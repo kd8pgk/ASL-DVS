@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>instmon - Uploading from Devices</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; INSTMON</div>
+    </div>
+    <div class="ed"><b>Part 2 of 5</b><br>device uploads</div>
+  </div>
+  <div class="body">
+    <h1>Uploading from <span>Devices</span></h1>
+    <p class="lede">How files get into instmon's library from outside the node: a file uploaded from a phone or laptop, a file copied from a USB stick, a manual, and a configuration snapshot. It covers the checks on each route, the limits, and what is refused.</p>
+    <div class="chips">
+      <span class="chip c1">BROWSER UPLOAD</span>
+      <span class="chip c2">USB IMPORT</span>
+      <span class="chip c3">MANUALS</span>
+      <span class="chip c4">CONFIG SNAPSHOT</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 2 of 5. Source: instmon_v2_91_1_20261105.py on branch ccr-9d4fe19f-ssud83. Limits are the code's defaults; the environment variable named in each row can change them.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The four routes</div>
+  <h1 class="ch">How a file gets in</h1>
+  <p class="ch-lede">A file from a device goes into one of four places. Each route has its own checks, and all of them stage the file into the library, so an install is a separate later step.</p>
+
+  <table>
+    <tr><th>Route</th><th>Where it goes</th><th>Who uses it</th></tr>
+    <tr><td>Browser upload (<code>/api/upload</code>)</td><td>The library folder for a chosen category, or Manuals for a PDF</td><td>A phone, tablet or laptop, through the page</td></tr>
+    <tr><td>USB import (<code>/api/usbimport/import</code>)</td><td>The same library folders, copied from a stick</td><td>A USB drive plugged into the node</td></tr>
+    <tr><td>Config snapshot (<code>/api/confputter/upload</code>)</td><td>A holding folder for Confputter, not the library</td><td>A Config getter snapshot, edited on a device</td></tr>
+    <tr><td>Editor save (<code>/api/file</code>)</td><td>The file already in the library, edited on the node</td><td>The page's editor (not an upload)</td></tr>
+  </table>
+  <p>Staging a file does not install it. The install is started separately from the page, through the component's own <code>--install</code> (Part 3).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Browser upload</div>
+  <h1 class="ch">Uploading through the page</h1>
+
+  <h2><span class="n">2.1</span>The request</h2>
+  <p>The page sends a multipart form with three fields: <code>category</code> (one of the library categories), <code>file</code> (the file), and an optional <code>force</code> flag set to "1". The request must be multipart form data and must include a Content-Length. A request with no length, or a length over the limit, is refused with 400.</p>
+  <table>
+    <tr><th>Limit</th><th>Default</th><th>Set by</th></tr>
+    <tr><td>Upload size</td><td>50 MB</td><td>INSTMON_MAX_UPLOAD_MB</td></tr>
+    <tr><td>Manual (PDF) size</td><td>64 MB</td><td>Fixed in the code. Reached only by the USB import. A browser upload is checked against the 50 MB request limit first, so a PDF over 50 MB cannot be uploaded through the page</td></tr>
+  </table>
+  <p>The whole request body is read into memory before it is parsed, so the limit also bounds the memory used by one upload.</p>
+
+  <h2><span class="n">2.2</span>The checks, in order</h2>
+  <ol>
+    <li><strong>Category.</strong> The category must be a known library category, or the upload is refused.</li>
+    <li><strong>File name.</strong> The name is reduced to its base name, so no folder can be given.</li>
+    <li><strong>Extension.</strong> The extension must be allowed for the category. The table in Part 3 lists them.</li>
+    <li><strong>Name pattern.</strong> The name must match a pattern for the category (for example <code>wifimon*.py</code> for wifimon). A name that does not match is refused with "doesn't look like a ... file", unless <code>force</code> is set. The refusal is marked as a mismatch, so the page can offer to force it.</li>
+    <li><strong>Lock.</strong> If the library file is locked (a locked file is one an operator has put aside) and the new content differs from it, the upload is refused with 409. An identical file is not an overwrite and goes through to the next step.</li>
+    <li><strong>Write.</strong> The file is written only if its content differs from the copy in the library. An identical file is reported as already staged.</li>
+  </ol>
+  <p>A forced mismatch is logged with the word "forced", so the book can point to it when a file is in the wrong place.</p>
+
+  <h2><span class="n">2.3</span>PDFs</h2>
+  <p>A PDF is always a manual, whatever category was chosen: a file whose name ends in .pdf is routed to Manuals before the category is looked at. The manual's name is cleaned (anything other than letters, digits, <code>.</code>, <code>_</code> and <code>-</code> becomes <code>_</code>, at most 120 characters), and the data must start with <code>%PDF-</code>, or it is refused as not a PDF. A manual identical to the one already there is reported as nothing to do. The file is written to a temporary name and renamed, with mode 644. In the other direction, an upload under the manuals category that is not a PDF is refused: "Only PDF files go in Manuals."</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The allowed files</div>
+  <h1 class="ch">What each category accepts</h1>
+
+  <table>
+    <tr><th>Category</th><th>Extensions</th><th>Name patterns</th></tr>
+    <tr><td>Dashboard</td><td>.py</td><td>nodecontrol*.py, asl_dvs_dashboard*.py</td></tr>
+    <tr><td>SysMon</td><td>.py</td><td>sysmon*.py, asl_dvs_sysmon*.py, asl_dvs_m17_sysmon*.py, sysmon_svx*.py</td></tr>
+    <tr><td>wifimon</td><td>.py</td><td>wifimon*.py</td></tr>
+    <tr><td>44helper</td><td>.py</td><td>44helper*.py, asl_dvs_m17_44helper*.py</td></tr>
+    <tr><td>Node Talker</td><td>.py</td><td>nodetalker*.py, nodelisten*.py</td></tr>
+    <tr><td>Node Recorder</td><td>.py</td><td>noderecorder*.py</td></tr>
+    <tr><td>Pibrary</td><td>.py</td><td>pibrary*.py</td></tr>
+    <tr><td>instmon</td><td>.py</td><td>instmon*.py</td></tr>
+    <tr><td>Scripts</td><td>.sh</td><td>install_all*.sh, uninstall_all*.sh, install_asl_dvs*.sh, uninstall_asl_dvs*.sh, wifi_menu*.sh, wifi-menu*.sh, asl_dvs*.sh</td></tr>
+    <tr><td>Config files</td><td>.conf</td><td>asl_dvs*.conf, sysmon*.conf, wifimon*.conf, nodetalker*.conf, nodelisten*.conf</td></tr>
+    <tr><td>Confgetter</td><td>.sh</td><td>confgetter*.sh</td></tr>
+    <tr><td>Confputter</td><td>.py</td><td>confputter*.py</td></tr>
+  </table>
+  <p>The name pattern is a shell-style match, ignoring case. A file named for a different tool, or with no matching name, is refused unless forced. In the code, the Node Talker category is named <code>nodelisten</code> (its library folder too), and it accepts both <code>nodetalker*.py</code> and <code>nodelisten*.py</code>.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; USB import</div>
+  <h1 class="ch">Copying from a stick</h1>
+
+  <h2><span class="n">4.1</span>Choosing the drive</h2>
+  <p>The page lists the drives that <code>lsblk</code> reports as whole disks with a positive size, and that are on a USB connection or flagged removable. The boot disk is marked and refused for import. The drive name is checked against a safe pattern (letters, digits, <code>_</code>, <code>.</code> and <code>-</code>) before anything else.</p>
+
+  <h2><span class="n">4.2</span>Mounting, read-only</h2>
+  <ol>
+    <li>The import waits its turn: it is refused while a disk-image job is running (answer 409), and only one import can run at a time.</li>
+    <li>The partition is found. If it is already mounted somewhere, that mount point is used and is not unmounted afterwards.</li>
+    <li>Otherwise it is mounted under <code>/mnt/instmon-usbimport/&lt;drive&gt;</code> with the options <code>ro,nosuid,nodev,noexec</code>, and <code>noload</code> for ext3 and ext4. A read-only mount means the stick cannot be changed by the import.</li>
+    <li>File systems: vfat, exfat, ext2, ext3 and ext4 are mounted as they are. NTFS needs the ntfs3 driver in the kernel or the ntfs-3g helper; if neither is there, the mount is refused with a message to install ntfs-3g.</li>
+    <li>When the import ends, a mount made by instmon is unmounted, whatever the outcome.</li>
+  </ol>
+
+  <h2><span class="n">4.3</span>Browsing and choosing a file</h2>
+  <p>The browse call lists the folder on the stick, up to 500 entries, showing only files of the allowed types and the manual type. Skipped are names that start with a dot or a dollar sign, "system volume information", "lost+found", "$recycle.bin", and every symbolic link. Every path is resolved inside the mount point, so a path that climbs out of it is refused.</p>
+
+  <h2><span class="n">4.4</span>Importing one file</h2>
+  <ul>
+    <li>The file must be a regular file. It is opened without following links and without blocking, so a device file or a symbolic link is refused.</li>
+    <li>The size is checked twice: once from the file's metadata, and again as the data is read. A file over the limit (50 MB, or 64 MB for a manual) is refused.</li>
+    <li>A PDF goes to Manuals. Any other file goes through the same checks as a browser upload (Part 2.2), with the source marked as USB. The log then says "Imported from USB".</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Config snapshots</div>
+  <h1 class="ch">Uploading a configuration for Confputter</h1>
+
+  <p>Confputter is a separate tool that applies a configuration. Its input is a snapshot written by Confgetter, a Markdown file. A snapshot edited on a laptop can be uploaded back to the node through this route.</p>
+  <ul>
+    <li><strong>Name.</strong> The name must start with a letter or digit, use only letters, digits, <code>.</code>, <code>_</code> and <code>-</code>, be at most 101 characters before the ending, and end in <code>.md</code>.</li>
+    <li><strong>Size.</strong> No more than 3,000,000 bytes, and not empty. The request itself may be 64 KB larger, for the form wrapper.</li>
+    <li><strong>Text.</strong> The file must be UTF-8 text.</li>
+    <li><strong>Heading.</strong> The first 40 lines must include a line that begins <code># Node config snapshot:</code>. A file without it is refused as not a Config getter snapshot.</li>
+    <li><strong>Where it goes.</strong> The edited-snapshots folder, which is kept with mode 700. The file is written to a temporary name and renamed into place, with mode 600.</li>
+  </ul>
+  <p>The upload does not apply anything. Applying is a separate Confputter step.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; The editor</div>
+  <h1 class="ch">Saving an edit on the node</h1>
+
+  <p>The page's editor saves a change to a file that is already in the library. It is not an upload, but the checks are the same kind:</p>
+  <ul>
+    <li>The file must already exist in the library (a file that is not there is refused with 404).</li>
+    <li>A locked file is refused with 409 whatever the new content is, and the log records the refusal. This is stricter than the upload route, which refuses a locked file only when the content differs.</li>
+    <li>A Python (.py) or shell (.sh) file is checked for syntax before it is saved. A file with a syntax error is not saved.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the upload routes show</h1>
+
+  <h2><span class="n">7.1</span>Staging is not installing</h2>
+  <p>Every route ends in the library, and nothing runs. The book can describe the library as a waiting room between a file's arrival and its install.</p>
+
+  <h2><span class="n">7.2</span>The name rules do the most work</h2>
+  <p>A browser upload is stopped mostly by its name. A file with the wrong name goes nowhere unless forced, and the force is logged. A forced file of the wrong kind can still be installed later, so operators should check the name before they force anything.</p>
+
+  <h2><span class="n">7.3</span>The USB stick is read-only</h2>
+  <p>The stick is mounted read-only and without execution, and its files are copied, not run. The book can say that plugging in a stick cannot change it, or run anything from it.</p>
+
+  <h2><span class="n">7.4</span>Not checked</h2>
+  <ul>
+    <li>The browser's side of the upload (the form and the force prompt), which was read for the request shape only.</li>
+    <li>What Confputter does with an uploaded snapshot once it is applied.</li>
+    <li>The kernel's NTFS driver behaviour on a real stick.</li>
+  </ul>
+</section>
+
+</body>
+</html>

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - How a Tunnel Is Set Up</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 2</b><br>tunnel setup</div>
+  </div>
+  <div class="body">
+    <h1>How a Tunnel Is <span>Set Up</span></h1>
+    <p class="lede">44helper builds a WireGuard tunnel to the 44Net Connect service, so the node can reach 44Net. This summary covers the configuration it accepts, the numbered steps the tabs run, the routing it installs, the boot order, the test-then-keep modes, and the router option.</p>
+    <div class="chips">
+      <span class="chip c1">FULL</span>
+      <span class="chip c2">SPLIT</span>
+      <span class="chip c3">HALF</span>
+      <span class="chip c4">EXCEPTIONS</span>
+      <span class="chip c5">ROUTER</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 2 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Routing and DNS behaviour is described from the code; nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The modes</div>
+  <h1 class="ch">Which tunnel for what</h1>
+  <p class="ch-lede">The same WireGuard tunnel (interface wg0) can be set up in five ways. They differ in what goes through the tunnel and in how much can be tested before it is kept.</p>
+
+  <table>
+    <tr><th>Mode</th><th>Tab</th><th>What goes through wg0</th><th>AllowedIPs</th><th>Test first?</th></tr>
+    <tr><td>Split tunnel</td><td>Split Tunnel</td><td>Only 44Net traffic (44.0.0.0/9 and 44.128.0.0/10)</td><td>The 44Net networks</td><td>No</td></tr>
+    <tr><td>Full tunnel</td><td>Full Tunnel</td><td>All internet traffic</td><td>0.0.0.0/0</td><td>No</td></tr>
+    <tr><td>Half tunnel</td><td>Full Tunnel (wizard)</td><td>Only ASL and EchoLink, on a separate routing table</td><td>0.0.0.0/0 in a temporary copy</td><td>Yes, 15-minute auto-undo</td></tr>
+    <tr><td>Full tunnel with exceptions</td><td>Full Tunnel (exceptions)</td><td>All internet traffic, except listed LAN addresses, hosts and ports</td><td>0.0.0.0/0</td><td>Yes, auto-undo</td></tr>
+    <tr><td>Router</td><td>Router Install</td><td>Handled by an OpenWrt-based router, not by the Pi</td><td>Set on the router</td><td>Checks along the way</td></tr>
+  </table>
+  <p>The Full and Split tabs share one set of numbered steps, shown in Part 3. The half tunnel and the full tunnel with exceptions are wizards with their own steps, in Parts 4 and 5. The router option is in Part 6.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The configuration</div>
+  <h1 class="ch">What a config must contain, and what the helper changes</h1>
+
+  <h2><span class="n">2.1</span>What is accepted</h2>
+  <p>The config is pasted in, copied from the 44Net Connect portal. The helper rejects it unless it has these sections and fields: an <code>[Interface]</code> section, a <code>[Peer]</code> section, a PrivateKey, a PublicKey and an Endpoint. A PrivateKey that is a placeholder, or that does not look like a WireGuard key, is refused with advice to copy the real key from the portal. A paste with no Endpoint is treated as a partial paste.</p>
+
+  <h2><span class="n">2.2</span>What is changed on the way in</h2>
+  <p>The helper normalises the config before writing it. It reports each change:</p>
+  <table>
+    <tr><th>Change</th><th>When</th></tr>
+    <tr><td>SaveConfig = true is removed</td><td>Always, because wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.</td></tr>
+    <tr><td>Address changed to a /32</td><td>When the address is a subnet. A 44Net Connect tunnel is one address. The operator can untick this when ARDC gave a subnet.</td></tr>
+    <tr><td>PersistentKeepalive = 25 added</td><td>When it is missing or off. Without it, a quiet tunnel goes idle and 44Net stations cannot reach the node.</td></tr>
+    <tr><td>AllowedIPs fitted to the tab</td><td>A config for the wrong tab (full on Split, split on Full) is blocked. The operator can choose to rewrite its AllowedIPs, or paste it on the right tab.</td></tr>
+    <tr><td>DNS line removed</td><td>When systemd-resolved is not answering, or there is no resolvconf command, or the DNS server is not inside the tunnel's AllowedIPs. DNS is then set from the DNS card.</td></tr>
+    <tr><td>Split routing block and endpoint pin</td><td>Added for a split tunnel (Part 3, step 4b), and to keep the tunnel server's own route outside wg0.</td></tr>
+  </table>
+
+  <h2><span class="n">2.3</span>Where it is written</h2>
+  <ul>
+    <li>The live file is <code>/etc/wireguard/wg0.conf</code>, written with mode 600 by a safe replace. The private key is never written to the log.</li>
+    <li>If a previous config existed, it is saved as <code>wg0.conf.pre-replace</code>. The DNS and MTU settings from the old file are carried over into the new one.</li>
+    <li>A copy is kept in the library folder, so the config can be restored later.</li>
+    <li>The tunnel's settings are saved in 44helper's config as the mode (pi), the interface (wg0), the path, and the kind (full or split).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The numbered steps</div>
+  <h1 class="ch">Full and Split tabs, steps 1 to 6</h1>
+  <p class="ch-lede">The page shows the steps in order. Each step has a command, and some have a verify check. Steps run through the same install engine described in Stage 1, with the same field and gate rules.</p>
+
+  <table>
+    <tr><th>Step</th><th>Title</th><th>What it runs</th></tr>
+    <tr><td>1</td><td>Firewall prerequisite</td><td>Installs firewalld and enables it.</td></tr>
+    <tr><td>1a</td><td>systemd-resolved prerequisite</td><td>Installs wireguard-tools and systemd-resolved, and enables resolved (ARDC guide, section 1a.1).</td></tr>
+    <tr><td>2</td><td>Create the 44NetConnect firewall zone</td><td>Creates the zone permanently and reloads firewalld.</td></tr>
+    <tr><td>3</td><td>Add inbound services and ports</td><td>A checklist. IAX2 uses the bind port from the config (4569/udp by default). EchoLink uses 5198 to 5199/udp and 5200/tcp.</td></tr>
+    <tr><td>4</td><td>Paste the WireGuard config</td><td>The config is pasted and written (Part 2).</td></tr>
+    <tr><td>5</td><td>Attach wg0 to the zone</td><td>Adds the interface wg0 to the 44NetConnect zone, then reloads firewalld.</td></tr>
+    <tr><td>6</td><td>Enable and start the tunnel</td><td>Enables and starts wg-quick@wg0, waits for the handshake, then runs the boot order (step 6b).</td></tr>
+  </table>
+  <p>Sub-steps: <strong>4a</strong> is DNS and MTU, <strong>4b</strong> is split routing (Split tab), or outbound reflector ports on the Full tab, and <strong>6b</strong> is the boot order.</p>
+
+  <h2><span class="n">3.1</span>Step 1 and 1a: why the prerequisites</h2>
+  <p>The tunnel is managed by firewalld, and the DNS settings need systemd-resolved, so both are installed first. Step 1a installs wireguard-tools, which provides wg-quick.</p>
+
+  <h2><span class="n">3.2</span>Step 2 and 5: the firewall zone</h2>
+  <p>Traffic that arrives over the tunnel is governed by the 44NetConnect zone. Its interface is wg0 (step 5), and the services and ports the operator needs are listed in it (step 3). The zone holds the tunnel's inbound rules that the helper manages.</p>
+
+  <h2><span class="n">3.3</span>Step 6: the handshake and the fallback unit</h2>
+  <ul>
+    <li>If the system has the standard wg-quick template, the step enables and starts <code>wg-quick@wg0</code>, restarting it if it is already active. Otherwise it writes a fallback unit, <code>44net-tunnel.service</code>, that runs <code>wg-quick up /etc/wireguard/wg0.conf</code>.</li>
+    <li>A full tunnel (AllowedIPs 0.0.0.0/0) needs nftables or iptables-restore for wg-quick's routing rules. If neither is installed, the step stops and asks for nftables to be installed first.</li>
+    <li>After the start, the helper waits up to 15 seconds for a handshake with the 44Net server. If there is none, it warns to check the endpoint and the portal approval.</li>
+    <li>Then it keeps the tunnel server's own address on the normal route, so its packets do not loop into wg0 (the endpoint pin).</li>
+  </ul>
+
+  <h2><span class="n">3.4</span>Step 4a: DNS and MTU</h2>
+  <table>
+    <tr><th>DNS mode</th><th>What it sets</th></tr>
+    <tr><td>Off</td><td>No DNS handling by the tunnel.</td></tr>
+    <tr><td>resolvectl, full</td><td>Sets 1.1.1.1 and 9.9.9.9 as the tunnel's DNS servers through resolved.</td></tr>
+    <tr><td>resolvectl, split</td><td>Sets 44.0.0.1 as the tunnel's DNS server, for 44Net names.</td></tr>
+    <tr><td>DNS line</td><td>Writes a DNS = line into the config: 1.1.1.1, 9.9.9.9 and 44.0.0.1. Needs the resolvconf command.</td></tr>
+  </table>
+  <p>The MTU can be set between 1280 and 1500. Blank or "off" removes it. Both settings are kept in marked blocks in the config, so they survive a re-paste.</p>
+
+  <h2><span class="n">3.5</span>Step 4b, split: routing with a table and a mark</h2>
+  <p>For a split tunnel, the helper adds a routing block to the [Interface] section. The block is marked, and it contains:</p>
+  <ul>
+    <li><code>Table = 4445</code> and <code>FwMark = 0x4445</code>. The 44Net routes live in table 4445, not in the main table.</li>
+    <li>A PostUp rule that sends traffic not carrying the mark to table 4445, and a PostDown rule that removes it.</li>
+  </ul>
+  <p>WireGuard's own packets carry the mark, so they always take the normal route, on whichever adapter is up. The helper restarts the tunnel and then waits up to 30 seconds for a handshake. A config that already has its own Table or FwMark lines is refused, rather than changed.</p>
+
+  <h2><span class="n">3.6</span>Step 4b, full: outbound reflector ports</h2>
+  <p>On the Full tab, a card named Outbound reflector ports (egress) adds and removes reflector ports through separate actions. The card's exact effect on the routes was not traced for this summary.</p>
+
+  <h2><span class="n">3.7</span>Step 6b: the boot order</h2>
+  <p>The boot order makes the tunnel come back after a reboot, and makes DVSwitch wait for it:</p>
+  <ul>
+    <li>A boot script, <code>/usr/local/sbin/44helper-netready</code>, runs as <code>44helper-netready.service</code>. It waits up to 180 seconds at boot for the default route and, when the tunnel is configured, for wg0 and its handshake. A later pass (the late check) waits up to 1,200 seconds.</li>
+    <li>A time wait of 90 seconds (<code>44helper-timewait</code>) gives the clock time to sync, because a Pi's clock can start behind after a power cut and the tunnel server then ignores its handshakes.</li>
+    <li>A drop-in is added to wg-quick's unit and to the DVSwitch restart units, so they start after the network check. The boot log is kept at <code>/var/lib/44helper/boot.log</code>.</li>
+    <li>When the tunnel is enabled, the boot order is applied with it. Any DVSwitch services that were enabled but stopped are started.</li>
+  </ul>
+
+  <h2><span class="n">3.8</span>Locks between tabs</h2>
+  <p>A Full and a Split config cannot both be in use, so each tab is locked when the other kind is installed. The locked tab shows a banner and an "Acknowledge and unlock" button, so a working tunnel is not overwritten by accident.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Half tunnel</div>
+  <h1 class="ch">Only ASL and EchoLink through the tunnel</h1>
+  <p class="ch-lede">The half tunnel sends the node's ASL and EchoLink traffic through the tunnel, and leaves everything else on the normal route. It is built as a test first: nothing is kept until the operator chooses so, and an automatic undo runs if they do nothing.</p>
+
+  <h2><span class="n">4.1</span>Before the test: Check first</h2>
+  <p>Check first reads the current state: the tunnel, its address, its endpoint, the firewall zone of wg0, and the routing. It lists anything that blocks the test. The last good Check is valid for 30 minutes. Arming the test refuses when there has been no good Check, or when it is older than that.</p>
+
+  <h2><span class="n">4.2</span>Arm the auto-undo</h2>
+  <p>Arming starts a 15-minute timer (<code>44helper-halfundo</code>). When it fires, the undo script puts everything back. The test state is kept in <code>/run/44helper-half</code>, which is cleared at reboot. Arming refuses while the full-tunnel-with-exceptions test is on, so the two tests cannot overlap.</p>
+
+  <h2><span class="n">4.3</span>The five test steps</h2>
+  <table>
+    <tr><th>Step</th><th>What it does</th></tr>
+    <tr><td>2. Restart tunnel in half mode</td><td>Writes a temporary copy of wg0.conf under <code>/run</code>, and restarts the tunnel with it. The half tunnel needs the full 0.0.0.0/0 range, as the helper's own note says. The permanent config is not changed.</td></tr>
+    <tr><td>3. Add tunnel route table</td><td>Adds a routing table (4444) with the 44Net networks (44.0.0.0/9 and 44.128.0.0/10) and routes through wg0. The tunnel server's own address stays on the normal route.</td></tr>
+    <tr><td>4. Send ASL and EchoLink into the tunnel</td><td>Adds policy-routing rules, at fixed priorities, so that the ASL and EchoLink traffic uses table 4444 and the rest uses the main table.</td></tr>
+    <tr><td>5. Open tunnel ports</td><td>Adds the ports the test needs to wg0's zone (the EchoLink range 5198 to 5199/udp is among them), and records which were added.</td></tr>
+    <tr><td>6. Loosen the return-path check on wg0</td><td>Changes the reverse-path filter for wg0, because replies can arrive on an interface the filter does not expect. The original value is saved so it can be put back.</td></tr>
+  </table>
+  <p>Each step must be done in order: step 3 cannot run before step 2, and so on. Every step records what it changed, so that the undo can reverse it.</p>
+
+  <h2><span class="n">4.4</span>Keep, undo, or make permanent</h2>
+  <ul>
+    <li><strong>Keep</strong> cancels the auto-undo timer. The test stays until the operator chooses Undo now or the node reboots.</li>
+    <li><strong>Undo now</strong> reverses the steps.</li>
+    <li><strong>Make permanent</strong> needs checks less than 15 minutes old. It writes <code>/etc/44helper/halftunnel.json</code>, a sysctl file for the loosened filter, a login reminder script, and a removal script with a copy of the old config. The removal script can take the half tunnel out later (Remove permanent runs it, with the same care as the undo).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Full tunnel with exceptions</div>
+  <h1 class="ch">Full tunnel, with some traffic kept off it</h1>
+  <p class="ch-lede">A full tunnel carries all internet traffic. The exceptions wizard lets the operator keep chosen LAN addresses, hosts and ports on the normal route, while the rest goes through the tunnel. Like the half tunnel, it is tested with an automatic undo first.</p>
+
+  <h2><span class="n">5.1</span>The steps</h2>
+  <table>
+    <tr><th>Step</th><th>What it does</th></tr>
+    <tr><td>Check first</td><td>Reads the state before the test, as for the half tunnel.</td></tr>
+    <tr><td>Arm</td><td>Starts the auto-undo timer (<code>44helper-fullxundo</code>) and the test state in <code>/run/44helper-fullx</code>.</td></tr>
+    <tr><td>2. Keep replies from the LAN address on the LAN link</td><td>Adds a rule that keeps replies to LAN addresses on the local link, so that LAN clients still reach the node.</td></tr>
+    <tr><td>3. Send the bypass list around the tunnel</td><td>Adds the hosts and ports the operator chose to the normal route, at fixed priorities.</td></tr>
+    <tr><td>Keep, undo, make permanent</td><td>As for the half tunnel. Permanent settings are saved in <code>/etc/44helper/fullx.json</code>.</td></tr>
+  </table>
+  <p>The exceptions are kept in blocks with the helper's own markers, so they can be found and removed cleanly.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Router</div>
+  <h1 class="ch">The router option</h1>
+  <p class="ch-lede">For an OpenWrt-based router, such as a GL.iNet, the tunnel can run on the router instead of the Pi. The Router Install tab walks through it as ten numbered steps. Each step checks the router before it changes anything.</p>
+
+  <table>
+    <tr><th>Step</th><th>Title</th></tr>
+    <tr><td>1</td><td>Router access</td></tr>
+    <tr><td>2</td><td>Router firmware and model detection (2a: LuCI status for GL.iNet and OpenWrt)</td></tr>
+    <tr><td>3</td><td>Allocation type</td></tr>
+    <tr><td>4</td><td>Capture the WireGuard config and the LAN subnet</td></tr>
+    <tr><td>5</td><td>Apply the WireGuard config to the router (uci)</td></tr>
+    <tr><td>6</td><td>Set the router's LAN IP to the subnet (where the model needs it)</td></tr>
+    <tr><td>7</td><td>Bring up the tunnel</td></tr>
+    <tr><td>8</td><td>The Pi's address (its LAN address for model B, its 44Net address otherwise)</td></tr>
+    <tr><td>9</td><td>Port forwards, and the WireGuard firewall zone fix</td></tr>
+    <tr><td>10</td><td>Verify (a ping and a traceroute to 44Net)</td></tr>
+  </table>
+  <p>The router path has its own actions for installing the LuCI page, binding an address to the Pi, adding static bindings, and adding port forwards. Verify is the step that records the router tunnel as working. Router settings are kept in 44helper's own config, in the tunnels section, under the router keys (tunnel.router.*), not in wg0.conf.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the tunnel code shows</h1>
+
+  <h2><span class="n">7.1</span>Every mode has a way back</h2>
+  <p>The half tunnel and the exceptions wizard are both tested first, with a timer that puts the node back. Make permanent writes a removal script next to the settings, so the change can be reversed later. The book can describe this as a design that never leaves the node without a way back, while noting that a restart of the tunnel can drop a remote session (see the watchdog summary).</p>
+
+  <h2><span class="n">7.2</span>The config is the source of truth</h2>
+  <p>Most settings (DNS, MTU, endpoint pin, split routing) are written into wg0.conf as marked blocks. A re-paste carries them over. This keeps the tunnel's state in one file.</p>
+
+  <h2><span class="n">7.3</span>The tests are mutually exclusive</h2>
+  <p>Each test's arm action refuses to start while the other test is on, and the exceptions arm also refuses when the tunnel is already permanent. A node can run one test, or one permanent mode, at a time.</p>
+
+  <h2><span class="n">7.4</span>Not checked</h2>
+  <ul>
+    <li>The exact routing rules that wg-quick adds for a full tunnel, which come from the wg-quick template, not from 44helper.</li>
+    <li>The router steps' commands, which were read by title and route, not in full.</li>
+    <li>The live effect of the reverse-path change in the half tunnel's step 6.</li>
+    <li>The 44Net server's side of the handshake and the portal approval.</li>
+  </ul>
+</section>
+
+</body>
+</html>

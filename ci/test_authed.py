@@ -158,14 +158,17 @@ def make_case(key):
             else:
                 self.skipTest("build has no logout route")
             protected = [p for p in self.routes("GET") if not ts.is_public(key, p)]
+            probe = next((p for p in protected if get_partial(self.server, p, self.cookie)[0] == 200), None)
+            if probe is None:
+                self.skipTest("no protected GET route answers 200 without parameters")
             own = login(self.server)
-            st = get_partial(self.server, protected[0], own)[0]
+            st = get_partial(self.server, probe, own)[0]
             self.assertEqual(st, 200, "session should work before logout")
             self.server.request("POST", logout[0], body=logout[1],
                                 headers={"Content-Type": "application/json", "Cookie": own})
-            st, _, _, _ = get_partial(self.server, protected[0], own)
+            st, _, _, _ = get_partial(self.server, probe, own)
             self.assertIn(st, (401, 403), "the logged-out cookie must stop working")
-            st = get_partial(self.server, protected[0], self.cookie)[0]
+            st = get_partial(self.server, probe, self.cookie)[0]
             self.assertEqual(st, 200, "logging out one session must not end the others")
 
     AuthedCase.__name__ = f"Authed_{key}"
@@ -518,6 +521,8 @@ def make_nt_case(key):
     return NTCase
 
 
+NT_KEYS = ("nodetalker", "amp_nodetalker", "noderecorder")
+
 for _key in ts.SERVERS:
     if _key == "pibrary":
         continue
@@ -526,8 +531,10 @@ for _key in ts.SERVERS:
         globals()[f"AuthedDVS_{_key}"] = make_nc_dvs_case(_key)
     elif _key.startswith("sysmon"):
         globals()[f"Authed_{_key}"] = make_sysmon_case(_key)
-    else:
+    elif _key in NT_KEYS:
         globals()[f"Authed_{_key}"] = make_nt_case(_key)
+    else:
+        globals()[f"Authed_{_key}"] = make_case(_key)
 
 
 if __name__ == "__main__":

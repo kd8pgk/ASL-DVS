@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - Editing rpt.conf to Add Private Nodes</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 3</b><br>private nodes</div>
+  </div>
+  <div class="body">
+    <h1>Editing rpt.conf for <span>Private Nodes</span></h1>
+    <p class="lede">How the Config tab adds and removes private nodes (numbers 1000 to 1999) in Asterisk's rpt.conf, and in the other files that go with them: extensions.conf, modules.conf and allmon3.ini. It covers the preview, the automatic copies, the managed blocks it leaves alone, and what it does not restart.</p>
+    <div class="chips">
+      <span class="chip c1">RPT.CONF</span>
+      <span class="chip c2">PREVIEW FIRST</span>
+      <span class="chip c3">AUTO COPY</span>
+      <span class="chip c4">NOT RESTARTED</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 3 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; What is changed</div>
+  <h1 class="ch">The files and the card</h1>
+  <p class="ch-lede">The Config tab's Add private node card changes up to four files. It never edits a file it does not own, and it never restarts Asterisk.</p>
+
+  <table>
+    <tr><th>File</th><th>Change</th></tr>
+    <tr><td><code>/etc/asterisk/rpt.conf</code></td><td>A new node stanza, and the node's line in the <code>[nodes]</code> section.</td></tr>
+    <tr><td><code>/etc/asterisk/extensions.conf</code></td><td>An exten line in the <code>[radio-secure]</code> context, if that context exists (optional, ticked on the card).</td></tr>
+    <tr><td><code>/etc/asterisk/modules.conf</code></td><td>Only for a USRP bridge node: chan_usrp is set to load.</td></tr>
+    <tr><td><code>/etc/allmon3/allmon3.ini</code></td><td>A section for the node, with its host, port, user and password copied from a public node section, so Allmon3 can show it.</td></tr>
+  </table>
+
+  <h2><span class="n">1.1</span>The rules of the card</h2>
+  <ul>
+    <li>It adds only nodes between 1000 and 1999 (<code>_CFGR_PRIVATE_MIN</code> and <code>_CFGR_PRIVATE_MAX</code>).</li>
+    <li>It never adds or removes the reserved numbers 1917 (the M17 bridge), 1921 (Node Talker's transmit node) or 1999 (the digital bridge). A node number 1921 is pointed to Node Talker's TX card.</li>
+    <li>It removes only nodes it added. A node written by hand, or by the Dashboard's Phone tab, is left alone.</li>
+    <li>It does not restart Asterisk. The result says "Asterisk was NOT restarted", and the operator uses the ASL3 Restart button when ready.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The steps</div>
+  <h1 class="ch">Preview, then add</h1>
+  <p class="ch-lede">Every change has two steps: a preview that writes nothing, and an apply that writes the files. The card uses the same code for both. The preview shows the diff of each file that would change.</p>
+
+  <h2><span class="n">2.1</span>Choosing the number</h2>
+  <p>A blank number means the next free one. The helper scans rpt.conf for every section name and every number in the [nodes] section, then picks the first number from 1000 upward that is not used and not reserved. If none is free, the card says so. A number typed by hand must be 1000 to 1999, and must not already be in rpt.conf.</p>
+
+  <h2><span class="n">2.2</span>Plain node or USRP bridge</h2>
+  <table>
+    <tr><th>Kind</th><th>rxchannel</th><th>Extra settings</th></tr>
+    <tr><td>Plain</td><td><code>Local/pseudo</code></td><td>None</td></tr>
+    <tr><td>USRP bridge</td><td><code>USRP/127.0.0.1:&lt;tx&gt;:&lt;rx&gt;</code>, from the two ports the card asks for</td><td>The bridge profile: duplex 0, hangtime 0, althangtime 0, holdofftelem 1, telemdefault 0, telemdynamic 0, linktolink no, nounkeyct 1, tx_timeout 170000. chan_usrp is set to load in modules.conf.</td></tr>
+  </table>
+  <p>For a USRP node, the two ports must differ, and neither can already be used by another USRP node in rpt.conf. The card reports any other clash as a warning (port clash check).</p>
+
+  <h2><span class="n">2.3</span>The stanza that is written</h2>
+  <p>The stanza is headed by a note line, <code>; 44helper: private node added on the Config tab (remove it there)</code>, which is how the card recognises its own nodes later. The header takes its template from the main node's stanza, found by the node's own number in the identity settings (or the first public node). For example, if the main node is <code>[652701](node-main)</code>, the new node gets <code>[1000](node-main)</code>. If there is no template, the node is written with no template, and the card says so.</p>
+  <pre>; 44helper: private node added on the Config tab (remove it there)
+[1000](node-main)
+rxchannel = Local/pseudo</pre>
+  <p>The [nodes] line for the node uses the local IAX port from the config. On port 4569 it is <code>1000 = radio@127.0.0.1/1000,NONE</code>. On another port, the port is written after the address.</p>
+
+  <h2><span class="n">2.4</span>The exten line</h2>
+  <p>If [radio-secure] exists in extensions.conf, the card adds <code>exten =&gt; 1000,1,rpt,1000</code> to it, unless one already exists. If that context is missing, the card does not invent one. It says so and gives the line to add by hand.</p>
+
+  <h2><span class="n">2.5</span>Allmon3</h2>
+  <p>The card adds the node's section to allmon3.ini, and removes it on removal. Allmon3 shows the change after its own restart, which the ASL3 Restart button does with Asterisk.</p>
+
+  <h2><span class="n">2.6</span>Apply</h2>
+  <ol>
+    <li>The card confirms with the operator before it applies (the page asks "Add private node N to rpt.conf?").</li>
+    <li>The current files are saved first as an automatic copy, with the label "auto before adding private node N".</li>
+    <li>Each changed file is written in a safe way: a temporary file is written beside it, then renamed over the old one. The owner, group and mode of the original are kept.</li>
+    <li>Files whose content would not change are skipped ("unchanged").</li>
+    <li>Asterisk is not restarted. The result lists the files written, and any automatic copies that were dropped to make room.</li>
+  </ol>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Removing a node</div>
+  <h1 class="ch">Remove only what the card added</h1>
+
+  <h2><span class="n">3.1</span>What counts as the card's node</h2>
+  <p>The card finds its nodes by the note line above their stanza. A stanza without that note is not its own, even if its number is in the private range. Its exten line is removed from [radio-secure] by matching the node number, and its [nodes] line is removed too.</p>
+
+  <h2><span class="n">3.2</span>What removal changes</h2>
+  <ul>
+    <li><strong>rpt.conf:</strong> the note, the stanza and the [nodes] line are removed. Blank lines left in a row are collapsed.</li>
+    <li><strong>extensions.conf:</strong> the matching exten line is removed.</li>
+    <li><strong>modules.conf:</strong> not changed, because other nodes may use chan_usrp. The card says so.</li>
+    <li><strong>allmon3.ini:</strong> the node's section is removed.</li>
+  </ul>
+  <p>Preview and apply work the same way as for adding.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Blocks the card leaves alone</div>
+  <h1 class="ch">Managed blocks</h1>
+
+  <h2><span class="n">4.1</span>The marker lines</h2>
+  <p>Some files hold blocks that another tool owns. Such a block starts with a line that says <code>managed by</code> between <code>; &gt;&gt;&gt;</code> and <code>&gt;&gt;&gt;</code>, and ends with a line of <code>; &lt;&lt;&lt; ... &lt;&lt;&lt;</code>. The Dashboard's Phone block is one example (the manual describes it this way). The card reads these blocks as a mask: nothing inside them is counted, changed or removed.</p>
+
+  <h2><span class="n">4.2</span>What this means</h2>
+  <ul>
+    <li>A private node that sits inside a managed block is not changed by the card. The card still counts every section header in the file, managed or not, as a used number, so it will not reuse that number.</li>
+    <li>The card lists nodes it left alone, with the reason, in its notes. For example: a private node in the dashboard's Phone block, or node 1921.</li>
+    <li>Node Talker's node 1921 is added from Node Talker's own TX card, not from this card.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Presets and other paths</div>
+  <h1 class="ch">Other ways the same file changes</h1>
+
+  <h2><span class="n">5.1</span>The Travel Node preset</h2>
+  <p>The Config tab can save this node's wiring, including its private nodes, as a preset, and apply it on another node. A preset holds no callsigns, IDs or passwords. Applying a preset removes the private nodes it does not list, and the preview shows "PRIVATE NODES THAT WILL BE REMOVED" before anything changes. The preset path was read in part; its full steps are not described here.</p>
+
+  <h2><span class="n">5.2</span>Automatic copies and save points</h2>
+  <ul>
+    <li>Every apply first saves an automatic copy. The copies are kept under the config folder's <code>auto</code> directory.</li>
+    <li>The limit is 10 save points (<code>_CFGR_MAX_POINTS</code>). When the total passes it, the oldest automatic copies are removed. Copies the operator saved by hand are kept, and saving one by hand is refused when 10 already exist.</li>
+    <li>A copy can be restored from the Config tab's restore section (the restore path was not traced in full).</li>
+  </ul>
+
+  <h2><span class="n">5.3</span>A reinstall is marked pending</h2>
+  <p>After a successful private-node change, or other config change, the helper writes a "reinstall pending" note. It is a reminder that a reinstall of the tools may be wanted (Stage 1.5, Part 5). It does not start one.</p>
+
+  <h2><span class="n">5.4</span>No change during a reinstall</h2>
+  <p>The config actions run under a lock, so two changes cannot run at once. The reinstall job (Stage 1.5) is a separate process; the page does not block a private-node change while it runs, so the operator should not make one during a reinstall.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Safety checks</div>
+  <h1 class="ch">What stops a bad edit</h1>
+
+  <ul>
+    <li><strong>Number rules.</strong> Only 1000 to 1999, not reserved, not already used.</li>
+    <li><strong>Port rules.</strong> USRP ports must be numbers from 1 to 65535, must differ from each other, and must not be used by another USRP node.</li>
+    <li><strong>Missing file.</strong> If rpt.conf is missing, the card stops and says to install ASL3 first.</li>
+    <li><strong>Preview.</strong> Nothing is written until the operator applies.</li>
+    <li><strong>Atomic write.</strong> A file is replaced only after its new copy is written in full.</li>
+    <li><strong>Automatic copy.</strong> The files are saved before every change.</li>
+    <li><strong>Root.</strong> Every config change first checks that the helper runs as root.</li>
+  </ul>
+
+  <h2><span class="n">6.1</span>What the card does not check</h2>
+  <p>The card does not test whether Asterisk accepts the new stanza. It does not check the USRP channel itself. A node that is written correctly can still fail to link until Asterisk is restarted and reloaded, and the operator is told to restart it by hand.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the editor shows</h1>
+
+  <h2><span class="n">7.1</span>It edits text, not an API</h2>
+  <p>The card edits the same files Asterisk reads. It does not use a database or a shadow copy, so what the operator sees in rpt.conf is what Asterisk gets. The book can say so plainly.</p>
+
+  <h2><span class="n">7.2</span>Ownership by a marker line</h2>
+  <p>A node the card added is recognised by one note line. That is simple and easy to check by eye, but a person who edits the stanza or deletes the note will make the card treat it as a node it did not add. The book should tell operators to leave the note in place.</p>
+
+  <h2><span class="n">7.3</span>Not checked</h2>
+  <ul>
+    <li>The preset apply and restore paths, which were read in part.</li>
+    <li>How Asterisk treats the new stanza once it is loaded.</li>
+    <li>The Allmon3 section format beyond the host, port, user and password lines the card copies.</li>
+  </ul>
+</section>
+
+</body>
+</html>

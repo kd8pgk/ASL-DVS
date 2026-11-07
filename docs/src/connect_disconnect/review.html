@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Connect and Disconnect Review</title>
+<link rel="stylesheet" href="review.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; LINK CONTROL</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W fork</b><br>nodecontrol_pi02w</div>
+  </div>
+  <div class="body">
+    <h1>Connect and <span>Disconnect</span> Review</h1>
+    <p class="lede">How Node Controller links and unlinks ASL, EchoLink, D-STAR, XLX, M17 and the bridge nodes, from the request that starts a link to the services it touches.</p>
+    <div class="chips">
+      <span class="chip c1">ASL</span>
+      <span class="chip c2">ECHOLINK</span>
+      <span class="chip c3">D-STAR &middot; XLX</span>
+      <span class="chip c4">M17</span>
+      <span class="chip c5">LOCAL API</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Source: nodecontrol_pi02w_v9_3_107_20261102.py, with the full build nodecontrol_v9_3_102_20261102.py for comparison. Line numbers are from the pi02w file.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope</div>
+  <h1 class="ch">What was reviewed</h1>
+  <p class="ch-lede">The connect and disconnect code of the Node Controller, pi02w build. Nothing in the code was changed for this review.</p>
+
+  <h2><span class="n">1.1</span>Sources</h2>
+  <ul>
+    <li><strong>Primary:</strong> <code>nodecontrol_pi02w_v9_3_107_20261102.py</code>. The pi02w fork is the current work.</li>
+    <li><strong>Build parity:</strong> all 25 connect, disconnect and reset functions named in this review are identical in the full build, <code>nodecontrol_v9_3_102_20261102.py</code>. Compared by code structure, not by text.</li>
+    <li><strong>Callers:</strong> the dashboard (POST <code>/api/action</code>) and Node Talker (POST <code>/api/local/action</code>, loopback only, with the local key in the <code>X-ASL-DVS-Local-Key</code> header).</li>
+  </ul>
+
+  <h2><span class="n">1.2</span>Modes that can be linked</h2>
+  <table>
+    <tr><th>Mode</th><th>What a connect does</th><th>What it talks to</th></tr>
+    <tr><td>ASL</td><td>Links a node number on the local Asterisk node.</td><td>Asterisk, through the AMI socket</td></tr>
+    <tr><td>EchoLink</td><td>Links an EchoLink node through the ASL gateway. The node number becomes <code>3</code> plus the number padded to six digits.</td><td>Asterisk, through the AMI socket</td></tr>
+    <tr><td>D-STAR and XLX</td><td>Tunes the DVSwitch bridge to a reflector or gateway. A gateway can also be linked through ircDDB remote control.</td><td><code>dvswitch.sh</code>, optionally ircDDB</td></tr>
+    <tr><td>M17</td><td>Writes the USRP2M17 reflector file and restarts its service.</td><td><code>USRP2M17.ini</code> and its service</td></tr>
+    <tr><td>Digital modes (DMR, YSF, FCS, others)</td><td>Tunes the talkgroup or room on the bridge.</td><td><code>dvswitch.sh</code></td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The layers</div>
+  <h1 class="ch">From request to service</h1>
+  <p class="ch-lede">Every link action passes through the same few layers. Most of the logic sits in the middle one.</p>
+
+  <table>
+    <tr><th>Layer</th><th>Role</th><th>Main names (line)</th></tr>
+    <tr><td>Entry</td><td>Receives a request from the dashboard or from Node Talker and routes it by action name.</td><td><code>_dispatch_action</code>; <code>action_local</code> (14521)</td></tr>
+    <tr><td>Action</td><td>Checks the input, takes the link lock, drops what is in the way, makes the new link, and sets the page state.</td><td><code>_do_asl_connect</code> (7339), <code>_do_echo_connect</code> (7391), <code>_do_dstar_family_connect</code> (7142), <code>action_m17_connect</code> (7275)</td></tr>
+    <tr><td>Link control</td><td>Sends <code>rpt cmd</code> link commands for one node, or drops every link.</td><td><code>_connect</code> (4235), <code>_disconnect</code> (4238), <code>_disconnect_perm</code> (4241), <code>_drop_links</code> (4305)</td></tr>
+    <tr><td>Transport</td><td>Sends a command to Asterisk over the AMI socket. Falls back to the Asterisk command line when the socket is not available.</td><td><code>_asterisk</code> (4178), <code>ami_command</code> (693)</td></tr>
+    <tr><td>Bridge tool</td><td>Runs <code>dvswitch.sh</code> with a timeout: 40 s for mode and tune, 10 s for the rest.</td><td><code>_dvs</code> (4196)</td></tr>
+    <tr><td>Services</td><td>Restarts the bridge and M17 services when a mode needs it.</td><td><code>_svc_restart</code>; <code>_hard_restart_stack</code> (7642)</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The link commands</div>
+  <h1 class="ch">The Asterisk link codes</h1>
+  <p class="ch-lede">Each link command is sent as <code>rpt cmd &lt;local node&gt; ilink &lt;code&gt; &lt;node&gt;</code>. The code names the operation.</p>
+
+  <table>
+    <tr><th>Code</th><th>Used by</th><th>Meaning as used here</th></tr>
+    <tr><td>1</td><td><code>_disconnect</code></td><td>Disconnect one link.</td></tr>
+    <tr><td>2</td><td><code>_connect</code> for phone listen-only nodes</td><td>Connect receive-only (listen).</td></tr>
+    <tr><td>3</td><td><code>_connect</code> (the normal case); the Node Talker transmit node after a fallback</td><td>Connect two-way (transceive).</td></tr>
+    <tr><td>6</td><td><code>_ilink6_pair</code>, the fallback when the link list cannot be read</td><td>Disconnect all links. Sent twice, 0.2 s apart.</td></tr>
+    <tr><td>11</td><td><code>_disconnect_perm</code></td><td>Drop a permanent link (one listed in <code>rpt.conf</code> under <code>nodes=</code>). The log messages say "permanent link ... ilink 11".</td></tr>
+  </table>
+  <p class="note">The code does not comment on the codes. The meanings above come from how the code uses them and from its log messages. Check them against the Asterisk <code>app_rpt</code> documentation for the installed version before publishing.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Connect flows</div>
+  <h1 class="ch">Making a link</h1>
+
+  <h2><span class="n">4.1</span>ASL and connect by number</h2>
+  <p>Entry: <code>action_asl_connect</code> (7255) and <code>action_connect_by_number</code> (7249), both calling <code>_do_asl_connect</code> (7339).</p>
+  <ol>
+    <li>Check that the node is all digits. Refuse a bridge node.</li>
+    <li>Take the link lock and reset the permanent-link settle timer.</li>
+    <li>Drop every other link (<code>_drop_links</code>, keep none).</li>
+    <li>Connect the node with code 3, or code 2 for a phone listen-only node.</li>
+    <li>Wait 1.5 s, arm the bridge reaper, and set the page to ASL with the node as the current favorite.</li>
+  </ol>
+
+  <h2><span class="n">4.2</span>EchoLink</h2>
+  <p>Entry: <code>action_echo_connect</code> and <code>action_echo_connect_by_number</code>, through <code>_do_echo_connect</code> (7391). The same steps as ASL, with the node mapped to its ASL number first. A by-number EchoLink node may have at most seven digits. The page is set to ECHO.</p>
+
+  <h2><span class="n">4.3</span>D-STAR and XLX</h2>
+  <p>Entry: <code>action_dstar_connect</code> and <code>action_xlx_connect</code>, through <code>_do_dstar_family_connect</code> (7142).</p>
+  <ol>
+    <li>Check the reflector or gateway callsign, the module letter and the length. A gateway callsign is 3 to 6 letters or digits. A reflector is REF, XRF or DCS plus three digits. XLX takes a single-letter module.</li>
+    <li>Clear any other link (<code>_clear_foreign_link</code>).</li>
+    <li>Send the D-STAR unlink and the talkgroup disconnect, then wait the settle time (400 ms).</li>
+    <li>On ASL, connect the digital bridge node if it is not already linked.</li>
+    <li>Set the mode to D-STAR, then wait out the rest of the settle time.</li>
+    <li>For a gateway with ircDDB remote control configured, link through remote control and tune to CQCQCQ. If that fails, fall back to a plain tune.</li>
+    <li>Tune <code>dvswitch.sh</code> to the reflector or gateway. A timeout returns a message saying the tune may still be completing, and the page state is not updated.</li>
+  </ol>
+
+  <h2><span class="n">4.4</span>M17</h2>
+  <p>Entry: <code>action_m17_connect</code> (7275), which also takes the lock.</p>
+  <ol>
+    <li>Check the reflector IP, the base name and the module (A to Z, or <code>@ALL</code>). Refuse if the M17 bridge is not detected.</li>
+    <li>Clear any other link, and send the talkgroup disconnect.</li>
+    <li>Write <code>USRP2M17.ini</code> for the reflector and restart the M17 service.</li>
+    <li>On ASL, connect the M17 bridge node if it is not already linked.</li>
+    <li>Set the page to M17, with the favorite as <code>base|module</code>.</li>
+  </ol>
+
+  <h2><span class="n">4.5</span>Local API (Node Talker)</h2>
+  <p>Node Talker sends <code>connect</code> to <code>action_local</code> (14521). That switches to the ASL or ECHO tab when needed and then calls the same ASL or EchoLink connect as the dashboard. An M17 link from Node Talker goes through <code>_local_m17_connect</code> (14708), which checks the reflector against the host list or the M17 favorites and the modules it publishes.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Disconnect flows</div>
+  <h1 class="ch">Taking a link down</h1>
+  <p class="ch-lede">A single disconnect removes one link or one mode's tune. It does not restart services, except in the emergency reset (Part 6).</p>
+
+  <table>
+    <tr><th>What is disconnected</th><th>Entry (line)</th><th>What it does</th></tr>
+    <tr><td>Current ASL link</td><td><code>action_asl_disconnect_current</code> (7368)</td><td>Drops the current favorite node if it is not a bridge node: code 11 if permanent, otherwise code 1. Clears any other link and sets the page to Ready.</td></tr>
+    <tr><td>Linked node (any)</td><td><code>action_disc_perm_link</code> (7379)</td><td>Drops the linked node, code 11 if permanent, otherwise code 1.</td></tr>
+    <tr><td>EchoLink</td><td><code>action_echo_disconnect</code> (7422)</td><td>Drops the mapped EchoLink node, then clears any other link.</td></tr>
+    <tr><td>D-STAR</td><td><code>action_dstar_disconnect</code> (7211)</td><td>If ircDDB remote control is configured, sends an unlink. Then sends the D-STAR unlink and talkgroup disconnect, and waits the settle time.</td></tr>
+    <tr><td>XLX</td><td><code>action_xlx_disconnect</code> (7223)</td><td>Sends the D-STAR unlink and talkgroup disconnect, then waits the settle time.</td></tr>
+    <tr><td>M17</td><td><code>action_m17_disconnect</code> (7331) to <code>_m17_disconnect_core</code> (7317)</td><td>When ASL is present, drops the M17 bridge node with code 1. Writes a placeholder <code>USRP2M17.ini</code> and restarts the service. If the write fails, the message says the link was dropped but the file was not written.</td></tr>
+    <tr><td>Digital tune</td><td><code>action_tune</code> (7055) with <code>disconnect</code> or <code>*88</code></td><td>For D-STAR, sends the unlink. Then sends the talkgroup disconnect and waits the settle time. Clears a foreign link when the page is the active one.</td></tr>
+    <tr><td>Digital, local API</td><td><code>_local_dvs_disconnect</code> (14678)</td><td>If the page is a digital mode with a tune, calls the D-STAR disconnect for D-STAR, or the tune disconnect for other modes.</td></tr>
+    <tr><td>Any node, local API</td><td><code>action_local</code>, disconnect branch (14521)</td><td>Refuses bridge-managed nodes and the Node Talker transmit node (1921). Otherwise calls the matching disconnect for the current ASL or EchoLink favorite, or drops the node directly.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Drop-all, reset and boot</div>
+  <h1 class="ch">Clearing everything</h1>
+
+  <h2><span class="n">6.1</span>Dropping every link: <code>_drop_links</code></h2>
+  <p>Used by ASL and EchoLink connects, by the boot disconnect, and by the emergency reset. The steps are:</p>
+  <ol>
+    <li>Read the linked nodes with <code>rpt show variables</code>. If the read fails, send code 6 twice (0.2 s apart), restore the Node Talker transmit link with code 3 on node 1921 if that link is owned and running, and log what is still linked.</li>
+    <li>Otherwise, for each linked node except the one to keep and the Node Talker listen set: code 11 if the node is a permanent link, otherwise code 1.</li>
+    <li>Stop after 16 links per pass. The poller handles the rest.</li>
+    <li>Pause 0.25 s between nodes.</li>
+    <li>After 1 s, a background check logs any link still up. It does not retry.</li>
+  </ol>
+  <p><code>_disconnect_all</code> (4339) is this call with nothing to keep.</p>
+
+  <h2><span class="n">6.2</span>Emergency reset: <code>action_disconnect_all</code></h2>
+  <p>The dashboard's reset (7656). It holds the link lock and then:</p>
+  <ol>
+    <li>Graceful step (<code>_graceful_notify</code>, 7633): send the D-STAR unlink if the page is D-STAR or XLX, send the talkgroup disconnect, and, when ASL is present, drop every link.</li>
+    <li>Restart step (<code>_hard_restart_stack</code>, 7642): restart the analog bridge and the MMDVM bridge, and Asterisk if ASL is present. Wait 2 s, then set the current digital mode again (FCS becomes YSF).</li>
+    <li>Clear the favorites and linked node in the state, and set the status to the page with RESET.</li>
+  </ol>
+  <p>This is the only disconnect path that restarts Asterisk. It interrupts every link, including the Node Talker path, and the bridge services.</p>
+
+  <h2><span class="n">6.3</span>Boot</h2>
+  <ul>
+    <li>A process restart within the same boot keeps live links. The code logs this and does not disconnect.</li>
+    <li>On a fresh boot with ASL present, <code>_asl_boot_disconnect</code> (15106) waits up to 450 s from dashboard start, for Asterisk to have been up for 30 s and for the network to be ready. It then runs <code>_disconnect_all</code>.</li>
+    <li>If Asterisk is not up after the wait, the boot disconnect is skipped and logged.</li>
+    <li>When the disconnect finishes, the boot ID is written to <code>/run/asl_dvs/boot_disconnect_done</code>. A later process start in the same boot does not repeat it.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Locks and bridge slots</div>
+  <h1 class="ch">Keeping actions in order</h1>
+
+  <h2><span class="n">7.1</span>One lock for link actions</h2>
+  <ul>
+    <li>All link actions share one reentrant lock, <code>_link_action_lock</code>. It is taken by <code>_link_enter</code> and <code>_link_guard</code>, and by the <code>@_link_locked</code> decorator.</li>
+    <li><code>@_link_locked</code> waits up to 2 s for the lock. If it still cannot get it, the action is refused with "Busy — another connect, disconnect or tab switch is still running."</li>
+    <li>Checked for this review: every connect and disconnect entry point takes the lock, either directly or through a decorator. The two wrappers without a decorator, <code>action_dstar_connect</code> and <code>action_xlx_connect</code>, only call a locked function. <code>action_m17_disconnect</code> takes the lock itself before calling its locked core.</li>
+    <li><code>_is_connecting()</code> reports whether a link action is running. The page can use it to show progress.</li>
+    <li>The bridge reaper (Section 7.2) tries the lock without waiting and skips its pass if the lock is busy.</li>
+  </ul>
+
+  <h2><span class="n">7.2</span>Bridge slots are owned by the dashboard</h2>
+  <ul>
+    <li>The digital, M17 and phone bridge nodes are bridge slots. ASL and EchoLink connects refuse them, and so does the Node Talker local API.</li>
+    <li>The bridge reaper is armed by the first connect. A bridge node that stays linked for two polls, and is not the node the current tab owns, is dropped. Each node has an 8 s cooldown after a drop.</li>
+    <li><code>_clear_foreign_link</code> (6957) drops the linked node unless there is none, it is node 0, it is a bridge node, or it is the current favorite. It drops with code 11 if the node is permanent.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points to decide on</div>
+  <h1 class="ch">Things the review found</h1>
+  <p class="ch-lede">These are observations from reading the code. They are not bugs that were tested. The book author can decide which to describe as design and which to flag.</p>
+
+  <h2><span class="n">8.1</span>"Connected" means the command was sent</h2>
+  <p><code>_asterisk</code> (4178) logs a warning when Asterisk refuses a command, but returns nothing. So <code>_connect</code>, and every connect action built on it, returns success whatever Asterisk did. The page state shows the link as set. The poller and <code>rpt show variables</code> are the only later checks on whether the link came up.</p>
+
+  <h2><span class="n">8.2</span>Link drops are capped</h2>
+  <p>One pass of <code>_drop_links</code> drops at most 16 links. Any others are left to the poller. That is fine for normal use but worth knowing if a node is ever linked to many nodes at once.</p>
+
+  <h2><span class="n">8.3</span>The fallback does not check permanent links</h2>
+  <p>When the link list cannot be read, <code>_drop_links</code> sends code 6 twice without first checking the permanent-link list. Code 11 is used only when the list is read. The fallback then restores only the Node Talker transmit link.</p>
+
+  <h2><span class="n">8.4</span>The emergency reset restarts services</h2>
+  <p><code>action_disconnect_all</code> restarts Asterisk and both bridge services. It is the only disconnect path that does, so it is much more disruptive than the others. Node Talker and every tab lose their links until the services are back.</p>
+
+  <h2><span class="n">8.5</span>Failed tunes do not update the page</h2>
+  <p>When a D-STAR or XLX tune times out, the action returns a message saying the tune may still be completing, and does not update the page state. The bridge can then be on a new reflector while the page still shows the old one. The message tells the operator to check the tab before retrying.</p>
+
+  <h2><span class="n">8.6</span>The teardown check only logs</h2>
+  <p>After a drop, the background check logs links it still sees and does not retry them. A link that survives is found only in the log.</p>
+
+  <h2><span class="n">8.7</span>Meanings of the link codes</h2>
+  <p>The codes in Part 3 are not commented in the source. Confirm them against the installed Asterisk version before the book states them as fact.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 9 &middot; Source map</div>
+  <h1 class="ch">Where each piece is</h1>
+  <p class="ch-lede">Line numbers are for <code>nodecontrol_pi02w_v9_3_107_20261102.py</code>. The full build has the same function names and bodies for the functions listed here.</p>
+
+  <table>
+    <tr><th>Function</th><th>Line</th><th>Role</th></tr>
+    <tr><td>ami_command</td><td>693</td><td>Sends an Asterisk command over AMI, with fallback</td></tr>
+    <tr><td>_asterisk</td><td>4178</td><td>Sends a link command and logs failures</td></tr>
+    <tr><td>_connect / _disconnect / _disconnect_perm</td><td>4235 / 4238 / 4241</td><td>Codes 3 or 2, 1 and 11</td></tr>
+    <tr><td>_dvs</td><td>4196</td><td>Runs dvswitch.sh with timeouts</td></tr>
+    <tr><td>_drop_one_link</td><td>4287</td><td>Drops one node, choosing code 11 or 1</td></tr>
+    <tr><td>_drop_links</td><td>4305</td><td>Drops every link, with the fallback</td></tr>
+    <tr><td>_disconnect_all</td><td>4339</td><td>Drops every link, nothing kept</td></tr>
+    <tr><td>_is_connecting / _link_enter / _link_guard / _link_locked</td><td>6318 / 6322 / 6344 / 6351</td><td>Lock and busy handling</td></tr>
+    <tr><td>_arm_bridge_reaper / _bridge_reaper</td><td>6486 / 6492</td><td>Bridge slot ownership</td></tr>
+    <tr><td>_dvs_settle</td><td>6471</td><td>Waits out the DVSwitch settle time</td></tr>
+    <tr><td>_clear_foreign_link</td><td>6957</td><td>Drops a link the page does not own</td></tr>
+    <tr><td>action_tune</td><td>7055</td><td>Tunes a digital mode, including disconnect</td></tr>
+    <tr><td>_do_dstar_family_connect</td><td>7142</td><td>D-STAR and XLX connect</td></tr>
+    <tr><td>action_dstar_disconnect / action_xlx_disconnect</td><td>7211 / 7223</td><td>D-STAR and XLX disconnect</td></tr>
+    <tr><td>action_m17_connect</td><td>7275</td><td>M17 connect</td></tr>
+    <tr><td>_m17_disconnect_core / action_m17_disconnect</td><td>7317 / 7331</td><td>M17 disconnect</td></tr>
+    <tr><td>_do_asl_connect</td><td>7339</td><td>ASL connect</td></tr>
+    <tr><td>action_asl_disconnect_current / action_disc_perm_link</td><td>7368 / 7379</td><td>ASL disconnect</td></tr>
+    <tr><td>_do_echo_connect / action_echo_disconnect</td><td>7391 / 7422</td><td>EchoLink connect and disconnect</td></tr>
+    <tr><td>_graceful_notify / _hard_restart_stack</td><td>7633 / 7642</td><td>Emergency reset steps</td></tr>
+    <tr><td>action_disconnect_all</td><td>7656</td><td>Emergency reset</td></tr>
+    <tr><td>action_local</td><td>14521</td><td>Local API for Node Talker</td></tr>
+    <tr><td>_local_dvs_disconnect / _local_m17_connect</td><td>14678 / 14708</td><td>Local API digital and M17</td></tr>
+    <tr><td>_boot_disconnect_done</td><td>14919</td><td>Reads the boot marker</td></tr>
+    <tr><td>_asl_boot_disconnect</td><td>15106</td><td>Boot disconnect</td></tr>
+  </table>
+</section>
+
+</body>
+</html>

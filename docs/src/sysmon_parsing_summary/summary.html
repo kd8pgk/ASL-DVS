@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - SysMon: How System, Port and Firewall Data Are Parsed</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; SYSMON</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W fork</b><br>sysmon_pi02w</div>
+  </div>
+  <div class="body">
+    <h1>How SysMon <span>Parses</span> the System</h1>
+    <p class="lede">Where SysMon gets its system information, how it reads the ini and conf files, how it builds the port list, and how it decides whether the Pi's firewall lets the node's traffic through.</p>
+    <div class="chips">
+      <span class="chip c1">SYSTEM</span>
+      <span class="chip c2">PORTS</span>
+      <span class="chip c3">CONF AND INI</span>
+      <span class="chip c4">FIREWALL</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Source: sysmon_pi02w_v6_13_83_20261028.py on branch ccr-9d4fe19f-ssud83. The full build's SysMon matches for every function named here.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope and method</div>
+  <h1 class="ch">What was read</h1>
+  <p class="ch-lede">SysMon gathers its data in one background loop, keeps the latest values in a shared state, and serves that state to the pages. Parsing happens at three points: when a value is read from the system, when a config file is read, and when a firewall or socket command's output is read.</p>
+
+  <h2><span class="n">1.1</span>Method</h2>
+  <ul>
+    <li>Each parsing function was read in full, along with the functions it calls for its data.</li>
+    <li>The full build's copy of each named function was compared by code structure. All 31 match the Pi Zero 2 W build, so the behaviour described here applies to both.</li>
+    <li>Nothing was run on a node. Behaviour is described from the code.</li>
+  </ul>
+
+  <h2><span class="n">1.2</span>The main loop</h2>
+  <table>
+    <tr><th>Step</th><th>How often</th><th>What it does</th></tr>
+    <tr><td>System readers</td><td>Every 10 s</td><td>Hostname, kernel, uptime, load, memory, swap, CPU temperature, core voltage, throttling, disk, SD health, process count, wifimon's shutdown state.</td></tr>
+    <tr><td>Quick tests and port conflicts</td><td>Every third pass (30 s)</td><td>Each pinned service's state, its port, and its config file. Then the duplicate-port check.</td></tr>
+    <tr><td>Registrations</td><td>Every third pass, or until the state is OK</td><td>Live sign-in state for each network.</td></tr>
+    <tr><td>M17 reflector list</td><td>About hourly, if the file is stale</td><td>Refreshes the reflector list from its source.</td></tr>
+  </table>
+  <p>The pages read the stored state. Requests that need a fresh answer (the Ports list, a probe, a firewall check) run their own command at the time of the request.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; System information</div>
+  <h1 class="ch">Where each value comes from</h1>
+  <p class="ch-lede">Most values come from a file under <code>/proc</code>, <code>/sys</code> or <code>/etc</code>, or from a short command. Each reader returns an empty value on failure, and writes a debug line only. A missing value shows as a dash on the page, not as an error.</p>
+
+  <table>
+    <tr><th>Value</th><th>Source</th><th>How it is parsed</th></tr>
+    <tr><td>Uptime</td><td><code>uptime -p</code></td><td>The leading "up " is removed.</td></tr>
+    <tr><td>Load</td><td><code>/proc/loadavg</code></td><td>The first three fields, for 1, 5 and 15 minutes.</td></tr>
+    <tr><td>Memory and swap</td><td><code>/proc/meminfo</code></td><td>MemTotal and MemAvailable (and SwapTotal and SwapFree), converted from kB to MB. Used memory is total minus available.</td></tr>
+    <tr><td>CPU temperature</td><td><code>/sys/class/thermal/thermal_zone0/temp</code></td><td>Millidegrees divided by 1,000, to one decimal place.</td></tr>
+    <tr><td>Core voltage</td><td><code>vcgencmd measure_volts core</code></td><td>The number after <code>volt=</code>.</td></tr>
+    <tr><td>Throttling</td><td><code>vcgencmd get_throttled</code></td><td>The hex value after <code>throttled=</code>. Bits 0 to 3 mean "now" (under-voltage, frequency cap, throttled, temperature limit). Bits 16 to 19 mean "since boot". The status is "uv" if under-voltage is now, "throttled" if throttled now, "warn" if any "since boot" bit is set, otherwise "ok".</td></tr>
+    <tr><td>Disk</td><td><code>os.statvfs("/")</code></td><td>Percent used, using space available to ordinary users, and the sizes in GB.</td></tr>
+    <tr><td>SD health</td><td><code>/proc/mounts</code></td><td>The root filesystem's option list. "ro" means read-only, anything else "rw".</td></tr>
+    <tr><td>Process count</td><td><code>/proc</code></td><td>The number of entries whose names are digits.</td></tr>
+    <tr><td>Service state</td><td><code>systemctl list-unit-files</code>, then <code>systemctl show</code></td><td>Unit names must match a fixed pattern and end in <code>.service</code>. Installed units are then queried for their properties, and the process ID is matched back to its unit.</td></tr>
+    <tr><td>Sound cards</td><td><code>/proc/asound/cards</code></td><td>Parsed into a list of cards for the hardware page.</td></tr>
+    <tr><td>Serial and USB devices</td><td><code>/sys/class/tty</code>, <code>/sys/bus/usb/devices</code></td><td>ttyUSB and ttyACM devices, and the USB device tree.</td></tr>
+    <tr><td>Process name</td><td><code>/proc/&lt;pid&gt;/comm</code>, <code>/proc/&lt;pid&gt;/cmdline</code></td><td>Used to name the program behind a port.</td></tr>
+  </table>
+
+  <h2><span class="n">2.1</span>What "unavailable" means</h2>
+  <p>When a reader fails, it returns an empty value. For throttling, the page reads "vcgencmd unavailable" from an empty result, so a missing command and a healthy Pi look different. For the other readers, a failure looks like a blank. The book should say that a dash can mean either "not known" or "no data".</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Ports</div>
+  <h1 class="ch">Listening ports</h1>
+
+  <h2><span class="n">3.1</span>Reading the socket table</h2>
+  <p>The port list comes from <code>ss -tlnpu</code>. Each line is parsed like this:</p>
+  <ol>
+    <li>The header line is skipped.</li>
+    <li>The protocol (first field) must be <code>tcp</code> or <code>udp</code>.</li>
+    <li>The local address (fifth field) is split at its last colon. The port must be all digits, so the address and the port are kept apart correctly for IPv6 forms.</li>
+    <li>The process ID comes from <code>pid=</code>, and the process name from the first quoted word after it.</li>
+  </ol>
+  <p>The list shows each protocol and port once (the first entry wins), sorted by port number. A port bound on both IPv4 and IPv6 therefore appears once.</p>
+
+  <h2><span class="n">3.2</span>Labels from the pinned services table</h2>
+  <p>The labels in the port list come from the pinned services table. Each row has five fields: unit, description, config file, port and protocol. Rows that begin with <code>__GROUP__:</code> start a group. The default table names these groups: System, ASL-DVS, Asterisk Core and M17. The default table gives SSH port 22, Cockpit 9090, the Dashboard 8989, SysMon 9999, Asterisk 4569/udp, and Allmon3 8080.</p>
+  <p>A label is attached by port number only. If two units share a port, the later one in the table wins. A row whose port is <code>-</code>, <code>parse</code> or blank has no label.</p>
+
+  <h2><span class="n">3.3</span>The <code>parse</code> value is not used</h2>
+  <p>The table's port field accepts the word <code>parse</code>, which seems meant to read the port from the unit's config file. No code does this. The quick tests and the service list skip <code>parse</code>, and show it as a dash. A row written as <code>parse</code> therefore never gets a port. The book should not describe this as working.</p>
+
+  <h2><span class="n">3.4</span>Duplicate ports</h2>
+  <p>Every 30 seconds, a port is reported as a conflict when at least two different process IDs are listening on the same protocol and port. Two sockets from one process do not count.</p>
+
+  <h2><span class="n">3.5</span>Quick tests</h2>
+  <p>For each pinned unit, the quick test checks four things in order: the unit is installed, it is active, its port is listening, and its config file exists and is not empty. The result is pass, fail or not applicable.</p>
+  <p><strong>Caution.</strong> The listening check is a substring test: it looks for the text <code>:port</code> anywhere in the <code>ss</code> output. Port 443 would therefore also match a listener on 4430. The duplicate and probe code uses a different, exact test (see 3.6), and the quick test should match its style.</p>
+
+  <h2><span class="n">3.6</span>On-demand probes</h2>
+  <p>The probe page tests one port over TCP, HTTP or UDP. It builds its target list from the addresses that <code>ss</code> reports for that port, then adds loopback (127.0.0.1 and ::1) as fallbacks. Addresses of <code>0.0.0.0</code> and <code>*</code> are replaced by loopback. A link-local IPv6 address keeps its interface scope. Nothing is probed beyond the node itself.</p>
+  <p>The phone check's UDP listener test (not the probe page) uses an exact suffix match on <code>:port</code>, so it does not match a longer port. This is the safer form.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Config and ini files</div>
+  <h1 class="ch">Reading the conf and ini files</h1>
+
+  <h2><span class="n">4.1</span>Which files are opened, and how</h2>
+  <ul>
+    <li><strong>Asterisk conf files.</strong> A file is accepted only if its name matches <code>^[\w\-]+\.conf$</code> and holds no slash or <code>..</code>. It is read from <code>/etc/asterisk</code>.</li>
+    <li><strong>Other ini files.</strong> These are opened by an explicit list of paths, tried in order. Examples: Analog_Bridge.ini in <code>/opt</code> or <code>/etc</code>; USRP2M17.ini in <code>/opt/USRP2M17</code>; DVSwitch.ini, MMDVM_Bridge.ini and the YSF, P25 and NXDN gateway ini files in <code>/opt</code>, <code>/etc</code> and <code>/etc/dvswitch</code>; allmon3.ini in the Allmon3 folder.</li>
+    <li><strong>Size.</strong> Any file is read up to 64 KB. Beyond that, the text is cut and a line says so. A key near the end of a large file can be missed.</li>
+    <li><strong>Decoding.</strong> Files are read with errors replaced, so a bad byte does not stop the read.</li>
+  </ul>
+
+  <h2><span class="n">4.2</span>The parsers</h2>
+  <table>
+    <tr><th>File</th><th>Parser</th><th>What it takes out</th></tr>
+    <tr><td>rpt.conf</td><td><code>_rpt_scan_full</code></td><td>Node sections and their keys. It understands templates (<code>[name](!)</code>), inheritance (<code>[1999](node-main)</code>), and <code>;--</code> to <code>--;</code> comment blocks. It records which section each key came from, and lists any template that is missing. A node is a numeric section that is not on the reserved list.</td></tr>
+    <tr><td>rpt.conf (USRP lines)</td><td><code>parse_rpt_conf</code></td><td>The RX and TX ports from a <code>USRP/host:rx:tx</code> channel line.</td></tr>
+    <tr><td>iax.conf</td><td><code>_dvsm_read_iax_conf</code></td><td>The <code>[general]</code> bindport (default 4569) and bindaddr.</td></tr>
+    <tr><td>pjsip.conf</td><td>Phone context loader, then <code>_ph_transport_for</code></td><td>The first UDP transport and its bind address. The port after the last colon is the SIP port. The default, if none is set, is 5060.</td></tr>
+    <tr><td>rtp.conf</td><td><code>_ph_rtp_range</code></td><td><code>rtpstart</code> and <code>rtpend</code>, with comments removed. If Asterisk is running, <code>rtp show settings</code> is used instead.</td></tr>
+    <tr><td>manager.conf</td><td><code>parse_manager_conf</code></td><td>Each user section other than <code>[general]</code>. It reports whether a secret is set, and never shows the value.</td></tr>
+    <tr><td>extensions.conf</td><td><code>_ph_build_dialplan</code></td><td>The <code>exten</code> and <code>same</code> lines, turned into a dial plan.</td></tr>
+    <tr><td>Analog_Bridge.ini</td><td><code>_dvsm_read_ab</code></td><td>The rxPort and txPort in the <code>[usrp]</code> section.</td></tr>
+    <tr><td>USRP2M17.ini</td><td><code>_m17_read_config</code></td><td>LocalPort, DstPort and gain from <code>[M17 Network]</code>, and the USRP ports from <code>[USRP Network]</code>.</td></tr>
+    <tr><td>DVSwitch.ini</td><td><code>parse_dvswitch_ini</code></td><td>txPort and rxPort for each section (DMR, D-STAR and others).</td></tr>
+    <tr><td>DVSwitch var.txt</td><td><code>parse_dvswitch_var_txt</code></td><td>Network entries, shown as address:port.</td></tr>
+    <tr><td>allmon3.ini</td><td><code>parse_allmon3_ini</code>, <code>parse_allmon3_web</code></td><td>Node sections, and the web port.</td></tr>
+    <tr><td>Dashboard conf, phone.json</td><td>Phone context loader</td><td>The dashboard's HOIP server and port.</td></tr>
+  </table>
+  <p class="note">The parsers that were not traced line by line are echolink.conf, savenode.conf, rpt_http_registrations.conf, modules.conf and the MMDVM gateway log settings. Their names and inputs are known, but their parse rules are not described here.</p>
+
+  <h2><span class="n">4.3</span>How the section parser works</h2>
+  <ul>
+    <li>A section header is a line in square brackets. A key is <code>name = value</code>. In the rpt.conf parser a semicolon ends the value; in the Phone parser an escaped <code>\;</code> is kept and only an unescaped one starts a comment.</li>
+    <li>Key case differs by parser. The rpt.conf and Phone parsers lower-case keys. The DVSwitch and USRP2M17 parsers keep the original case. A search by key must match the parser's case.</li>
+    <li>The generic <code>_ini_sections</code> function takes the header and key patterns as parameters, so each file type can define its own rules.</li>
+  </ul>
+
+  <h2><span class="n">4.4</span>The Phone context loader</h2>
+  <p>The phone checks read the Asterisk files as one set. <code>_ph_parse_file</code> follows <code>#include</code> and <code>#tryinclude</code> lines, up to three levels deep. Each file must be 1 MB or smaller, and its name must match <code>^[\w.\-]+$</code>. Lines between <code>; &gt;&gt;&gt; dvs-phone</code> and <code>; &lt;&lt;&lt; dvs-phone &lt;&lt;&lt;</code> are marked as managed by the dashboard, as are whole files named <code>dvs_phone_*</code>.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; The firewall</div>
+  <h1 class="ch">Deciding whether the Pi lets traffic in</h1>
+  <p class="ch-lede">The firewall check does not read the whole firewall. It asks one question: are the UDP ports the node needs open to incoming traffic? The two ports it needs are the SIP port and the RTP audio range.</p>
+
+  <h2><span class="n">5.1</span>Which firewall is found</h2>
+  <table>
+    <tr><th>Order</th><th>Test</th><th>Note</th></tr>
+    <tr><td>1</td><td><code>firewall-cmd --state</code> says running</td><td>firewalld</td></tr>
+    <tr><td>2</td><td><code>ufw</code> is installed</td><td>Installed is enough. Whether ufw is active is checked later.</td></tr>
+    <tr><td>3</td><td><code>nft</code> is installed</td><td>nftables</td></tr>
+    <tr><td>4</td><td><code>iptables</code> is installed</td><td>iptables</td></tr>
+    <tr><td>5</td><td>None of the above</td><td>"no firewall on the Pi"</td></tr>
+  </table>
+
+  <h2><span class="n">5.2</span>Reading the rules</h2>
+  <ul>
+    <li><strong>firewalld.</strong> Each active zone is read with <code>--list-all</code>. If a zone's target is ACCEPT, everything is open. Otherwise, the zone's ports are read, its services are expanded from their XML files (in <code>/etc/firewalld/services</code> or <code>/usr/lib/firewalld/services</code>, following includes up to four levels), and its rich rules are matched for port, protocol and accept, reject or drop.</li>
+    <li><strong>ufw.</strong> <code>ufw status verbose</code> is checked first. If ufw is not active, the check stops. If the default policy allows incoming traffic, everything is open. Otherwise <code>ufw status numbered</code> is read. IPv6 rules are skipped. ALLOW and LIMIT rules count.</li>
+    <li><strong>nftables.</strong> The ruleset is read. If every input chain accepts everything, the result is "open". Otherwise the check says it cannot read the rules port by port.</li>
+    <li><strong>iptables.</strong> The INPUT chain is read. If the policy accepts and there is no DROP or REJECT, the result is "open". Otherwise the check says it cannot read the rules port by port.</li>
+  </ul>
+
+  <h2><span class="n">5.3</span>The coverage check</h2>
+  <p>Only UDP rules that allow traffic are collected. The needed range (one port for SIP, or the RTP range) is compared with them, and any part not covered is listed as a gap. The result is one of five states:</p>
+  <table>
+    <tr><th>State</th><th>Meaning</th></tr>
+    <tr><td>open</td><td>Every port in the range is allowed.</td></tr>
+    <tr><td>partial</td><td>Some ports are allowed. The gaps are listed.</td></tr>
+    <tr><td>closed</td><td>None of the range is allowed (the whole range is a gap).</td></tr>
+    <tr><td>nofilter</td><td>The firewall lets everything in (firewalld target ACCEPT, ufw default allow, or an accept-all chain), or ufw is not active.</td></tr>
+    <tr><td>unknown</td><td>The firewall's rules cannot be read port by port (nftables or iptables with filtering).</td></tr>
+  </table>
+
+  <h2><span class="n">5.4</span>Fix advice</h2>
+  <p>The advice names the port by taking the last word of the check's label, then gives the command for the firewall found: a firewalld command, a ufw allow rule, an nftables reload, or a general instruction when none is found.</p>
+
+  <h2><span class="n">5.5</span>What the check does not cover</h2>
+  <ul>
+    <li>Only UDP. The TCP ports in the pinned table (Dashboard, Cockpit, Allmon3, SSH) are not checked against the firewall.</li>
+    <li>IAX2 on 4569/udp is not checked, although it is a UDP port that the node uses. The coverage check has only two entries: SIP, and audio.</li>
+    <li>Only the phone checks call the coverage code. The Ports tab does not show firewall state beside each port.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Points for the book</div>
+  <h1 class="ch">What the parsing shows</h1>
+
+  <h2><span class="n">6.1</span>A rule's source is ignored</h2>
+  <p>In the firewall check, a rule counts as "open" if it allows UDP, whatever its source. A firewalld rich rule that accepts UDP from one address, and a ufw rule that allows UDP from one subnet, are both counted as open to everyone. The source field is read, but never used. A node could therefore show a port as open when only a single address can reach it. Fix this before the book describes the check as a test of reachability.</p>
+
+  <h2><span class="n">6.2</span>Substring port match in the quick test</h2>
+  <p>The quick test finds a listener by searching for <code>:port</code> anywhere in the output. Port 443 would match 4430. The exact match used elsewhere (<code>endswith</code>) avoids this, and the quick test should use it too.</p>
+
+  <h2><span class="n">6.3</span>The <code>parse</code> port is not implemented</h2>
+  <p>The pinned table advertises a way to read a port from a config file, but the code never does it. A user who writes <code>parse</code> gets a dash and no test. The book should either describe the port table as manual, or the code should be finished.</p>
+
+  <h2><span class="n">6.4</span>Failures are silent</h2>
+  <p>A reader that fails returns an empty value and logs only at debug level. The page then shows a dash. A missing command, a permissions problem and a healthy empty value look the same. The book should tell the operator where to look (the debug log) when a value is always blank.</p>
+
+  <h2><span class="n">6.5</span>Truncated files</h2>
+  <p>A conf file over 64 KB is cut, and the parsers see only the first part. This is unlikely for the usual Asterisk files, but a large rpt.conf or a long dial plan would lose its tail without a warning on the page.</p>
+
+  <h2><span class="n">6.6</span>Two ways to match a port</h2>
+  <p>The quick test uses a substring match, and the phone check's UDP listener test uses an exact suffix match. The port list uses a third method: it parses the full socket table and keeps the first entry for each port. Pick one for the book, and note that the substring form can report a listener that is not there.</p>
+
+  <h2><span class="n">6.7</span>Duplicate labels</h2>
+  <p>Two pinned units on the same port give one label, the later one. A second unit on that port is not shown in the list, so an accidental clash may not be noticed until the duplicate check reports it.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Not checked</div>
+  <h1 class="ch">What this summary does not cover</h1>
+  <ul>
+    <li>The parse rules of echolink.conf, savenode.conf, rpt_http_registrations.conf, modules.conf and the MMDVM gateway log settings were not traced line by line.</li>
+    <li>The exact output of <code>ss</code> and <code>ufw</code> on a live node. The parsers were read against their expected formats, not tested on real output.</li>
+    <li>The firewalld rich-rule expression and its variants, beyond the port, protocol and verdict the code reads.</li>
+    <li>How the pages display the values. That is covered in the HTML and JavaScript summaries.</li>
+  </ul>
+</section>
+
+</body>
+</html>

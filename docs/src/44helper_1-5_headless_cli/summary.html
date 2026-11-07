@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - Command Line and Headless Operation</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 1.5</b><br>command line</div>
+  </div>
+  <div class="body">
+    <h1>Command Line and <span>Headless</span> Use</h1>
+    <p class="lede">What 44helper can do without a browser: its command-line options, its web interface as a scripted API, and the reinstall job that runs unattended under systemd.</p>
+    <div class="chips">
+      <span class="chip c1">--INSTALL</span>
+      <span class="chip c2">--BOOT-REPORT</span>
+      <span class="chip c3">HTTP API</span>
+      <span class="chip c4">UNATTENDED</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 1.5 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Examples show the shape of commands; they were not run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Overview</div>
+  <h1 class="ch">Four ways to use it without the page</h1>
+
+  <table>
+    <tr><th>Way</th><th>What it is for</th><th>Needs</th></tr>
+    <tr><td>Command-line options</td><td>Install, remove, and report on the helper itself</td><td>Root</td></tr>
+    <tr><td>The server, started by systemd</td><td>Serves the page and the API, and is restarted if it stops</td><td>Nothing from the operator</td></tr>
+    <tr><td>The HTTP API</td><td>A script can log in, start a step, and read the result</td><td>The root password</td></tr>
+    <tr><td>The reinstall job</td><td>Reinstalls the suite's tools unattended, then reboots the node</td><td>Started from the Config tab, or from the command line by hand</td></tr>
+  </table>
+  <p>Install steps are described in Stage 1. The tunnels and the terminal are covered in Stages 2 and 5.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Command-line options</div>
+  <h1 class="ch">The options the program accepts</h1>
+  <p class="ch-lede">The program is <code>44helper.py</code>, installed at <code>/usr/local/bin/44helper.py</code>. With no option it starts the server. The options are parsed by one argument parser; any other argument is an error.</p>
+
+  <table>
+    <tr><th>Command</th><th>What it does</th><th>Root</th></tr>
+    <tr><td><code>44helper.py</code></td><td>Starts the server on the address and port in <code>/etc/44helper/44helper.conf</code>. The defaults are 0.0.0.0 and port 9997. Run by systemd in normal use.</td><td>Yes, to change the firewall and services</td></tr>
+    <tr><td><code>44helper.py --install</code></td><td>Installs the helper as a service and starts it (Part 3).</td><td>Yes</td></tr>
+    <tr><td><code>44helper.py --uninstall</code></td><td>Stops and removes the service and its command links (Part 3).</td><td>Yes</td></tr>
+    <tr><td><code>44helper.py --boot-report</code></td><td>Prints the Boot tab's report as text to standard output, then exits.</td><td>Not checked in the code</td></tr>
+    <tr><td><code>44helper.py --boot-report --json</code></td><td>The same report as JSON.</td><td>Not checked in the code</td></tr>
+  </table>
+  <p>The <code>--boot-report</code> option redirects the program's own log output to standard error while it builds the report, so the report on standard output is clean enough to save to a file or to parse.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Install and remove the helper</div>
+  <h1 class="ch">The helper's own service</h1>
+
+  <h2><span class="n">3.1</span>What <code>--install</code> does</h2>
+  <ol>
+    <li>Makes sure <code>/etc/44helper</code> exists with mode 0700.</li>
+    <li>Copies the running file to <code>/usr/local/lib/asl_dvs/44helper/</code> under its own name, and removes the previous version it finds there.</li>
+    <li>Makes symlinks to it at <code>/usr/local/bin/44helper.py</code> and at the older path <code>/opt/44helper/asl_dvs_m17_44helper.py</code>. A plain file at either path is replaced by the link, and the install says so.</li>
+    <li>Writes the launcher and the service file <code>/etc/systemd/system/44helper.service</code>.</li>
+    <li>Opens the helper's port in the firewall (the port in the config, default 9997), using the firewall helper from the shared functions.</li>
+    <li>Reloads systemd, enables <code>44helper.service</code>, and restarts it.</li>
+  </ol>
+  <p>The service runs the launcher with the installed file. It is set to Type=notify, to restart always after 3 seconds, and to be checked by a watchdog every 60 seconds. It runs as root, and its output goes to the journal.</p>
+
+  <h2><span class="n">3.2</span>What <code>--uninstall</code> does</h2>
+  <ol>
+    <li>Stops and disables the service.</li>
+    <li>Removes the service file and reloads systemd.</li>
+    <li>Removes the command links at <code>/usr/local/bin/44helper.py</code> and the older path, and the installed copies they point to in the install folder.</li>
+    <li>Removes Python cache files and empty folders left behind.</li>
+  </ol>
+  <p class="note">The removal steps in the code work on the links, the installed copies and the folders around them. None of those steps names <code>/etc/44helper</code>, so the saved settings are expected to survive. This was read from the code (in part), not from a live node.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; The HTTP API</div>
+  <h1 class="ch">Driving the helper from a script</h1>
+  <p class="ch-lede">The page talks to the helper over the same JSON API that a script can use. Nothing in the API needs the page itself, but the rules below must be followed.</p>
+
+  <h2><span class="n">4.1</span>Rules for every request</h2>
+  <ul>
+    <li><strong>Login.</strong> Every route except the public ones needs a session. Without one the helper answers 401 with "Authentication required".</li>
+    <li><strong>The request header.</strong> Every POST needs the header <code>X-Requested-With: XMLHttpRequest</code>. Without it the helper answers 403. The header is a guard against forged requests from other sites, not a password.</li>
+    <li><strong>Lockout.</strong> Five failed logins from one address within five minutes lock that address for 15 minutes, and the login answers 429 with the seconds left.</li>
+    <li><strong>Session cookie.</strong> A successful login sets the cookie <code>helper44_session</code>. A script keeps that cookie and sends it on later requests.</li>
+  </ul>
+
+  <h2><span class="n">4.2</span>The routes a script uses</h2>
+  <table>
+    <tr><th>Route</th><th>Method</th><th>Login</th><th>What it does</th></tr>
+    <tr><td><code>/healthz</code>, <code>/api/ping</code></td><td>GET</td><td>No</td><td>Answers if the helper is running. Useful for a monitor.</td></tr>
+    <tr><td><code>/api/version</code></td><td>GET</td><td>Yes</td><td>The helper's version.</td></tr>
+    <tr><td><code>/api/login</code></td><td>POST</td><td>No</td><td>Body is JSON with a <code>password</code> field, the node's root password. Sets the session cookie.</td></tr>
+    <tr><td><code>/api/logout</code></td><td>POST</td><td>Yes</td><td>Ends the session.</td></tr>
+    <tr><td><code>/api/&lt;tab&gt;/script</code></td><td>GET</td><td>Yes</td><td>The steps of a tab (for example <code>/api/asl3/script</code>), with their exact commands.</td></tr>
+    <tr><td><code>/api/&lt;tab&gt;/action</code></td><td>POST</td><td>Yes</td><td>Starts a step. Tabs with this route include asl3, dvswitch, svxlink, m17, amp and cf.</td></tr>
+    <tr><td><code>/api/action_status?job_key=...</code></td><td>GET</td><td>Yes</td><td>The state and output of a job.</td></tr>
+    <tr><td><code>/api/config/reinstall</code></td><td>GET</td><td>Yes</td><td>The reinstall job's state and the last lines of its log.</td></tr>
+  </table>
+  <p>A step request carries these fields: <code>mode</code> (install, purge or custom), <code>distro</code>, <code>step_id</code>, <code>fields</code> (for steps that need values), and <code>command_text</code>, the exact command. The helper runs only the command it builds itself and refuses a different one (Stage 1, Part 3).</p>
+
+  <h2><span class="n">4.3</span>The shape of a scripted install</h2>
+  <p>The sequence below shows the shape of the calls. The placeholders are not real values, and a real password should never be typed into a command line where the shell history keeps it. Read the password from a file with restricted permissions.</p>
+  <pre>1. log in              POST /api/login         {"password": "&lt;from a protected file&gt;"}
+                         header X-Requested-With: XMLHttpRequest
+                         keep the helper44_session cookie
+2. read the steps      GET  /api/asl3/script
+                         find the step; copy its cmd (or build it from its fields)
+3. start the step      POST /api/asl3/action
+                         {"mode": "install", "distro": "bookworm",
+                          "step_id": "prereqs", "command_text": "&lt;the exact cmd&gt;"}
+4. follow the job      GET  /api/action_status?job_key=asl3_install_bookworm_prereqs
+                         poll until the status is done; read the output</pre>
+  <p>A step whose fields are needed (a callsign, a port) must be sent with <code>fields</code> filled in, and <code>command_text</code> must be the command the helper would build from them. The simplest reliable way is to copy the command shown by the script route after the fields are set.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; The reinstall job</div>
+  <h1 class="ch">Unattended reinstall of the suite's tools</h1>
+  <p class="ch-lede">The Config tab can reinstall the suite's tools from a library, then reboot the node. The work is done by a script written to disk and run by systemd, so it keeps going when the page or the helper's session is gone.</p>
+
+  <h2><span class="n">5.1</span>What it reinstalls</h2>
+  <table>
+    <tr><th>Tool</th><th>Port</th><th>Critical</th></tr>
+    <tr><td>instmon</td><td>8990</td><td>Yes</td></tr>
+    <tr><td>Dashboard (nodecontrol)</td><td>8989</td><td>Yes</td></tr>
+    <tr><td>SysMon</td><td>9999</td><td>No</td></tr>
+    <tr><td>wifimon</td><td>8991</td><td>No</td></tr>
+    <tr><td>44helper</td><td>9997</td><td>No</td></tr>
+  </table>
+
+  <h2><span class="n">5.2</span>Where the new files come from</h2>
+  <p>For each tool that is installed, the job looks in the library folder <code>/etc/asl_dvs/instmon_library/&lt;tool&gt;/</code> for the newest version of the same kind. It keeps the Pi Zero 2 W or full-build variant to match what is installed (the version string says "pi02w" for the fork). If the library has no newer copy, it uses the installed copy. A tool with no version line, or no <code>--install</code> option, is left alone.</p>
+
+  <h2><span class="n">5.3</span>The order of work</h2>
+  <ol>
+    <li><strong>Plan.</strong> Works out which tool gets which file, and writes the plan.</li>
+    <li><strong>Back up.</strong> Copies each installed file to <code>config_restore/reinstall_backup</code>.</li>
+    <li><strong>instmon first.</strong> Before instmon is replaced, a rollback timer is set for 90 seconds. Then instmon is installed and given 6 seconds. If instmon does not answer on its port within 90 seconds, the timer puts the backup back and reinstalls the old file.</li>
+    <li><strong>The other tools.</strong> Each is installed with <code>--install</code> (a command is limited to 600 seconds), then checked: its service must be active and its port must answer, within 60 seconds. If the check fails, the saved old file is installed again, and the step ends as "rolled back", or as "attention" if the old one does not come back either.</li>
+    <li><strong>Settle.</strong> The job waits at least 20 seconds, then up to 180 seconds more, for Asterisk (when it is loaded) and every reinstalled tool to be active with its port answering. Tools that are still not answering are named in the result as a warning.</li>
+    <li><strong>Reboot or not.</strong> If instmon or the Dashboard is not healthy, or Asterisk is loaded but not active, the job does not reboot and says why. Otherwise it reboots the node 5 seconds later, through a one-shot systemd timer.</li>
+  </ol>
+  <p>After a reboot the job's state changes to "rebooted" once the boot time is later than the scheduled reboot. A reboot that cannot be scheduled leaves the job at "done, no reboot", and the message asks for a reboot by hand.</p>
+
+  <h2><span class="n">5.4</span>Starting it and watching it</h2>
+  <ul>
+    <li><strong>From the page:</strong> the Config tab shows the plan, then starts the job when the operator confirms. The helper runs the job with systemd-run, under the unit name <code>asl-dvs-reinstall</code>, so it is not tied to the helper's process.</li>
+    <li><strong>Plan only, from the command line:</strong> <code>python3 /etc/asl_dvs/instmon_library/config_restore/reinstall_job.py --plan</code> prints the plan as JSON and changes nothing.</li>
+    <li><strong>Run from the command line:</strong> <code>... reinstall_job.py --run</code> runs the job in the foreground, without the service wrapper. Use <code>systemd-run</code> as the helper does, so that the job is not stopped if the terminal closes.</li>
+    <li><strong>Status:</strong> <code>GET /api/config/reinstall</code>, or the files in <code>config_restore</code>: <code>reinstall_job.json</code> (the state), <code>reinstall.log</code> (the log), and <code>reinstall_pending.json</code> (a job waiting to run).</li>
+    <li><strong>Dismiss:</strong> a finished or pending job can be dismissed. A running job cannot.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Unattended operation</div>
+  <h1 class="ch">What can run without a person</h1>
+
+  <table>
+    <tr><th>Task</th><th>How</th><th>Stops for a person?</th></tr>
+    <tr><td>Install a step that is not manual</td><td>The API (Part 4)</td><td>No, but a step can fail, and the script must read the result</td></tr>
+    <tr><td>Install or remove the helper</td><td><code>--install</code>, <code>--uninstall</code></td><td>No</td></tr>
+    <tr><td>Reinstall the tools and reboot</td><td>The reinstall job (Part 5)</td><td>No. It reboots the node if its checks pass.</td></tr>
+    <tr><td>Health monitoring</td><td><code>/healthz</code> with a timer</td><td>No</td></tr>
+    <tr><td>Boot report for a file</td><td><code>--boot-report --json</code></td><td>No</td></tr>
+    <tr><td>Package recovery</td><td>The Update tab's steps 9 to 11, through the API</td><td>No, but run them in order</td></tr>
+  </table>
+
+  <h2><span class="n">6.1</span>What cannot run without a person</h2>
+  <ul>
+    <li><strong>Manual steps.</strong> Seven steps are marked manual (Stage 1, Part 7): the ASL3 menu, the Ampersand first run and hub file, the Cloudflare token and dashboard steps, the Cloudflare quick test and the Claude sign-in. The page offers no Run button for them, but the API does not check the flag. A script could send one, and it would be an interactive command with no terminal, so these must be done by hand.</li>
+    <li><strong>Steps that stop on a question.</strong> A package step that asks a question at a prompt stops until someone answers. The install commands use the non-interactive settings (<code>DEBIAN_FRONTEND=noninteractive</code>, and the keep-the-old-config options), and the step tables use them throughout (43 occurrences in the file). A step without them can stop at a prompt.</li>
+  </ul>
+
+  <h2><span class="n">6.2</span>Gates that protect an unattended run</h2>
+  <ul>
+    <li>The package-health gate refuses a package step while <code>dpkg --audit</code> reports broken packages.</li>
+    <li>The masked-service gate refuses an install while the tab's services are masked, after trying to clear the masks.</li>
+    <li>The exact-command check refuses any command the helper did not build itself. A script that sends a command from an old copy of the script route will be refused, so it must read the route first.</li>
+    <li>The lockout stops a script that guesses the root password.</li>
+  </ul>
+
+  <h2><span class="n">6.3</span>What to watch for</h2>
+  <ul>
+    <li>Package installs and builds have no timeout. A hung install has to be found by watching the output, not by a limit.</li>
+    <li>The reinstall job reboots the node on its own. Schedule it for a quiet time.</li>
+    <li>The Custom box in the API runs any command as root (Stage 1, Part 6.3). A script should not use it.</li>
+    <li>The root password is the only login. A script that holds it can do everything the page can.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the command line shows</h1>
+
+  <h2><span class="n">7.1</span>One program, several roles</h2>
+  <p>The same file is the server, the installer and the boot reporter. A reader who knows that the helper runs as root from systemd will find the installer and the reporter easy to follow.</p>
+
+  <h2><span class="n">7.2</span>The reinstall job is safer than it looks</h2>
+  <p>It keeps a backup of every file it replaces, puts the old file back when a tool fails its check (instmon also has the 90-second timer), and refuses to reboot unless the critical tools (instmon and the Dashboard) and Asterisk are healthy. The book can describe it as a guarded update.</p>
+
+  <h2><span class="n">7.3</span>Scripts need the exact command</h2>
+  <p>The API is not a free shell. A script must read each step from the script route and send that exact command. This makes scripted installs match the page, but it also means a script breaks when the step table changes between releases.</p>
+
+  <h2><span class="n">7.4</span>Not checked</h2>
+  <ul>
+    <li>The exact JSON the script route returns for each tab. The shape was read from the route, not from a live response.</li>
+    <li>The launcher file and the body of the uninstall's copy-removal loop, which were read in part.</li>
+    <li>The behaviour of the reinstall job on a real node, including the rollback timer.</li>
+  </ul>
+</section>
+
+</body>
+</html>

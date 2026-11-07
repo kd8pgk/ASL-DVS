@@ -31,6 +31,15 @@ SERVERS = {
     "noderecorder": {"file": "noderecorder_v0_5_12_20261105.py", "port": 8995, "scheme": "https", "health": "/api/health"},
     "pibrary": {"file": "pibrary_v0_16_1_20261104.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
+    "instmon": {"file": "instmon_v2_91_1_20261105.py", "port": 8990, "scheme": "http", "health": "/",
+                "health_expect": b"<html", "error_keys": ("error",),
+                "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
+                "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",
+                              "INSTMON_RECORDER_STATUS_URL": None}},
+    "wifimon": {"file": "wifimon_v5_48_0_20261102.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
+                "health_expect": b'"version"', "error_keys": ("error",)},
+    "44helper": {"file": "44helper_v0_1_17_20261103.py", "port": 9997, "scheme": "http",
+                 "error_keys": ("output",)},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
@@ -46,6 +55,9 @@ PUBLIC_BY_DESIGN = {
     "amp_nodetalker": {"/api/health", "/api/whoami"},
     "noderecorder": {"/api/health", "/api/whoami", "/api/recorder/status"},
     "pibrary": {"/api/health", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"},
+    "instmon": {"/suitelog"},
+    "wifimon": {"/api/whoami", "/api/countries"},
+    "44helper": set(),
 }
 
 
@@ -116,6 +128,13 @@ class Server:
             path = os.path.join(self.stub_dir, sub)
             os.makedirs(path, exist_ok=True)
             env[var] = path
+        for var, sub in self.spec.get("files_env", {}).items():
+            if sub is None:
+                env[var] = "http://127.0.0.1:9/none"
+                continue
+            path = os.path.join(self.stub_dir, sub)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            env[var] = path
         return env
 
     def seed_login(self):
@@ -140,7 +159,7 @@ class Server:
         self.seed_login()
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
-            [sys.executable, os.path.join(ROOT, self.spec["file"])],
+            [sys.executable] + self.launcher_args() + [os.path.join(ROOT, self.spec["file"])],
             cwd=ROOT, env=self.env(), stdout=self.log, stderr=subprocess.STDOUT,
             start_new_session=True)
         deadline = time.time() + timeout
@@ -153,6 +172,19 @@ class Server:
             except OSError:
                 time.sleep(0.5)
         raise RuntimeError(f"{self.key} did not answer on port {self.spec['port']}")
+
+    def launcher_args(self):
+        if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1":
+            return []
+        with open(os.path.join(ROOT, self.spec["file"]), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_LAUNCHER_CODE" for t in node.targets):
+                path = os.path.join(self.stub_dir, "asl_dvs_launch.py")
+                with open(path, "w") as out:
+                    out.write(node.value.value)
+                return [path]
+        raise RuntimeError(f"{self.key}: no _LAUNCHER_CODE to start through")
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
@@ -219,7 +251,7 @@ def make_case(key):
         def test_public_endpoints_answer(self):
             status, _, body = self.server.request("GET", self.server.spec["health"])
             self.assertEqual(status, 200)
-            self.assertIn(b'"ok"', body)
+            self.assertIn(self.server.spec.get("health_expect", b'"ok"'), body)
 
         def test_protected_get_routes_refuse_without_login(self):
             failures = []
@@ -259,7 +291,8 @@ def make_case(key):
                 headers={"Content-Type": "application/json"})
             self.assertIn(status, (401, 403, 429), body[:200])
             self.assertNotIn(status, (200, 204))
-            self.assertIn("message", json.loads(body), "error replies must carry a message key")
+            keys = self.server.spec.get("error_keys", ("message",))
+            self.assertTrue(any(k in json.loads(body) for k in keys), f"error replies must carry one of {keys}")
 
         def test_login_rejects_empty_password(self):
             status, _, _ = self.server.request(
@@ -273,7 +306,7 @@ def make_case(key):
                 headers={"Content-Type": "application/json"})
             self.assertIn(status, (400, 403, 415, 429))
 
-        def test_login_lockout_after_repeated_failures(self):
+        def test_zz_login_lockout_after_repeated_failures(self):
             codes = []
             for _ in range(6):
                 status, _, _ = self.server.request(

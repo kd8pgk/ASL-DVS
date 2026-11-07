@@ -1,0 +1,167 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Node Controller - Audits, Testing and Fact-Checking</title><link rel="stylesheet" href="summary.css"></head><body>
+<section class="cover"><div class="band"><div><div class="brand">NODE CONTROLLER</div><div class="brand-sub">BOOK REFERENCE &middot; QUALITY</div></div><div class="ed"><b>How we know</b><br>and how to find problems</div></div>
+<div class="body"><h1>Audits, Testing and <span>Fact-Checking</span></h1><p class="lede">The checks that stand between a change and a node, the tests that exercise the servers and the audio, the audits a node runs on itself, how the summaries in this series were checked against the code, and a plan for finding a problem.</p>
+<div class="chips"><span class="chip c1">CI CHECKS</span><span class="chip c2">TEST SUITES</span><span class="chip c3">NODE AUDITS</span><span class="chip c4">FIND A PROBLEM</span></div><div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div></div>
+<div class="foot">Sources: ci/, .github/workflows/, channels/, the tool files, and the checks run for this summary on branch ccr-9d4fe19f-ssud83.</div></section>
+
+<section class="chapter"><div class="kicker">Part 1 &middot; The layers</div><h1 class="ch">Five places a problem can be caught</h1>
+<table><tr><th>Layer</th><th>When</th><th>What it is</th></tr>
+<tr><td>1. Local checks</td><td>Before a push</td><td><code>ci/check_repo.py</code>, <code>py_compile</code> and <code>pyflakes</code> on changed Python, <code>node --check</code> on page script, <code>bash -n</code> on shell, and a test of the changed behaviour (CLAUDE.md)</td></tr>
+<tr><td>2. The <code>checks</code> workflow</td><td>Every pull request</td><td>The same repo checks, plus the test suites in Part 3</td></tr>
+<tr><td>3. The release gate</td><td>Daily and on each push to main</td><td>The <code>promote-stable</code> workflow decides what reaches the Stable channel (Part 4)</td></tr>
+<tr><td>4. Run-time guards</td><td>On a node, at the moment of a change</td><td>Confirmation, gates, locks and rollback in the tools (Part 5)</td></tr>
+<tr><td>5. Node audits and health readings</td><td>On a node, any time</td><td>The SysMon audit, health verdicts, the boot report, the Suite Log (Part 5)</td></tr></table>
+<p>The first three layers look at the code. The last two look at a running node. A problem found on a node should become a test or a check, so the next change cannot bring it back.</p></section>
+
+<section class="chapter"><div class="kicker">Part 2 &middot; Repo checks</div><h1 class="ch">What check_repo.py enforces</h1>
+<p class="ch-lede">The script compares the changed files with the base branch and fails the pull request on any of these. It prints each problem, or "OK" with the number of files checked.</p>
+<table><tr><th>Group</th><th>Rule</th></tr>
+<tr><td>Code</td><td>Every changed Python file compiles and passes <code>pyflakes</code>. Page script inside a Python file is extracted and parsed with <code>node --check</code> (module scripts as modules). Shell files pass <code>bash -n</code>.</td></tr>
+<tr><td>Versions</td><td>One file per tool. The file name and the version inside agree. Three parts for a release, four for a cosmetic build. The pi02w suffix is present or absent as the tool requires. A new version is newer than the previous file. A cosmetic build follows its release and may keep its file name only if the code did not change, only text.</td></tr>
+<tr><td>Records</td><td>The README lists the file. The tool's changelog has an entry and its "Current file" line is right.</td></tr>
+<tr><td>Shared code</td><td>Each function in <code>shared/confio.py</code> is identical in every tool its <code>USED_BY</code> table lists. The shared look (font and colour lines, welcome and licence text) is present in the eight web tools. The launcher text is identical wherever it is written.</td></tr>
+<tr><td>Channels</td><td><code>channels/stable.json</code> may not be edited by a pull request. The other channel files must have the right shape.</td></tr>
+<tr><td>Android</td><td>A change under <code>android/</code> raises the app version and adds a changelog entry.</td></tr></table>
+<p>The checks cannot judge whether a change is correct. They keep the files, versions and copies consistent, so a node can mix versions safely.</p></section>
+
+<section class="chapter"><div class="kicker">Part 3 &middot; Test suites</div><h1 class="ch">What the tests exercise</h1>
+<table><tr><th>Suite</th><th>What it proves</th><th>In the workflow</th><th>Result when run for this summary</th></tr>
+<tr><td><code>ci/test_ci.py</code></td><td>241 tests: the repo checker, promotion rules, atomic writes, Confgetter and Confputter, Node Talker cards and behaviour, receive-health readings, the link and push-to-talk logs, listen events, and the Suite Log</td><td>Yes</td><td>241 passed</td></tr>
+<tr><td><code>test_talker_tx_baseline.py</code></td><td>Transmit audio reaches the USRP port at the expected level, compared with a stored baseline (<code>ci/fixtures</code>)</td><td>Yes</td><td>2 passed</td></tr>
+<tr><td><code>test_noderecorder_raw.py</code></td><td>Node Recorder's raw audio path</td><td>Yes</td><td>3 passed</td></tr>
+<tr><td><code>test_talker_baseline.py</code></td><td>Receive audio through the cleanup stage: tone levels, onset latency and signal cycles against a stored baseline</td><td>Yes</td><td>3 passed (47 s)</td></tr>
+<tr><td><code>test_servers.py</code></td><td>Eight servers (Dashboard, pi02w Dashboard, SysMon, pi02w SysMon, Node Talker, amp Node Talker, Node Recorder, Pibrary) start with stubbed hardware; instmon, wifimon and 44helper are not among them. The workflow step is still labelled "six servers". Every route found in the source refuses without a login. Health answers; unknown paths, bad logins and a forged cookie are refused; six wrong logins cause a lockout.</td><td>Yes (as root)</td><td>72 passed</td></tr>
+<tr><td><code>test_pages.py</code></td><td>Six pages (both Dashboards, both SysMons, Node Talker, Node Recorder, before and after login) load in headless Chromium with no script or console errors, has the right title and tab set, and each clicked tab shows its panel</td><td>Yes</td><td>Not run here (needs a root password set for the tests)</td></tr>
+<tr><td><code>test_authed.py</code></td><td>With a login, on the eight test servers except Pibrary: every route, and "badge truth", meaning what a status badge shows matches the service state that the test sets</td><td>Yes</td><td>Not run here (same reason)</td></tr>
+<tr><td><code>test_talker_stream.py</code></td><td>34 tests of Node Talker: login and events (including the X-Requested-With refusal), WebSocket handshake and origin checks, idle close, listen streams, stalled listeners, silence, and a soak test (skipped unless asked for)</td><td><strong>No.</strong> The baseline suites import it only for its helpers, so its own tests never run in CI</td><td>34 run: 33 passed, 1 skipped (soak), 3.6 minutes</td></tr>
+<tr><td><code>test_security.py</code> (new)</td><td>For each of the eleven servers: the response headers, the request-shape guard on login, the loopback-proxy rule, the Dashboard's local-API key, and (logged in) the guard on a protected POST, wifimon's proxy refusal and the 44helper terminal's proxy refusal</td><td>Yes</td><td>25 passed without a login; the logged-in checks run in CI</td></tr>
+<tr><td><code>test_install.py</code> (new)</td><td>Every pi02w and common tool installs and uninstalls cleanly: unit file, launcher, command link, and the launcher removed with the last unit</td><td>Yes (opt-in, as root)</td><td>Passed for all eight tools</td></tr>
+<tr><td>Android job</td><td>Unit tests, a release build and lint of the app</td><td>Separate workflow</td><td>Not run here</td></tr></table>
+<p>Results come from runs on this branch under Python 3.13 (CI uses 3.11). The Chromium suites set the root password, so they were left to CI. <code>check_repo.py --base origin/main</code> passed: 108 changed files.</p></section>
+
+<section class="chapter"><div class="kicker">Part 4 &middot; The release gate</div><h1 class="ch">From main to Stable</h1>
+<ul><li><code>main</code> is the Testing channel (opt-in on nodes). Stable is the default, and only the <code>promote-stable</code> workflow writes it.</li>
+<li>The rules are in <code>channels/rules.json</code>: a release becomes stable once 4 newer releases of that tool are on main and it has been there 3 days, or once it has been the newest release for 14 days. Cosmetic builds do not count. A floor sets the lowest version a tool may be promoted at.</li>
+<li><code>channels/overrides.json</code> (changed only by pull request) can hold a version back or send a hotfix to Stable at once. The file today holds back versions of wifimon, 44helper, Node Talker and instmon, and hotfixes versions of instmon and pibrary.</li>
+<li>The workflow runs daily and on every push to main, and retries its push up to three times.</li>
+<li>On a node, instmon checks each download against its git blob id, so a changed file is refused (instmon part 1 of this series).</li></ul>
+<p>The delay is the audit: a bad release has days on Testing to be noticed, and a hold in <code>overrides.json</code> stops it reaching Stable.</p></section>
+
+<section class="chapter"><div class="kicker">Part 5 &middot; On a node</div><h1 class="ch">Guards, audits and health readings</h1>
+<h2><span class="n">5.1</span>Guards that act before a change</h2>
+<table><tr><th>Where</th><th>Guard</th></tr>
+<tr><td>instmon</td><td>Confirmation on installs, scripts and updates; a syntax check and a self-install check before an install; no action during a Full Update; actions locked while Node Recorder is recording; one install per tool; library locks; a 60-second stay-up watch after an install; Full Update rollback, and a 90-second timer that restores instmon itself.</td></tr>
+<tr><td>44helper</td><td>The command a step runs must equal the command in its table; a masked-service gate; a broken-package gate (<code>dpkg --audit</code>); field rules; the terminal's switch, address, origin, password and ticket checks; a 15-minute auto-undo on the tunnel tests.</td></tr>
+<tr><td>Node Controller</td><td>One link lock for all connects; the bridge reaper and watchdog; a boot disconnect that waits for Asterisk.</td></tr>
+<tr><td>Node Talker</td><td>A key-up refused when the node is not ready, not linked or busy; a time-out and a dead-man stop; a load guard that stops tests when the Pi is stressed.</td></tr>
+<tr><td>wifimon</td><td>Watchdogs for Wi-Fi, voltage and the tunnel; a test of a new network with undo; a control gate on changes.</td></tr></table>
+<h2><span class="n">5.2</span>Audits and readings</h2>
+<table><tr><th>Reading</th><th>Where</th><th>What it tells you</th></tr>
+<tr><td>Security audit, 14 checks</td><td>Full-build SysMon only</td><td>Port exposure, default credentials, SSH, Fail2ban, Monit, service user, file permissions, and more. <strong>The pi02w build has no audit.</strong></td></tr>
+<tr><td>Self-check and readiness</td><td>44helper</td><td>The tunnel interface, <code>wg0.conf</code> permissions, firewall exposure, and whether each setup step is really done</td></tr>
+<tr><td>Boot report</td><td>44helper (Boot tab, <code>--boot-report</code>)</td><td>Uptime, clock sync, power, journal warnings, restarted or never-started units; saved 6 and 25 minutes after each boot</td></tr>
+<tr><td>Receive-health verdict</td><td>Node Talker</td><td>Which layer lost audio: the network outside the LAN, the Pi, the Pi's Wi-Fi, the link to the listener, or the phone</td></tr>
+<tr><td>Audio check, tone test, kerchunk test</td><td>Node Talker</td><td>Measured levels, drop-outs, delay and bandwidth; rules that suggest a setting change</td></tr>
+<tr><td>Suite Log and coverage</td><td>instmon</td><td>A redacted record of journals, files, Wi-Fi and 10-minute snapshots, and a coverage table showing which expected sources produced rows</td></tr>
+<tr><td>Quick tests and conflicts</td><td>SysMon</td><td>For each pinned service: installed, active, port listening, config present; and duplicate ports</td></tr>
+<tr><td>Shutdown reports</td><td>wifimon</td><td>The newest 10 reports from watchdog shutdowns</td></tr></table></section>
+
+<section class="chapter"><div class="kicker">Part 6 &middot; Fact-checking</div><h1 class="ch">How the summaries were checked against the code</h1>
+<p class="ch-lede">Each of the 26 summaries was read against the source. The methods below found real errors, and each can be repeated.</p>
+<table><tr><th>Method</th><th>What it catches</th><th>Example from this series</th></tr>
+<tr><td>Search for the constant or string</td><td>A wrong number, name or path</td><td>Lockout starts at the fifth failure, not the first; each tool has its own cookie name</td></tr>
+<tr><td>Load the module and count its tables</td><td>Counts that were estimated by eye</td><td>The 44helper step tables: ASL3 has 16 install steps, not 15; Ampersand 7 and 6, not 12</td></tr>
+<tr><td>Compare function trees (<code>ast</code>)</td><td>A shared function that has drifted</td><td>All 52 copies of the 13 shared functions match</td></tr>
+<tr><td>Hash extracted text</td><td>A copied block that differs</td><td>The launcher is identical in all 11 files</td></tr>
+<tr><td>Parse the markup with an HTML parser</td><td>Counts distorted by script text</td><td>Control and ARIA counts per page, corrected</td></tr>
+<tr><td>Follow a call to its end</td><td>A claim about a feature that the code does not support</td><td>Phone tones are sent by the Dashboard, not by Node Talker; the kerchunk log is kept in the Suite Log file</td></tr>
+<tr><td>Read the gate, not the label</td><td>A name that sounds like a rule</td><td>Pibrary's "access" and SysMon's "lan" flag only label a client; they refuse nothing</td></tr>
+<tr><td>Search the whole repo for what is absent</td><td>A missing protection</td><td>No sandbox directive in any unit; five tools serve plain HTTP; the pi02w SysMon has no audit</td></tr>
+<tr><td>Render and look</td><td>Layout faults</td><td>A wrong footer label, and pages holding one stray line</td></tr></table>
+<h2><span class="n">6.1</span>Kinds of error found</h2>
+<ul><li>Numbers and names that were right once and drifted (counts, limits, file names).</li>
+<li>A claim taken from a manual and not checked in code, or the reverse.</li>
+<li>A feature described from its label, when its code did something narrower.</li>
+<li>Something real that the first reading missed (connection caps, the shared login file, the custom command mode).</li></ul>
+<p>Summaries mark what was not checked. Those lists are the next place to look.</p></section>
+
+<section class="chapter"><div class="kicker">Part 7 &middot; Finding problems</div><h1 class="ch">A plan, in order</h1>
+<h2><span class="n">7.1</span>In the repo</h2>
+<ol><li>Run <code>python3 ci/check_repo.py --base origin/main</code>. Fix every line it prints.</li>
+<li>Run <code>python3 ci/test_ci.py</code>, then the baseline and server tests. A failure in a baseline means the audio changed.</li>
+<li>For a page change, run the page and authenticated tests on a runner that has Chromium, or open the page headless and watch the console.</li>
+<li>Run <code>pyflakes</code> and <code>node --check</code> on what you touched, and exercise the changed behaviour.</li>
+<li>Search for the name you changed in every tool: shared functions and the launcher live in many files, and the full build repeats the pi02w code.</li></ol>
+<h2><span class="n">7.2</span>On a node</h2>
+<ol><li>Look at the Boot tab or run <code>44helper.py --boot-report --json</code>: clock, power, restarted units.</li>
+<li>Look at SysMon's quick tests and port conflicts, and (full build) the audit.</li>
+<li>For audio, read Node Talker's health verdict first. It names the layer that lost audio.</li>
+<li>Start an instmon Suite Log collection, reproduce the fault, and read the coverage table for silent sources.</li>
+<li>Check the tool's own log and the service journal; look for lockouts, refused requests and rollbacks.</li></ol>
+<h2><span class="n">7.3</span>Symptom to place</h2>
+<table><tr><th>Symptom</th><th>Look at</th></tr>
+<tr><td>A tool will not update or install</td><td>instmon log; the channel and its stable list; a hold in <code>overrides.json</code>; a lock or an install already running</td></tr>
+<tr><td>A link will not make or drop</td><td>The Dashboard link lock and its "Busy" message; the bridge reaper; Node Talker's guard (it acts only when it owns the node)</td></tr>
+<tr><td>Audio drops or is late</td><td>Node Talker's verdict row by row, then the load guard and the Pi's power flags</td></tr>
+<tr><td>A key-up is refused</td><td>The reason code: not-ready, not-linked, busy, in-use (TX path)</td></tr>
+<tr><td>The node rebooted or shut down</td><td>wifimon: the network-loss action, the voltage watchdog and its shutdown reports</td></tr>
+<tr><td>The tunnel is not working</td><td>The tunnel guard's state file, the handshake, the boot order units, and any half or exceptions test still armed</td></tr>
+<tr><td>A page will not load or log in</td><td>The lockout (15 minutes or a doubling wait), the shared Dashboard and SysMon session, a proxy header refusal, the connection cap</td></tr>
+<tr><td>A setting has no effect</td><td>Node Talker's level switch; whether the tool was restarted (launcher flags are read at start)</td></tr></table></section>
+
+<section class="chapter"><div class="kicker">Part 8 &middot; Gaps and fixes</div><h1 class="ch">What is missing, and what to add</h1>
+<p class="ch-lede">Each gap below was checked in the repository. The status column says what was applied in this round; the rules that keep them applied are in the Testing and audit policy in CLAUDE.md.</p>
+<table><tr><th>#</th><th>Gap (evidence)</th><th>Fix</th><th>Status</th></tr>
+<tr><td>1</td><td>The Node Talker stream tests (34) never run in CI. The workflow has no step for <code>test_talker_stream.py</code>.</td><td>Add a step to <code>checks.yml</code>: <code>python3 ci/test_talker_stream.py</code> (about 4 minutes; the soak stays off).</td><td>Applied</td></tr>
+<tr><td>2</td><td>instmon, wifimon and 44helper have no server tests: no check that their routes refuse without a login, that a wrong login is refused, or that they lock out.</td><td>Add the three to <code>SERVERS</code> in <code>ci/test_servers.py</code> with temporary config folders (instmon reads <code>INSTMON_CONFIG_DIR</code> and <code>INSTMON_LIBRARY_DIR</code>; wifimon and 44helper use fixed folders, so they need a folder override or the runner's own paths). Then add them to the authenticated and page tests, with Pibrary.</td><td>Applied to the server, security and install tests (eleven servers). Page and logged-in tests for the three are still to add</td></tr>
+<tr><td>3</td><td>No test sends a request that should be refused for its shape: a POST with no <code>X-Requested-With</code> (or, in the Dashboard and SysMon, no JSON type), a request with a proxy header to wifimon or the 44helper terminal, a local-API call without the key or from a non-loopback address, or a WebSocket with a foreign Origin (only Node Talker's is tested).</td><td>A new <code>ci/test_security.py</code> driven by a table of expected answers per tool: 403 or 415 for the missing header or type; 403 for a proxy header; 403 for the local API without the key. Run it against the same stub servers.</td><td>Applied (<code>test_security.py</code>). Found: instmon and Pibrary take a login without the header; recorded as a known gap</td></tr>
+<tr><td>4</td><td>Response headers are not tested. The security summary lists which tool sends which header, but nothing keeps it true.</td><td>In <code>ci/test_security.py</code>, fetch each page and compare <code>X-Frame-Options</code>, <code>nosniff</code>, <code>Referrer-Policy</code> and <code>Content-Security-Policy</code> with a table, so a missing header fails CI.</td><td>Applied</td></tr>
+<tr><td>5</td><td>The workflow runs on pull requests only, not on pushes to main, so the merged result is never tested.</td><td>Add <code>push: branches: [main]</code> to <code>checks.yml</code>.</td><td>Applied</td></tr>
+<tr><td>6</td><td>CI uses Python 3.11 only. Debian 13 (Trixie) nodes run 3.13.</td><td>Run the Python steps on a matrix of 3.11 and 3.13. (The suites passed on 3.13 when run for this summary.)</td><td>Applied (matrix 3.11 and 3.13)</td></tr>
+<tr><td>7</td><td>44helper's exact-command rule, its field rules and its custom mode have no tests. A step field with no rule makes the step unrunnable, and nothing finds that.</td><td>Unit tests in <code>ci/test_ci.py</code>: for every step table, every field has a rule in <code>_STEP_FIELD_RULES</code>; <code>_step_command</code> builds the shown command; a changed command is refused; a bad field value is refused.</td><td>Applied (8 tests)</td></tr>
+<tr><td>8</td><td>The comment-stripped rule is not enforced. Today no tool file has a Python comment or docstring (checked with the tokenizer), but <code>check_repo.py</code> would not notice one.</td><td>In <code>check_python</code>, fail on any comment token after the shebang and coding lines, and on any docstring; for shell, allow only the shebang and title line.</td><td>Applied (Python and shell)</td></tr>
+<tr><td>9</td><td>The launcher and <code>-OO</code> are never exercised. The test servers start each tool directly.</td><td>A test that writes the launcher from a tool file, runs a small target through it, and checks the re-run keeps the process ID, applies <code>-OO</code> and the arena cap, removes the cap from child processes, honours each <code>launch_no_*</code> flag, and loads a file whose name starts with a digit. Also start one server-test run through the launcher.</td><td>Applied (tests, and servers start through the launcher in CI)</td></tr>
+<tr><td>10</td><td><code>--install</code> and <code>--uninstall</code> are untested: unit files, links, the launcher, firewall ports, and the rule that the launcher is removed only when no unit uses it.</td><td>A test that runs each tool's install and uninstall in a temporary root with <code>systemctl</code>, <code>firewall-cmd</code> and <code>ufw</code> replaced by stubs on <code>PATH</code>, and checks what was written and removed.</td><td>Applied (<code>test_install.py</code>)</td></tr>
+<tr><td>11</td><td>Promotion to Stable does not check that the commit passed CI. <code>ci/promote.py</code> reads only the history of main.</td><td>Make <code>promote.yml</code> skip a release whose commit has no successful <code>checks</code> run, or rely on branch protection and say so in the README.</td><td>Applied (promotion waits for green checks)</td></tr>
+<tr><td>12</td><td>Shell scripts get only <code>bash -n</code>.</td><td>Run <code>shellcheck -S error</code> on changed <code>.sh</code> files in <code>check_repo.py</code>.</td><td>Applied (CI requires shellcheck)</td></tr>
+<tr><td>13</td><td>Only changed files are checked. An unchanged tool is not re-checked when Python or Node changes.</td><td>A weekly scheduled run that checks every tool file, not only the changed ones.</td><td>Applied (weekly <code>--all</code> run)</td></tr>
+<tr><td>14</td><td>Disk-image backup, restore, clone and format are not tested. instmon accepts only USB or removable drives, so a loop device cannot stand in.</td><td>Add a test-only switch (as Pibrary has <code>PIBRARY_TEST_ALLOW_LOOP</code>) and test the jobs on loop devices made from image files.</td><td>Not applied: needs an instmon release with a test switch</td></tr>
+<tr><td>15</td><td>Unused code is not found. Two page-script functions in 44helper are never called.</td><td>A warning in <code>check_repo.py</code> for page-script functions defined and never named, with an allow-list for names built at run time.</td><td>Applied as a note; removal goes in 44helper's next release</td></tr>
+<tr><td>16</td><td>The summaries drift from the code. Each names its source file in the footer, and nothing warns when that file is replaced.</td><td>A note in <code>check_repo.py</code>: when a tool gets a new file name, list the files in <code>docs/src</code> that still name the old one.</td><td>Applied as a note</td></tr>
+<tr><td>17</td><td>No test runs on a real node. Asterisk, DVSwitch, WireGuard, firewalld and the radio path are stubbed.</td><td>A short release checklist run on a Pi Zero 2 W before a hold is lifted: link and unlink each mode, a tone test, a tunnel restart, a reboot, and the boot report.</td><td>Added to the policy</td></tr>
+<tr><td>18</td><td>The workflow step says "six servers". There are eight.</td><td>Correct the label in <code>checks.yml</code>.</td><td>Applied</td></tr></table>
+<h2><span class="n">8.1</span>Product gaps the tests cannot fix</h2>
+<ul><li>The pi02w SysMon has no security audit. Only the full build does.</li>
+<li>Five tools serve plain HTTP, and every service runs as root without sandboxing (see the security summary).</li>
+<li>Memory and timing on a Pi Zero 2 W (the launcher savers, the light-theme filter) were not measured.</li></ul>
+<h2><span class="n">8.2</span>Order used</h2>
+<p>First the workflow-only changes (1, 5, 6, 18); then the server and security tests (2, 3, 4), which cover the largest untested surface; then the small additions (7, 8); then 9 to 12 and the rest.</p></section>
+<section class="chapter"><div class="kicker">Part 9 &middot; Worked example</div><h1 class="ch">One round of audit and fixes, step by step</h1>
+<p class="ch-lede">This is how the gaps in Part 8 were found and fixed. It is an example of the method in Parts 6 and 7, applied to the tests themselves. Each step names what was run and what it showed.</p>
+<table><tr><th>Step</th><th>What was done</th><th>What it showed</th></tr>
+<tr><td>1. Check the document against the repo</td><td>Read <code>ci/test_servers.py</code>, <code>ci/test_pages.py</code>, <code>ci/test_authed.py</code> and the workflow, and compared them with this summary.</td><td>Three errors in this summary: the server tests covered eight servers, not six; the stream tests were not run by CI at all; the page tests covered six pages.</td></tr>
+<tr><td>2. Prove each gap before listing it</td><td>Searched <code>ci/</code> for each behaviour (proxy headers, local key, headers, launcher, install). Counted comments with the Python tokenizer, not with a text search.</td><td>18 gaps, each with evidence. A text search had counted <code>#</code> inside strings as comments; the tokenizer found none.</td></tr>
+<tr><td>3. Run what CI skipped</td><td><code>python3 ci/test_talker_stream.py</code></td><td>34 tests, 33 passed and the soak skipped. Safe to add to CI.</td></tr>
+<tr><td>4. Add the missing servers and read every failure</td><td>Added instmon, wifimon and 44helper to the server harness, with stubs so a reboot or power-off is only logged.</td><td>Seven failures, none a security fault: the lockout test ran first and locked later tests out; these tools reply with <code>error</code> or <code>output</code>, not <code>message</code>; two wifimon routes and one instmon page are public on purpose. The harness was fixed; 99 tests passed.</td></tr>
+<tr><td>5. Probe before writing expectations</td><td>A short script asked every server the same questions: headers, login without the CSRF header, a proxy header, the local API without a key.</td><td>A real finding: instmon and Pibrary take a login without <code>X-Requested-With</code>. Recorded as a known gap, not hidden.</td></tr>
+<tr><td>6. Pin the answers in a test</td><td>Wrote <code>ci/test_security.py</code> from the probe results.</td><td>25 checks pass without a login. The logged-in checks need a root password, which this container could not set, so they run in CI.</td></tr>
+<tr><td>7. Check what could not be run</td><td>Read each logged-in check against the tool's POST handler.</td><td>One expectation was wrong: SysMon has no <code>/api/action</code>; the check now uses <code>/api/config</code>.</td></tr>
+<tr><td>8. Tighten the repo checker</td><td>Added the comment, docstring and shellcheck rules, <code>--all</code>, and two notes; wrote self-tests for each; ran it on every script in the repo.</td><td>139 files pass. The unused-function note found exactly the two known functions. shellcheck (installed in a scratch environment) passed all four shell scripts.</td></tr>
+<tr><td>9. Test the launcher</td><td>Ran a small target through the launcher text taken from a tool, then ran all servers through it.</td><td>Process ID kept, <code>-OO</code> on, arena cap kept from children, switches honoured, digit-first names loaded. 99 server tests passed through the launcher.</td></tr>
+<tr><td>10. Test install and uninstall</td><td>Installed and removed all eight tools in this disposable container, then looked for leftovers.</td><td>All passed in 6 seconds; nothing was left in the unit, binary or library folders.</td></tr>
+<tr><td>11. Change the workflows and re-read them</td><td>Added the triggers, the Python matrix and the new steps; added a promotion gate.</td><td>The first gate would have blocked forever (the bot's own <code>stable.json</code> commit has no checks run). Fixed to look at the newest non-<code>stable.json</code> commit.</td></tr>
+<tr><td>12. Write the rule down</td><td>Added the Testing and audit policy to CLAUDE.md.</td><td>The fixes stay applied: new tools join the tests, the security table is a contract, known gaps are listed until fixed.</td></tr></table>
+<h2><span class="n">9.1</span>Results of the round</h2>
+<table><tr><th>Suite</th><th>Before</th><th>After</th></tr>
+<tr><td>Self-tests (<code>test_ci.py</code>)</td><td>241</td><td>259, all passing</td></tr>
+<tr><td>Server tests</td><td>8 servers, 72 tests</td><td>11 servers, 99 tests, also through the launcher</td></tr>
+<tr><td>Security tests</td><td>none</td><td>77 cases (25 without a login, the rest in CI)</td></tr>
+<tr><td>Install tests</td><td>none</td><td>8 tools</td></tr>
+<tr><td>Stream tests in CI</td><td>not run</td><td>34 run</td></tr>
+<tr><td>Python versions in CI</td><td>3.11</td><td>3.11 and 3.13</td></tr></table>
+<h2><span class="n">9.2</span>What the example teaches</h2>
+<ul><li><strong>A failing new test is a question, not a verdict.</strong> Most failures in step 4 were in the test, not the tools.</li>
+<li><strong>Probe, then pin.</strong> Asking the real servers first gave a table that matched the code, and surfaced a real gap.</li>
+<li><strong>Say what was not run.</strong> The logged-in checks were checked by reading, and that is stated, until CI runs them.</li>
+<li><strong>Re-read your own fix.</strong> The promotion gate was wrong on the first try and was caught by thinking through the next run.</li></ul></section>
+</body></html>

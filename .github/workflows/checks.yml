@@ -2,6 +2,10 @@ name: checks
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 7 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -10,19 +14,26 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    name: checks (Python ${{ matrix.python }})
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install pyflakes
-        run: python -m pip install --quiet pyflakes
+      - name: Install pyflakes and shellcheck
+        run: |
+          python -m pip install --quiet pyflakes
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
       - name: CI self-tests
         run: python ci/test_ci.py
       - name: Node Talker transmit baseline tests
@@ -31,10 +42,16 @@ jobs:
         run: python3 ci/test_noderecorder_raw.py
       - name: Node Talker baseline tests
         run: python3 ci/test_talker_baseline.py
+      - name: Node Talker stream tests (login, handshake, origin, idle, listeners)
+        run: python3 ci/test_talker_stream.py
       - name: Repo checks
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-        run: python ci/check_repo.py --base "$BASE_SHA"
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+          ASL_REQUIRE_SHELLCHECK: "1"
+          FULL: ${{ github.event_name == 'schedule' && '--all' || '' }}
+        run: |
+          case "$BASE_SHA" in 0000000000000000000000000000000000000000) BASE_SHA=origin/main ;; esac
+          python ci/check_repo.py --base "$BASE_SHA" $FULL
       - name: Install Playwright and Chromium
         run: |
           npm install --prefix "$RUNNER_TEMP/pw" --no-save playwright@1.63.0
@@ -47,9 +64,13 @@ jobs:
           echo "::add-mask::$PW"
           echo "root:$PW" | sudo chpasswd
           echo "ASL_TEST_ROOT_PASSWORD=$PW" >> "$GITHUB_ENV"
-      - name: Server tests (six servers, stubbed hardware)
-        run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_servers.py
+      - name: Server tests (eleven servers, started through the launcher, stubbed hardware)
+        run: sudo env PATH="$PATH" ASL_TEST_VIA_LAUNCHER=1 ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_servers.py
+      - name: Security tests (headers, request shape, proxy, local key)
+        run: sudo env PATH="$PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_security.py
       - name: Page tests (headless Chromium)
         run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_pages.py
       - name: Authenticated tests (login, every route, badge truth)
         run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_authed.py
+      - name: Install and uninstall tests (every pi02w and common tool)
+        run: sudo env PATH="$PATH" ASL_TEST_INSTALL=1 python3 ci/test_install.py

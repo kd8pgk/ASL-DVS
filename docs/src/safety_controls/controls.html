@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Watchdogs, Guardrails, Locks and Controls</title>
+<link rel="stylesheet" href="controls.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; SAFETY CONTROLS</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W fork</b><br>all tools</div>
+  </div>
+  <div class="body">
+    <h1>Watchdogs, <span>Guardrails</span>, Locks and Controls</h1>
+    <p class="lede">The mechanisms that bring a node back when it stalls, stop it from doing harm, keep two actions from colliding, and let an operator change things safely.</p>
+    <div class="chips">
+      <span class="chip c1">WATCHDOGS</span>
+      <span class="chip c2">GUARDRAILS</span>
+      <span class="chip c3">LOCKS</span>
+      <span class="chip c4">CONTROLS</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Source: the tool files on branch ccr-9d4fe19f-ssud83. Values are from the code unless a row is marked (manual).</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope</div>
+  <h1 class="ch">What counts as a control</h1>
+  <p class="ch-lede">Four kinds of control, grouped by what they protect against.</p>
+
+  <table>
+    <tr><th>Kind</th><th>What it does</th><th>Example</th></tr>
+    <tr><td>Watchdog</td><td>Watches a service, link, tunnel or supply and acts on its own.</td><td>wifimon's voltage watchdog shuts the node down after sustained low voltage.</td></tr>
+    <tr><td>Guardrail</td><td>Checks an action before it runs and refuses or warns.</td><td>44helper refuses to open a loopback-only port in any firewall zone.</td></tr>
+    <tr><td>Lock</td><td>Stops two actions, or two people, from working on the same thing.</td><td>Five wrong passwords lock an address out for a while.</td></tr>
+    <tr><td>Control</td><td>A setting or button an operator uses to pause, change or undo.</td><td>Quiet mode pauses services before a big install.</td></tr>
+  </table>
+
+  <h2><span class="n">1.1</span>How to read the tables</h2>
+  <ul>
+    <li>Values are the ones in the code, with the file's constant name where it helps.</li>
+    <li>Rows marked <strong>(manual)</strong> describe behaviour from the user manual that was not re-checked in the code for this summary.</li>
+    <li>Times are in seconds unless stated otherwise.</li>
+    <li>Tool names follow the repository (wifimon, 44helper, nodecontrol, nodetalker, sysmon, instmon). Text uses Node Controller for the Dashboard's own name.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Watchdogs</div>
+  <h1 class="ch">The guard dogs</h1>
+  <p class="ch-lede">Each watchdog watches one thing and has one job. Most act only when a check has failed several times in a row, so a single blip does nothing.</p>
+
+  <h2><span class="n">2.1</span>Service watchdogs (systemd)</h2>
+  <p>Every tool runs as a systemd service with <code>Restart=always</code>. Each one also sends a heartbeat to systemd. If the heartbeat stops, systemd restarts the service.</p>
+  <table>
+    <tr><th>Service</th><th>Heartbeat window</th><th>Where set</th></tr>
+    <tr><td>nodecontrol (Dashboard), pi02w</td><td>30 s</td><td>nodecontrol_pi02w, unit file (line 176)</td></tr>
+    <tr><td>sysmon, pi02w</td><td>30 s</td><td>sysmon_pi02w, unit file</td></tr>
+    <tr><td>44helper</td><td>60 s</td><td>44helper, unit file (line 539)</td></tr>
+    <tr><td>wifimon</td><td>60 s</td><td>wifimon, unit file (line 336)</td></tr>
+    <tr><td>nodetalker (Node Talker)</td><td>60 s</td><td>nodetalker, unit file (line 197)</td></tr>
+    <tr><td>amp_nodetalker, noderecorder, instmon</td><td>60 s</td><td>each tool's unit file</td></tr>
+  </table>
+  <p>The installer no longer installs a separate watchdog script. The Dashboard's own service covers that job, and the installer says so. An old copy is removed on install.</p>
+
+  <h2><span class="n">2.2</span>Hardware watchdog (wifimon)</h2>
+  <ul>
+    <li>On by default (<code>HW_WATCHDOG_ON</code>), with a 15 s limit (<code>HW_WATCHDOG_SECS</code>).</li>
+    <li>Set through systemd's <code>RuntimeWatchdogSec=15s</code>, using <code>/dev/watchdog0</code> or <code>/dev/watchdog</code>.</li>
+    <li>On a Pi without a hardware watchdog device, the page says there is nothing to turn on.</li>
+    <li>wifimon also has a loop-stall limit of 180 s (<code>LOOP_STALL_SECS</code>).</li>
+  </ul>
+
+  <h2><span class="n">2.3</span>WiFi watchdog (wifimon)</h2>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Meaning</th></tr>
+    <tr><td>Check interval</td><td>5 s</td><td>How often the connection is tested.</td></tr>
+    <tr><td>Misses before "lost"</td><td>3</td><td>Three failed checks in a row before the link counts as lost.</td></tr>
+    <tr><td>No-connection limit</td><td>180 s</td><td>How long the link can stay down before the loss action runs.</td></tr>
+    <tr><td>Reconnect interval</td><td>15 s</td><td>Time between reconnect attempts. Each attempt is verified for 15 s.</td></tr>
+    <tr><td>NetworkManager head start</td><td>30 s, then up to 45 s busy</td><td>Gives NetworkManager time to reconnect before wifimon acts.</td></tr>
+    <tr><td>Stuck link</td><td>60 s</td><td>The interface reports up but there is no connection for 60 s. This is treated as a stuck link and sends wifimon to its recovery steps.</td></tr>
+    <tr><td>Boot grace</td><td>600 s</td><td>In the first 10 minutes after boot, a missing network does not trigger the loss action, because the router may still be starting.</td></tr>
+    <tr><td>Change grace</td><td>180 s</td><td>After a network change, the shutdown timer pauses while the new link settles.</td></tr>
+  </table>
+  <p>The loss action is set by <code>network_loss_action</code>. The code default is <strong>reboot</strong>, at most 3 times in 6 hours (<code>NET_REBOOT_LIMIT</code>, <code>NET_REBOOT_WINDOW_SECS</code>). After the third reboot in the window, the node stays up and keeps trying to reconnect. The other choice is power off. See Part 6, point 1.</p>
+  <p>On a fresh install, both watchdogs are written as off. The first login asks whether to turn them on (see Part 6, point 2).</p>
+
+  <h2><span class="n">2.4</span>Voltage watchdog (wifimon)</h2>
+  <ul>
+    <li>Counts readings from 0.50 V up to 0.90 V (<code>LOW_VOLTAGE_THRESHOLD</code>) as low voltage. Readings outside that range are not counted.</li>
+    <li>Shuts the node down after the low reading lasts 30 s (<code>LOW_VOLTAGE_SHUTDOWN_SECS</code>). Shutdown is power off, not reboot.</li>
+    <li>The page shows the two counters as they run. When a problem clears, the counter resets.</li>
+  </ul>
+
+  <h2><span class="n">2.5</span>Tunnel watchdog (wifimon, for the 44Net tunnel)</h2>
+  <p>Watches the WireGuard tunnel <code>wg0</code> that 44helper sets up. It is on by default (<code>tunnel_guard</code> defaults to enabled).</p>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Meaning</th></tr>
+    <tr><td>Check interval</td><td>60 s</td><td>How often the handshake is checked.</td></tr>
+    <tr><td>Stale handshake</td><td>180 s</td><td>A handshake older than this counts as bad.</td></tr>
+    <tr><td>Probe</td><td>ping 44.0.0.1, then wait 6 s</td><td>Sent before the check, to wake a quiet tunnel.</td></tr>
+    <tr><td>Bad checks before restart</td><td>3</td><td>Consecutive bad checks before the tunnel is restarted.</td></tr>
+    <tr><td>Wait for handshake after restart</td><td>60 s</td><td>Time allowed for a new handshake.</td></tr>
+    <tr><td>Restart timeout</td><td>240 s</td><td>A restart may take this long, because the clock wait alone can take 90 s.</td></tr>
+    <tr><td>Back-off after failed restarts</td><td>0, 10 min, 30 min, 1 h</td><td>Waiting time between attempts.</td></tr>
+    <tr><td>Maximum attempts</td><td>6 per boot</td><td>After that the watchdog shows "Gave up for this boot".</td></tr>
+    <tr><td>Boot delay</td><td>300 s</td><td>Time after boot before the watchdog starts acting.</td></tr>
+  </table>
+  <p>On a handshake failure, the watchdog restarts the tunnel unit. When the handshake returns, it can restart netcheck and the bridges that depend on the tunnel (the restart_dv setting, on by default). While a half-tunnel or exceptions test is armed in 44helper (its state files under <code>/run/44helper-half</code> and <code>/run/44helper-fullx</code> show steps or an arm time), the watchdog stays out of the way. In the code, the tunnel watchdog never reboots or powers the node off. The manual says the same (manual). Its state is in <code>/run/asl_dvs/tunnel_guard.json</code>, and every action is written to the Activity log.</p>
+
+  <h2><span class="n">2.6</span>Link watchdogs (Node Controller and Node Talker)</h2>
+  <table>
+    <tr><th>Watchdog</th><th>Where</th><th>What it does</th></tr>
+    <tr><td>Bridge reaper</td><td>nodecontrol, <code>_bridge_reaper</code></td><td>A bridge node that stays linked for two polls while the current tab does not own it is dropped. 8 s cooldown per node.</td></tr>
+    <tr><td>Bridge watchdog</td><td>nodecontrol, <code>_bridge_watchdog</code></td><td>When the owned bridge drops out for two polls, the node links it again. 8 s cooldown.</td></tr>
+    <tr><td>Node Talker guard</td><td>nodetalker, <code>guard_tick</code></td><td>Checks every 5 s. A bridge link not in use is dropped after two polls. If the bridge the Node Talker set up is down, it is linked again. More than one public link drops the extra favorites, and keeps one.</td></tr>
+  </table>
+  <p>The Node Talker guard stays out when the Dashboard is running the node itself, so the two do not fight over the same node. Drops are capped at 16 links per pass, with 0.25 s pacing. The Node Talker's transmit node (1921) is never dropped by the guard.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Guardrails</div>
+  <h1 class="ch">Checks before an action</h1>
+  <p class="ch-lede">A guardrail either blocks the action or warns and lets the operator decide. Blocks are for things that would break the node or leave it open to the wrong people.</p>
+
+  <h2><span class="n">3.1</span>Firewall port guardrail (44helper)</h2>
+  <table>
+    <tr><th>Port role</th><th>Result</th><th>Why</th></tr>
+    <tr><td>Loopback-only (a local link no remote peer needs)</td><td><strong>Blocked</strong> in every zone</td><td>Opening it adds exposure with no benefit.</td></tr>
+    <tr><td>Management (Dashboard, AMI, Cockpit)</td><td><strong>Warning</strong>, only sensible on a LAN zone</td><td>Risky if reachable from outside. Never on the 44Net tunnel zone.</td></tr>
+    <tr><td>Anything else</td><td>OK</td><td>No guardrail message.</td></tr>
+  </table>
+  <p>The check runs when a port is added, and it also runs as the operator types. Adding a port to a zone that firewalld does not have is refused (<code>_fw_zone_guard</code>).</p>
+
+  <h2><span class="n">3.2</span>WireGuard and AllStar zone guardrail (44helper)</h2>
+  <p>The check <code>check_allstarlink_zone_guardrail</code> warns when <code>wg0</code> is attached to the ASL3 image's own <code>allstarlink</code> firewall zone, instead of 44helper's zone. The Full and Split Tunnel tabs show the result as a guardrail line (manual for the page layout; the check function is in the code).</p>
+
+  <h2><span class="n">3.3</span>Safe-change steps for the tunnel (44helper, manual)</h2>
+  <ol>
+    <li>Use <strong>Add (runtime test)</strong> before a permanent change. The port is open only until the next reboot or an undo.</li>
+    <li>Changes can be put back by a timer, <strong>Undo now</strong>, or a reboot.</li>
+    <li><strong>Make permanent</strong> stays locked until the earlier steps are done and every check is green or grey and under 15 minutes old.</li>
+  </ol>
+
+  <h2><span class="n">3.4</span>Network change safety (wifimon)</h2>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Meaning</th></tr>
+    <tr><td>New network test</td><td>30 s</td><td>A newly joined network is tested before it is kept.</td></tr>
+    <tr><td>Fallback test</td><td>20 s</td><td>Time allowed for the network to fall back to a known one.</td></tr>
+    <tr><td>Undo window</td><td>60 s</td><td>A change can be undone within this time.</td></tr>
+    <tr><td>Change grace</td><td>180 s</td><td>The shutdown timer pauses while the new link settles.</td></tr>
+  </table>
+  <p>A pending change is recorded in <code>/run/wifimon/pending_change.json</code>.</p>
+
+  <h2><span class="n">3.5</span>Transmit guard and limits (Node Talker)</h2>
+  <table>
+    <tr><th>Setting</th><th>Range or value</th><th>Meaning</th></tr>
+    <tr><td>Push-to-talk guard</td><td>30, 60, 90, 120, 180 s (default 60)</td><td>Used by the page in tap mode (and with a headset key): it unkeys by itself after this time, never beyond the transmit time-out. With 10 s left it flashes, beeps twice and vibrates.</td></tr>
+    <tr><td>Tap debounce</td><td>500 ms</td><td>Taps closer together than this are ignored.</td></tr>
+    <tr><td>Wait after receive</td><td>4 s (off by default)</td><td>When on, push-to-talk is locked for 4 s after the node receives audio.</td></tr>
+    <tr><td>Transmit time-out</td><td>30 to 600 s (default 120)</td><td>The node's own limit on any one transmission.</td></tr>
+    <tr><td>Don't transmit while busy</td><td>On or off; 1.0 s grace</td><td>When on, the node refuses to key while other audio is active. A transmission that is already running is not affected.</td></tr>
+  </table>
+  <p>Settings outside the allowed values are refused. For example, a guard value other than the five listed raises an error when it is read.</p>
+
+  <h2><span class="n">3.6</span>Link actions (Node Controller)</h2>
+  <ul>
+    <li>ASL and EchoLink connects refuse bridge slots. The local API refuses to disconnect them.</li>
+    <li>A connect first drops every other link (up to 16 per pass). The Node Talker transmit node is kept.</li>
+    <li>A link that belongs to the dashboard's own tab is never treated as foreign.</li>
+  </ul>
+
+  <h2><span class="n">3.7</span>Config checks (every tool)</h2>
+  <p>Settings are checked when they are saved. Values that could break a tool are refused. Files are written with <code>atomic_write</code>, so a power cut leaves the old file, not a half-written one (see the Common Functions Sheet).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Locks</div>
+  <h1 class="ch">Keeping actions and people apart</h1>
+
+  <h2><span class="n">4.1</span>Login lockout, by tool</h2>
+  <p>Each tool has its own login, and the rules are not the same. The manual says "the other tools have similar limits". The code shows three different rules.</p>
+  <table>
+    <tr><th>Tool</th><th>Failures allowed</th><th>Lockout</th><th>Session</th></tr>
+    <tr><td>Dashboard (nodecontrol) and SysMon</td><td>5 in 5 min</td><td>15 min, fixed. Applies to both tools.</td><td>12 h session, one shared session file in <code>/run/asl_dvs</code></td></tr>
+    <tr><td>44helper</td><td>5 in 5 min</td><td>15 min, fixed</td><td>2 h session. The login cookie is set to last up to 365 days.</td></tr>
+    <tr><td>Node Talker (and Node Recorder, same code)</td><td>5</td><td>From the fifth failure, 5 s, doubling with each failure, capped at 300 s. Failure history forgotten after 1 h.</td><td>12 h</td></tr>
+    <tr><td>instmon, pibrary, Node Recorder</td><td>5</td><td>The first four failures carry no wait. From the fifth, 5 s, doubling, capped at 300 s</td><td>12 h</td></tr>
+    <tr><td>wifimon</td><td>5</td><td>From the fifth failure, 5 s, doubling, capped at 300 s</td><td>12 h. At most 16 connections, 8 from one address.</td></tr>
+  </table>
+  <p>Node Talker also counts failed logins from the internet separately: 20 failures in 10 minutes make internet logins wait until that window ends.</p>
+  <p>Sessions and the shared file: <code>/run</code> is cleared at reboot, so a reboot logs everyone out. Stored sessions are written under a file lock.</p>
+
+  <h2><span class="n">4.2</span>Link action lock (Node Controller)</h2>
+  <ul>
+    <li>All connect, disconnect and tab-switch actions share one reentrant lock.</li>
+    <li>An action waits up to 2 s for the lock. If it still cannot get it, it is refused with "Busy — another connect, disconnect or tab switch is still running".</li>
+    <li>The bridge reaper only tries the lock and skips its pass if it is busy.</li>
+  </ul>
+
+  <h2><span class="n">4.3</span>Transmit lock (Node Talker)</h2>
+  <p>The tune lock is taken without waiting. The guard skips its work if a transmit or tune is already using the lock. The busy lock refuses a transmission while another source is active, as described in Part 3.5.</p>
+
+  <h2><span class="n">4.4</span>Package manager lock (instmon, 44helper)</h2>
+  <ul>
+    <li>Quiet mode is refused while an apt or dpkg lock is held. instmon checks four lock files, and 44helper checks the same four.</li>
+    <li>The message names the lock file, and says to try again once apt or dpkg has finished.</li>
+  </ul>
+
+  <h2><span class="n">4.5</span>Terminal (44helper)</h2>
+  <ul>
+    <li>Only one terminal can be open at a time. A second one is refused with a "one at a time" message.</li>
+    <li>A terminal closes itself after 10 minutes with no typing.</li>
+    <li>The Asterisk CLI console blocks the <code>!</code> shell escape and Ctrl-Z (manual, not re-checked in the code).</li>
+  </ul>
+
+  <h2><span class="n">4.6</span>Masked services and tunnel kind (44helper, SysMon, manual)</h2>
+  <ul>
+    <li>A masked service cannot start, even by hand, until it is unmasked. The install buttons on a tab stay locked while a service that tab needs is masked.</li>
+    <li>If one kind of tunnel (full or split) is installed, the other kind's steps are locked until the operator presses <strong>Acknowledge and unlock</strong>, so a working tunnel is not overwritten by accident.</li>
+    <li>SysMon locks the modules a feature needs (shown with a lock icon) and the Dashboard's own phone block in <code>rpt.conf</code> and <code>modules.conf</code>.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Controls</div>
+  <h1 class="ch">Things an operator can change</h1>
+
+  <h2><span class="n">5.1</span>Pause and resume</h2>
+  <table>
+    <tr><th>Control</th><th>Where</th><th>What it does</th></tr>
+    <tr><td>Quiet mode</td><td>44helper, instmon</td><td>Pauses the services that compete for the SD card, in tiers, before a big install or upgrade. Each stop waits up to 150 s. Watchdogs and update timers are paused too. Turning it on is refused while an apt or dpkg lock is held (manual for the tier order).</td></tr>
+    <tr><td>Quiet System / Restore</td><td>instmon (code); also on other pages (manual)</td><td>Pauses SysMon, the Dashboard, 44helper, Node Talker, Node Recorder, Pibrary and any watchdog timer, and restores itself after 30 minutes (INSTMON_QUIET_AUTO_RESTORE_SEC) or when Restore is pressed. The radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up. Refused while a disk-image job runs.</td></tr>
+    <tr><td>Node reboot schedule</td><td>44helper (manual)</td><td>Reboots the node 3 s after the schedule fires, with <code>systemd-run</code>.</td></tr>
+  </table>
+
+  <h2><span class="n">5.2</span>Link controls (Node Controller)</h2>
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>Disconnect current, disconnect one, disconnect all</td><td>Per-link drops. See the Connect and Disconnect Review.</td></tr>
+    <tr><td>Emergency reset</td><td>Drops every link, then restarts the analog bridge, the MMDVM bridge and Asterisk. Of the disconnect actions, this is the only one that restarts Asterisk.</td></tr>
+    <tr><td>Node Talker local API</td><td>Accepts connect and disconnect from Node Talker, only from the loopback address and with the local key.</td></tr>
+  </table>
+
+  <h2><span class="n">5.3</span>Service controls (SysMon, manual)</h2>
+  <ul>
+    <li><strong>Start, Stop, Restart</strong> for each service.</li>
+    <li><strong>Reset Failed</strong> clears a "failed" mark so the service can start cleanly.</li>
+    <li><strong>Mask and Unmask</strong> block or allow a service from starting. Mask asks first.</li>
+    <li>Each action asks first where a stop could cut the node off.</li>
+  </ul>
+
+  <h2><span class="n">5.4</span>Firewall controls (44helper, shared functions)</h2>
+  <ul>
+    <li>Open and close ports through the shared <code>open_firewall_port</code> and <code>close_firewall_port</code> functions (see the Common Functions Sheet).</li>
+    <li>Enable or disable ufw. Enabling it blocks everything with no allow rule. It asks first, and warns if no rule exists for the SSH port (manual).</li>
+  </ul>
+
+  <h2><span class="n">5.5</span>WiFi and watchdog settings (wifimon)</h2>
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>WiFi watchdog and voltage watchdog switches</td><td>Turn each watchdog on or off. Both start off on a fresh install.</td></tr>
+    <tr><td>Hardware watchdog switch</td><td>Turns the 15 s hardware watchdog on or off.</td></tr>
+    <tr><td>Network loss action</td><td>Reboot (default) or power off, when the link is lost.</td></tr>
+    <tr><td>Tunnel watchdog switch</td><td>On by default. Turn it off while working on the tunnel by hand, because a restart can drop an SSH or Cockpit session from outside.</td></tr>
+    <tr><td>Keep adapter on, off, or Auto</td><td>Keeps a Wi-Fi adapter on or off. Keep off writes a NetworkManager rule for it (manual).</td></tr>
+    <tr><td>Hotspot</td><td>Starts a hotspot. The node leaves its current WiFi while it runs (manual).</td></tr>
+    <tr><td>Reset to defaults</td><td>Puts every wifimon setting back to its default.</td></tr>
+  </table>
+
+  <h2><span class="n">5.6</span>Evidence after an event</h2>
+  <ul>
+    <li>Each watchdog shutdown writes a shutdown report and a state file (<code>/run/wifimon/shutdown_state.json</code>). The newest 10 reports are kept, each up to 256 KB.</li>
+    <li>A shutdown notice appears on SysMon and the Dashboard, reading "wifimon — Node Shutting Down".</li>
+    <li>The Activity log of each tool records its watchdog actions.</li>
+    <li>Restore points (44helper, Config tab) let the operator roll back a config change (manual).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Points for the book</div>
+  <h1 class="ch">Where the manual and code differ</h1>
+  <p class="ch-lede">Found while checking this summary. The book should follow the code, or the code should be changed to match the manual.</p>
+
+  <h2><span class="n">6.1</span>Network loss: reboot, not shut down</h2>
+  <p>The manual says the WiFi watchdog "shuts the Pi down after 3 minutes with no connection". The code's default is <strong>reboot</strong>, at most 3 times in 6 hours. After that, the node stays up and keeps trying. Power off is the other choice. The Dashboard's hint text says "Default Reboot", which matches the code. The manual is out of date here.</p>
+
+  <h2><span class="n">6.2</span>Watchdogs start off on a fresh install</h2>
+  <p>The constants in the code say both watchdogs are on. But a fresh install writes them as off, and the first login asks whether to turn them on. The manual is correct. The constants are only the fallback when no saved state exists.</p>
+
+  <h2><span class="n">6.3</span>"Similar" lockout limits are not the same</h2>
+  <p>The manual says the other tools have similar limits. The code has three rules: a fixed 15 minutes (Dashboard, SysMon, 44helper), a delay that starts at the fifth failure and doubles, capped at 5 minutes (Node Talker, Node Recorder, pibrary, instmon, wifimon), and 44helper's 2-hour session, which differs from the 12-hour session of the others.</p>
+
+  <h2><span class="n">6.4</span>Tunnel watchdog and reboots</h2>
+  <p>The tunnel section of wifimon has no reboot or power-off call. That matches the manual's "it never reboots". The only restarts it makes are of the tunnel service and the units that depend on it.</p>
+
+  <h2><span class="n">6.5</span>Emergency reset is the only Asterisk restart</h2>
+  <p>Among the disconnect actions, only the Node Controller's emergency reset restarts Asterisk. Other disconnects send link commands only. Asterisk is restarted in other places, though: phone setup apply or revert (when a restart is requested), Node Talker's restart control, and SysMon's Restart Asterisk. Each of those restarts drops every link, so the operator should check the Dashboard before using one.</p>
+
+  <h2><span class="n">6.6</span>What was not checked in code</h2>
+  <p>These items come from the manual and were not traced in the code for this summary: the Asterisk CLI key blocks, the masked-service and tunnel-kind locks in 44helper, SysMon's locked modules, quiet mode's tier order, the Keep-adapter rule, the hotspot, and Restore points. Trace them before the book states them as fact.</p>
+</section>
+
+</body>
+</html>

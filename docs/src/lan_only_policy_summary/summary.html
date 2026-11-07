@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - The LAN-Only Policy</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; ACCESS</div>
+    </div>
+    <div class="ed"><b>Part 2 of 3</b><br>LAN-only policy</div>
+  </div>
+  <div class="body">
+    <h1>The <span>LAN-Only</span> Policy</h1>
+    <p class="lede">Which requests a node accepts from the local network only, how the tools decide that a request is local, which features enforce the rule, and which features only label a request as local without blocking it.</p>
+    <div class="chips">
+      <span class="chip c1">LOCAL NETWORK</span>
+      <span class="chip c2">TAILSCALE</span>
+      <span class="chip c3">ENFORCED</span>
+      <span class="chip c4">LABELS ONLY</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 2 of 3. Sources: the pi02w tools, the common tools and Node Talker on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; There is no single switch</div>
+  <h1 class="ch">The rule is set feature by feature</h1>
+
+  <p class="ch-lede">The tools do not share one LAN gate. Each feature decides for itself whether a request must be local, and each uses its own test. The servers listen on every interface, so the rule is applied in code, not by a firewall that the tools configure.</p>
+
+  <ul>
+    <li><strong>Listening.</strong> The Dashboard and wifimon bind to <code>0.0.0.0</code>, so they accept connections on every interface, including the WAN side when the node has one.</li>
+    <li><strong>Gating.</strong> A feature that must be local checks the request's source address before it does its work.</li>
+    <li><strong>Labelling.</strong> Some views only report whether a client looks local. They do not refuse anything.</li>
+  </ul>
+  <p>Read the book's wording with that split in mind. "LAN only" is true of a named feature, not of a whole tool.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; What counts as local</div>
+  <h1 class="ch">The address test</h1>
+
+  <h2><span class="n">2.1</span>The standard test</h2>
+  <p>Most tools parse the peer address with Python's <code>ipaddress</code> module and accept it when it is one of:</p>
+  <ul>
+    <li><code>is_loopback</code>: the node itself (<code>127.0.0.0/8</code>, <code>::1</code>)</li>
+    <li><code>is_private</code>: the RFC 1918 ranges and the IPv6 unique-local range</li>
+    <li><code>is_link_local</code>: the self-assigned <code>169.254.0.0/16</code> and <code>fe80::/10</code> ranges</li>
+  </ul>
+  <p>IPv4-mapped IPv6 addresses (<code>::ffff:a.b.c.d</code>) are unwrapped first, so a mapped LAN address is treated like its IPv4 form.</p>
+
+  <h2><span class="n">2.2</span>Tailscale is added in two places</h2>
+  <p>Node Talker, Node Recorder and amp Node Talker (<code>_TAILNET</code>) and the SysMon Node Listen view (<code>_NL_TAILNET</code>) also accept <code>100.64.0.0/10</code>. That range is the carrier-grade NAT block that Tailscale uses, so a device on the node's tailnet counts as local there. The standard test in the other tools does not accept it, because Python does not count that block as private. pibrary only names it in its access label ("Tailscale or another VPN").</p>
+  <p>The address test is not the same as a logged-in user. A tailnet device that reaches a gated feature still needs the feature's own checks, such as a login, where those apply.</p>
+
+  <h2><span class="n">2.3</span>What a proxy does to the test</h2>
+  <p>A request that arrives through a proxy or a tunnel comes from the proxy's address, which is often local. The tools therefore check for proxy headers as well (see the Security hardening summary, Part 5). The rule differs by tool. wifimon and the 44helper terminal refuse any request that has one of their listed headers, whatever its address. Node Talker and Node Recorder treat a request as outside only when it comes from a loopback address and has one of their headers, which is the shape of a tunnel program running on the node. A LAN device that adds such a header to its own request is still treated as local there.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The rules that are enforced</div>
+  <h1 class="ch">Where a request is refused</h1>
+
+  <h2><span class="n">3.1</span>wifimon control actions</h2>
+  <p>The control gate (<code>_control_gate</code>) runs before any change. It checks, in order:</p>
+  <ol>
+    <li>The session is logged in (401 otherwise).</li>
+    <li>The source is loopback or private, and is not the unspecified address. The request has no proxy header (403, "Changes only work from this machine or the local network, not through a proxy.").</li>
+    <li>Changes are switched on by the file <code>/etc/wifimon/install.enable</code> (wifimon's config folder). The file must be a regular file (a link does not count), owned by root, and not writable by group or others. Otherwise the answer is 403.</li>
+  </ol>
+  <p>The gate covers only the control paths: radio, device disconnect, switch, mode, forget, service restart and install start. Other paths are not gated by the LAN test.</p>
+
+  <h2><span class="n">3.2</span>44helper terminal</h2>
+  <p>The terminal check (<code>_term_client_ok</code>) refuses any request with a proxy or Cloudflare header. It accepts only loopback, link-local and private addresses, and refuses the rest with the message "The terminal only works from your LAN." Enabling the terminal (<code>_term_can_enable</code>) also needs root and the terminal-enable switch.</p>
+
+  <h2><span class="n">3.3</span>Node Talker and Node Recorder outside access</h2>
+  <p>Both tools treat a peer as outside (WAN) when the request is proxied (Part 2.3) or its address is not local. Every GET and every POST starts with this check. An outside request is refused with 403, "Node Talker is not open to the internet (allow_wan is off)," unless the <code>allow_wan</code> setting is on. The default is off, so neither tool is open to the internet until an operator turns it on. The check covers the page, the audio stream and the WebSocket, since all of them begin as a GET.</p>
+  <p>When <code>allow_wan</code> is on, logins from outside have their own cap: after 20 failed internet logins in 10 minutes, every internet login waits until the window ends.</p>
+  <p>Node Recorder also has a route that answers only a loopback peer that is not proxied: the recording status (403, "The recording status is for programs on this Pi only").</p>
+
+  <h2><span class="n">3.4</span>The Dashboard local API</h2>
+  <p>The Dashboard's local API accepts only loopback peers, and it also needs the local key. This is the strictest rule in the set: the local API is not reachable from the LAN at all (see the security summary, Part 3).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Labels that do not block</div>
+  <h1 class="ch">Where "local" is only reported</h1>
+
+  <table>
+    <tr><th>Feature</th><th>What it does with the test</th><th>Blocks anything?</th></tr>
+    <tr><td>SysMon Node Listen client list</td><td>Marks each connected client with a <code>lan</code> flag and a <code>local</code> flag for the loopback addresses</td><td>No</td></tr>
+    <tr><td>pibrary <code>access_info</code></td><td>Describes how the viewer reached the page: this Pi, Tailscale or VPN, a LAN address, or unknown</td><td>No</td></tr>
+    <tr><td>instmon router link</td><td>Offers the router's web address only when the client is on the gateway's LAN network</td><td>No. It decides whether a link is shown</td></tr>
+    <tr><td>Dashboard phone check</td><td>Reports whether the phone's Pi address is a private address</td><td>No</td></tr>
+  </table>
+  <p>These are useful to the operator, but they are not access rules. The book must not describe a label as a control.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Summary by tool</div>
+  <h1 class="ch">What each tool enforces</h1>
+
+  <table>
+    <tr><th>Tool</th><th>Local test</th><th>Enforced where</th></tr>
+    <tr><td>Dashboard (pi02w)</td><td>Loopback only for the local API; LAN labels elsewhere</td><td>Local API only</td></tr>
+    <tr><td>SysMon (pi02w)</td><td>Standard test, plus Tailscale in Node Listen</td><td>Labels only in the code read</td></tr>
+    <tr><td>wifimon</td><td>Loopback or private, with the proxy header refusal</td><td>Control paths (<code>_CONTROL_PATHS</code>)</td></tr>
+    <tr><td>44helper</td><td>Loopback, link-local or private, with the proxy refusal</td><td>Terminal and its enabling</td></tr>
+    <tr><td>Node Talker</td><td>Standard test, plus Tailscale; proxied means loopback with a proxy header</td><td>Every GET and POST, unless <code>allow_wan</code> is on</td></tr>
+    <tr><td>Node Recorder</td><td>Same as Node Talker</td><td>Every GET and POST, unless <code>allow_wan</code> is on; the status route is loopback only</td></tr>
+    <tr><td>amp Node Talker</td><td>Same test as Node Talker (code present)</td><td>Not traced here</td></tr>
+    <tr><td>instmon</td><td>Gateway LAN network for the router link</td><td>Not a gate. Other routes need a session</td></tr>
+    <tr><td>pibrary</td><td>Standard test, for labels</td><td>Labels only in the code read</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Points for the book</div>
+  <h1 class="ch">What the LAN-only policy means in practice</h1>
+
+  <h2><span class="n">6.1</span>"Local" means the whole home network</h2>
+  <p>A private address is any device on the LAN, not one trusted person. The policy keeps the internet out, but it does not separate household devices from each other. The book should say that plainly.</p>
+
+  <h2><span class="n">6.2</span>The tunnel is the main exception</h2>
+  <p>A tunnel that brings internet traffic onto the LAN, such as a Cloudflare tunnel, is refused by the proxy headers where those are checked (wifimon, the 44helper terminal, and Node Talker and Node Recorder for a tunnel program on the node itself). A tunnel that places the remote device on the LAN, such as Tailscale, is accepted by design. Operators who want the tunnel refused must rely on the feature's own login.</p>
+
+  <h2><span class="n">6.3</span>The rule is set in code</h2>
+  <p>Changing who is local means changing the code of each tool. There is no setting that moves every feature to a stricter policy at once.</p>
+
+  <h2><span class="n">6.4</span>Not checked</h2>
+  <ul>
+    <li>Every route in the Dashboard, SysMon and instmon for a local test. Only the gates named above were read.</li>
+    <li>amp Node Talker's use of the outside test.</li>
+    <li>How the wifimon install-enable file is set on a running node.</li>
+    <li>Whether the firewall rules the tools open are restricted by source address.</li>
+  </ul>
+</section>
+
+</body>
+</html>

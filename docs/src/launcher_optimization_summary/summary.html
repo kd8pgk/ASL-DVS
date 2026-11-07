@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Python Loading and the Launcher</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; LAUNCHER</div>
+    </div>
+    <div class="ed"><b>Part 3 of 3</b><br>Python loading</div>
+  </div>
+  <div class="body">
+    <h1>Python Loading and the <span>Launcher</span></h1>
+    <p class="lede">How the shared launcher starts each tool's Python file: the optimized run, the memory cap on the C allocator, the periodic memory trim, and how the tool file is loaded. It also covers the three opt-out flags.</p>
+    <div class="chips">
+      <span class="chip c1">LAUNCHER</span>
+      <span class="chip c2">-OO</span>
+      <span class="chip c3">MALLOC_ARENA_MAX</span>
+      <span class="chip c4">OPT-OUT FLAGS</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 3 of 3. Sources: the shared launcher text in 44helper_v0_1_17_20261103.py, identical in each tool that carries it. Memory figures are from the user manual, Appendix D, and were not measured here.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; What the launcher is</div>
+  <h1 class="ch">One script, eleven copies</h1>
+
+  <p class="ch-lede">The launcher is a small Python script installed at <code>/usr/local/bin/asl_dvs_launch.py</code>. Each tool's systemd service starts Python through it, with the tool's file as the first argument. The launcher prepares the process, then runs the tool as if Python had started it directly.</p>
+
+  <p>The same launcher text is written by eleven tool files: the full and pi02w builds of the Dashboard and SysMon, instmon, 44helper, Node Talker, amp Node Talker, Node Recorder, wifimon and pibrary. The repo rules require the text to be identical in every copy, and a hash comparison of the extracted text confirmed that it is. In all eleven, the service unit is Type=notify and its start line runs the launcher.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; What it does at start</div>
+  <h1 class="ch">The first run</h1>
+
+  <h2><span class="n">2.1</span>Re-running Python</h2>
+  <p>If the launcher's marker variable (<code>ASL_DVS_LAUNCH</code>) is not set, it is the first run. It builds a list of extra flags and a copy of the environment, then:</p>
+  <ol>
+    <li><strong>Optimization.</strong> If Python is not already running at optimization level 2, and the <code>launch_no_optimize</code> flag is absent, it adds <code>-OO</code>.</li>
+    <li><strong>Allocator cap.</strong> If <code>MALLOC_ARENA_MAX</code> is not already set, and the <code>launch_no_arena_cap</code> flag is absent, it sets <code>MALLOC_ARENA_MAX=2</code> and records the marker as <code>arena</code>.</li>
+    <li><strong>Re-run.</strong> If either step asked for a change, it replaces its own process with <code>os.execve</code>, using the Python executable, the extra flags and the original arguments. If the replacement fails, it carries on in the current process.</li>
+  </ol>
+  <p><code>execve</code> replaces the program in the same process, so the process ID does not change. systemd, which runs the service as Type=notify, therefore sees the same process from start to finish.</p>
+
+  <h2><span class="n">2.2</span>In the second run</h2>
+  <p>The second run sees the marker. It removes the marker from its environment. If the marker said <code>arena</code>, it also removes <code>MALLOC_ARENA_MAX</code>. The cap has already taken effect in the process by then, because the C allocator reads it at start. Removing it stops the cap being passed to any child process the tool starts later, so those children get the usual allocator behaviour.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The memory trim</div>
+  <h1 class="ch">A background thread calls malloc_trim</h1>
+
+  <p>Unless the <code>launch_no_trim</code> flag is present, the launcher starts a daemon thread named <code>mem-trim</code>. The thread:</p>
+  <ol>
+    <li>Sleeps 60 seconds, to let the tool start.</li>
+    <li>Loads the C library and gets its <code>malloc_trim</code> function. If the library or function is missing, the thread ends quietly.</li>
+    <li>Calls <code>malloc_trim(0)</code>, then sleeps 300 seconds, and repeats for as long as the process runs.</li>
+  </ol>
+  <p>The call asks the allocator to return freed memory to the operating system. It does not free memory that the tool still uses. Because the thread is a daemon, it does not keep the process alive when the tool exits.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Loading the tool file</div>
+  <h1 class="ch">How the tool's Python is run</h1>
+
+  <ol>
+    <li><strong>Find the file.</strong> The first argument is resolved with <code>realpath</code>, so a symbolic link is followed to the real file.</li>
+    <li><strong>Set the arguments.</strong> <code>sys.argv</code> becomes the file's path followed by the rest of the original arguments, so the tool sees the same arguments it would see if run directly.</li>
+    <li><strong>Set the import path.</strong> The file's folder is put first on <code>sys.path</code>, so modules beside the tool import correctly.</li>
+    <li><strong>Run as the main program.</strong> If the file's base name is a valid Python identifier, the launcher runs it with <code>runpy.run_module</code> under the name <code>__main__</code>. Otherwise it loads the file by path with <code>importlib</code>, registers it as <code>__main__</code>, and runs it. A name fails the test when it has a hyphen or starts with a digit. 44helper's installed file name (<code>44helper_v0_1_17_20261103.py</code>) starts with a digit, so 44helper takes this second path, and the other tools take the first.</li>
+  </ol>
+  <p>The two paths give the same result for the tool. The second exists because a name that is not a valid identifier cannot be imported by name.</p>
+
+  <h2><span class="n">4.1</span>Why load it as a module</h2>
+  <p>The user manual (Appendix D) gives the reason: loading the tool as a module lets Python keep the compiled copy in <code>__pycache__</code>, where a script started directly is compiled again on each start. The manual's table compares each tool started directly with the same tool started through the launcher:</p>
+  <table>
+    <tr><th>Tool</th><th>Started directly</th><th>Through the launcher</th></tr>
+    <tr><td>SysMon (Pi02w)</td><td>54 MB</td><td>26 MB</td></tr>
+    <tr><td>Dashboard (Pi02w)</td><td>45 MB</td><td>25 MB</td></tr>
+    <tr><td>instmon</td><td>34 MB</td><td>21 MB</td></tr>
+    <tr><td>wifimon</td><td>36 MB</td><td>22 MB</td></tr>
+    <tr><td>44helper</td><td>48 MB</td><td>26 MB</td></tr>
+  </table>
+  <p>These figures are the manual's and were not measured for this summary. They describe the module loading. The manual gives no figures for the three savers in Parts 2, 3 and 6.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; What -OO changes</div>
+  <h1 class="ch">Why the optimized run is safe for these tools</h1>
+
+  <p>Running Python with <code>-OO</code> removes <code>assert</code> statements, sets <code>__debug__</code> to false, and removes docstrings from the compiled code. The gain is a smaller compiled footprint and slightly less work at run time.</p>
+  <ul>
+    <li><strong>Asserts.</strong> The pi02w tools use no <code>assert</code> statement that a run depends on. A check that matters is written as an <code>if</code> and an error, so removing asserts does not remove a check.</li>
+    <li><strong>Docstrings.</strong> Docstrings are not read by the tools' logic. The one that matters for the book is in a wrapper, so its removal does not change behaviour.</li>
+    <li><strong>Debug checks.</strong> No code path depends on <code>__debug__</code> being true.</li>
+  </ul>
+  <p>A search of all eleven files found no <code>assert</code> statement and no use of <code>__debug__</code>. The one use of <code>__doc__</code> is in the Dashboard (the full and pi02w builds): a wrapper copies a function's docstring onto itself, which under <code>-OO</code> copies <code>None</code> and does nothing harmful. This was checked by reading the code, not by running the tools under <code>-OO</code> on a node.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; The memory cap</div>
+  <h1 class="ch">What MALLOC_ARENA_MAX=2 does</h1>
+
+  <p>glibc gives each thread its own memory arena to reduce lock contention. On a small device with many threads, the arenas can hold a lot of memory that is not in use. The manual puts the default at up to 8 arenas per CPU core. Setting <code>MALLOC_ARENA_MAX=2</code> limits the process to two arenas, which trades a little speed under heavy threading for a smaller footprint.</p>
+  <p>The launcher applies the cap to the tool process only. The removal in the second run (Part 2.2) stops the cap passing to child processes the tool starts.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; The opt-out flags</div>
+  <h1 class="ch">Turning each optimization off</h1>
+
+  <table>
+    <tr><th>Flag file</th><th>Turns off</th><th>Effect</th></tr>
+    <tr><td><code>/etc/asl_dvs/launch_no_optimize</code></td><td>The <code>-OO</code> run</td><td>Python runs with its normal asserts and docstrings</td></tr>
+    <tr><td><code>/etc/asl_dvs/launch_no_arena_cap</code></td><td>The <code>MALLOC_ARENA_MAX=2</code> cap</td><td>The allocator uses its default arenas</td></tr>
+    <tr><td><code>/etc/asl_dvs/launch_no_trim</code></td><td>The periodic <code>malloc_trim</code> thread</td><td>Freed memory is not returned on a timer</td></tr>
+  </table>
+  <p>The launcher checks for the flag files each time it starts. A change therefore takes effect when the service next starts, not while it is running. The flag files keep the <code>asl_dvs</code> system name, as the naming rules require.</p>
+  <p>The user manual, Appendix D, describes these flags and shows the command to turn one off for every tool (touch the file, then restart the services). It also warns that with <code>-OO</code> the first start after an update compiles everything once more, so memory should be measured after the next restart.</p>
+
+  <h2><span class="n">7.1</span>Installing and removing the launcher</h2>
+  <p>Each tool writes the launcher when it installs. On uninstall, a tool removes the launcher only when no service file in <code>/etc/systemd/system</code> still names it, so one tool's removal does not break another.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the launcher shows</h1>
+
+  <h2><span class="n">8.1</span>One launcher, one behaviour</h2>
+  <p>Because every tool starts through the same script, a change to the launcher changes all eleven tools at once. The identical-text rule keeps that change predictable.</p>
+
+  <h2><span class="n">8.2</span>Running a file by hand skips the launcher</h2>
+  <p>A tool run directly with <code>python3</code> does not get <code>-OO</code>, the cap or the trim thread. Only the service path uses the launcher, so a person testing a tool by hand sees different memory behaviour from the service.</p>
+
+  <h2><span class="n">8.3</span>Fallbacks</h2>
+  <ul>
+    <li>If the re-run fails, the tool carries on in the first process, without the flags.</li>
+    <li>If the trim library is missing, the trim thread ends and nothing else changes.</li>
+  </ul>
+
+  <h2><span class="n">8.4</span>Not checked</h2>
+  <ul>
+    <li>The memory figures in the manual, which were not measured here.</li>
+    <li>Whether every tool's test set passes under <code>-OO</code> on a running node.</li>
+    <li>Whether the arena cap changes speed for any tool under load.</li>
+  </ul>
+</section>
+
+</body>
+</html>

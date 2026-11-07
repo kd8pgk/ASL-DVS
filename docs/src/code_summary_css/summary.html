@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Code Summary: CSS</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; WEB PAGES</div>
+    </div>
+    <div class="ed"><b>Stage 2 of 3</b><br>CSS</div>
+  </div>
+  <div class="body">
+    <h1>Code Summary: <span>CSS</span></h1>
+    <p class="lede">The styles of the eight web tools in the Pi Zero 2 W build: how each stylesheet is stored, the design tokens it uses, how the light and dark themes work, and where the layout changes for smaller screens.</p>
+    <div class="chips">
+      <span class="chip c1">8 STYLESHEETS</span>
+      <span class="chip c2">DARK DEFAULT</span>
+      <span class="chip c3">STAGE 2</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 2 covers CSS. HTML was Stage 1, JavaScript is Stage 3. Source: the tool files on branch ccr-9d4fe19f-ssud83.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope and method</div>
+  <h1 class="ch">Where the styles are</h1>
+  <p class="ch-lede">The same eight pages as Stage 1. Their styles are not kept in one file. Each tool stores its CSS in two ways: a literal <code>&lt;style&gt;</code> block in the page, and Python string constants (names beginning <code>_CSS</code>) that are joined together when the page is served.</p>
+
+  <h2><span class="n">1.1</span>How the counts were made</h2>
+  <ul>
+    <li>Both forms were collected for each tool: every <code>&lt;style&gt;</code> block in the file, and every string constant whose name contains CSS or THEME.</li>
+    <li>Rule counts are approximate: they count selector blocks. Token counts are distinct custom properties (names beginning <code>--</code>).</li>
+    <li>Nothing was rendered. Behaviour described here comes from the CSS text.</li>
+  </ul>
+
+  <h2><span class="n">1.2</span>Two kinds of stylesheet</h2>
+  <table>
+    <tr><th>Kind</th><th>Pages</th><th>Shape</th></tr>
+    <tr><td>One large sheet plus a small theme block</td><td>Node Controller, SysMon, wifimon, Pibrary</td><td>A single main sheet of 46,000 to 93,000 characters.</td></tr>
+    <tr><td>Many named parts joined at run time</td><td>instmon, 44helper, Node Talker, Node Recorder</td><td>Parts such as <code>_CSS_BASE</code>, <code>_CSS_LAYOUT</code> and <code>_CSS_COMPONENTS</code>, joined when the page is served.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; At a glance</div>
+  <h1 class="ch">Size and features per page</h1>
+
+  <table>
+    <tr><th>Page</th><th>Parts</th><th>Characters</th><th>Rules</th><th>Tokens</th><th>Media rules</th><th>Animations</th><th>!important</th></tr>
+    <tr><td>Node Controller</td><td>2</td><td>85,901</td><td>468</td><td>56</td><td>11</td><td>3</td><td>2</td></tr>
+    <tr><td>SysMon</td><td>2</td><td>93,080</td><td>581</td><td>42</td><td>13</td><td>2</td><td>4</td></tr>
+    <tr><td>instmon</td><td>13</td><td>60,465</td><td>244</td><td>51</td><td>4</td><td>1</td><td>3</td></tr>
+    <tr><td>wifimon</td><td>2</td><td>46,394</td><td>159</td><td>40</td><td>2</td><td>0</td><td>4</td></tr>
+    <tr><td>44helper</td><td>12</td><td>59,889</td><td>256</td><td>43</td><td>2</td><td>0</td><td>2</td></tr>
+    <tr><td>Node Talker</td><td>5</td><td>60,475</td><td>346</td><td>32</td><td>4</td><td>1</td><td>95</td></tr>
+    <tr><td>Node Recorder</td><td>4</td><td>61,134</td><td>350</td><td>32</td><td>4</td><td>1</td><td>98</td></tr>
+    <tr><td>Pibrary</td><td>2</td><td>52,782</td><td>241</td><td>32</td><td>5</td><td>0</td><td>2</td></tr>
+  </table>
+
+  <h2><span class="n">2.1</span>Breakpoints</h2>
+  <p>Each page changes layout at a few widths. The list below gives the widths named in media queries, in pixels. Most pages have several small-screen steps.</p>
+  <table>
+    <tr><th>Page</th><th>Widths named in media queries</th></tr>
+    <tr><td>Node Controller</td><td>560, 600, 900</td></tr>
+    <tr><td>SysMon</td><td>480, 600, 640, 800, 900, 1200</td></tr>
+    <tr><td>instmon</td><td>560, 600 (max-width) and 561 (min-width)</td></tr>
+    <tr><td>wifimon</td><td>964 (min-width)</td></tr>
+    <tr><td>44helper</td><td>560, 640</td></tr>
+    <tr><td>Node Talker</td><td>420, 480, 560</td></tr>
+    <tr><td>Node Recorder</td><td>420, 480, 560</td></tr>
+    <tr><td>Pibrary</td><td>600</td></tr>
+  </table>
+  <p>wifimon's one layout rule is a min-width rule at 964 px, so it changes the layout for wider screens rather than narrower ones. The other pages adjust for narrower screens.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Themes</div>
+  <h1 class="ch">Light and dark</h1>
+  <p class="ch-lede">Seven of the eight pages share one theme mechanism. Pibrary has its own.</p>
+
+  <h2><span class="n">3.1</span>The shared mechanism</h2>
+  <ul>
+    <li>The page is dark by default. A light theme is turned on by setting <code>data-theme="light"</code> on the root element.</li>
+    <li>The choice is saved in the browser under <code>asl_dvs_theme</code>. If storage is not available, the page falls back to dark.</li>
+    <li>The light theme is not a second set of colours. It applies <code>filter: invert(1) hue-rotate(180deg)</code> to the whole page, re-tunes the colour tokens for light, and then inverts images, video, canvas, iframes and checkboxes back to their original colours.</li>
+    <li>Text shadows are removed in the light theme.</li>
+    <li>A Dark and Light switch (a label and two buttons) appears in a settings area of each page. On 44helper it is on the Config tab. The active button is marked with <code>aria-pressed</code>.</li>
+  </ul>
+
+  <h2><span class="n">3.2</span>What the approach means</h2>
+  <ul>
+    <li><strong>One set of rules, two looks.</strong> A rule written for dark applies to light without change. This keeps the CSS small.</li>
+    <li><strong>Colours in images and icons.</strong> Anything inverted must be inverted back, which the shared block does for the listed element types. A new image or canvas type would need the same treatment.</li>
+    <li><strong>Cost on the Pi.</strong> A filter on the whole page is applied to every element. Its cost on a Pi Zero 2 W has not been measured for this summary, and the book should not assume it is free.</li>
+  </ul>
+
+  <h2><span class="n">3.3</span>Pibrary</h2>
+  <p>Pibrary defines its own light and dark token sets, with no inversion. Its setting has three values: <strong>dark</strong>, <strong>light</strong> and <strong>auto</strong>. Auto follows the operating system through <code>prefers-color-scheme</code>. The value is saved under <code>pibrary.theme</code>. Pibrary is the only page that follows the operating system.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Tokens</div>
+  <h1 class="ch">Design tokens</h1>
+
+  <h2><span class="n">4.1</span>Where the tokens are</h2>
+  <p>Each page defines its colours and sizes as custom properties on the root element, and the rules use them through <code>var(--name)</code>. The Node Controller defines 56 distinct tokens, and most of its colour tokens come in groups: a main colour, its RGB triple (for use in transparent fills) and a dimmed version. The groups are <code>--mc</code>, <code>--tc</code>, <code>--rc</code>, and others for mode colours.</p>
+
+  <h2><span class="n">4.2</span>Shared token names</h2>
+  <p>Several pages use the same names for the same roles, so one theme block can serve them all. The names that recur include the accent colours (<code>--accent</code>, <code>--teal</code>, <code>--red</code>, <code>--green</code>, <code>--amber</code>, <code>--blue</code>, <code>--orange</code>), and the text and surface colours. The light theme block re-tunes these names, not the rules that use them.</p>
+
+  <h2><span class="n">4.3</span>Pibrary's tokens</h2>
+  <p>Pibrary uses its own names. Its dark set includes <code>--bg</code>, <code>--surface</code>, <code>--surface2</code> and <code>--border</code>, and its light set uses the same names with light values.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Pages</div>
+  <h1 class="ch">Node Controller and SysMon</h1>
+
+  <h2><span class="n">5.1</span>Node Controller</h2>
+  <ul>
+    <li>Two parts: a small block for the theme (1,327 characters) and the main sheet (84,573 characters).</li>
+    <li>56 tokens, and 468 rules, the most of any page after SysMon.</li>
+    <li>Eleven media rules, including one for <code>prefers-reduced-motion</code>, so its animations can be turned off for users who ask for less motion.</li>
+    <li><code>z-index</code> values run from 100 to 9,999, and the highest value is 9,999.</li>
+    <li>Three animations.</li>
+  </ul>
+
+  <h2><span class="n">5.2</span>SysMon</h2>
+  <ul>
+    <li>The largest sheet of the eight: 93,080 characters and 581 rules.</li>
+    <li>Thirteen media rules, at 480, 600, 640, 800, 900 and 1200 px, to adjust the layout as the screen narrows.</li>
+    <li>Eight layers, from 200 to 9,999.</li>
+    <li>Four <code>!important</code> rules, and two animations. No reduced-motion rule.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Pages</div>
+  <h1 class="ch">wifimon, 44helper and instmon</h1>
+
+  <h2><span class="n">6.1</span>wifimon</h2>
+  <ul>
+    <li>One main sheet of 45,066 characters and 159 rules: the smallest rule count of the large sheets, which suits a page of cards.</li>
+    <li>The one layout rule is at 964 px (min-width), so the card grid widens on larger screens rather than narrowing on smaller ones.</li>
+    <li>Respects reduced motion, with one rule.</li>
+  </ul>
+
+  <h2><span class="n">6.2</span>44helper</h2>
+  <ul>
+    <li>Twelve parts: a base sheet of 33,082 characters, a layout part, a components part, and one part for each section (nodes, firewall, logs, ASL3, auth and quiet mode).</li>
+    <li>Media rules at 560 and 640 px only.</li>
+    <li>No reduced-motion rule and no animation keyframes.</li>
+  </ul>
+
+  <h2><span class="n">6.3</span>instmon</h2>
+  <ul>
+    <li>Thirteen parts, one for each section of the main page (base, layout, components, library, log, editor, login and disk image), plus the theme block.</li>
+    <li>Media rules at 560 and 600 px (max-width), one at 561 px (min-width), and one reduced-motion rule.</li>
+    <li>The Suite Log page (Stage 1) uses its own short sheet inside its page, not the shared parts.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Pages</div>
+  <h1 class="ch">Node Talker, Node Recorder and Pibrary</h1>
+
+  <h2><span class="n">7.1</span>Node Talker</h2>
+  <ul>
+    <li>A large part of 53,259 characters, with four smaller parts in the page.</li>
+    <li>It uses <code>!important</code> 95 times. Many of these force a layout at phone widths: for example, the connect bar is made full width and its buttons share a row.</li>
+    <li>Media rules at 420, 480 and 560 px. Its small-screen focus fits a phone-first page.</li>
+    <li>No reduced-motion rule. Its localStorage use is the heaviest of the eight (29 references in the page code), which is a JavaScript matter for Stage 3.</li>
+  </ul>
+
+  <h2><span class="n">7.2</span>Node Recorder</h2>
+  <ul>
+    <li>A large part of 53,968 characters.</li>
+    <li>It is a near copy of Node Talker's sheet. The two differ in about 48 lines (for example, the Node Recorder has a JSON panel and a conversion terminal, and the listen-row rules are absent). Changes to one do not reach the other.</li>
+    <li><code>!important</code> is used 98 times, in the same pattern.</li>
+  </ul>
+
+  <h2><span class="n">7.3</span>Pibrary</h2>
+  <ul>
+    <li>One main sheet of 52,773 characters and 241 rules, with few <code>!important</code> uses (2).</li>
+    <li>Five media rules, all at 600 px.</li>
+    <li>Its own theme (Part 3.3). It is the only page with a dark, light and auto choice.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">Things the stylesheets show</h1>
+
+  <h2><span class="n">8.1</span>Copies drift apart</h2>
+  <p>Node Talker and Node Recorder share most of their stylesheet, but have separately edited copies. A fix in one will not reach the other. The book should describe the two as related, not shared.</p>
+
+  <h2><span class="n">8.2</span>Heavy use of <code>!important</code></h2>
+  <p>Node Talker (95) and Node Recorder (98) use <code>!important</code> far more than any other page. These rules are hard to override, so a new style for those pages may have to fight them. Document the reason before a change is made.</p>
+
+  <h2><span class="n">8.3</span>Reduced motion is not universal</h2>
+  <p>Only the Dashboard, wifimon and instmon respond to a request for less motion. The other pages animate regardless. Check before the book claims the pages respect that setting.</p>
+
+  <h2><span class="n">8.4</span>The light theme is a filter</h2>
+  <p>The light theme of seven pages depends on a whole-page filter. It is simple, but it needs care with images and new elements, and its cost on the Pi Zero 2 W has not been measured. The book should say so.</p>
+
+  <h2><span class="n">8.5</span>Inline CSS, no shared file</h2>
+  <p>No page loads a stylesheet file. Every rule is served inside the page. A change to a page's look means editing its tool file, and the change ships with that tool's version.</p>
+</section>
+
+</body>
+</html>

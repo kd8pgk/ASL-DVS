@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Talker - Overview</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; NODE TALKER</div>
+    </div>
+    <div class="ed"><b>Part 1 of 4</b><br>overview</div>
+  </div>
+  <div class="body">
+    <h1>Node Talker <span>Overview</span></h1>
+    <p class="lede">What Node Talker is, what it connects to on the node, how audio comes in and goes out, and where each part of the rest of this series begins.</p>
+    <div class="chips">
+      <span class="chip c1">RX PATH</span>
+      <span class="chip c2">TX PATH</span>
+      <span class="chip c3">BALANCER</span>
+      <span class="chip c4">AUDIO SETTINGS</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 1 of 4. Source: nodetalker_v0_10_20_20261105.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; What it is</div>
+  <h1 class="ch">A phone or laptop page that talks to the node</h1>
+  <p class="ch-lede">Node Talker serves a web page. The page listens to the node's receive audio and sends the operator's voice back onto the node's transmit path. It is a common tool: the same file serves both builds, and it is installed by its own <code>--install</code>.</p>
+
+  <table>
+    <tr><th>Item</th><th>Value</th><th>Set in</th></tr>
+    <tr><td>Web port</td><td>8993 (HTTPS by default)</td><td><code>port</code>, <code>https</code></td></tr>
+    <tr><td>Audio in from the node</td><td>UDP 127.0.0.1:6200</td><td><code>udp_port</code></td></tr>
+    <tr><td>Transmit node</td><td>Node 1921, a USRP channel on ports 32018 (send) and 34018 (listen)</td><td>Built into the tool; written to rpt.conf</td></tr>
+    <tr><td>Listener slots</td><td>3 by default (1 to 10)</td><td><code>max_listeners</code></td></tr>
+    <tr><td>Config file</td><td><code>/etc/asl_dvs/nodetalker.conf</code>, section <code>[nodetalker]</code></td><td>Written by the page's saves</td></tr>
+  </table>
+  <p>The config file keeps the <code>asl_dvs</code> name, as the naming rules require. The older name, nodelisten, is still read as a fallback section.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The two paths</div>
+  <h1 class="ch">Audio goes both ways</h1>
+
+  <h2><span class="n">2.1</span>Receive (node to phone)</h2>
+  <ol>
+    <li>Asterisk sends the node's receive audio to a feed command (<code>outstreamcmd</code>) written into rpt.conf for the chosen node.</li>
+    <li>The feed command reads that audio and sends it as UDP datagrams to 127.0.0.1:6200.</li>
+    <li>Node Talker turns the datagrams into 20 ms frames, cleans them, and queues them for each listener.</li>
+    <li>Each listener reads a stream over HTTP, as u-law by default, or as 16-bit PCM when asked.</li>
+  </ol>
+  <p>Part 2 of this series covers each step.</p>
+
+  <h2><span class="n">2.2</span>Transmit (phone to node)</h2>
+  <ol>
+    <li>The page opens a WebSocket and sends the operator's microphone audio as 16-bit PCM.</li>
+    <li>When the operator keys up, the server checks the node is ready and linked, and that the channel is not busy.</li>
+    <li>Audio is paced out at 20 ms a frame as USRP packets to Asterisk on the transmit node.</li>
+    <li>Asterisk keys the node's transmitter while the packets flow, and drops the key when they stop.</li>
+  </ol>
+  <p>Part 3 of this series covers each step.</p>
+
+  <h2><span class="n">2.3</span>The balancer and the audio settings</h2>
+  <p>The balancer is a set of tone and live checks that the page runs, and it changes settings one at a time. The settings control gain, filtering, the listen buffer and the transmit buffer. Part 4 covers both.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Where the work happens</div>
+  <h1 class="ch">The main parts of the code</h1>
+
+  <table>
+    <tr><th>Part</th><th>What it is</th><th>Where to start</th></tr>
+    <tr><td>Receive hub</td><td>Takes UDP audio, makes frames, sends them to listeners</td><td><code>Hub</code>, <code>udp_loop</code>, <code>run_feed</code></td></tr>
+    <tr><td>Receive cleanup</td><td>Filter, gain, AGC and gate on the audio</td><td><code>RxClean</code></td></tr>
+    <tr><td>Receive health</td><td>Records gaps, jitter and listener stalls, with a verdict</td><td><code>RxHealth</code>, <code>rxh_verdict</code></td></tr>
+    <tr><td>Transmit</td><td>Keys the node, buffers and paces the audio</td><td><code>Talker</code></td></tr>
+    <tr><td>Transmit setup</td><td>Writes the node 1921 block into rpt.conf</td><td><code>tx_enable</code>, <code>tx_state</code></td></tr>
+    <tr><td>Load guard</td><td>Stops tone tests when the Pi is stressed</td><td><code>LoadGuard</code></td></tr>
+    <tr><td>Balancer</td><td>Saves, restores and keeps a balance run</td><td><code>balance_snapshot</code>, <code>balance_restore</code>, <code>balance_keep</code></td></tr>
+    <tr><td>Page</td><td>The browser code that runs the tests and the balancer</td><td>The script in the page, from <code>expRun</code></td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Start-up and shutdown</div>
+  <h1 class="ch">What runs inside the service</h1>
+
+  <h2><span class="n">4.1</span>HTTPS</h2>
+  <p>With <code>https</code> on (the default), the service creates a self-signed certificate on first start with <code>openssl</code> (elliptic-curve key, valid 10 years, names for the host, <code>host.local</code> and the node's LAN addresses) and serves TLS 1.2 or later on the one port. A plain HTTP request to that port is answered with a 301 redirect to the same address over HTTPS. If the certificate cannot be made or loaded, the service falls back to plain HTTP and the page shows a warning that the password travels in plain text. Push-to-talk needs HTTPS in the browser, so the log says so.</p>
+
+  <h2><span class="n">4.2</span>The threads</h2>
+  <p>After the listener is up, the service starts these background threads: the Asterisk key-up watcher, the audio pump (20 ms), the UDP receiver, the transmit pacer (20 ms), the transmit drain, the link keeper, the link guard and link log, the IAX and Wi-Fi health samplers, the Pi health sampler, and the systemd watchdog. It then tells systemd it is ready (<code>Type=notify</code>).</p>
+
+  <h2><span class="n">4.3</span>Stopping</h2>
+  <p>On a stop signal, the service ends any transmission in progress and, if the transmit node is set up, unlinks node 1921 from the main node, so a stopped service does not leave the transmit node linked.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Who may connect</div>
+  <h1 class="ch">Access, briefly</h1>
+
+  <ul>
+    <li><strong>Local network by default.</strong> A request from outside the local network is treated as coming from the internet and is refused on the gated routes, unless <code>allow_wan</code> is on. The default is off.</li>
+    <li><strong>Login.</strong> The page uses a login with session cookies and lockouts. The security series covers these. Only the page itself, <code>/api/health</code> and <code>/api/whoami</code> answer without a login.</li>
+    <li><strong>Public listening.</strong> With <code>public_listen</code> on (off by default), the status and audio stream routes (<code>/api/status</code>, <code>/api/listen</code>) also answer without a login, to anyone who passes the local-network test. Talking (<code>/api/talk</code>) always needs a login.</li>
+    <li><strong>Proxied requests</strong> from a loopback address that carry a proxy header are treated as outside.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Points for the book</div>
+  <h1 class="ch">What the overview shows</h1>
+
+  <h2><span class="n">6.1</span>Two streams, one node</h2>
+  <p>Receive and transmit use different ports and different pieces of Asterisk. A problem on one side does not necessarily affect the other, and the logs and health readings keep them apart.</p>
+
+  <h2><span class="n">6.2</span>Node 1921 is a separate node</h2>
+  <p>The transmit path is a second node in rpt.conf, linked to the main node. The receive path uses the main node's own output hook. Operators must restart Asterisk after the rpt.conf change that the setup makes.</p>
+
+  <h2><span class="n">6.3</span>Not checked</h2>
+  <ul>
+    <li>The full set of routes in the page (only the main structure was read).</li>
+    <li>The Asterisk side of the USRP channel on a running node.</li>
+    <li>The page's phone-app path in full.</li>
+  </ul>
+</section>
+
+</body>
+</html>
