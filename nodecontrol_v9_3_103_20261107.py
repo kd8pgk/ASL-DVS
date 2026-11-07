@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.102"
+VERSION      = "9.3.103"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -261,6 +261,7 @@ def _sd_notify(state: str) -> None:
 
 DIGITAL_MODES    = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
 ALL_PAGES        = ("ASL", "ECHO") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHONE")
+HUB_PAGES         = ("SVX", "AMP")
 VALID_CONF_MODES = {"DMR", "STFU", "YSF", "FCS", "P25", "NXDN", "DSTAR"}
 TUNE_MODES       = set(DIGITAL_MODES) | {"FCS"}
 
@@ -276,14 +277,14 @@ class Config:
     bridge_nodes:        List[str] = field(default_factory=lambda: list(DEFAULT_BRIDGE_NODES))
     port:                int      = PORT
     callsign:            str      = ""
-    enabled_tabs:        Set[str] = field(default_factory=lambda: set(ALL_PAGES))
-    enabled_tabs_sorted: list     = field(default_factory=lambda: list(ALL_PAGES))
+    enabled_tabs:        Set[str] = field(default_factory=lambda: set(ALL_PAGES + HUB_PAGES))
+    enabled_tabs_sorted: list     = field(default_factory=lambda: list(ALL_PAGES + HUB_PAGES))
     cpuweight_enabled:   bool     = False
 
 _cfg = Config()
 
 def _refresh_tabs_cache() -> None:
-    _cfg.enabled_tabs_sorted = [p for p in ALL_PAGES if p in _cfg.enabled_tabs]
+    _cfg.enabled_tabs_sorted = [p for p in ALL_PAGES + HUB_PAGES if p in _cfg.enabled_tabs]
 
 def _apply_config(cfg: dict) -> None:
     with _cfg_lock:
@@ -321,7 +322,7 @@ def _apply_config(cfg: dict) -> None:
             val   = cfg["enabled_tabs"]
             items = val if isinstance(val, (list, tuple)) else str(val).split(",")
             _cfg.enabled_tabs = {str(t).strip().upper() for t in items
-                                 if str(t).strip().upper() in ALL_PAGES}
+                                 if str(t).strip().upper() in ALL_PAGES + HUB_PAGES}
             _refresh_tabs_cache()
         if "cpuweight_enabled" in cfg:
             v = cfg["cpuweight_enabled"]
@@ -4013,7 +4014,7 @@ def action_save_config(cfg: dict) -> Tuple[bool, str]:
         with _cfg_lock:
             items = tabs_raw if isinstance(tabs_raw, list) else str(tabs_raw).upper().split(",")
             _cfg.enabled_tabs = {str(t).strip().upper() for t in items
-                                 if str(t).strip().upper() in ALL_PAGES}
+                                 if str(t).strip().upper() in ALL_PAGES + HUB_PAGES}
             _refresh_tabs_cache()
         if get_state().page not in _cfg.enabled_tabs:
             _st2     = get_state()
@@ -7803,7 +7804,104 @@ def _read_wifimon_shutdown_state() -> dict:
 def _dmr_servers_public(servers: list) -> list:
     return [{k: v for k, v in s.items() if k != "password"} for s in servers]
 
+HUB_STATUS_TTL = 8.0
+_HUB_CACHE: dict = {"at": 0.0, "data": None}
+_HUB_LOCK = threading.Lock()
+_SVX_UNITS = ("svxlink.service", "svxlink-usrp.service", "remotetrx.service")
+_SVX_CONFS = ("/etc/svxlink/svxlink.conf", "/usr/local/etc/svxlink/svxlink.conf")
+_SVX_BINS = ("/usr/bin/svxlink", "/usr/local/bin/svxlink")
+_SVX_LOG = "/var/log/svxlink"
+_AMP_UNITS = ("amp-server.service", "amp-hub.service")
+_AMP_ENV = "/usr/etc/amp-hub.env"
+_AMP_BIN = "/usr/bin/amp-server"
+_AMP_SHOWN_KEYS = ("AMP_NODE", "AMP_IAX_PORT", "AMP_IAX_AUTHMODE", "AMP_IAX_ALLOWLIST", "AMP_VOTER_PORT")
+
+def _hub_unit(unit: str) -> dict:
+    p = _unit_props(unit, "LoadState", "ActiveState", "UnitFileState")
+    return {"unit": unit, "loaded": p.get("LoadState") == "loaded",
+            "active": p.get("ActiveState", "unknown"), "enabled": p.get("UnitFileState", "")}
+
+def _hub_file_tail(path: str, lines: int = 8) -> list:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 8192))
+            data = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return [ln[:200] for ln in data.splitlines()[-lines:]]
+
+def _hub_journal_tail(unit: str, lines: int = 8) -> list:
+    out, rc = run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short"], timeout=4)
+    if rc != 0:
+        return []
+    return [ln[:200] for ln in out.splitlines() if ln.strip()][-lines:]
+
+def _hub_svx_global(path: str) -> dict:
+    out: dict = {}
+    section = None
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip("[]")
+            continue
+        if section == "GLOBAL" and "=" in line:
+            k, v = line.split("=", 1)
+            if k.strip().upper() in ("LOGICS", "LINKS", "CALLSIGN"):
+                out[k.strip().upper()] = v.strip()
+    return out
+
+def _hub_amp_settings(path: str) -> dict:
+    out: dict = {}
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() in _AMP_SHOWN_KEYS:
+            out[k.strip()] = v.strip()
+    return out
+
+def _probe_svx() -> dict:
+    units = [_hub_unit(u) for u in _SVX_UNITS]
+    conf = next((p for p in _SVX_CONFS if Path(p).is_file()), "")
+    installed = (any(u["loaded"] for u in units) or bool(conf)
+                 or any(Path(b).is_file() for b in _SVX_BINS))
+    return {"installed": installed, "units": units, "conf_path": conf,
+            "global": _hub_svx_global(conf) if conf else {},
+            "log_tail": _hub_file_tail(_SVX_LOG) if installed else []}
+
+def _probe_amp() -> dict:
+    units = [_hub_unit(u) for u in _AMP_UNITS]
+    env_ok = Path(_AMP_ENV).is_file()
+    installed = any(u["loaded"] for u in units) or Path(_AMP_BIN).is_file() or env_ok
+    return {"installed": installed, "units": units,
+            "env_path": _AMP_ENV if env_ok else "",
+            "settings": _hub_amp_settings(_AMP_ENV) if env_ok else {},
+            "log_tail": _hub_journal_tail("amp-hub.service") if installed else []}
+
+def _hub_status() -> dict:
+    now = time.monotonic()
+    with _HUB_LOCK:
+        if _HUB_CACHE["data"] is not None and now - _HUB_CACHE["at"] < HUB_STATUS_TTL:
+            return _HUB_CACHE["data"]
+        data = {"svx": _probe_svx(), "amp": _probe_amp()}
+        _HUB_CACHE["at"] = now
+        _HUB_CACHE["data"] = data
+        return data
+
 def build_status() -> dict:
+    hub = _hub_status()
     st = get_state_fields(
         "page", "status", "current_fav", "has_asl", "has_dvs", "has_stfu",
         "has_echo", "echo_fav", "linked_node", "asl_nodes", "echo_nodes",
@@ -7823,6 +7921,9 @@ def build_status() -> dict:
         "has_stfu":          st["has_stfu"],
         "has_echo":          st["has_echo"],
         "has_m17":           st["has_m17"],
+        "has_svx":           hub["svx"]["installed"],
+        "has_amp":           hub["amp"]["installed"],
+        "hub":               hub,
         "echo_fav":          st["echo_fav"],
         "asl_node":          _cfg.asl_node,
         "enabled_tabs":      _cfg.enabled_tabs_sorted,
@@ -8124,6 +8225,14 @@ body.offline.perm-linked #perm-link-bar {
 #tg-indicator.ind-phone{color:var(--green);border-color:rgba(0,255,176,.4);background:rgba(0,255,176,.07);text-shadow:0 0 8px rgba(0,255,176,.5)}
 #tg-indicator.ind-rx{color:#ffd700;border-color:rgba(220,60,60,.6);background:rgba(200,20,20,.22);box-shadow:0 0 10px rgba(220,30,30,.35),inset 0 0 8px rgba(220,30,30,.12);text-shadow:0 0 10px rgba(255,215,0,.8)}
 
+.hub-card{background:#0f1a2b;border:1px solid #1e2d45;border-radius:6px;padding:.7rem .9rem;margin:.5rem 0}
+.hub-card h3{margin:0 0 .3rem;font-family:var(--sans);font-size:var(--fs-base);color:var(--text-bright)}
+.hub-card h4{margin:.7rem 0 .3rem;font-family:var(--sans);font-size:var(--fs-sm);color:#8fa3bf}
+.hub-row{display:flex;justify-content:space-between;gap:.8rem;padding:.2rem 0;border-bottom:1px solid #1a2639;font-family:var(--sans);font-size:var(--fs-sm)}
+.hub-k{color:#8fa3bf}
+.hub-v{color:var(--text-bright);text-align:right;word-break:break-all}
+.hub-note{font-family:var(--sans);font-size:var(--fs-sm);color:#8fa3bf;margin:.2rem 0}
+.hub-log{white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:var(--fs-sm);background:#0a1220;padding:.5rem;border-radius:4px;max-height:16rem;overflow:auto}
 /* ── Tabs ── */
 .tabs {
   display: flex;
@@ -9304,6 +9413,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
         <div class="tab" id="tab-dstar" onclick="clickTab('DSTAR')">D-STAR</div>
         <div class="tab" id="tab-xlx"   onclick="clickTab('XLX')">XLX</div>
         <div class="tab" id="tab-m17"   onclick="clickTab('M17')">M17</div>
+        <div class="tab" id="tab-svx"   onclick="hubTab('SVX')" style="display:none">SVX</div>
+        <div class="tab" id="tab-amp"   onclick="hubTab('AMP')" style="display:none">AMP</div>
         <div class="tab" id="tab-phone" onclick="clickTab('PHONE')">Phone</div>
         <div class="tab" id="tab-edit"  onclick="clickEdit()">EDIT</div>
       </div>
@@ -9606,6 +9717,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
           </div>
           <div class="pt-rf-note" role="note"><b>Notice:</b> Sending music over a radio node is a violation of FCC rules. 47 CFR &sect;97.113(a)(4) prohibits music on an amateur station, and that includes a phone system's hold music or a recording played into a call. &sect;97.113(e) also bars retransmitting broadcast stations. Hang up if a call goes to hold music. Radioless nodes and phone systems with no RF link should be fine.</div>
         </div>
+        <div id="pg-SVX" class="hidden" style="display:none"><div id="hub-svx-body"></div></div>
+        <div id="pg-AMP" class="hidden" style="display:none"><div id="hub-amp-body"></div></div>
         <div id="pg-EDIT" class="hidden">
           <div class="ed-toolbar" style="justify-content:center">
             <button class="btn btn-muted" onclick="showPage(curPage)">Back</button>
@@ -9660,6 +9773,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-YSF"   value="YSF">YSF</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-FCS"   value="FCS">FCS</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-P25"   value="P25">P-25</label>
+              <label class="tab-chk-lbl"><input type="checkbox" id="chk-SVX"   value="SVX">SVX</label>
+              <label class="tab-chk-lbl"><input type="checkbox" id="chk-AMP"   value="AMP">AMP</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-NXDN"  value="NXDN">NXDN</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-DSTAR" value="DSTAR">D-STAR</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-XLX"   value="XLX">XLX</label>
@@ -9816,6 +9931,7 @@ let _pendingTune=null; // {tg,mode,name,at} while awaiting ABInfo confirmation; 
 // failed switch must leave the tile picker up, not fall through to the TG grid.
 // Never touched by Edit → Back navigation (showPage preserves the flag as-is).
 let _dmrNetSelectMode=false;
+let _hubPage=null,_lastHub=null;
 let _lastEtag='';  // ETag from last /api/status 200 — sent as If-None-Match on next poll
 let _tgDataLoaded=false; // true once loadTgData() has completed at least one successful fetch
 // FCS browse card state (v8.4.2) — see the fcsCard* block near openLast().
@@ -10033,6 +10149,7 @@ const MODE_CAPS={
   PHONE: {requires:['hasAsl'],            isDigital:false, reflectorGrid:false, tgRefresh:false},
 };
 const STATIC_PAGES=Object.keys(MODE_CAPS);
+const HUB_PAGES=['SVX','AMP'];
 function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17){
   const flags={hasAsl,hasDvs,hasStfu,hasEcho,hasM17};
   const before=PAGES.slice().sort().join();
@@ -10046,7 +10163,51 @@ function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17){
   });
   return PAGES.slice().sort().join()!==before;
 }
+function hubPaneStyle(){
+  HUB_PAGES.forEach(h=>{
+    const el=byId('pg-'+h);if(el)el.style.display=(_hubPage===h&&!inEdit)?'block':'none';
+    const t=byId('tab-'+h.toLowerCase());
+    if(t)t.className='tab'+(_hubPage===h&&!inEdit?' t-'+h.toLowerCase():'');
+  });
+}
+function hubRow(k,v){return `<div class="hub-row"><span class="hub-k">${esc(k)}</span><span class="hub-v">${esc(v)}</span></div>`}
+function hubUnits(units){return (units||[]).map(u=>hubRow(u.unit,u.loaded?`${u.active} · ${u.enabled||'—'}`:'not installed')).join('')}
+function hubLog(lines){return (lines&&lines.length)?`<pre class="hub-log">${esc(lines.join('\n'))}</pre>`:'<div class="hub-note">No log lines yet.</div>'}
+function paintHub(){
+  if(!_lastHub)return;
+  if(_hubPage==='SVX'){
+    const s=_lastHub.svx||{};
+    byId('hub-svx-body').innerHTML=`<div class="hub-card"><h3>SVX</h3><div class="hub-note">Read-only. Changes nothing.</div>${hubUnits(s.units)}${hubRow('Config',s.conf_path||'not found')}${Object.entries(s.global||{}).map(([k,v])=>hubRow(k,v)).join('')}<h4>Log</h4>${hubLog(s.log_tail)}</div>`;
+  }else if(_hubPage==='AMP'){
+    const a=_lastHub.amp||{};
+    byId('hub-amp-body').innerHTML=`<div class="hub-card"><h3>AMP</h3><div class="hub-note">Read-only. Changes nothing.</div>${hubUnits(a.units)}${hubRow('Settings file',a.env_path||'not found')}${Object.entries(a.settings||{}).map(([k,v])=>hubRow(k,v)).join('')}<h4>Log (amp-hub)</h4>${hubLog(a.log_tail)}</div>`;
+  }
+}
+function hubVisible(d){
+  const en=Array.isArray(d.enabled_tabs)?d.enabled_tabs:[];
+  return {SVX:!!d.has_svx&&en.includes('SVX'),AMP:!!d.has_amp&&en.includes('AMP')};
+}
+function applyHubTabs(d){
+  const show=hubVisible(d);
+  HUB_PAGES.forEach(h=>{const t=byId('tab-'+h.toLowerCase());if(t)t.style.display=show[h]?'':'none';});
+  if(d.hub)_lastHub=d.hub;
+  if(_hubPage&&!show[_hubPage]){_hubPage=null;syncPageDisplay();return;}
+  if(_hubPage){paintHub();hubPaneStyle();}
+}
+function hubTab(n){
+  if(busy||_tabLock.on)return;
+  inEdit=false;_hubPage=n;
+  syncPageDisplay();paintHub();
+}
 function syncPageDisplay(){
+  if(_hubPage&&!inEdit){
+    STATIC_PAGES.forEach(p=>{const el=byId('pg-'+p);if(el)el.style.display='none';const t=byId('tab-'+p.toLowerCase());if(t)t.className='tab';});
+    byId('pg-EDIT').style.display='none';
+    byId('tab-edit').className='tab';
+    hubPaneStyle();
+    return;
+  }
+  hubPaneStyle();
   STATIC_PAGES.forEach(p=>{
     const el=byId('pg-'+p);
     const tab=byId('tab-'+p.toLowerCase());
@@ -10124,6 +10285,7 @@ document.addEventListener('input',e=>{if(tabLockTarget(e.target)&&e.target.tagNa
 
 async function clickTab(page){
   if(busy||_tabLock.on)return;
+  _hubPage=null;
   if(!inEdit&&page===curPage){
     if(page==='PHONE'){_pt.netSelect=true;ptRender();return;}   // v9.1.0: re-click = back to the network list, no server work
     reTuneTab(page);return;
@@ -11952,13 +12114,25 @@ async function doShutdown(){if(!await confirm1('Shut down the system?'))return;c
 function applyTabState(d){
   if(_firstPoll){
     _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
-    if(!d.has_asl&&!d.has_dvs){
+    if(!d.has_asl&&!d.has_dvs&&!d.has_svx&&!d.has_amp){
       byId('tabs-strip').style.display='none';
       PAGES.length=0;inEdit=true;syncPageDisplay();edReload();
       document.body.classList.add('tabs-ready');
       _firstPoll=false;return;
     }
+    if(!d.has_asl&&!d.has_dvs){
+      applyTabVisibility(d.enabled_tabs||[],false,false,false,false,false);
+      PAGES.length=0;
+      applyHubTabs(d);
+      const show=hubVisible(d);
+      _hubPage=show.SVX?'SVX':(show.AMP?'AMP':null);
+      if(!_hubPage)inEdit=true;
+      syncPageDisplay();if(inEdit)edReload();else paintHub();
+      document.body.classList.add('tabs-ready');
+      _firstPoll=false;return;
+    }
     applyTabVisibility(d.enabled_tabs||[],_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    applyHubTabs(d);
     // X2 — one-shot startup warnings from the backend (e.g. legacy XLX rows
     // dropped during conf parse). Gated on _firstPoll so it surfaces exactly
     // once per page load, never repeats on subsequent poll cycles.
@@ -12009,6 +12183,7 @@ function applyTabState(d){
   }else if(Array.isArray(d.enabled_tabs)){
     _hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
     const pc=applyTabVisibility(d.enabled_tabs,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    applyHubTabs(d);
     if(pc){
       if(curPage&&!PAGES.includes(curPage)){curPage=PAGES.length?PAGES[0]:null;if(!inEdit)inEdit=!curPage}
       syncPageDisplay();_lastHash='';
@@ -12214,7 +12389,7 @@ async function cfgLoad(){
     byId('cfg-port').value=d.port||'';
     byId('cfg-cpuweight').checked=!!d.cpuweight_enabled;
     const enabled=Array.isArray(d.enabled_tabs)?d.enabled_tabs:[];
-    STATIC_PAGES.forEach(m=>{
+    [...STATIC_PAGES,...HUB_PAGES].forEach(m=>{
       const el=byId('chk-'+m);if(el)el.checked=enabled.includes(m);
     });
     if(d.mode_net_urls&&typeof d.mode_net_urls==='object'){
@@ -12235,7 +12410,7 @@ async function cfgSave(){
   });
   const bridge_node=bridge_nodes[0];
   const port=byId('cfg-port').value.trim();
-  const enabled_tabs=STATIC_PAGES
+  const enabled_tabs=[...STATIC_PAGES,...HUB_PAGES]
     .filter(m=>{const el=byId('chk-'+m);return el&&el.checked});
   const cpuweight_enabled=byId('cfg-cpuweight').checked;
   const d=await api({action:'save-config',asl_node,bridge_node,bridge_nodes,port,callsign,enabled_tabs,cpuweight_enabled,mode_net_urls:modeNetUrls});
@@ -13426,7 +13601,7 @@ async function edSave(){
       edRender();
       loadTgData();
       _refreshLhBtns();
-      const en=STATIC_PAGES.filter(m=>byId('chk-'+m)?.checked);
+      const en=[...STATIC_PAGES,...HUB_PAGES].filter(m=>byId('chk-'+m)?.checked);
       applyTabVisibility(en,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);syncPageDisplay();setTimeout(refresh,400);
     }
   }finally{hideWorking();busy=false}
@@ -15536,7 +15711,7 @@ def main() -> None:
         server.server_close()
 
 if __name__ == "__main__":
-    _parser = argparse.ArgumentParser(description="ASL-DVS Node Control Dashboard")
+    _parser = argparse.ArgumentParser(description="Node Controller")
     _parser.add_argument("--install", action="store_true",
                           help="Install as a systemd service (versioned copy + stable symlink)")
     _parser.add_argument("--uninstall", action="store_true",

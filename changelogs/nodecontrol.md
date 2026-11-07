@@ -1,7 +1,15 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_102_20261102.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_103_20261107.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
 
+## 9.3.103 (2026-11-07)
+
+Expanded branch only (not on main). Adds two read-only hub tabs, SVX and AMP.
+- **SVX and AMP tabs.** Shown only when the product is installed. SVX reads the SvxLink units, the config in use (`[GLOBAL]` LOGICS, LINKS, CALLSIGN) and the last lines of `/var/log/svxlink`. AMP reads the Ampersand units, the hub settings (node, IAX port, auth mode, allowlist, voter port; passwords are never read) and the amp-hub journal tail.
+- **Radioless hubs.** A node with neither ASL nor DVS but with SVX or AMP installed opens on that hub tab, not on Edit. The radio tabs stay hidden.
+- **Independent of the radio pages.** The hub tabs are not in the radio page list and do not change the page or the mode state.
+- **Edit page.** SVX and AMP are in Visible Tabs.
+- **Title.** The command-line description reads "Node Controller" (was "ASL-DVS Node Control Dashboard"). The on-page title already read "Node Controller".
 ## 9.3.102 (2026-11-02)
 
 - **Links and settings are locked while Node Recorder is recording, with an Override.** The Dashboard asks Node Recorder (`http://127.0.0.1:8995/api/recorder/status`, answered only on this Pi) whether a recording is in progress, every 3 s from the page and before it acts. While one is, connecting, disconnecting and tuning (ASL, EchoLink, D-STAR, XLX, M17, DMR networks and the other digital modes, Disconnect All), the tab switch that retunes, saving the node, mode and phone settings (Save, Save all, the DMR and XLX and M17 lists), the phone patch settings and calls, Reboot and Shutdown are refused with a message that names the recording and when it ends. Saving a favorite, hanging up a call and the CPU-weight calls stay open. If Node Recorder is not installed or not answering, nothing is locked.

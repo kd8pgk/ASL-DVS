@@ -1,6 +1,12 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_95_20261028.py`. Newest entries first.
+Current file: `sysmon_v6_13_96_20261107.py`. Newest entries first.
+
+## 6.13.96 (2026-11-07)
+
+- **SVX and AMP tabs** (expanded branch, not on main). Two read-only tabs, placed after Zello and shown only when the product is installed: **SVX** (SvxLink, `svxlink`, `svxlink-usrp` and `remotetrx` units with their state, the config in use, its `[GLOBAL]` LOGICS, LINKS and CALLSIGN, and the last lines of `/var/log/svxlink`) and **AMP** (Ampersand, `amp-server` and `amp-hub` units, the hub settings from `/usr/etc/amp-hub.env` (node, IAX port, auth mode, allowlist, voter port only; passwords are never read out), and the last lines of the amp-hub journal).
+- **Edit page.** SVX and AMP are in Visible Tabs, so either can be hidden.
+- **Title.** The link to Node Controller reads "Return to Node Controller" (was "Return to ASL-DVS Dashboard"). The ASL-DVS tab keeps its name.
 
 ## 6.13.95 (2026-10-28)
 

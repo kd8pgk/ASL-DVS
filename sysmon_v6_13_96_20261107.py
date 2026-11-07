@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.95"
+VERSION      = "6.13.96"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -115,7 +115,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,reg,phone,tune,hardware,net,dvsm,stfu,m17,zello,sdcard,security,console,edit",
+        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,reg,phone,tune,hardware,net,dvsm,stfu,m17,zello,svx,amp,sdcard,security,console,edit",
     },
 }
 
@@ -1527,6 +1527,10 @@ html[data-theme="light"] *{text-shadow:none!important}
 .theme-sw>button.theme-opt+button.theme-opt{border-left:1px solid #3a5278}
 .theme-sw>button.theme-opt[aria-pressed="true"]{background:#1e2a3f;color:#ffffff}
 .theme-sw>button.theme-opt:focus-visible{outline:2px solid #22d4ff;outline-offset:-2px}
+.hub-row{display:flex;justify-content:space-between;gap:.8rem;padding:.25rem 0;border-bottom:1px solid #1a2639;font-size:.85rem}
+.hub-k{color:#8fa3bf}
+.hub-v{color:#e6eefc;text-align:right;word-break:break-all}
+.hub-log{white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:.8rem;background:#0a1220;padding:.5rem;border-radius:4px;max-height:16rem;overflow:auto}
 </style>
 <script>
 (function(){var K="asl_dvs_theme",d=document.documentElement;function g(){try{return localStorage.getItem(K)==="light"?"light":"dark"}catch(e){return"dark"}}function a(t){d.setAttribute("data-theme",t);var b=document.querySelectorAll("[data-theme-set]");for(var i=0;i<b.length;i++)b[i].setAttribute("aria-pressed",String(b[i].getAttribute("data-theme-set")===t))}a(g());document.addEventListener("DOMContentLoaded",function(){a(g())});document.addEventListener("click",function(e){var b=e.target&&e.target.closest?e.target.closest("[data-theme-set]"):null;if(!b)return;var t=b.getAttribute("data-theme-set")==="light"?"light":"dark";try{localStorage.setItem(K,t)}catch(x){}a(t)});window.addEventListener("storage",function(e){if(e.key===K)a(g())})})();
@@ -2997,7 +3001,7 @@ body.tab-edit #zone-content{
   <a id="lnk-wifimon" class="ql-btn" href="http://localhost:8991/" target="_blank" rel="noopener"
      title="WifiMon">WifiMon</a>
   <a id="lnk-dashboard" class="ql-btn" href="http://localhost:8989/" 
-     title="Return to ASL-DVS Dashboard" target="_self" onclick="pauseAllPolling()">Node Controller</a>
+     title="Return to Node Controller" target="_self" onclick="pauseAllPolling()">Node Controller</a>
 </div>
 
 <div id="zone-status">
@@ -3041,6 +3045,10 @@ body.tab-edit #zone-content{
     onclick="switchTab('m17','124,255,60')">M17</button>
   <button class="tab-btn"        id="tbtn-zello"
     onclick="switchTab('zello','255,140,0')">Zello</button>
+  <button class="tab-btn"        id="tbtn-svx"
+    onclick="switchTab('svx','64,200,255')">SVX</button>
+  <button class="tab-btn"        id="tbtn-amp"
+    onclick="switchTab('amp','255,190,60')">AMP</button>
   <button class="tab-btn"        id="tbtn-sdcard"
     onclick="switchTab('sdcard','180,140,255')">SD Card</button>
   <button class="tab-btn"        id="tbtn-security"
@@ -4383,6 +4391,30 @@ body.tab-edit #zone-content{
 
   </div>
 
+  <div id="panel-svx" class="tab-panel">
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">SVX</span>
+        <span class="s3-card-meta">read-only</span>
+      </div>
+      <div id="svx-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-amp" class="tab-panel">
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">AMP</span>
+        <span class="s3-card-meta">read-only</span>
+      </div>
+      <div id="amp-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
+  </div>
+
   <div id="panel-sdcard" class="tab-panel">
 
     <div class="s3-card">
@@ -4612,6 +4644,10 @@ body.tab-edit #zone-content{
           <input type="checkbox" id="tabchk-m17" value="m17" onchange="edTabVisChanged()">M17</label>
         <label class="tab-vis-lbl" title="Only shown while asl-zello-bridge is actually installed, regardless of this checkbox">
           <input type="checkbox" id="tabchk-zello" value="zello" onchange="edTabVisChanged()">Zello</label>
+        <label class="tab-vis-lbl">
+          <input type="checkbox" id="tabchk-svx" value="svx" onchange="edTabVisChanged()">SVX</label>
+        <label class="tab-vis-lbl">
+          <input type="checkbox" id="tabchk-amp" value="amp" onchange="edTabVisChanged()">AMP</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-sdcard" value="sdcard" onchange="edTabVisChanged()">SD Card</label>
         <label class="tab-vis-lbl">
@@ -5100,12 +5136,13 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","net","dvsm","stfu","m17","zello","sdcard","security","console","edit"];
+const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","net","dvsm","stfu","m17","zello","svx","amp","sdcard","security","console","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
 let _savedEnabledTabs = TABS.slice();
 let _zelloInstalled   = false;
+let _svxInstalled = false, _ampInstalled = false, _hubData = null;
 
 let _ptRefreshTimer  = null;
 let _phRefreshTimer  = null;
@@ -5113,8 +5150,22 @@ let _s3RefreshTimer  = null;
 let _sdTestTimer = null;
 let _statusPollTimer = null;
 
+function hubRowS(k, v) { return `<div class="hub-row"><span class="hub-k">${esc(k)}</span><span class="hub-v">${esc(v)}</span></div>`; }
+function hubUnitsS(units) { return (units || []).map(u => hubRowS(u.unit, u.loaded ? `${u.active} · ${u.enabled || "—"}` : "not installed")).join(""); }
+function hubLogS(lines) { return (lines && lines.length) ? `<pre class="hub-log">${esc(lines.join("\n"))}</pre>` : `<div class="stub-panel">No log lines yet.</div>`; }
+function renderHubPanels() {
+  if (!_hubData) return;
+  const s = _hubData.svx || {}, a = _hubData.amp || {};
+  const sb = document.getElementById("svx-body"), ab = document.getElementById("amp-body");
+  if (sb) sb.innerHTML = `${hubUnitsS(s.units)}${hubRowS("Config", s.conf_path || "not found")}${Object.entries(s.global || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(s.log_tail)}`;
+  if (ab) ab.innerHTML = `${hubUnitsS(a.units)}${hubRowS("Settings file", a.env_path || "not found")}${Object.entries(a.settings || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(a.log_tail)}`;
+}
+function loadTab_svx() { renderHubPanels(); }
+function loadTab_amp() { renderHubPanels(); }
+
 function _applyTabVisibilityGated() {
-  const list = _savedEnabledTabs.filter(t => t !== "zello" || _zelloInstalled);
+  const list = _savedEnabledTabs.filter(t =>
+    (t !== "zello" || _zelloInstalled) && (t !== "svx" || _svxInstalled) && (t !== "amp" || _ampInstalled));
   applyTabVisibility(list);
 }
 
@@ -5332,6 +5383,12 @@ async function pollStatus() {
 
   if (d.wifimon_shutdown && d.wifimon_shutdown.active) showWfmShutdown(d.wifimon_shutdown);
 
+  if (d.hub) { _hubData = d.hub; renderHubPanels(); }
+  if (typeof d.svx_installed === "boolean" && (d.svx_installed !== _svxInstalled || d.amp_installed !== _ampInstalled)) {
+    _svxInstalled = !!d.svx_installed;
+    _ampInstalled = !!d.amp_installed;
+    _applyTabVisibilityGated();
+  }
   if (typeof d.zello_installed === "boolean" && d.zello_installed !== _zelloInstalled) {
     _zelloInstalled = d.zello_installed;
     _applyTabVisibilityGated();
@@ -5754,7 +5811,7 @@ const TAB_RGB = {
   firewall:"255,170,34", journal:"212,102,255", asldvs:"255,61,90",
   reg:"120,180,255", phone:"0,255,176",
   tune:"255,68,204", hardware:"0,200,120", net:"64,224,208", dvsm:"255,170,34",
-  stfu:"0,191,255", zello:"255,140,0", sdcard:"180,140,255", edit:"255,208,64"
+  stfu:"0,191,255", zello:"255,140,0", svx:"64,200,255", amp:"255,190,60", sdcard:"180,140,255", edit:"255,208,64"
 };
 
 function dpUnit() { return _dpUnit; }
@@ -8385,7 +8442,7 @@ function _startApp() {
     const host = window.location.hostname;
     const dashboardUrl = `http://${host}:8989/`;
     lnk.href = dashboardUrl;
-    lnk.title = "Return to ASL-DVS Dashboard";
+    lnk.title = "Return to Node Controller";
   }
 
   const qlHost = window.location.hostname;
@@ -14122,7 +14179,103 @@ def _zello_quick_installed() -> bool:
         return True
     return any(p.exists() for p in _ZELLO_SERVICE_PATHS)
 
+HUB_STATUS_TTL = 8.0
+_HUB_CACHE: dict = {"at": 0.0, "data": None}
+_HUB_LOCK = threading.Lock()
+_SVX_UNITS = ("svxlink.service", "svxlink-usrp.service", "remotetrx.service")
+_SVX_CONFS = ("/etc/svxlink/svxlink.conf", "/usr/local/etc/svxlink/svxlink.conf")
+_SVX_BINS = ("/usr/bin/svxlink", "/usr/local/bin/svxlink")
+_SVX_LOG = "/var/log/svxlink"
+_AMP_UNITS = ("amp-server.service", "amp-hub.service")
+_AMP_ENV = "/usr/etc/amp-hub.env"
+_AMP_BIN = "/usr/bin/amp-server"
+_AMP_SHOWN_KEYS = ("AMP_NODE", "AMP_IAX_PORT", "AMP_IAX_AUTHMODE", "AMP_IAX_ALLOWLIST", "AMP_VOTER_PORT")
+
+def _hub_unit(unit: str) -> dict:
+    out = _run(["systemctl", "show", "-p", "LoadState,ActiveState,UnitFileState", unit], timeout=5)
+    p = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    return {"unit": unit, "loaded": p.get("LoadState") == "loaded",
+            "active": p.get("ActiveState", "unknown"), "enabled": p.get("UnitFileState", "")}
+
+def _hub_file_tail(path: str, lines: int = 8) -> list:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 8192))
+            data = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return [ln[:200] for ln in data.splitlines()[-lines:]]
+
+def _hub_journal_tail(unit: str, lines: int = 8) -> list:
+    out = _run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short"], timeout=4)
+    return [ln[:200] for ln in out.splitlines() if ln.strip()][-lines:]
+
+def _hub_svx_global(path: str) -> dict:
+    out: dict = {}
+    section = None
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip("[]")
+            continue
+        if section == "GLOBAL" and "=" in line:
+            k, v = line.split("=", 1)
+            if k.strip().upper() in ("LOGICS", "LINKS", "CALLSIGN"):
+                out[k.strip().upper()] = v.strip()
+    return out
+
+def _hub_amp_settings(path: str) -> dict:
+    out: dict = {}
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() in _AMP_SHOWN_KEYS:
+            out[k.strip()] = v.strip()
+    return out
+
+def _probe_svx() -> dict:
+    units = [_hub_unit(u) for u in _SVX_UNITS]
+    conf = next((p for p in _SVX_CONFS if Path(p).is_file()), "")
+    installed = (any(u["loaded"] for u in units) or bool(conf)
+                 or any(Path(b).is_file() for b in _SVX_BINS))
+    return {"installed": installed, "units": units, "conf_path": conf,
+            "global": _hub_svx_global(conf) if conf else {},
+            "log_tail": _hub_file_tail(_SVX_LOG) if installed else []}
+
+def _probe_amp() -> dict:
+    units = [_hub_unit(u) for u in _AMP_UNITS]
+    env_ok = Path(_AMP_ENV).is_file()
+    installed = any(u["loaded"] for u in units) or Path(_AMP_BIN).is_file() or env_ok
+    return {"installed": installed, "units": units,
+            "env_path": _AMP_ENV if env_ok else "",
+            "settings": _hub_amp_settings(_AMP_ENV) if env_ok else {},
+            "log_tail": _hub_journal_tail("amp-hub.service") if installed else []}
+
+def _hub_status() -> dict:
+    now = time.monotonic()
+    with _HUB_LOCK:
+        if _HUB_CACHE["data"] is not None and now - _HUB_CACHE["at"] < HUB_STATUS_TTL:
+            return _HUB_CACHE["data"]
+        data = {"svx": _probe_svx(), "amp": _probe_amp()}
+        _HUB_CACHE["at"] = now
+        _HUB_CACHE["data"] = data
+        return data
+
 def _route_status(h: Handler) -> None:
+    hub = _hub_status()
     snap   = get_state_snapshot()
     mem    = snap.get("memory") or {}
     load   = snap.get("load")   or {}
@@ -14152,6 +14305,9 @@ def _route_status(h: Handler) -> None:
         "port_conflicts": snap.get("port_conflicts", {}),
         "needs_restart":  snap.get("needs_restart", False),
         "zello_installed": _zello_quick_installed(),
+        "svx_installed":  hub["svx"]["installed"],
+        "amp_installed":  hub["amp"]["installed"],
+        "hub":            hub,
         "wifimon_shutdown": snap.get("wifimon_shutdown") or {"active": False},
         "reg_summary":    _reg_summary_for_page(),
     })
@@ -33510,7 +33666,7 @@ def unpin_service(unit: str) -> bool:
     return ok
 
 _ALL_TABS = ("overview", "services", "ports", "firewall", "journal",
-             "asldvs", "reg", "phone", "tune", "hardware", "net", "dvsm", "stfu", "m17", "zello", "sdcard",
+             "asldvs", "reg", "phone", "tune", "hardware", "net", "dvsm", "stfu", "m17", "zello", "svx", "amp", "sdcard",
              "security", "console", "edit")
 
 _LOCKED_TABS = ("overview", "edit")
