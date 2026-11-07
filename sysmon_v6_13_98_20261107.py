@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.97"
+VERSION      = "6.13.98"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -4394,6 +4394,19 @@ body.tab-edit #zone-content{
   <div id="panel-svx" class="tab-panel">
     <div class="s3-card">
       <div class="s3-card-hdr">
+        <span class="s3-card-title">SvxLink — Config Files</span>
+        <span class="s3-card-meta">click row → edit</span>
+      </div>
+      <div class="ast-row" onclick="openSvxEditor()">
+        <span class="ast-name">svxlink.conf</span>
+        <div style="display:flex;gap:.3rem">
+          <button class="btn btn-muted btn-sm" onclick="event.stopPropagation();openSvxEditor()">Edit</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
         <span class="s3-card-title">SVX</span>
         <span class="s3-card-meta">read-only</span>
       </div>
@@ -6816,8 +6829,9 @@ async function _ufSaveOrig() {
 
 async function ufRestart() {
   if (!_ufUnit) return;
-  if (!await confirm(`Restart ${_ufUnit} to apply unit file changes?`)) return;
-  const d = await api("/api/svc", "POST", {action: "restart", unit: _ufUnit});
+  const unit = _ufUnit.startsWith("\x00svx:") ? "svxlink-usrp.service" : _ufUnit;
+  if (!await confirm(`Restart ${unit} to apply changes? Any SvxLink link drops.`)) return;
+  const d = await api("/api/svc", "POST", {action: "restart", unit});
   if (!d) { toast("Server unreachable", "err"); return; }
   toast(d.message || (d.ok ? "Restarted" : "Failed"), d.ok ? "ok" : "err");
   if (d.ok) { d.async ? _svcPollAfterRestart() : setTimeout(loadOverview, 800); }
@@ -7295,7 +7309,7 @@ function _ufOpenReset(unit, title, pathText) {
   document.getElementById("uf-overlay").classList.add("open");
 }
 
-async function _ufOpenLabelFile(prefix, apiBase, label) {
+async function _ufOpenLabelFile(prefix, apiBase, label, withRestart) {
   _ufOpenReset(prefix + label, label, "Loading…");
   const d = await api(`${apiBase}?label=${encodeURIComponent(label)}`);
   if (!d || !d.ok) {
@@ -7305,6 +7319,11 @@ async function _ufOpenLabelFile(prefix, apiBase, label) {
   document.getElementById("uf-textarea").value      = d.content;
   document.getElementById("uf-save-btn").disabled   = !d.writable;
   document.getElementById("uf-path").textContent    = d.path;
+  if (withRestart) {
+    const rb = document.getElementById("uf-restart-btn");
+    rb.style.display = "";
+    rb.disabled = false;
+  }
   if (!d.exists) {
     ufSetStatus("⚠ File does not exist yet — saving will create it", false);
   } else {
@@ -8357,6 +8376,12 @@ async function openAstEditor(name) {
   ufSetStatus(d.writable ? "" : "Read-only (not running as root)");
 }
 
+function openSvxEditor() {
+  document.getElementById("dpanel")?.style.setProperty("--panel-accent", "var(--red)");
+  document.getElementById("uf-overlay").style.setProperty("--uf-accent", "var(--red)");
+  return _ufOpenLabelFile("\x00svx:", "/api/svxlink/file", "svxlink.conf", true);
+}
+
 async function _ufSaveFile(url, payload, what, confirmText, after) {
   if (!await confirm(confirmText)) return;
   const content = document.getElementById("uf-textarea").value;
@@ -8387,6 +8412,9 @@ async function ufSave() {
   } else if (_ufUnit.startsWith("\x00allmon3:")) {
     const label = _ufUnit.slice(9);
     return _ufSaveFile("/api/allmon3/file", {label}, label, overwrite(label), loadAllmon3Files);
+  } else if (_ufUnit.startsWith("\x00svx:")) {
+    return _ufSaveFile("/api/svxlink/file", {label: "svxlink.conf"}, "svxlink.conf",
+      "Save changes to svxlink.conf?\n\nThis overwrites /usr/local/etc/svxlink/svxlink.conf. The old file is kept as svxlink.conf.sysmon-bak. The change takes effect when svxlink-usrp restarts.");
   } else if (_ufUnit.startsWith("\x00appconf:")) {
     const label = _ufUnit.slice(9);
     return _ufSaveFile("/api/appconf/file", {label}, label, overwrite(label));
@@ -33834,6 +33862,33 @@ _PATHFILE_APPCONF = {
     "descs":    {"asl_dvs.conf": "ASL-DVS Dashboard", "sysmon.conf": "SysMon"},
 }
 
+_SVX_CONF = Path("/usr/local/etc/svxlink/svxlink.conf")
+_SVX_CONF_BAK = Path("/usr/local/etc/svxlink/svxlink.conf.sysmon-bak")
+_PATHFILE_SVX = {
+    "files":    [_SVX_CONF],
+    "readonly": None,
+    "descs":    {"svxlink.conf": "SvxLink (USRP fork)"},
+}
+
+def _route_svx_get(h: Handler) -> None:
+    _pathfile_get(h, _PATHFILE_SVX)
+
+def _route_svx_post(h: Handler, data: dict) -> None:
+    if os.geteuid() != 0:
+        h.send_json({"ok": False, "message": "root required"}, 403); return
+    if str(data.get("label", "")).strip() != "svxlink.conf":
+        h.send_json({"ok": False, "message": "Unknown file for SvxLink"}, 400); return
+    content = str(data.get("content", ""))
+    if not any(ln.strip() == "[GLOBAL]" for ln in content.splitlines()):
+        h.send_json({"ok": False,
+                     "message": "Not saved: the file must keep its [GLOBAL] section"}, 400); return
+    if _SVX_CONF.is_file():
+        try:
+            shutil.copy2(_SVX_CONF, _SVX_CONF_BAK)
+        except OSError as exc:
+            h.send_json({"ok": False, "message": f"Not saved: could not make a backup ({exc})"}, 500); return
+    _pathfile_post(h, data, _PATHFILE_SVX)
+
 def _route_appconf_list(h: Handler) -> None:
     _pathfile_list(h, _PATHFILE_APPCONF)
 
@@ -35252,6 +35307,7 @@ _GET_ROUTES = {
     "/api/radio/stack_status": _route_radio_stack_status,
     "/api/appconf/files":      _route_appconf_list,
     "/api/appconf/file":       _route_appconf_get,
+    "/api/svxlink/file":       _route_svx_get,
     "/api/pinned":             _route_pinned_get,
     "/api/abinfo":             _route_abinfo,
     "/api/hardware":           _route_hardware_get,
@@ -35296,6 +35352,7 @@ _POST_ROUTES = {
     "/api/radio/presets":   _route_radio_presets_post,
     "/api/radio/tune/save": _route_radio_tune_save_post,
     "/api/appconf/file":    _route_appconf_post,
+    "/api/svxlink/file":    _route_svx_post,
     "/api/pinned":          _route_pinned_post,
     "/api/hardware":        _route_hardware_post,
     "/api/stfu":            _route_stfu_post,

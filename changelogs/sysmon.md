@@ -1,6 +1,12 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_97_20261107.py`. Newest entries first.
+Current file: `sysmon_v6_13_98_20261107.py`. Newest entries first.
+
+## 6.13.98 (2026-11-07)
+
+- **SvxLink config card on the SVX tab.** A card in the ASL-DVS style lists `/usr/local/etc/svxlink/svxlink.conf`. Click the row or Edit to open it in the same editor as the other config files, with Find, Save, Copy, Reload Daemon and Restart.
+- **Save.** Saving asks first and overwrites the file. The old file is kept as `svxlink.conf.sysmon-bak`. A save is refused if the text has no `[GLOBAL]` line, or if the backup cannot be written. Only root can save (403 otherwise).
+- **Restart.** In this editor, Restart restarts `svxlink-usrp.service` (it asks first, and says that any SvxLink link drops).
 
 ## 6.13.97 (2026-11-07)
 
