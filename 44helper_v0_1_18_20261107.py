@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.17"
+APP_VERSION = "0.1.18"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5652,7 +5652,7 @@ _QM_JOB_POLL_SEC = 2.0
 def _qm_unit_props(unit: str) -> dict:
     try:
         r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveState", "-p", "SubState",
-                            "-p", "ExecMainStatus", "-p", "LoadState"],
+                            "-p", "ExecMainStatus", "-p", "LoadState", "-p", "Result"],
                            capture_output=True, text=True, timeout=15)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {}
@@ -5747,7 +5747,7 @@ def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False,
 def _finish_unit(unit: str, props: dict) -> tuple[bool, int | None]:
     status = props.get("ExecMainStatus", "")
     rc = int(status) if status.lstrip("-").isdigit() else None
-    ok = rc == 0 and props.get("ActiveState") != "failed"
+    ok = rc == 0 and props.get("ActiveState") != "failed" and props.get("Result") != "timeout"
     subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
     subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
     _UNIT_LIST_CACHE["at"] = 0.0
@@ -5780,6 +5780,8 @@ def _run_pkg_unit(job_key: str, cmd: str) -> dict:
     log(f"{'OK' if ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
     return {"success": ok, "returncode": rc, "output": "".join(lines).strip()}
 
+_PKG_JOB_MAX_SEC = 3600
+
 def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) -> None:
     own_quiet = False
     job_ok, rc = False, None
@@ -5801,7 +5803,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
                 _qm_write_state(state)
         subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
         subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
-        props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0"]
+        props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0",
+                      "-p", f"RuntimeMaxSec={_PKG_JOB_MAX_SEC}"]
         if low_priority:
             props_argv += ["-p", "Nice=19", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"]
         start = _run_argv(["systemd-run", f"--unit={unit}"] + props_argv + _unit_env_args() +
@@ -5815,6 +5818,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
                                     + " -- keeps going even if you log out or the helper restarts ===\n")
         props = _follow_unit_to_end(job_key, unit)
         job_ok, rc = _finish_unit(unit, props)
+        if props.get("Result") == "timeout":
+            _job_append_output(job_key, _timeout_message(cmd, _PKG_JOB_MAX_SEC) + "\n")
         _job_append_output(job_key, f"=== Package job finished: {'OK' if job_ok else 'FAILED'} (exit {rc}) ===\n")
         state = _qm_read_state()
         if state.get("active") and state.get("job_unit") == unit:
