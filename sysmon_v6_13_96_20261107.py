@@ -5160,8 +5160,6 @@ function renderHubPanels() {
   if (sb) sb.innerHTML = `${hubUnitsS(s.units)}${hubRowS("Config", s.conf_path || "not found")}${Object.entries(s.global || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(s.log_tail)}`;
   if (ab) ab.innerHTML = `${hubUnitsS(a.units)}${hubRowS("Settings file", a.env_path || "not found")}${Object.entries(a.settings || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(a.log_tail)}`;
 }
-function loadTab_svx() { renderHubPanels(); }
-function loadTab_amp() { renderHubPanels(); }
 
 function _applyTabVisibilityGated() {
   const list = _savedEnabledTabs.filter(t =>
