@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.104"
+VERSION      = "9.3.105"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -7900,6 +7900,80 @@ def _hub_status() -> dict:
         _HUB_CACHE["data"] = data
         return data
 
+HUB_FAV_PATH = "/etc/asl_dvs/hub_favorites.json"
+HUB_FAV_COUNT = 10
+HUB_FAV_KINDS = ("svx", "amp")
+HUB_FAV_LABEL_MAX = 24
+HUB_FAV_TARGET_MAX = 16
+_HUB_FAV_LOCK = threading.Lock()
+_HUB_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/._-]{0,15}$")
+
+def _hub_fav_blank() -> dict:
+    return {"label": "", "target": ""}
+
+def _hub_fav_read() -> dict:
+    out = {k: [_hub_fav_blank() for _ in range(HUB_FAV_COUNT)] for k in HUB_FAV_KINDS}
+    try:
+        raw = json.loads(Path(HUB_FAV_PATH).read_text())
+    except (OSError, ValueError):
+        return out
+    if not isinstance(raw, dict):
+        return out
+    for k in HUB_FAV_KINDS:
+        rows = raw.get(k) if isinstance(raw.get(k), list) else []
+        for i, r in enumerate(rows[:HUB_FAV_COUNT]):
+            if isinstance(r, dict):
+                out[k][i] = {"label": str(r.get("label", ""))[:HUB_FAV_LABEL_MAX],
+                             "target": str(r.get("target", ""))[:HUB_FAV_TARGET_MAX]}
+    return out
+
+def _hub_fav_clean(kind: str, rows) -> Tuple[Optional[list], str]:
+    if not isinstance(rows, list) or len(rows) > HUB_FAV_COUNT:
+        return None, f"Hub favorites: a list of up to {HUB_FAV_COUNT} slots"
+    out = []
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            return None, f"{kind.upper()} slot {i}: bad entry"
+        label = str(r.get("label", "")).strip()
+        target = str(r.get("target", "")).strip()
+        if not label and not target:
+            out.append(_hub_fav_blank())
+            continue
+        if not label or not target:
+            return None, f"{kind.upper()} slot {i}: give both a name and a target"
+        if len(label) > HUB_FAV_LABEL_MAX or _has_ctrl_chars(label):
+            return None, f"{kind.upper()} slot {i}: name must be up to {HUB_FAV_LABEL_MAX} plain characters"
+        if kind == "amp":
+            if not (target.isdigit() and len(target) <= 7 and int(target) > 0):
+                return None, f"AMP slot {i}: the target must be a node number (up to 7 digits)"
+            target = str(int(target))
+        elif not _HUB_TARGET_RE.match(target):
+            return None, f"SVX slot {i}: the target must be letters, digits or / . _ - (up to {HUB_FAV_TARGET_MAX})"
+        out.append({"label": label, "target": target})
+    while len(out) < HUB_FAV_COUNT:
+        out.append(_hub_fav_blank())
+    return out, ""
+
+def action_save_hub_favorites(kind: str, rows) -> Tuple[bool, str]:
+    kind = str(kind or "").strip().lower()
+    if kind not in HUB_FAV_KINDS:
+        return False, "Unknown hub (use svx or amp)"
+    clean, err = _hub_fav_clean(kind, rows)
+    if clean is None:
+        return False, err
+    with _HUB_FAV_LOCK:
+        data = _hub_fav_read()
+        data[kind] = clean
+        try:
+            Path(HUB_FAV_PATH).parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(Path(HUB_FAV_PATH), json.dumps(data, indent=2) + "\n")
+        except OSError as e:
+            return False, f"Could not save the {kind.upper()} favorites: {e}"
+    global _status_etag
+    with _lock:
+        _status_etag = ""
+    return True, f"Saved {kind.upper()} favorites"
+
 def build_status() -> dict:
     hub = _hub_status()
     st = get_state_fields(
@@ -7924,6 +7998,7 @@ def build_status() -> dict:
         "has_svx":           hub["svx"]["installed"],
         "has_amp":           hub["amp"]["installed"],
         "hub":               hub,
+        "hub_favs":          _hub_fav_read(),
         "echo_fav":          st["echo_fav"],
         "asl_node":          _cfg.asl_node,
         "enabled_tabs":      _cfg.enabled_tabs_sorted,
@@ -8232,6 +8307,14 @@ body.offline.perm-linked #perm-link-bar {
 .hub-k{color:#8fa3bf}
 .hub-v{color:var(--text-bright);text-align:right;word-break:break-all}
 .hub-note{font-family:var(--sans);font-size:var(--fs-sm);color:#8fa3bf;margin:.2rem 0}
+.hub-fav.row-grid{grid-template-columns:1.6rem 7px 1fr 2rem}
+.hub-target{color:#8fa3bf;font-size:.85em;margin-left:.4rem}
+.hub-x{background:none;border:1px solid #3a4a64;color:#e6eefc;border-radius:4px;width:2rem;height:2rem;cursor:pointer}
+.hub-empty{padding:.6rem 0;font-family:var(--sans);font-size:var(--fs-sm);color:#8fa3bf}
+.hub-add{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem}
+.hub-add .cfg-inp{flex:1 1 8rem}
+.hub-edit-row{display:grid;grid-template-columns:1.6rem 1fr 1fr;gap:.3rem;align-items:center;margin:.2rem 0}
+.hub-edit-row .cfg-inp{width:100%}
 .hub-log{white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:var(--fs-sm);background:#0a1220;padding:.5rem;border-radius:4px;max-height:16rem;overflow:auto}
 /* ── Tabs ── */
 .tabs {
@@ -9762,6 +9845,13 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               </div>
             </div>
             <div class="ed-sec-hdr" style="margin-top:.6rem;padding-left:0">
+              <span>SVX and AMP favorites</span>
+              <button onclick="toggleEdSection('eds-hubfavs')">Hide</button>
+            </div>
+            <div id="eds-hubfavs" class="tab-enable-row" style="border-top:none;padding-top:0;margin-top:.3rem">
+              <div id="eds-hubfavs-body"></div>
+            </div>
+            <div class="ed-sec-hdr" style="margin-top:.6rem;padding-left:0">
               <span>Visible Tabs</span>
               <button onclick="toggleEdSection('eds-tabs')">Hide</button>
             </div>
@@ -10170,18 +10260,91 @@ function hubPaneStyle(){
     if(t)t.className='tab'+(_hubPage===h&&!inEdit?' t-'+h.toLowerCase():'');
   });
 }
-function hubRow(k,v){return `<div class="hub-row"><span class="hub-k">${esc(k)}</span><span class="hub-v">${esc(v)}</span></div>`}
-function hubUnits(units){return (units||[]).map(u=>hubRow(u.unit,u.loaded?`${u.active} · ${u.enabled||'—'}`:'not installed')).join('')}
-function hubLog(lines){return (lines&&lines.length)?`<pre class="hub-log">${esc(lines.join('\n'))}</pre>`:'<div class="hub-note">No log lines yet.</div>'}
+let _hubPaintSig={},_lastHubFavs=null,_hubEditSig='';
+function hubFavEmpty(){return Array.from({length:10},()=>({label:'',target:''}));}
+function hubFavList(K){const rows=(_lastHubFavs&&_lastHubFavs[K])||hubFavEmpty();return rows;}
+function hubFavCard(kind){
+  const K=kind.toLowerCase();
+  const rows=hubFavList(K);
+  const filled=rows.map((r,i)=>({r,i})).filter(x=>x.r.label&&x.r.target);
+  const list=filled.length?filled.map((x,n)=>`<div class="row-grid hub-fav" title="${esc(x.r.target)}">
+      <span class="row-num">${n+1}</span>
+      <div class="dot dot-off"></div>
+      <span class="row-name">${esc(x.r.label)}<span class="hub-target">${esc(x.r.target)}</span></span>
+      <button class="hub-x" onclick="hubFavRemove('${K}',${x.i})" aria-label="Remove ${esc(x.r.label)}">×</button></div>`).join('')
+    :`<div class="hub-empty">No ${kind} favorites saved</div>`;
+  return `<div class="hub-card"><div class="hub-note">Favorites · ${filled.length} of ${rows.length} saved</div>
+    <div>${list}</div>
+    <div class="hub-add">
+      <input class="cfg-inp" id="hub-add-label-${K}" maxlength="${24}" placeholder="Name" aria-label="${kind} favorite name">
+      <input class="cfg-inp" id="hub-add-target-${K}" maxlength="${16}" placeholder="${K==='amp'?'Node number':'Target'}" aria-label="${kind} favorite target">
+      <button class="btn btn-teal" onclick="hubFavAdd('${K}')">Save</button>
+    </div></div>`;
+}
 function paintHub(){
-  if(!_lastHub)return;
-  if(_hubPage==='SVX'){
-    const s=_lastHub.svx||{};
-    byId('hub-svx-body').innerHTML=`<div class="hub-card"><h3>SVX</h3><div class="hub-note">Read-only. Changes nothing.</div>${hubUnits(s.units)}${hubRow('Config',s.conf_path||'not found')}${Object.entries(s.global||{}).map(([k,v])=>hubRow(k,v)).join('')}<h4>Log</h4>${hubLog(s.log_tail)}</div>`;
-  }else if(_hubPage==='AMP'){
-    const a=_lastHub.amp||{};
-    byId('hub-amp-body').innerHTML=`<div class="hub-card"><h3>AMP</h3><div class="hub-note">Read-only. Changes nothing.</div>${hubUnits(a.units)}${hubRow('Settings file',a.env_path||'not found')}${Object.entries(a.settings||{}).map(([k,v])=>hubRow(k,v)).join('')}<h4>Log (amp-hub)</h4>${hubLog(a.log_tail)}</div>`;
-  }
+  if(!_lastHubFavs||!_hubPage||_hubPage==='EDIT')return;
+  const K=_hubPage.toLowerCase();
+  const sig=JSON.stringify(hubFavList(K));
+  if(_hubPaintSig[K]===sig)return;
+  _hubPaintSig[K]=sig;
+  const el=byId('hub-'+K+'-body');
+  if(el)el.innerHTML=hubFavCard(_hubPage);
+}
+async function hubFavSave(K,slots,done){
+  const d=await api({action:'save-hub-favorites',hub:K,slots});
+  if(!d||!d.ok){errModal((d&&d.message)||'Could not save the favorites');return false;}
+  const padded=slots.slice(0,10);
+  while(padded.length<10)padded.push({label:'',target:''});
+  _lastHubFavs=Object.assign({},_lastHubFavs||{},{[K]:padded});
+  if(done)done();
+  _hubPaintSig={};paintHub();renderHubEdit(true);
+  toast(d.message||'Saved','ok');
+  return true;
+}
+function hubFavSlotsFrom(K){return hubFavList(K).map(r=>({label:r.label,target:r.target}));}
+async function hubFavAdd(kind){
+  const K=kind.toLowerCase();
+  const label=(byId('hub-add-label-'+K)?.value||'').trim();
+  const target=(byId('hub-add-target-'+K)?.value||'').trim();
+  if(!label||!target){errModal('Give the favorite a name and a target.');return;}
+  const slots=hubFavSlotsFrom(K);
+  const idx=slots.findIndex(r=>!r.label&&!r.target);
+  if(idx<0){errModal(`All 10 ${kind} favorite slots are in use. Free one first.`);return;}
+  slots[idx]={label,target};
+  await hubFavSave(K,slots,()=>{const a=byId('hub-add-label-'+K),t=byId('hub-add-target-'+K);if(a)a.value='';if(t)t.value='';});
+}
+async function hubFavRemove(kind,i){
+  const K=kind.toLowerCase();
+  const slots=hubFavSlotsFrom(K);
+  slots[i]={label:'',target:''};
+  await hubFavSave(K,slots);
+}
+function hubSetupLine(K){
+  const h=(_lastHub&&_lastHub[K])||{};
+  if(K==='svx')return h.installed?`SVXLink installed · config ${esc(h.conf_path||'not found')}`:'SVXLink not installed. Install it from the 44helper SVXLink tab.';
+  return h.installed?`Ampersand installed · settings ${esc(h.env_path||'not found')}`:'Ampersand not installed. Install it from the 44helper Ampersand tab.';
+}
+function renderHubEdit(force){
+  const el=byId('eds-hubfavs-body');if(!el||!_lastHubFavs)return;
+  const sig=JSON.stringify([_lastHubFavs,(_lastHub||{}).svx&&_lastHub.svx.installed,(_lastHub||{}).svx&&_lastHub.svx.conf_path,(_lastHub||{}).amp&&_lastHub.amp.installed,(_lastHub||{}).amp&&_lastHub.amp.env_path]);
+  if(!force&&sig===_hubEditSig)return;
+  _hubEditSig=sig;
+  el.innerHTML=['svx','amp'].map(K=>{
+    const rows=hubFavList(K);
+    const inputs=rows.map((r,i)=>`<div class="hub-edit-row"><span class="row-num">${i+1}</span>
+      <input class="cfg-inp" data-hub="${K}" data-slot="${i}" data-f="label" maxlength="24" value="${esc(r.label)}" placeholder="Name" aria-label="${K.toUpperCase()} slot ${i+1} name">
+      <input class="cfg-inp" data-hub="${K}" data-slot="${i}" data-f="target" maxlength="16" value="${esc(r.target)}" placeholder="${K==='amp'?'Node number':'Target'}" aria-label="${K.toUpperCase()} slot ${i+1} target"></div>`).join('');
+    return `<div class="hub-card"><h3>${K.toUpperCase()} favorites</h3><div class="hub-note">${hubSetupLine(K)}</div>${inputs}
+      <div class="hub-add"><button class="btn btn-teal" onclick="hubEditSave('${K}')">Save ${K.toUpperCase()} favorites</button></div></div>`;
+  }).join('');
+}
+async function hubEditSave(K){
+  const slots=hubFavEmpty();
+  document.querySelectorAll(`#eds-hubfavs-body [data-hub="${K}"]`).forEach(inp=>{
+    const i=Number(inp.dataset.slot);
+    slots[i][inp.dataset.f]=inp.value.trim();
+  });
+  await hubFavSave(K,slots);
 }
 function hubVisible(d){
   const en=Array.isArray(d.enabled_tabs)?d.enabled_tabs:[];
@@ -10189,10 +10352,12 @@ function hubVisible(d){
 }
 function applyHubTabs(d){
   const show=hubVisible(d);
+  if(d.hub_favs)_lastHubFavs=d.hub_favs;
   const tw=document.querySelector('.tg-wrap');
   if(tw)tw.style.display=(d.has_asl||d.has_dvs)?'':'none';
   HUB_PAGES.forEach(h=>{const t=byId('tab-'+h.toLowerCase());if(t)t.style.display=show[h]?'':'none';});
   if(d.hub)_lastHub=d.hub;
+  renderHubEdit(false);
   if(_hubPage&&!show[_hubPage]){_hubPage=null;syncPageDisplay();return;}
   if(_hubPage){paintHub();hubPaneStyle();}
 }
@@ -10347,7 +10512,7 @@ async function clickTab(page){
     if(!d.ok)errModal(d.message);
   }finally{endAction(1000)}
 }
-function clickEdit(){if(inEdit||_tabLock.on)return;inEdit=true;syncPageDisplay();edReload()}
+function clickEdit(){if(inEdit||_tabLock.on)return;inEdit=true;syncPageDisplay();edReload();renderHubEdit(true)}
 
 // ── Edit section collapse state ───────────────────────────────────────────────
 // Keys are section content div IDs. Persists for the session; not saved to conf.
@@ -12118,7 +12283,7 @@ function applyTabState(d){
     _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
     if(!d.has_asl&&!d.has_dvs&&!d.has_svx&&!d.has_amp){
       byId('tabs-strip').style.display='none';
-      PAGES.length=0;inEdit=true;syncPageDisplay();edReload();
+      PAGES.length=0;inEdit=true;syncPageDisplay();edReload();renderHubEdit(true);
       document.body.classList.add('tabs-ready');
       _firstPoll=false;return;
     }
@@ -12129,7 +12294,7 @@ function applyTabState(d){
       const show=hubVisible(d);
       _hubPage=show.SVX?'SVX':(show.AMP?'AMP':null);
       if(!_hubPage)inEdit=true;
-      syncPageDisplay();if(inEdit)edReload();else paintHub();
+      syncPageDisplay();if(inEdit){edReload();renderHubEdit(true);}else paintHub();
       document.body.classList.add('tabs-ready');
       _firstPoll=false;return;
     }
@@ -14835,6 +15000,7 @@ _POST_ACTIONS: dict = {
     "save-ysf-favorite": lambda h, d: action_save_ysf_favorite(_arg(d, "ref")),
     "save-tg-favorite":  lambda h, d: action_save_tg_favorite(_arg(d, "mode"), _arg(d, "tg")),
     "save-asl-favorite": lambda h, d: action_save_asl_favorite(_arg(d, "node")),
+    "save-hub-favorites": lambda h, d: action_save_hub_favorites(_arg(d, "hub"), d.get("slots") or []),
     "save-echo-favorite": lambda h, d: action_save_echo_favorite(_arg(d, "node")),
     "save-dmr-favorite": lambda h, d: action_save_dmr_favorite(_arg(d, "network"), _arg(d, "tg")),
     "save-m17-favorite": lambda h, d: action_save_m17_favorite(_arg(d, "base"), _arg(d, "module")),

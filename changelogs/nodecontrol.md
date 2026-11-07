@@ -1,6 +1,13 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_104_20261107.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_105_20261107.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.105 (2026-11-07)
+
+- **SVX and AMP tabs show favorites, not status.** The status card on each hub tab is replaced by a favorites card in the ASL grid style: numbered rows with a name and a target, a remove button, and an add form. Ten slots per hub.
+- **Favorites are stored in `/etc/asl_dvs/hub_favorites.json`** (written atomically, as the phone favorites are). SVX targets are letters, digits or `/ . _ -` up to 16 characters. AMP targets are node numbers up to 7 digits. Names are up to 24 plain characters. A corrupt file reads as empty and is not overwritten until you save.
+- **Edit tab: SVX and AMP favorites.** A new section with a 10-slot editor for each hub, and a setup line for each: whether the product is installed and the config file found (SvxLink config, or the Ampersand settings file). A missing product points to its 44helper tab.
+- Favorites do not connect or change anything on the node. They are a saved list only.
 
 ## 9.3.104 (2026-11-07)
 
