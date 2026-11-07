@@ -2300,6 +2300,113 @@ class PttLogTests(unittest.TestCase):
         self.assertIn("'/api/ptt/log'", text)
 
 
+class PttLockTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        nt = self.nt
+        for name, value in (("log_event", mock.DEFAULT), ("tx_state", lambda: {"ready": True, "linked": True})):
+            p = mock.patch.object(nt, name, value if value is not mock.DEFAULT else mock.DEFAULT)
+            p.start()
+            self.addCleanup(p.stop)
+        for target, attr in ((nt.KEYED, "wake"), (nt.TALKER, "_packet"), (nt.HUB, "audio_active")):
+            p = mock.patch.object(target, attr, return_value=False)
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.reset)
+        self.reset()
+
+    def reset(self):
+        nt = self.nt
+        nt.PTT_LOCK.update(on=False, since=0.0)
+        nt.TALK_SOCKS.clear()
+        nt.TALKER._unkey("test")
+
+    def owner(self):
+        o = mock.Mock()
+        o.sent = []
+        o.send_json.side_effect = o.sent.append
+        return o
+
+    def test_the_request_must_say_true_or_false(self):
+        for bad in (None, [], {}, {"locked": 1}, {"locked": "true"}, {"locked": None}):
+            with self.assertRaises(ValueError):
+                self.nt.ptt_lock_set(bad)
+        self.assertFalse(self.nt.ptt_lock_state()["locked"])
+
+    def test_lock_and_unlock_are_kept_and_shown(self):
+        nt = self.nt
+        self.assertEqual(nt.ptt_lock_state(), {"locked": False, "since": 0.0})
+        out = nt.ptt_lock_set({"locked": True})
+        self.assertEqual((out["ok"], out["locked"]), (True, True))
+        st = nt.ptt_lock_state()
+        self.assertTrue(st["locked"])
+        self.assertGreater(st["since"], 0)
+        self.assertEqual(nt.ptt_lock_set({"locked": False})["locked"], False)
+        self.assertEqual(nt.ptt_lock_state(), {"locked": False, "since": 0.0})
+
+    def test_keying_is_refused_while_locked_and_allowed_after(self):
+        nt = self.nt
+        nt.ptt_lock_set({"locked": True})
+        o = self.owner()
+        self.assertEqual(nt.TALKER.key(o, "me"), (False, "locked"))
+        self.assertFalse(nt.TALKER.keyed)
+        nt.ptt_lock_set({"locked": False})
+        self.assertEqual(nt.TALKER.key(o, "me"), (True, ""))
+        self.assertTrue(nt.TALKER.keyed)
+
+    def test_a_lock_set_while_keying_cannot_leave_the_node_keyed(self):
+        nt = self.nt
+
+        def lock_midway():
+            nt.PTT_LOCK["on"] = True
+            return {"ready": True, "linked": True}
+
+        with mock.patch.object(nt, "tx_state", side_effect=lock_midway):
+            self.assertEqual(nt.TALKER.key(self.owner(), "me"), (False, "locked"))
+        self.assertFalse(nt.TALKER.keyed)
+
+    def test_locking_stops_a_transmission_under_way_and_says_why(self):
+        nt = self.nt
+        o = self.owner()
+        self.assertEqual(nt.TALKER.key(o, "me"), (True, ""))
+        nt.ptt_lock_set({"locked": True})
+        self.assertFalse(nt.TALKER.keyed)
+        unkeyed = [m for m in o.sent if m.get("ev") == "unkeyed"]
+        self.assertEqual([m["why"] for m in unkeyed], ["locked"])
+
+    def test_every_open_talk_socket_is_told_and_a_dead_one_is_skipped(self):
+        nt = self.nt
+        good, dead = self.owner(), self.owner()
+        dead.send_json.side_effect = OSError("gone")
+        nt.TALK_SOCKS.update((dead, good))
+        nt.ptt_lock_set({"locked": True})
+        self.assertIn({"ev": "lock", "locked": True}, good.sent)
+        nt.ptt_lock_set({"locked": True})
+        nt.ptt_lock_set({"locked": False})
+        self.assertEqual([m["locked"] for m in good.sent if m.get("ev") == "lock"], [True, True, False])
+
+    def test_the_tone_test_explains_a_locked_refusal(self):
+        self.assertIn("locked", self.nt.TONE_KEY_ERRORS["locked"].lower())
+
+    def test_status_carries_the_lock(self):
+        self.nt.ptt_lock_set({"locked": True})
+        with open(sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1], encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('st["ptt_lock"] = ptt_lock_state()', text)
+
+    def test_the_page_has_a_slider_placed_by_css_not_by_measuring(self):
+        with open(sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1], encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('id="ptt-slide"', text)
+        self.assertNotIn('id="ptt-lock"', text)
+        self.assertNotIn("$('ptt-lock')", text)
+        self.assertIn(".ptt-slide.on{left:calc(100% - 64px)", text)
+        self.assertNotIn("translateX(' + (locked", text)
+
+
 class ListenEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

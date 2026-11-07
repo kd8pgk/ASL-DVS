@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.23"
+VERSION = "0.10.24"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -6112,6 +6112,8 @@ class Talker:
             if not mine:
                 return False, "busy"
         with self.lock:
+            if PTT_LOCK["on"]:
+                return False, "locked"
             if self.keyed and self.owner is not owner:
                 return False, "in-use"
             now = time.monotonic()
@@ -6312,6 +6314,7 @@ TONE_KEY_ERRORS = {
     "not-linked": "The node is not linked to the network.",
     "busy": "The node is busy (someone is talking).",
     "in-use": "Another transmission is using the node.",
+    "locked": "PPT is locked: nobody can transmit until it is unlocked.",
 }
 TONE_MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.", "G": "--.", "H": "....",
@@ -7350,10 +7353,10 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 .ptt-wrap{position:relative;flex:1;min-width:0}
 .ptt-wrap #ptt{padding-left:80px}
-.ptt-slide{position:absolute;top:0;bottom:0;left:0;width:64px;border-radius:14px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:20px;cursor:grab;z-index:2;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s ease,background .2s}
+.ptt-slide{position:absolute;top:0;bottom:0;left:0;width:64px;border-radius:14px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:20px;cursor:grab;z-index:2;touch-action:none;user-select:none;-webkit-user-select:none;transition:left .15s ease,background .2s}
 .ptt-slide.dragging{cursor:grabbing;transition:none}
 .ptt-slide.armed{box-shadow:inset 0 0 0 3px rgba(255,255,255,.7)}
-.ptt-slide.on{background:var(--red)}
+.ptt-slide.on{left:calc(100% - 64px);background:var(--red)}
 .ptt-slide:focus-visible{outline:3px solid var(--text);outline-offset:2px}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
@@ -10289,7 +10292,7 @@ function pttSlideTravel() {
 
 function pttSlidePos(locked) {
   const s = $('ptt-slide');
-  s.style.transform = 'translateX(' + (locked ? pttSlideTravel() : 0) + 'px)';
+  s.style.left = '';
   s.classList.toggle('on', !!locked);
   s.setAttribute('aria-valuenow', locked ? '1' : '0');
   s.setAttribute('aria-valuetext', locked ? 'Locked' : 'Unlocked');
@@ -10316,7 +10319,7 @@ function pttSlideInit() {
   let timer = null, dragging = false, startX = 0, startLeft = 0, x = 0;
   const move = (px) => {
     x = Math.max(0, Math.min(pttSlideTravel(), px));
-    s.style.transform = 'translateX(' + x + 'px)';
+    s.style.left = x + 'px';
   };
   const cancel = () => {
     clearTimeout(timer);
@@ -10360,7 +10363,6 @@ function pttSlideInit() {
       if (pttLocked) setPttLock(false);
     }
   });
-  window.addEventListener('resize', () => pttSlidePos(pttLocked));
   pttSlidePos(pttLocked);
 }
 

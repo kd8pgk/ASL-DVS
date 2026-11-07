@@ -1,5 +1,14 @@
 # Node Talker changelog
 
+## 0.10.24 (2026-11-07)
+
+- **Audit fixes for the PPT lock.**
+  - A lock set at the instant someone keyed could leave the node keyed while locked. The lock is now checked again inside the keying lock, so a key either is refused or is stopped by the lock.
+  - The tone test now says "PPT is locked: ..." when the lock refuses it (it showed the bare word "locked").
+  - The slider's locked position is set by CSS, not measured. Locking while the talk tab was hidden left the red handle at the left edge until a resize; it now sits at the right edge whenever it is shown.
+- Tests: the lock is covered in `ci/test_ci.py` (`PttLockTests`): bad requests, state, keying while locked, the keying race, stopping a live transmission, telling every open page (a dead socket skipped), the tone-test message and the page markup.
+- Python and page JavaScript changed, so this is a release.
+
 ## 0.10.23 (2026-11-07)
 
 - **PPT lock is a slider on the PPT button.** A handle sits on the left of the PPT button. Press and hold it, then slide it right to lock PPT (the handle turns red and the button is disabled) or left to unlock it. Past halfway it commits; released before halfway it stays where it was. The lock is set on the node and every open page is told at once, as before. The separate "Lock PPT" button is gone. The handle also works from the keyboard: the right arrow or End locks, the left arrow or Home unlocks. If the node refuses the change, the handle goes back to the current state and the reason is shown under the button.
@@ -51,7 +60,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_23_20261107.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_24_20261107.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
