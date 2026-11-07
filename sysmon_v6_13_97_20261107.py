@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.96"
+VERSION      = "6.13.97"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -5152,13 +5152,23 @@ let _statusPollTimer = null;
 
 function hubRowS(k, v) { return `<div class="hub-row"><span class="hub-k">${esc(k)}</span><span class="hub-v">${esc(v)}</span></div>`; }
 function hubUnitsS(units) { return (units || []).map(u => hubRowS(u.unit, u.loaded ? `${u.active} · ${u.enabled || "—"}` : "not installed")).join(""); }
-function hubLogS(lines) { return (lines && lines.length) ? `<pre class="hub-log">${esc(lines.join("\n"))}</pre>` : `<div class="stub-panel">No log lines yet.</div>`; }
+function hubLogS(kind, lines) {
+  const body = (lines && lines.length) ? `<pre class="hub-log">${esc(lines.join("\n"))}</pre>` : `<div class="stub-panel">No log lines yet.</div>`;
+  return `<div class="hub-log-hdr"><span class="s3-card-meta">Log</span><button class="dvsm-copy" onclick="hubCopyLog('${kind}', this)" title="Copy the log lines">Copy log</button></div>${body}`;
+}
+function hubCopyLog(kind, btn) {
+  const lines = ((_hubData || {})[kind] || {}).log_tail || [];
+  if (!lines.length) { toast("No log lines to copy", "info"); return; }
+  dvsmCopy(btn, lines.join("\n"));
+}
 function renderHubPanels() {
   if (!_hubData) return;
   const s = _hubData.svx || {}, a = _hubData.amp || {};
   const sb = document.getElementById("svx-body"), ab = document.getElementById("amp-body");
-  if (sb) sb.innerHTML = `${hubUnitsS(s.units)}${hubRowS("Config", s.conf_path || "not found")}${Object.entries(s.global || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(s.log_tail)}`;
-  if (ab) ab.innerHTML = `${hubUnitsS(a.units)}${hubRowS("Settings file", a.env_path || "not found")}${Object.entries(a.settings || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS(a.log_tail)}`;
+  const svxHtml = `${hubUnitsS(s.units)}${hubRowS("Config", s.conf_path || "not found")}${Object.entries(s.global || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS("svx", s.log_tail)}`;
+  const ampHtml = `${hubUnitsS(a.units)}${hubRowS("Settings file", a.env_path || "not found")}${Object.entries(a.settings || {}).map(([k, v]) => hubRowS(k, v)).join("")}${hubLogS("amp", a.log_tail)}`;
+  if (sb && sb._hubHtml !== svxHtml) { sb._hubHtml = svxHtml; sb.innerHTML = svxHtml; }
+  if (ab && ab._hubHtml !== ampHtml) { ab._hubHtml = ampHtml; ab.innerHTML = ampHtml; }
 }
 
 function _applyTabVisibilityGated() {

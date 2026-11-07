@@ -1,6 +1,10 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_96_20261107.py`. Newest entries first.
+Current file: `sysmon_v6_13_97_20261107.py`. Newest entries first.
+
+## 6.13.97 (2026-11-07)
+
+- **Copy the SVX and AMP logs.** Each hub tab's log block has a Copy log button that copies the log lines shown (the same copy as the other tabs). With no lines, it says so instead of copying.
 
 ## 6.13.96 (2026-11-07)
 
