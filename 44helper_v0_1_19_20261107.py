@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.19"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4298,17 +4298,24 @@ def _amp_hub_config_cmd(node: str, password: str, port: str, authmode: str, allo
             "grep -E '^#?AMP_(NODE0_NUMBER|NODE0_GREETING|IAX_PORT|IAX_AUTHMODE|IAX_ALLOWLIST)=' $f && "
             "echo 'Saved. Start or restart the hub (step 6) to use it.'")
 
+_AMP_OS_CHECK = ("grep -q '^VERSION_CODENAME=trixie$' /etc/os-release || { echo \"STOP: Ampersand needs Debian 13 (Trixie); "
+    "this node is $(. /etc/os-release; echo ${PRETTY_NAME:-unknown}). Nothing was changed.\"; exit 1; }; "
+    "case \"$(uname -m)\" in aarch64|x86_64) ;; *) echo \"STOP: no Ampersand package for $(uname -m) "
+    "(aarch64 and x86_64 only). Nothing was changed.\"; exit 1;; esac; "
+    "echo \"OK: Debian 13 (Trixie), $(uname -m)\"; ")
+
 def _amp_server_install_steps() -> list[dict]:
     return [
-        {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+        {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check the OS, processor and conflicts (read-only)",
+         "cmd": _AMP_OS_CHECK + "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
                 "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; "
                 "systemctl is-enabled asterisk 2>&1; echo; "
                 "echo '== Listeners on IAX 4569/udp and web UI 8080/tcp =='; "
                 "sudo ss -lunp 2>/dev/null | grep -E ':4569' || echo 'nothing on 4569/udp'; "
                 "sudo ss -ltnp 2>/dev/null | grep -E ':8080' || echo 'nothing on 8080/tcp'",
          "timeout": 30,
-         "note": "Read-only — changes nothing. Ampersand REPLACES Asterisk; it does not run alongside "
+         "note": "Read-only — changes nothing. It stops here, before any package is installed, unless the node is "
+                 "Debian 13 (Trixie) on aarch64 or x86_64. Ampersand REPLACES Asterisk; it does not run alongside "
                  "ASL3/app_rpt on the same node. If Asterisk is active here, or something already listens "
                  "on 4569/udp, do NOT also run amp-server as the same node on the same IAX port. Either use "
                  "a dedicated node for Ampersand, or give it a different IAX port and node number. 8080/tcp "
@@ -4400,13 +4407,14 @@ def _amp_server_purge_steps() -> list[dict]:
 
 def _amp_hub_install_steps() -> list[dict]:
     return [
-        {"id": "amp_hub_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+        {"id": "amp_hub_check_conflicts", "num": 1, "title": "Check the OS, processor and conflicts (read-only)",
+         "cmd": _AMP_OS_CHECK + "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
                 "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; echo; "
                 "echo '== Listeners on IAX 4569/udp and VOTER 1667/udp =='; "
                 "sudo ss -lunp 2>/dev/null | grep -E ':(4569|1667)\\b' || echo 'nothing on 4569 or 1667/udp'",
          "timeout": 30,
-         "note": "Read-only — changes nothing. A hub is radio-less, but it still binds an IAX port (4569 by "
+         "note": "Read-only — changes nothing. It stops here, before any package is installed, unless the node is "
+                 "Debian 13 (Trixie) on aarch64 or x86_64. A hub is radio-less, but it still binds an IAX port (4569 by "
                  "default) and the VOTER port 1667, and registers a node number. If this box already runs "
                  "Asterisk/ASL3 on 4569/udp, give the hub another IAX port in step 4 and its own node number."},
         {"id": "amp_hub_deps", "num": 2, "title": "Install required packages",
@@ -19574,10 +19582,6 @@ _JS_OVERVIEW = """
 // ── Overview tab (Stage 2) — fetch/populate logic ──
 var _ovTimer = null;
 
-function _ovLevelLabel(level) {
-  return {ok: 'All clear', info: 'Info', warn: 'Attention', danger: 'Exposure risk'}[level] || level;
-}
-
 function _ovDot(level) {
   return '<span class="ov-dot ' + level + '"></span>';
 }
@@ -25192,9 +25196,6 @@ _JS_QUIET = """
 // triple-quoted JS blocks turn them into real characters at load time).
 var _qmTimer = null;
 var _qmLastRestoreFailed = false;
-function qmEsc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
 function qmNL() { return String.fromCharCode(10); }
 function qmRenderStatus(s) {
   var banner = document.getElementById('qm-banner');
