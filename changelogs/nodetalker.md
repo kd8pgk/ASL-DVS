@@ -16,6 +16,12 @@
 - Page JavaScript logic changed, so this is a release.
 - Tests: `ci/test_ci.py` and `ci/test_servers.py` pass. The slider was also driven in headless Chromium: a quick slide without the hold does nothing; hold and slide past halfway locks and disables the PPT button; the left arrow unlocks; a partial slide released before halfway changes nothing.
 
+## 0.10.22 (2026-11-07)
+
+- **Lock PPT.** A new Lock PPT control stops every transmit, from the page and from the phone, until it is unlocked. Locking drops any transmission in progress, and the phone shows "PPT locked" and disables its talk button. The state is logged when it changes and sent to connected phones.
+- Needs Node Talker Mobile for the phone's lock state; an older app ignores the lock message.
+- Python and page behaviour changed, so this is a release.
+
 ## 0.10.21 (2026-11-06)
 
 - **The phone's last report to the node is timed.** Each report the phone sends now carries how long its previous report took to reach the node (`probe_ms`), counted from the start of the send to the node's answer, so it includes opening a new connection when one is needed. The receive-health report's phone line shows "last report to the node took N ms" when that is 1 second or more. Reports go out about every 2.5 minutes when nothing is wrong, so this is a sample, not a continuous probe.

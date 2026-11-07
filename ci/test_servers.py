@@ -38,7 +38,7 @@ SERVERS = {
                               "INSTMON_RECORDER_STATUS_URL": None}},
     "wifimon": {"file": "wifimon_v5_48_0_20261102.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
                 "health_expect": b'"version"', "error_keys": ("error",)},
-    "44helper": {"file": "44helper_v0_1_18_20261107.py", "port": 9997, "scheme": "http",
+    "44helper": {"file": "44helper_v0_1_20_20261107.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
 }
 for _spec in SERVERS.values():

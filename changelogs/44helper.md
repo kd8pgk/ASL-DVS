@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_18_20261107.py`. Newest entries first.
+Current file: `44helper_v0_1_20_20261107.py`. Newest entries first.
+
+## 0.1.20 (2026-11-07)
+
+- **Claude Code status.** The install page's Claude Code card reports whether `claude --version` answers, the version, and whether the signed-in account is set up; it notes when an installed version differs from the pinned one.
+- **Ampersand needs Trixie, checked first.** The Ampersand server and hub installs check the OS and processor in step 1, before any package is installed. Anything other than Debian 13 (Trixie) on aarch64 or x86_64 stops there with a message and changes nothing.
+- **Hub addresses.** The status check accepts an IPv4-mapped IPv6 address when it matches the Claude Code network ranges.
+- Python behaviour changed, so this is a release.
 
 ## 0.1.18 (2026-11-07)
 
