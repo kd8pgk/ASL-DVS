@@ -1,6 +1,11 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_48_0_20261102.py`. Newest entries first.
+Current file: `wifimon_v5_49_0_20261107.py`. Newest entries first.
+
+## 5.49.0 (2026-11-07)
+
+- **Dashboard changes can be switched on from the command line.** Adapter on and off, radio, switch and restart stay blocked until changes are enabled. `sudo wifimon --enable-changes` turns them on by creating the root-owned `/etc/wifimon/install.enable` file, and `sudo wifimon --disable-changes` turns them off again. Before, the file had to be made by hand. Login is still the root password, and only this machine and private LAN addresses are accepted.
+- This is a release, not a cosmetic build.
 
 ## 5.48.0 (2026-11-02)
 

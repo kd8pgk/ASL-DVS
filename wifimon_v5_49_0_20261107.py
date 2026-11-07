@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.48.0"
+APP_VERSION = "5.49.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -9623,7 +9623,40 @@ if __name__ == "__main__":
     parser.add_argument("--install", action="store_true", help="Install wifimon as a systemd service")
     parser.add_argument("--uninstall", action="store_true", help="Remove wifimon systemd service")
     parser.add_argument("--setup-wifi", action="store_true", help="Add/import WiFi networks")
+    parser.add_argument("--enable-changes", action="store_true",
+                        help="Allow dashboard control (adapter on/off, radio, switch, restart); creates the root-owned " + _INSTALL_ENABLE_FILE)
+    parser.add_argument("--disable-changes", action="store_true",
+                        help="Switch dashboard control off again (removes " + _INSTALL_ENABLE_FILE + ")")
     args = parser.parse_args()
+
+    if args.enable_changes or args.disable_changes:
+        if os.geteuid() != 0:
+            print("Error: this needs root privileges. Run with 'sudo'.")
+            sys.exit(1)
+        if args.enable_changes and args.disable_changes:
+            print("Error: pick one of --enable-changes or --disable-changes.")
+            sys.exit(2)
+        if args.enable_changes:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            try:
+                os.remove(_INSTALL_ENABLE_FILE)
+            except OSError:
+                pass
+            fd = os.open(_INSTALL_ENABLE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            os.close(fd)
+            os.chown(_INSTALL_ENABLE_FILE, 0, 0)
+            os.chmod(_INSTALL_ENABLE_FILE, 0o644)
+            print(f"  [+] Dashboard changes enabled ({_INSTALL_ENABLE_FILE})")
+            print("      Needs NetworkManager for adapter Keep on/off; login is still the root password,")
+            print("      and only this machine / private LAN addresses are accepted.")
+        else:
+            try:
+                os.remove(_INSTALL_ENABLE_FILE)
+            except FileNotFoundError:
+                pass
+            print("  [-] Dashboard changes disabled")
+        if not (args.install or args.uninstall or args.setup_wifi):
+            sys.exit(0)
 
     if args.install:
         install_service()

@@ -1,6 +1,18 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_12_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_14_20261107.py`. Newest entries first.
+
+## 0.5.14 (2026-11-07)
+
+- **Schedule windows can touch.** The rule that windows be at least 2 minutes apart is gone: back-to-back windows are allowed. Each scheduled recording starts 60 seconds after its window opens and stops 60 seconds before it closes, so two windows that meet leave a one-minute gap for the node to change over. Overlapping windows are still refused. The dry run uses the same timing. Record now is not affected.
+- **Scheduled slots are at least 3 minutes long.** A scheduled entry shorter than 3 minutes is refused with a message.
+- **Offline banner.** When Node Recorder stops answering, a red banner says so. The page checks `/api/health` every 5 seconds and hides the banner when the server answers again.
+- This is a release, not a cosmetic build.
+
+## 0.5.13 (2026-11-07)
+
+- **One Schedule list.** The Setup tab no longer has its own copy of the schedule list. The Schedule tab's card is the only list, and it folds like the other cards. Its note about 2-minute windows is removed.
+- This is a release, not a cosmetic build.
 
 ## 0.5.12 (2026-11-05)
 
