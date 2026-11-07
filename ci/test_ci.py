@@ -279,6 +279,45 @@ class CheckTests(unittest.TestCase):
         self.r.build("foo", "1.0.1", T0 + DAY, self.prev, code="undefined_name")
         self.assertCheck(False, "pyflakes")
 
+    def test_comment_refused(self):
+        self.r.build("foo", "1.0.1", T0 + DAY, self.prev, code="1  # why")
+        self.assertCheck(False, "has a comment")
+
+    def test_docstring_refused(self):
+        name = self.r.build("foo", "1.0.1", None, self.prev)
+        path = os.path.join(self.r.path, name)
+        with open(path) as f:
+            text = f.read()
+        self.r.write(name, text.replace("def main():\n", 'def main():\n    """Explain."""\n'))
+        self.r.commit("docstring", T0 + DAY)
+        self.assertCheck(False, "has a docstring")
+
+    def test_shebang_and_coding_lines_allowed(self):
+        name = self.r.build("foo", "1.0.1", None, self.prev)
+        path = os.path.join(self.r.path, name)
+        with open(path) as f:
+            text = f.read()
+        self.r.write(name, text.replace("#!/usr/bin/env python3\n", "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n"))
+        self.r.commit("coding line", T0 + DAY)
+        self.assertCheck(True)
+
+    def test_unused_page_function_noted(self):
+        self.r.build("foo", "1.0.1", T0 + DAY, self.prev, extra="function neverCalled() { return 1; }")
+        self.assertCheck(True, "neverCalled")
+
+    def test_page_function_built_from_a_prefix_not_noted(self):
+        self.r.build("foo", "1.0.1", T0 + DAY, self.prev,
+                     extra="function asl3Run() { return 1; }\nconst t = '<b onclick=\"{prefix}Run()\">';")
+        rc, out = self.r.check()
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("asl3Run", out)
+
+    def test_replaced_file_named_in_docs_noted(self):
+        self.r.write("docs/src/foo_summary/summary.html", f"<p>Source: {self.prev}</p>")
+        self.r.commit("doc", T0 + DAY / 2)
+        self.r.build("foo", "1.0.1", T0 + DAY, self.prev, code="2")
+        self.assertCheck(True, "still name it")
+
     def test_launcher_drift(self):
         self.r.build("foo", "1.0.1", None, self.prev)
         self.r.build("qux", "1.0.0", None)
@@ -460,6 +499,91 @@ def load_helper44():
 
 BUNDLE_DIR = os.path.join(HERE, "..", "configs", "pi02w")
 VALUES = {"callsign": "w1test", "node": "654321", "dmr_id": "3123456", "nxdn_id": "12345"}
+
+
+STEP_SAMPLES = {"callsign": "W1TEST", "dmrid": "3123456", "port": "8080", "rx_port": "34001", "branch": "main",
+                "username": "admin", "version": "20260610", "node": "1234", "hubpassword": "", "authmode": "OPEN",
+                "allowlist": "", "cruser": "pi", "crfolder": "~/claude-remote", "password": "Secret1"}
+STEP_TABLES = ("_ASL3_SCRIPTS", "_DVSWITCH_SCRIPTS", "_SVXLINK_SCRIPTS", "_M17_SCRIPTS", "_AMP_SCRIPTS",
+               "_CF_SCRIPTS", "_CR_SCRIPTS")
+
+
+class Helper44StepTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.h = load_helper44()
+
+    def steps(self):
+        for table in STEP_TABLES:
+            for mode, per in getattr(self.h, table).items():
+                for distro, steps in per.items():
+                    for step in steps:
+                        yield table, mode, distro, step
+
+    def test_every_field_has_a_rule(self):
+        missing = sorted({f"{t}:{s['id']}:{f['id']}" for t, _, _, s in self.steps()
+                          for f in s.get("fields") or [] if f["id"] not in self.h._STEP_FIELD_RULES})
+        self.assertEqual(missing, [], "a field with no rule makes its step unrunnable from the page")
+
+    def test_template_markers_match_fields(self):
+        bad = []
+        for t, _, _, s in self.steps():
+            tmpl = s.get("cmd_template")
+            if not tmpl:
+                continue
+            marks = set(re.findall(r"\{\{(\w+)\}\}", tmpl))
+            fields = {f["id"] for f in s.get("fields") or []}
+            if marks != fields:
+                bad.append(f"{t}:{s['id']} markers {sorted(marks)} fields {sorted(fields)}")
+        self.assertEqual(bad, [])
+
+    def test_step_ids_unique_per_list(self):
+        for table in STEP_TABLES:
+            for mode, per in getattr(self.h, table).items():
+                for distro, steps in per.items():
+                    ids = [s["id"] for s in steps]
+                    self.assertEqual(len(ids), len(set(ids)), f"{table} {mode} {distro}")
+
+    def test_samples_pass_every_rule(self):
+        for fid, (rx, _) in self.h._STEP_FIELD_RULES.items():
+            self.assertIn(fid, STEP_SAMPLES)
+            self.assertTrue(rx.fullmatch(STEP_SAMPLES[fid]), fid)
+
+    def test_templates_build_with_good_values(self):
+        for t, _, _, s in self.steps():
+            if not s.get("cmd_template"):
+                continue
+            fields = {f["id"]: STEP_SAMPLES[f["id"]] for f in s["fields"]}
+            cmd, why = self.h._step_command(s, fields)
+            self.assertEqual(why, "", f"{t}:{s['id']}")
+            self.assertNotIn("{{", cmd, f"{t}:{s['id']}")
+
+    def test_bad_value_refused(self):
+        for t, _, _, s in self.steps():
+            if any(f["id"] == "callsign" for f in s.get("fields") or []):
+                fields = {f["id"]: STEP_SAMPLES[f["id"]] for f in s["fields"]}
+                fields["callsign"] = "W1TEST; reboot"
+                cmd, why = self.h._step_command(s, fields)
+                self.assertEqual(cmd, "")
+                self.assertIn("use 3 to 16", why)
+                return
+        self.fail("no step with a callsign field found")
+
+    def test_changed_command_refused_before_anything_runs(self):
+        step = self.h._ASL3_SCRIPTS["install"]["bookworm"][0]
+        r = self.h._dispatch_tab_action({"mode": "install", "distro": "bookworm", "step_id": step["id"],
+                                         "command_text": step["cmd"] + " ; echo changed"},
+                                        self.h._asl3_lookup_step, "asl3")
+        self.assertFalse(r["success"])
+        self.assertEqual(r["output"], self.h._STEP_CHANGED_MSG)
+
+    def test_unknown_step_and_distro_refused(self):
+        r = self.h._dispatch_tab_action({"mode": "install", "distro": "bookworm", "step_id": "no_such_step",
+                                         "command_text": "true"}, self.h._asl3_lookup_step, "asl3")
+        self.assertIn("Unknown step_id", r["output"])
+        r = self.h._dispatch_tab_action({"mode": "install", "distro": "jessie", "step_id": "prereqs",
+                                         "command_text": "true"}, self.h._asl3_lookup_step, "asl3")
+        self.assertIn("Unknown distro", r["output"])
 
 
 class BundleTests(unittest.TestCase):
@@ -2344,6 +2468,86 @@ class ListenEventTests(unittest.TestCase):
             bt = fh.read()
         for why in re.findall(r'"(?:system|user)", "(\w+)"', bt):
             self.assertIn(why, nt.LISTEN_WHY)
+
+
+LAUNCH_TARGET = '''import json, os, sys, threading
+print(json.dumps({"pid": os.getpid(), "optimize": sys.flags.optimize, "argv": sys.argv[1:],
+                  "arena": os.environ.get("MALLOC_ARENA_MAX"), "again": os.environ.get("ASL_DVS_LAUNCH"),
+                  "name": __name__, "doc": (lambda: None).__doc__,
+                  "trim": any(t.name == "mem-trim" for t in threading.enumerate())}))
+'''
+
+
+def launcher_code():
+    import ast
+    path = sorted(glob.glob(os.path.join(HERE, "..", "instmon_v*.py")))[-1]
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_LAUNCHER_CODE" for t in node.targets):
+            return node.value.value
+    raise AssertionError("no _LAUNCHER_CODE in instmon")
+
+
+class LauncherTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.off = os.path.join(self.tmp.name, "launch_no_")
+        code = launcher_code()
+        self.assertIn('_OFF = "/etc/asl_dvs/launch_no_"', code)
+        self.launcher = os.path.join(self.tmp.name, "launch.py")
+        with open(self.launcher, "w") as f:
+            f.write(code.replace('"/etc/asl_dvs/launch_no_"', repr(self.off)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_target(self, name="target_tool.py", *flags):
+        for flag in flags:
+            open(self.off + flag, "w").close()
+        target = os.path.join(self.tmp.name, name)
+        with open(target, "w") as f:
+            f.write(LAUNCH_TARGET)
+        env = {k: v for k, v in os.environ.items() if k not in ("MALLOC_ARENA_MAX", "ASL_DVS_LAUNCH")}
+        p = subprocess.Popen([sys.executable, self.launcher, target, "a1", "a2"], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, err = p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 0, err)
+        return p.pid, json.loads(out.strip().splitlines()[-1])
+
+    def test_rerun_keeps_pid_and_applies_savers(self):
+        pid, d = self.run_target()
+        self.assertEqual(d["pid"], pid, "the re-run must keep the process ID for systemd")
+        self.assertEqual(d["optimize"], 2)
+        self.assertIsNone(d["doc"])
+        self.assertIsNone(d["arena"], "the arena cap must not pass to child processes")
+        self.assertIsNone(d["again"])
+        self.assertTrue(d["trim"])
+        self.assertEqual(d["argv"], ["a1", "a2"])
+        self.assertEqual(d["name"], "__main__")
+
+    def test_name_that_is_not_an_identifier(self):
+        _, d = self.run_target("44target_v1.py")
+        self.assertEqual(d["name"], "__main__")
+        self.assertEqual(d["argv"], ["a1", "a2"])
+
+    def test_off_switches(self):
+        pid, d = self.run_target("target_tool.py", "optimize", "arena_cap", "trim")
+        self.assertEqual(d["pid"], pid)
+        self.assertEqual(d["optimize"], 0)
+        self.assertFalse(d["trim"])
+
+    def test_launcher_is_identical_in_every_tool(self):
+        import ast
+        texts = set()
+        for path in glob.glob(os.path.join(HERE, "..", "*_v*.py")):
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for node in tree.body:
+                if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_LAUNCHER_CODE"
+                                                        for t in node.targets):
+                    texts.add(node.value.value)
+        self.assertEqual(len(texts), 1)
 
 
 class SuiteLogTests(unittest.TestCase):

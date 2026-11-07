@@ -1,7 +1,9 @@
 name: promote-stable
 
 on:
-  push:
+  workflow_run:
+    workflows: [checks]
+    types: [completed]
     branches: [main]
   schedule:
     - cron: "17 6 * * *"
@@ -9,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: promote-stable
@@ -16,6 +19,7 @@ concurrency:
 
 jobs:
   promote:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +27,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - name: Require the checks to have passed on the current main
+        id: green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-list -1 HEAD -- . ':(exclude)channels/stable.json')
+          concl=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow checks.yml --commit "$sha" --json conclusion -q '[.[] | select(.conclusion == "success")] | length')
+          if [ "${concl:-0}" -gt 0 ]; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "The checks have not passed on $sha (the newest main commit that is not a stable.json update); not promoting."
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
       - name: Recompute and push channels/stable.json
+        if: steps.green.outputs.ok == '1'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

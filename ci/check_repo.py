@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
+import io
 
 TOOL_RE = re.compile(
     r"^(?P<stem>[A-Za-z0-9][A-Za-z0-9_]*?)_v(?P<ver>\d{1,6}(?:_\d{1,6})*)(?:_(?P<date>\d{8}))?\.(?P<ext>py|sh)$")
@@ -23,6 +25,13 @@ ANDROID_DIR = "android/"
 ANDROID_GRADLE = "android/app/build.gradle.kts"
 ANDROID_LOG = "changelogs/nodetalker_android.md"
 ANDROID_VERSION_RE = re.compile(r'^val appVersion = "([^"]+)"', re.M)
+CODING_RE = re.compile(r"^#.*coding[:=]")
+SH_TITLE_RE = re.compile(r"^#\s*\S+\.sh\s+v\S+")
+JS_FUNC_RE = re.compile(r"(\(\s*(?:async\s+)?)?\bfunction\s+([A-Za-z_][\w]*)\s*\(")
+BUILT_NAME_RE = re.compile(r"\{[A-Za-z_]+\}([A-Za-z_]\w*)\(")
+WORD_RE = re.compile(r"[A-Za-z_$][\w$]*")
+HEREDOC_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_]\w*)['\"]?")
+DOCS_SRC = "docs/src"
 
 errors = []
 notes = []
@@ -178,7 +187,71 @@ def check_python(path, text):
             fail("pyflakes is not installed (pip install pyflakes)")
         else:
             fail(f"{path}: pyflakes:\n{out}")
+    check_no_comments(path, text)
     return True
+
+
+def check_no_comments(path, text):
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return
+    for t in toks:
+        if t.type != tokenize.COMMENT:
+            continue
+        line = t.start[0]
+        if line == 1 and t.string.startswith("#!"):
+            continue
+        if line <= 2 and CODING_RE.match(t.string):
+            continue
+        fail(f"{path}: line {line} has a comment; scripts carry no comments (CLAUDE.md)")
+        break
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                where = getattr(node, "name", "the module")
+                fail(f"{path}: {where} has a docstring; scripts carry no docstrings (CLAUDE.md)")
+                return
+
+
+def note_unused_page_functions(path, text):
+    words = {}
+    for w in WORD_RE.findall(text):
+        words[w] = words.get(w, 0) + 1
+    built = set(BUILT_NAME_RE.findall(text))
+    unused = []
+    for m in JS_FUNC_RE.finditer(text):
+        if m.group(1):
+            continue
+        name = m.group(2)
+        if words.get(name, 0) > 1 or any(name.endswith(b) for b in built):
+            continue
+        unused.append(name)
+    if unused:
+        notes.append(f"{path}: page function(s) defined and never named: {', '.join(sorted(set(unused)))}")
+
+
+def note_docs_naming(old_path):
+    name = os.path.basename(old_path)
+    hits = []
+    for root, _dirs, files in os.walk(DOCS_SRC):
+        for f in files:
+            if not f.endswith(".html"):
+                continue
+            p = os.path.join(root, f)
+            try:
+                if name in read(p):
+                    hits.append(p)
+            except OSError:
+                continue
+    if hits:
+        notes.append(f"{name} was replaced; these docs still name it, so recheck them: {', '.join(sorted(hits))}")
 
 
 def check_page_js(path, text):
@@ -202,6 +275,37 @@ def check_shell(path):
     r = subprocess.run(["bash", "-n", path], capture_output=True, text=True)
     if r.returncode != 0:
         fail(f"{path}: bash -n:\n{r.stderr.strip()}")
+    check_shell_comments(path, read(path))
+    try:
+        r = subprocess.run(["shellcheck", "-S", "error", path], capture_output=True, text=True)
+    except FileNotFoundError:
+        if os.environ.get("ASL_REQUIRE_SHELLCHECK") == "1":
+            fail("shellcheck is not installed, so shell scripts could not be checked")
+        else:
+            notes.append(f"{path}: shellcheck is not installed here; CI runs it")
+        return
+    if r.returncode != 0:
+        fail(f"{path}: shellcheck -S error:\n{(r.stdout + r.stderr).strip()}")
+
+
+def check_shell_comments(path, text):
+    end = None
+    for n, line in enumerate(text.splitlines(), 1):
+        if end is not None:
+            if line.strip() == end:
+                end = None
+            continue
+        m = HEREDOC_RE.search(line)
+        if m and not line.lstrip().startswith("#"):
+            end = m.group(1)
+        if not line.lstrip().startswith("#"):
+            continue
+        if n == 1 and line.startswith("#!"):
+            continue
+        if n <= 3 and SH_TITLE_RE.match(line):
+            continue
+        fail(f"{path}: line {n} has a comment; shell scripts keep only the shebang and title line (CLAUDE.md)")
+        return
 
 
 SHARED_LOOK_TOOLS = {"nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "instmon", "44helper", "wifimon", "pibrary"}
@@ -378,6 +482,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--head", default="HEAD")
+    ap.add_argument("--all", action="store_true", help="also check every script file, not only changed ones")
     args = ap.parse_args()
 
     base = git("merge-base", args.base, args.head).strip()
@@ -413,12 +518,18 @@ def main():
 
     readme = read("README.md") if os.path.isfile("README.md") else ""
     changed = [p for p in added + modified if os.path.isfile(p)]
+    if args.all:
+        tracked = git("ls-files").splitlines()
+        changed = sorted(set(changed) | {p for p in tracked if p.endswith((".py", ".sh")) and os.path.isfile(p)
+                                          and not p.startswith(("android/", "docs/"))})
 
     for path in changed:
         text = read(path)
         if path.endswith(".py"):
             if check_python(path, text):
                 check_page_js(path, text)
+                if parse_tool(path):
+                    note_unused_page_functions(path, text)
         elif path.endswith(".sh"):
             check_shell(path)
         elif path.startswith("channels/") and path.endswith(".json"):
@@ -509,6 +620,8 @@ def main():
         t = parse_tool(path)
         if t and not head_tools.get(canon(t[0])):
             notes.append(f"{path}: tool '{canon(t[0])}' removed")
+        if t:
+            note_docs_naming(path)
 
     check_launchers()
     check_android(base, added + modified + deleted)

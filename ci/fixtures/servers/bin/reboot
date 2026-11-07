@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "stub: reboot $*" >> "${STUB_DIR:-/tmp}/power.log"
+exit 0

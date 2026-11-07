@@ -118,10 +118,64 @@
 ## Before pushing
 
 - `python3 ci/check_repo.py --base origin/main` runs the same checks as the
-  `checks` workflow (needs `pyflakes` and `node`).
+  `checks` workflow (needs `pyflakes`, `node` and `shellcheck`). It also
+  fails on any comment or docstring in a script, and notes page functions that
+  are never named and docs that still name a replaced file.
 - `python3 -m py_compile` and `pyflakes` on changed Python files.
 - `node --check` on page JavaScript after a page change. The page HTML is a
   raw string, so the source text is what is served.
-- `bash -n` on changed shell scripts.
+- `bash -n` and `shellcheck -S error` on changed shell scripts.
+- `python3 ci/test_ci.py` after any change to a tool or to `ci/`.
 - Exercise the changed behaviour (unit test with mocks, or the page in
   headless Chromium) before opening a pull request.
+
+## Testing and audit policy
+
+- **What CI runs.** The `checks` workflow runs on every pull request, on every
+  push to `main`, and weekly (the weekly run checks every script, not only
+  changed ones), on Python 3.11 and 3.13. A pull request is merged only when
+  both legs pass.
+- **Every web tool is in the server tests.** Each tool that serves a page is
+  listed in `ci/test_servers.py` (`SERVERS`), `ci/test_security.py`
+  (`EXPECT`), and, for the pi02w and common tools, `ci/test_install.py`
+  (`TOOLS`). A new tool is added to all three in the pull request that adds it.
+  A route that answers without a login on purpose goes in `PUBLIC_BY_DESIGN`.
+- **Run the suites that cover the change.**
+  - Routes, login or server code: `sudo python3 ci/test_servers.py` (also
+    with `ASL_TEST_VIA_LAUNCHER=1`, the way services start on a node) and
+    `sudo python3 ci/test_security.py`.
+  - Node Talker or Node Recorder audio: the three baseline suites and
+    `ci/test_talker_stream.py`.
+  - `--install` or `--uninstall` code: `ASL_TEST_INSTALL=1 python3
+    ci/test_install.py`, as root, only on a disposable machine (it installs
+    into the system folders).
+  - The logged-in checks need `ASL_TEST_ROOT_PASSWORD`. CI sets it; never set
+    a root password on a node or a shared machine for a test.
+- **The security table is the contract.** `EXPECT` in `ci/test_security.py`
+  records each tool's response headers and request guards. A change that
+  weakens one fails CI. A change that strengthens one updates the table in the
+  same pull request. A known gap is listed in `KNOWN_GAPS` until it is fixed,
+  and fixing it removes the entry. Known today: instmon and Pibrary accept a
+  login request without `X-Requested-With`.
+- **Error replies carry a message.** New tools answer errors with a
+  `message` key. instmon and wifimon (`error`) and 44helper (`output`) are
+  recorded in the server tests as they are; move them to `message` in their
+  next release and update `error_keys`.
+- **Promotion waits for green.** `promote-stable` promotes only when the
+  `checks` workflow passed on the newest `main` commit (other than a
+  `stable.json` update). Never edit `channels/stable.json` by hand.
+- **Real node before Stable.** Before lifting a hold or adding a hotfix in
+  `channels/overrides.json`, run the release on a Pi Zero 2 W: link and unlink
+  each mode, a Node Talker tone test, a tunnel restart, a reboot, and read the
+  boot report and the Node Talker health verdict. Note the result in the pull
+  request.
+- **Unused code.** A page function that `check_repo.py` reports as never named
+  is removed in that tool's next release (today: `_ovLevelLabel` and
+  `qmEsc` in 44helper).
+- **Docs follow the code.** When `check_repo.py` notes that a summary in
+  `docs/src/` names a replaced file, recheck that summary against the new
+  code (constants, routes, counts) before it is rebuilt, and update its source
+  line.
+- **Not covered by CI.** Real hardware (Asterisk, DVSwitch, WireGuard, the
+  radio path) and the disk-image jobs. They are checked on a node (above), and
+  a disk-image change is also tested by hand on spare drives.
