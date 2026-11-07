@@ -136,4 +136,32 @@
 <li>Memory and timing on a Pi Zero 2 W (the launcher savers, the light-theme filter) were not measured.</li></ul>
 <h2><span class="n">8.2</span>Order used</h2>
 <p>First the workflow-only changes (1, 5, 6, 18); then the server and security tests (2, 3, 4), which cover the largest untested surface; then the small additions (7, 8); then 9 to 12 and the rest.</p></section>
+<section class="chapter"><div class="kicker">Part 9 &middot; Worked example</div><h1 class="ch">One round of audit and fixes, step by step</h1>
+<p class="ch-lede">This is how the gaps in Part 8 were found and fixed. It is an example of the method in Parts 6 and 7, applied to the tests themselves. Each step names what was run and what it showed.</p>
+<table><tr><th>Step</th><th>What was done</th><th>What it showed</th></tr>
+<tr><td>1. Check the document against the repo</td><td>Read <code>ci/test_servers.py</code>, <code>ci/test_pages.py</code>, <code>ci/test_authed.py</code> and the workflow, and compared them with this summary.</td><td>Three errors in this summary: the server tests covered eight servers, not six; the stream tests were not run by CI at all; the page tests covered six pages.</td></tr>
+<tr><td>2. Prove each gap before listing it</td><td>Searched <code>ci/</code> for each behaviour (proxy headers, local key, headers, launcher, install). Counted comments with the Python tokenizer, not with a text search.</td><td>18 gaps, each with evidence. A text search had counted <code>#</code> inside strings as comments; the tokenizer found none.</td></tr>
+<tr><td>3. Run what CI skipped</td><td><code>python3 ci/test_talker_stream.py</code></td><td>34 tests, 33 passed and the soak skipped. Safe to add to CI.</td></tr>
+<tr><td>4. Add the missing servers and read every failure</td><td>Added instmon, wifimon and 44helper to the server harness, with stubs so a reboot or power-off is only logged.</td><td>Seven failures, none a security fault: the lockout test ran first and locked later tests out; these tools reply with <code>error</code> or <code>output</code>, not <code>message</code>; two wifimon routes and one instmon page are public on purpose. The harness was fixed; 99 tests passed.</td></tr>
+<tr><td>5. Probe before writing expectations</td><td>A short script asked every server the same questions: headers, login without the CSRF header, a proxy header, the local API without a key.</td><td>A real finding: instmon and Pibrary take a login without <code>X-Requested-With</code>. Recorded as a known gap, not hidden.</td></tr>
+<tr><td>6. Pin the answers in a test</td><td>Wrote <code>ci/test_security.py</code> from the probe results.</td><td>25 checks pass without a login. The logged-in checks need a root password, which this container could not set, so they run in CI.</td></tr>
+<tr><td>7. Check what could not be run</td><td>Read each logged-in check against the tool's POST handler.</td><td>One expectation was wrong: SysMon has no <code>/api/action</code>; the check now uses <code>/api/config</code>.</td></tr>
+<tr><td>8. Tighten the repo checker</td><td>Added the comment, docstring and shellcheck rules, <code>--all</code>, and two notes; wrote self-tests for each; ran it on every script in the repo.</td><td>139 files pass. The unused-function note found exactly the two known functions. shellcheck (installed in a scratch environment) passed all four shell scripts.</td></tr>
+<tr><td>9. Test the launcher</td><td>Ran a small target through the launcher text taken from a tool, then ran all servers through it.</td><td>Process ID kept, <code>-OO</code> on, arena cap kept from children, switches honoured, digit-first names loaded. 99 server tests passed through the launcher.</td></tr>
+<tr><td>10. Test install and uninstall</td><td>Installed and removed all eight tools in this disposable container, then looked for leftovers.</td><td>All passed in 6 seconds; nothing was left in the unit, binary or library folders.</td></tr>
+<tr><td>11. Change the workflows and re-read them</td><td>Added the triggers, the Python matrix and the new steps; added a promotion gate.</td><td>The first gate would have blocked forever (the bot's own <code>stable.json</code> commit has no checks run). Fixed to look at the newest non-<code>stable.json</code> commit.</td></tr>
+<tr><td>12. Write the rule down</td><td>Added the Testing and audit policy to CLAUDE.md.</td><td>The fixes stay applied: new tools join the tests, the security table is a contract, known gaps are listed until fixed.</td></tr></table>
+<h2><span class="n">9.1</span>Results of the round</h2>
+<table><tr><th>Suite</th><th>Before</th><th>After</th></tr>
+<tr><td>Self-tests (<code>test_ci.py</code>)</td><td>241</td><td>259, all passing</td></tr>
+<tr><td>Server tests</td><td>8 servers, 72 tests</td><td>11 servers, 99 tests, also through the launcher</td></tr>
+<tr><td>Security tests</td><td>none</td><td>77 cases (25 without a login, the rest in CI)</td></tr>
+<tr><td>Install tests</td><td>none</td><td>8 tools</td></tr>
+<tr><td>Stream tests in CI</td><td>not run</td><td>34 run</td></tr>
+<tr><td>Python versions in CI</td><td>3.11</td><td>3.11 and 3.13</td></tr></table>
+<h2><span class="n">9.2</span>What the example teaches</h2>
+<ul><li><strong>A failing new test is a question, not a verdict.</strong> Most failures in step 4 were in the test, not the tools.</li>
+<li><strong>Probe, then pin.</strong> Asking the real servers first gave a table that matched the code, and surfaced a real gap.</li>
+<li><strong>Say what was not run.</strong> The logged-in checks were checked by reading, and that is stated, until CI runs them.</li>
+<li><strong>Re-read your own fix.</strong> The promotion gate was wrong on the first try and was caught by thinking through the next run.</li></ul></section>
 </body></html>

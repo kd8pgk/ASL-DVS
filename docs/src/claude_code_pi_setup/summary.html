@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Claude Code on a Pi</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">SETUP GUIDE &middot; CLAUDE CODE</div>
+    </div>
+    <div class="ed"><b>Step by step</b><br>install and set up</div>
+  </div>
+  <div class="body">
+    <h1>Claude Code on a <span>Pi</span></h1>
+    <p class="lede">How to install Claude Code on a Raspberry Pi node, sign it in, and run it as a service so the Claude apps can reach the node through Remote Control. Two paths: the 44helper Claude Remote tab, or the same steps by hand.</p>
+    <div class="chips">
+      <span class="chip c1">NODE.JS 22</span>
+      <span class="chip c2">CLAUDE CODE</span>
+      <span class="chip c3">SIGN IN</span>
+      <span class="chip c4">REMOTE CONTROL SERVICE</span>
+    </div>
+    <div class="draft">GUIDE &middot; FROM THE 44HELPER STEPS</div>
+  </div>
+  <div class="foot">Source: the Claude Remote step tables in 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Versions are the ones 44helper pins; a later 44helper may pin newer ones.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Before you start</div>
+  <h1 class="ch">What you need</h1>
+  <table>
+    <tr><th>Need</th><th>Why</th></tr>
+    <tr><td>A 64-bit OS (aarch64) on the Pi, or an x86_64 machine</td><td>The Node.js download is for these two only. On a 32-bit OS (<code>armv7l</code>) the install stops with "No Node.js build for armv7l here". On a Pi Zero 2 W, install the 64-bit Raspberry Pi OS (Bookworm) or Debian 13 (Trixie).</td></tr>
+    <tr><td>Internet access from the Pi</td><td>Node.js comes from nodejs.org and Claude Code from the npm registry. The sign-in uses Claude's servers.</td></tr>
+    <tr><td>A Claude account that can use Claude Code</td><td>You sign in with the same account you use in the Claude apps. Remote Control then shows the Pi in those apps.</td></tr>
+    <tr><td>A normal login user on the Pi (not root)</td><td>Claude Code runs as this user. 44helper's form suggests <code>ubuntu</code>; on Raspberry Pi OS it is the user you created (often <code>pi</code>). Use your own.</td></tr>
+    <tr><td>A second device with a browser</td><td>To open the sign-in link.</td></tr>
+    <tr><td>About 200 MB of free disk, and some free memory</td><td>Node.js and Claude Code are installed under <code>/opt</code> and <code>/usr/local</code>. A Pi Zero 2 W has 512 MB of memory, so stop heavy jobs (or use Quiet System in instmon) while you install.</td></tr>
+  </table>
+  <p>Check the processor and OS first:</p>
+  <pre class="cmd">uname -m                       # must say aarch64 (or x86_64)
+grep -E '^(PRETTY_NAME|VERSION_CODENAME)=' /etc/os-release</pre>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Path A</div>
+  <h1 class="ch">With the 44helper Claude Remote tab</h1>
+  <p class="ch-lede">Open 44helper (port 9997), log in with the root password, and open the <strong>Claude Remote</strong> tab. Run the steps in order. Each Run button shows its command first; 44helper runs only the command in its table.</p>
+  <table>
+    <tr><th>Step</th><th>Button</th><th>What happens</th></tr>
+    <tr><td>1</td><td>Check what is here (read-only)</td><td>Shows the OS, the processor, any Node.js and Claude Code already installed, and the service state. Changes nothing.</td></tr>
+    <tr><td>2</td><td>Install Node.js 22</td><td>Downloads Node.js v22.23.4 for this processor, checks it against a SHA-256 pinned in 44helper, unpacks it to <code>/opt/node-v22.23.4</code>, and links <code>node</code>, <code>npm</code> and <code>npx</code> into <code>/usr/local/bin</code>. The Debian packages are too old for Claude Code, so they are not used.</td></tr>
+    <tr><td>3</td><td>Install Claude Code</td><td>Installs <code>@anthropic-ai/claude-code@2.1.317</code> with that Node.js and links <code>claude</code> into <code>/usr/local/bin</code>.</td></tr>
+    <tr><td>4</td><td>Sign in (manual)</td><td>Done in a terminal (Part 4). Use the <strong>Terminal</strong> button in the 44helper header, or SSH.</td></tr>
+    <tr><td>5</td><td>Create the Remote Control folder</td><td>Fill in the login user and the folder (default <code>~/claude-remote</code>), then run. The folder must be inside the user's home; the home itself and hidden folders are refused.</td></tr>
+    <tr><td>6</td><td>Start Claude Remote as a service</td><td>Writes <code>/etc/systemd/system/claude-remote.service</code>, enables it at boot, starts it, and shows its first log lines. It needs step 4 done first.</td></tr>
+    <tr><td>7</td><td>Check the service</td><td>Shows the status and the last 30 log lines.</td></tr>
+    <tr><td>8</td><td>Stop Claude Remote</td><td>Stops the service and disables it at boot. The Pi leaves the Claude apps.</td></tr>
+  </table>
+  <p>Steps 5 and 6 use the same two fields. Give the user that signed in at step 4, and the same folder.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Path B</div>
+  <h1 class="ch">The same steps by hand</h1>
+  <p class="ch-lede">These are the commands from the 44helper table, laid out for a shell. Run them as your login user; <code>sudo</code> is used where root is needed. Set the two names first.</p>
+  <pre class="cmd">U=pi                       # your login user
+D=/home/$U/claude-remote   # the Remote Control folder</pre>
+
+  <h2><span class="n">3.1</span>Install Node.js 22 (pinned and checked)</h2>
+  <pre class="cmd">a=$(uname -m)
+if [ "$a" = aarch64 ]; then
+  f=linux-arm64
+  s=6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b
+elif [ "$a" = x86_64 ]; then
+  f=linux-x64
+  s=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce
+else
+  echo "No Node.js build for $a"
+fi
+cd /tmp
+curl -fsSL -o node-cr.tar.xz \
+  https://nodejs.org/dist/v22.23.4/node-v22.23.4-$f.tar.xz
+echo "$s  node-cr.tar.xz" | sha256sum -c -   # must print: OK
+sudo tar -xJf node-cr.tar.xz -C /opt
+sudo mv /opt/node-v22.23.4-$f /opt/node-v22.23.4
+rm -f node-cr.tar.xz
+sudo ln -sf /opt/node-v22.23.4/bin/node /usr/local/bin/node
+sudo ln -sf /opt/node-v22.23.4/bin/npm  /usr/local/bin/npm
+sudo ln -sf /opt/node-v22.23.4/bin/npx  /usr/local/bin/npx
+node --version                                     # v22.23.4</pre>
+  <p>If <code>sha256sum</code> does not print OK, stop: the download is not the file 44helper was written for.</p>
+
+  <h2><span class="n">3.2</span>Install Claude Code</h2>
+  <pre class="cmd">sudo /opt/node-v22.23.4/bin/npm install -g \
+  @anthropic-ai/claude-code@2.1.317
+sudo ln -sf /opt/node-v22.23.4/bin/claude /usr/local/bin/claude
+claude --version</pre>
+
+  <h2><span class="n">3.3</span>Create the folder, then sign in (Part 4)</h2>
+  <pre class="cmd">mkdir -p "$D"</pre>
+
+  <h2><span class="n">3.4</span>Run Remote Control as a service</h2>
+  <pre class="cmd">sudo tee /etc/systemd/system/claude-remote.service &gt;/dev/null &lt;&lt;EOF
+[Unit]
+Description=Claude Code remote control (44helper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$U
+Environment=HOME=/home/$U
+WorkingDirectory=$D
+ExecStart=/usr/local/bin/claude remote-control
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now claude-remote
+systemctl is-active claude-remote
+journalctl -u claude-remote -n 15 --no-pager</pre>
+  <p>This is the same unit 44helper writes, so 44helper's Check and Stop steps work with it.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Sign in</div>
+  <h1 class="ch">Sign in once, as the login user</h1>
+  <p class="ch-lede">The service cannot sign in by itself. Sign in once in a terminal; the sign-in is kept in the user's home folder and the service uses it.</p>
+  <ol>
+    <li>Open a terminal as the login user: the 44helper <strong>Terminal</strong> button (then <code>sudo -u pi -H bash</code> if it opened as root), or SSH in as that user.</li>
+    <li>Start Claude in the Remote Control folder:
+      <pre class="cmd">cd ~/claude-remote &amp;&amp; claude</pre>
+      44helper's step 4 does the same as root for you: <code>sudo -u ubuntu -H bash -c 'mkdir -p ~/claude-remote &amp;&amp; cd ~/claude-remote &amp;&amp; exec /usr/local/bin/claude'</code>, with your user in place of <code>ubuntu</code>.</li>
+    <li>Claude shows a sign-in link. Open it on your phone or computer, sign in with the same account as your Claude apps, and paste the code it gives you back into the terminal.</li>
+    <li>When Claude asks whether you trust the folder, answer <strong>Yes</strong>. The service will not start in a folder that is not trusted.</li>
+    <li>Leave Claude with <code>/exit</code> (or Ctrl+C twice).</li>
+    <li>Now run step 6 (Path A) or Part 3.4 (Path B).</li>
+  </ol>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Check and use it</div>
+  <h1 class="ch">Is it working?</h1>
+  <pre class="cmd">systemctl status claude-remote --no-pager -l | head -25
+journalctl -u claude-remote -n 30 --no-pager</pre>
+  <ul>
+    <li><strong>Active (running)</strong> and no errors in the log: the Pi should appear in the Claude apps under Remote Control.</li>
+    <li>To work on the Node Controller code itself, clone the repository into the folder (<code>cd ~/claude-remote &amp;&amp; git clone https://github.com/kd8pgk/ASL-DVS</code>). Claude Code reads the repository's <code>CLAUDE.md</code>, so the repo rules (versions, no comments, the testing policy) apply to its work.</li>
+    <li>You can also use Claude Code directly over SSH: <code>cd ~/claude-remote &amp;&amp; claude</code>.</li>
+  </ul>
+
+  <h2><span class="n">5.1</span>If it does not start</h2>
+  <table>
+    <tr><th>Symptom</th><th>Cause and fix</th></tr>
+    <tr><td>"No Node.js build for armv7l"</td><td>The OS is 32-bit. Install a 64-bit OS.</td></tr>
+    <tr><td><code>sha256sum</code> reports FAILED</td><td>The download changed or was cut off. Delete it and try again; if it still fails, wait for a 44helper release with a new pin.</td></tr>
+    <tr><td>The service stops soon after start</td><td>Usually the sign-in was not done, was done as another user, or the folder was not trusted. Repeat Part 4 as the user named in the unit, in the same folder.</td></tr>
+    <tr><td>"Folder missing" from step 6</td><td>Run step 5 first, with the same user and folder.</td></tr>
+    <tr><td>The log says it cannot reach Claude</td><td>Check the Pi's internet access and clock (the 44helper Boot tab shows clock sync).</td></tr>
+    <tr><td>The install is slow or killed on a Pi Zero 2 W</td><td>Memory is short. Stop other jobs (instmon Quiet System) and run the step again.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Safety</div>
+  <h1 class="ch">What this gives access to</h1>
+  <ul>
+    <li><strong>Who can reach it.</strong> Remote Control makes the Pi reachable from the Claude apps signed in to your account. Anyone with that account can direct Claude on the Pi. Protect the account.</li>
+    <li><strong>What it can do.</strong> Claude Code works with the rights of the login user, in the folder you chose. It is not run as root. If that user can use <code>sudo</code>, Claude can ask to run root commands; read each request before you allow it.</li>
+    <li><strong>Secrets.</strong> Do not keep passwords or keys in the Remote Control folder. Node Controller keys live in <code>/etc/asl_dvs</code>, outside it.</li>
+    <li><strong>Turning it off.</strong> Step 8 (or <code>sudo systemctl disable --now claude-remote</code>) removes the Pi from the apps at once.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Remove</div>
+  <h1 class="ch">Taking it off the Pi</h1>
+  <p>The 44helper purge for this tab runs these, in order, then checks that nothing is left:</p>
+  <pre class="cmd">sudo systemctl disable --now claude-remote
+sudo rm -f /etc/systemd/system/claude-remote.service
+sudo systemctl daemon-reload
+sudo /opt/node-v22.23.4/bin/npm uninstall -g @anthropic-ai/claude-code
+sudo rm -f /usr/local/bin/claude
+sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+sudo rm -rf /opt/node-v22.23.4</pre>
+  <p>The sign-in stays in the user's home folder (<code>~/.claude</code>). Delete that folder by hand if you want it gone too. The Remote Control folder and anything in it are kept.</p>
+</section>
+
+</body>
+</html>
