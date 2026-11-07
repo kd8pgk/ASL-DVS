@@ -35,8 +35,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.12"
-DATE_STR = "2026-11-05"
+VERSION = "0.5.14"
+DATE_STR = "2026-11-07"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -4847,7 +4847,9 @@ ENGINE = RecordingEngine()
 SCHEDULE_PATH = os.path.join(CONFIG_DIR, "schedule.json")
 SCHEDULE_STATE_PATH = os.path.join(CONFIG_DIR, "schedule_state.json")
 SCHEDULE_MAX = 40
-SCHEDULE_GAP_MIN = 2
+SCHEDULE_GAP_MIN = 0
+SCHEDULE_EDGE_SEC = 60
+SCHEDULE_MIN_MIN = 3
 SCHEDULE_FORMATS = ("ulaw", "pcm")
 SCHEDULE_NAME_MAX = 40
 SCHEDULE_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
@@ -4904,6 +4906,8 @@ def schedule_norm_entry(raw, check_target=True):
     end = _hm_minutes(raw.get("end"), "End")
     if start == end:
         raise ValueError("Start and end must differ")
+    if check_target and (end - start) % 1440 < SCHEDULE_MIN_MIN:
+        raise ValueError(f"A slot must be at least {SCHEDULE_MIN_MIN} minutes long")
     if check_target:
         try:
             target = _target_keys(_tune_fav(raw.get("target")))
@@ -4990,7 +4994,7 @@ def schedule_conflicts(entries):
                     if ea["id"] == eb["id"]:
                         out.append(f"{ea['name']} runs into its own next window; shorten it")
                     else:
-                        out.append(f"{ea['name']} and {eb['name']} overlap or are less than {SCHEDULE_GAP_MIN} minutes apart")
+                        out.append(f"{ea['name']} and {eb['name']} overlap")
     gap = timedelta(minutes=SCHEDULE_GAP_MIN)
     sps = [e for e in entries if e.get("enabled") and e.get("kind") == "special"]
     for i in range(len(sps)):
@@ -5211,7 +5215,7 @@ class CurrentLinkActions(RealActions):
         return True, "the link was left as it is", None
 
 
-def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, timeouts=None, window=None):
+def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, timeouts=None, window=None, start_at=None):
     timeouts = timeouts or STEP_TIMEOUT
     steps = []
 
@@ -5229,6 +5233,11 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     if not ok:
         do("disconnect", actions.disconnect, entry)
         return done("connect_failed", f"connect failed: {msg}")
+    if abort.is_set():
+        do("disconnect", actions.disconnect, entry)
+        return done("aborted", "stopped before the recording started")
+    while start_at is not None and now_fn() < start_at and not abort.is_set():
+        sleep_fn(min(1.0, max(0.05, start_at - now_fn())))
     if abort.is_set():
         do("disconnect", actions.disconnect, entry)
         return done("aborted", "stopped before the recording started")
@@ -5468,7 +5477,9 @@ class Scheduler:
         return True, ""
 
     def _start_run(self, entry, window, now, manual=False):
-        end_at = self.clock() + (window[1] - now).total_seconds()
+        edge = 0 if manual else SCHEDULE_EDGE_SEC
+        end_at = self.clock() + (window[1] - now).total_seconds() - edge
+        start_at = self.clock() + max(0.0, (window[0] - now).total_seconds() + edge)
         s_iso = window[0].isoformat(timespec="minutes")
         dry = self._dry()
         with self.lock:
@@ -5483,7 +5494,7 @@ class Scheduler:
             self.state = "connecting"
             self._state_save()
         actions = self.dry() if dry else (CurrentLinkActions() if manual else self.real())
-        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions, abort, manual),
+        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, start_at, actions, abort, manual),
                                        name="sched-run", daemon=True)
         self.thread.start()
 
@@ -5505,9 +5516,9 @@ class Scheduler:
         log_event(f"Recording stopped by hand: {name}", "warn")
         return True, f"Stopping {name}. What was recorded is saved."
 
-    def _run(self, entry, window, s_iso, end_at, actions, abort, manual):
+    def _run(self, entry, window, s_iso, end_at, start_at, actions, abort, manual):
         try:
-            res = run_sequence(entry, actions, end_at, abort, self._set_state, self.clock, self.sleep, window=window)
+            res = run_sequence(entry, actions, end_at, abort, self._set_state, self.clock, self.sleep, window=window, start_at=start_at)
         except Exception as exc:
             res = {"result": "error", "detail": str(exc), "steps": []}
         special = entry.get("kind") == "special"
@@ -5563,8 +5574,8 @@ def schedule_dry_run(body):
         clock["t"] += sec
 
     states = []
-    res = run_sequence(entry, DryActions(), entry["duration_min"] * 60.0, threading.Event(),
-                       lambda s, file=None: states.append(s), lambda: clock["t"], sleep)
+    res = run_sequence(entry, DryActions(), entry["duration_min"] * 60.0 - SCHEDULE_EDGE_SEC, threading.Event(),
+                       lambda s, file=None: states.append(s), lambda: clock["t"], sleep, start_at=float(SCHEDULE_EDGE_SEC))
     return {"ok": True, "result": res["result"], "detail": res["detail"], "steps": res["steps"], "states": states,
             "message": "Dry run finished: nothing was connected or recorded."}
 
@@ -5772,6 +5783,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #conv-term{max-height:260px;overflow:auto;margin:6px 0;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#05080f;color:#c8f7c5;border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-all}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
 .hidden{display:none !important}
+#offline-banner{flex:none;padding:8px 16px;background:#b3261e;color:#fff;font-weight:600;text-align:center;font-size:.9rem;z-index:6}
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
 .why{margin:4px 0 8px}
@@ -5953,6 +5965,13 @@ _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
 let favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
 let nets = [], netMax = 10;
+function setOffline(on) {
+  const b = document.getElementById('offline-banner');
+  if (b) b.classList.toggle('hidden', !on);
+}
+async function beat() {
+  try { const r = await fetch('/api/health', {cache: 'no-store'}); setOffline(!r.ok); } catch (e) { setOffline(true); }
+}
 async function api(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({'X-Requested-With': 'XMLHttpRequest'}, opts.headers || {});
@@ -5961,7 +5980,8 @@ async function api(url, opts) {
     opts.headers['Content-Type'] = 'application/json';
   }
   let r;
-  try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Recorder is not answering.'}; }
+  try { r = await fetch(url, opts); } catch (e) { setOffline(true); return {ok: false, error: 'Node Recorder is not answering.'}; }
+  setOffline(false);
   let d = {};
   try { d = await r.json(); } catch (e) { d = {ok: false, error: 'HTTP ' + r.status}; }
   if (r.status === 401 && url !== '/api/login' && authed) { authed = false; render(); }
@@ -6473,7 +6493,7 @@ function showTab(name) {
   });
   if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); loadSchedule(); }
   if (name === 'record') { loadSchedule(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); loadConv(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 function render() {
@@ -6689,10 +6709,8 @@ async function loadSchedule() {
       tb.appendChild(tr2);
     });
   };
-  rows('sch-rows', false);
-  rows('sl-rows', true);
+  rows('sch-rows', true);
   $('sch-none').classList.toggle('hidden', d.entries.length > 0);
-  $('sl-none').classList.toggle('hidden', d.entries.length > 0);
   sum('sched', d.entries.length + (d.entries.length === 1 ? ' entry' : ' entries'));
   $('sch-results').textContent = (st.results || []).slice(-5).reverse()
     .map((r) => r.name + ' ' + r.window.replace('T', ' ') + ': ' + (RESULT_TXT[r.result] || r.result) + (r.detail ? ' (' + r.detail + ')' : '')).join(' | ');
@@ -7002,12 +7020,12 @@ function schedEdit(e) {
 }
 async function schedToggle(e, on) {
   const d = await post('/api/schedule/set', {entry: schedEntry(e, on)});
-  setMsg('sl-msg', d);
+  setMsg('sch-msg', d);
   loadSchedule();
 }
 async function schedRemove(e) {
   if (!confirm('Remove ' + e.name + ' from the schedule?')) return;
-  setMsg('sl-msg', await post('/api/schedule/remove', {id: e.id}));
+  setMsg('sch-msg', await post('/api/schedule/remove', {id: e.id}));
   if (schedEditId === e.id) schedClear();
   loadSchedule();
 }
@@ -7080,6 +7098,7 @@ function initPage() {
   $('sc-set').addEventListener('click', schedSet);
   $('sc-clear').addEventListener('click', () => schedClear());
   setInterval(pollHostLinks, 30000);
+  setInterval(beat, 5000);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
   whoami();
   pollEvery(pollStatus, 1500);
@@ -7196,6 +7215,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <header><div class="hdr-left"><h1>Node Recorder</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
 <div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
+<div id="offline-banner" class="hidden" role="alert">Server unreachable. Node Recorder is not answering; retrying every 5 seconds.</div>
 <div id="login-screen">
 <div id="login-card">
 <h2>Node Recorder Login</h2>
@@ -7232,15 +7252,17 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span></button>
 <div id="da-msg" class="msg"></div>
 </div>
-<div class="card" id="cd-rsched">
-<h2>Schedule</h2>
+<div class="card fold" id="cd-sched">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-sched">
 <div id="sch-note" class="muted small"></div>
+<div id="sch-err" class="msg err hidden"></div>
 <table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
 <div id="sch-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
-<div id="sch-err" class="msg err hidden"></div>
 <div id="sch-msg" class="msg"></div>
 <div id="sch-trace" class="mono small hidden"></div>
 <div id="sch-results" class="muted small"></div>
+</div>
 </div>
 </section>
 
@@ -7327,15 +7349,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><button id="setup-save" class="btn primary" type="button">Save</button>
 <button id="setup-restart" class="btn danger" type="button">Restart Asterisk</button></div>
 <div id="setup-msg" class="msg"></div>
-</div>
-</div>
-<div class="card fold" id="cd-sched">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-sched">
-<p class="muted small">Add recordings on the Schedule tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
-<table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
-<div id="sl-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
-<div id="sl-msg" class="msg"></div>
 </div>
 </div>
 <div class="card fold" id="cd-dig">
