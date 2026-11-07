@@ -1,6 +1,10 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_103_20261107.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_104_20261107.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.104 (2026-11-07)
+
+On a node with neither ASL nor DVS, the header hides the radio indicator and the Listen button (they belong to the radio path). Nodes with ASL or DVS see no change.
 
 ## 9.3.103 (2026-11-07)
 

@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.103"
+VERSION      = "9.3.104"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -10189,6 +10189,8 @@ function hubVisible(d){
 }
 function applyHubTabs(d){
   const show=hubVisible(d);
+  const tw=document.querySelector('.tg-wrap');
+  if(tw)tw.style.display=(d.has_asl||d.has_dvs)?'':'none';
   HUB_PAGES.forEach(h=>{const t=byId('tab-'+h.toLowerCase());if(t)t.style.display=show[h]?'':'none';});
   if(d.hub)_lastHub=d.hub;
   if(_hubPage&&!show[_hubPage]){_hubPage=null;syncPageDisplay();return;}

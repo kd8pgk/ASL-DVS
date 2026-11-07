@@ -2,6 +2,10 @@
 
 Current file: `sysmon_v6_13_96_20261107.py`. Newest entries first.
 
+## 6.13.96.1 (2026-11-07)
+
+Cosmetic build, same file. Removes two unused page functions (`loadTab_svx`, `loadTab_amp`); the hub panels are redrawn by the status poll, as before.
+
 ## 6.13.96 (2026-11-07)
 
 - **SVX and AMP tabs** (expanded branch, not on main). Two read-only tabs, placed after Zello and shown only when the product is installed: **SVX** (SvxLink, `svxlink`, `svxlink-usrp` and `remotetrx` units with their state, the config in use, its `[GLOBAL]` LOGICS, LINKS and CALLSIGN, and the last lines of `/var/log/svxlink`) and **AMP** (Ampersand, `amp-server` and `amp-hub` units, the hub settings from `/usr/etc/amp-hub.env` (node, IAX port, auth mode, allowlist, voter port only; passwords are never read out), and the last lines of the amp-hub journal).
