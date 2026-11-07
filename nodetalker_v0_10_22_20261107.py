@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.21"
+VERSION = "0.10.22"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3435,6 +3435,7 @@ def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
                "jitter_ms": tune_value("jitter_ms"), "usrp_forward": True})
+    st["ptt_lock"] = ptt_lock_state()
     if full:
         st["recording"] = recorder_busy()
         st["pi"] = pi_snapshot()
@@ -3524,6 +3525,9 @@ WEB_PAGES = (("allmon3", "/allmon3/"), ("dvswitch", "/dvswitch/"))
 LINK_TTL_SEC = 30.0
 POWER_CMDS = {"reboot": (["reboot"], "Rebooting…"), "shutdown": (["shutdown", "-h", "now"], "Shutting down…")}
 TX_BUSY_GRACE_SEC = 1.0
+PTT_LOCK = {"on": False, "since": 0.0}
+PTT_LOCK_LOCK = threading.Lock()
+TALK_SOCKS = set()
 _TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
 TX_QUEUE_MAX = 50
 TX_DEADMAN_SEC = 1.0
@@ -6093,6 +6097,8 @@ class Talker:
                     "last_gaps": self.last_gaps}
 
     def key(self, owner, who, phone=True):
+        if PTT_LOCK["on"]:
+            return False, "locked"
         st = tx_state()
         if not st["ready"]:
             return False, "not-ready"
@@ -6144,6 +6150,12 @@ class Talker:
             cap = PHONE_QUEUE_MAX if self.phone_session else TX_QUEUE_MAX
             while len(self.q) > cap:
                 self.q.popleft()
+
+    def stop_for_lock(self):
+        with self.lock:
+            busy = self.keyed
+        if busy:
+            self._unkey("locked")
 
     def release(self, owner):
         with self.lock:
@@ -6243,6 +6255,37 @@ class Talker:
 
 TALKER = Talker()
 PHONE = PhonePatch()
+
+
+def ptt_lock_state():
+    with PTT_LOCK_LOCK:
+        return {"locked": PTT_LOCK["on"], "since": PTT_LOCK["since"]}
+
+
+def _talk_send(ws, obj):
+    try:
+        ws.send_json(obj)
+    except (OSError, ValueError):
+        pass
+
+
+def ptt_lock_set(body):
+    if not isinstance(body, dict) or not isinstance(body.get("locked"), bool):
+        raise ValueError("locked must be true or false")
+    on = body["locked"]
+    with PTT_LOCK_LOCK:
+        changed = PTT_LOCK["on"] != on
+        PTT_LOCK.update(on=on, since=time.time() if on else 0.0)
+        socks = list(TALK_SOCKS)
+    if on:
+        TALKER.stop_for_lock()
+    for ws in socks:
+        _talk_send(ws, {"ev": "lock", "locked": on})
+    if changed:
+        log_event("PPT locked: nobody can transmit until it is unlocked" if on else "PPT unlocked: transmit is allowed again",
+                  "warn" if on else "ok")
+    return {"ok": True, "locked": on,
+            "message": "PPT is locked: nobody can transmit until it is unlocked." if on else "PPT is unlocked."}
 
 
 TONE_RATE = 8000
@@ -7305,6 +7348,7 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 #ptt-mark:active{filter:brightness(1.3)}
 #ptt{width:100%;height:var(--lt-h);border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
+#ptt-lock.on{border-color:var(--red);color:var(--red)}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
 #ptt.busy{border-color:var(--amber)}
@@ -7991,6 +8035,7 @@ async function pollStatus() {
   if (!playing && !talking) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (chk && chk.running) chkPoll(d);
   if (!authed) return;
+  if (d.ptt_lock && !!d.ptt_lock.locked !== pttLocked) applyPttLock(d.ptt_lock.locked);
   const tx = d.tx || {};
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
   $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
@@ -10214,19 +10259,36 @@ function pttLabel() {
   const tap = ptt.mode === 'tap';
   const ph = phoneOn ? ' · PHONE' : '';
   $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING') + ph
-    : pttState === 'keying' ? 'Keying...' : (busyText || (gapLeft() > 0 ? 'Wait...' : (tap ? 'Tap to talk' : 'Hold to talk') + ph));
+    : pttState === 'keying' ? 'Keying...' : pttLocked ? 'PPT locked' : (busyText || (gapLeft() > 0 ? 'Wait...' : (tap ? 'Tap to talk' : 'Hold to talk') + ph));
   $('ptt').setAttribute('aria-label', tap ? 'Push to talk: tap to transmit, tap again to stop' : 'Push to talk: hold to transmit');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
+
+let pttLocked = false;
 
 function pttUi(state, text, cls) {
   const b = $('ptt');
   pttState = state;
   b.classList.toggle('talking', state === 'talking' || state === 'keying');
   b.classList.toggle('ready', state === 'ready');
-  b.disabled = state === 'off';
+  b.disabled = state === 'off' || pttLocked;
   pttLabel();
   if (text !== undefined) note('ptt-msg', cls, text);
+}
+
+function applyPttLock(locked) {
+  pttLocked = !!locked;
+  const lb = $('ptt-lock');
+  lb.textContent = pttLocked ? 'Unlock PPT' : 'Lock PPT';
+  lb.setAttribute('aria-pressed', pttLocked ? 'true' : 'false');
+  lb.classList.toggle('on', pttLocked);
+  pttUi(wsReady ? 'ready' : 'off', pttLocked ? 'PPT is locked: nobody can transmit until it is unlocked.' : '', pttLocked ? 'warn' : '');
+}
+
+async function setPttLock(locked) {
+  const d = await post('/api/ptt/lock', {locked: locked});
+  if (d && d.ok) applyPttLock(d.locked);
+  else note('ptt-msg', 'err', (d && (d.error || d.message)) || 'Could not change the PPT lock.');
 }
 
 function appTalk() {
@@ -10241,19 +10303,23 @@ function talkMsg(m) {
     preKey = [];
     pttUi('talking', '');
     if (navigator.vibrate) navigator.vibrate(30);
+  } else if (m.ev === 'lock') {
+    applyPttLock(m.locked);
   } else if (m.ev === 'phone') {
     note('ptt-msg', m.ok ? '' : 'warn', m.text || '');
   } else if (m.ev === 'denied') {
     const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
       'in-use': 'Someone else is transmitting from Node Talker.',
       'not-ready': 'Node 1921 is not set up yet (Setup tab).',
+      locked: 'PPT is locked: nobody can transmit until it is unlocked.',
       'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
     endTalk(); pttUi('ready', why, 'warn');
   } else if (m.ev === 'unkeyed') {
     keyed = false; endTalk();
     if (guardStop) { pttUi('ready', guardStop, 'warn'); guardStop = ''; return; }
     const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
-      deadman: 'Audio stopped reaching the node, so it unkeyed.'}[m.why];
+      deadman: 'Audio stopped reaching the node, so it unkeyed.',
+      locked: 'PPT was locked, so the transmission stopped.'}[m.why];
     pttUi('ready', why || '', why ? 'warn' : '');
     if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
   }
@@ -10728,6 +10794,7 @@ function endTalk() {
 async function pttDown(ev) {
   if (ev) ev.preventDefault();
   if (talking || testing) return;
+  if (pttLocked) { note('ptt-msg', 'warn', 'PPT is locked: nobody can transmit until it is unlocked.'); return; }
   const wait = gapLeft();
   if (wait > 0) {
     note('ptt-msg', 'warn', 'Waiting after receive: talk in ' + Math.ceil(wait / 1000) + ' s.');
@@ -11876,6 +11943,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hsSummary();
   hsDevices().then((l) => { devCount = l.length; });
   pttUi('off', '');
+  $('ptt-lock').addEventListener('click', () => setPttLock(!pttLocked));
   whoami().then(() => { if (authed) loadFavs(); });
   availUi();
   setInterval(availUi, 2000);
@@ -12082,6 +12150,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="ptt-card">
 <div class="ptt-row">
 <button id="ptt" type="button" disabled aria-label="Push to talk: hold to transmit"><span id="ptt-label">Hold to talk</span><span id="ptt-time"></span></button>
+<button id="ptt-lock" type="button" aria-pressed="false">Lock PPT</button>
 <button id="ptt-mark" type="button" class="hidden" aria-label="Mark the key-up that just ended as a kerchunk">Mark kerchunk</button>
 </div>
 <div class="ptt-line"><span id="ptt-msg" class="msg"></span><span id="ptt-info" class="muted">-</span></div>
@@ -12584,6 +12653,7 @@ _POST_ACTIONS = {
     "/api/rxhealth/client": (rxh_client, (ValueError,)),
     "/api/listen/event": (listen_event, (ValueError,)),
     "/api/ptt/log": (ptt_log, (ValueError,)),
+    "/api/ptt/lock": (ptt_lock_set, (ValueError,)),
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
@@ -12851,6 +12921,10 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(60)
         ws = WebSocket(self)
         who = self._ip()
+        with PTT_LOCK_LOCK:
+            TALK_SOCKS.add(ws)
+            locked_now = PTT_LOCK["on"]
+        _talk_send(ws, {"ev": "lock", "locked": locked_now})
         stop = threading.Event()
 
         def pinger():
@@ -12881,6 +12955,8 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             stop.set()
+            with PTT_LOCK_LOCK:
+                TALK_SOCKS.discard(ws)
             TALKER.drop(ws)
             ws.send(8, struct.pack(">H", ws.close_code) if ws.close_code else b"")
             ws.closed = True

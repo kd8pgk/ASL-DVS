@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.20"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1330,6 +1330,196 @@ def _detect_installed_products(force: bool = False) -> list[dict]:
         _INSTALLED_CACHE["data"] = results
     return results
 
+_CC_BIN = "/usr/local/bin/claude"
+_CC_UNIT = "claude-remote.service"
+_CC_NETS = tuple(ipaddress.ip_network(n) for n in ("160.79.104.0/23", "2607:6bc0::/48"))
+_CC_PROBE_HOST = "api.anthropic.com"
+_CC_TTL = 30.0
+_CC_CACHE: dict = {"at": 0.0, "data": None, "busy": False, "ver_key": None, "ver": ""}
+_CC_LOCK = threading.Lock()
+
+def _cc_version() -> str:
+    try:
+        real = os.path.realpath(_CC_BIN)
+        key = (real, os.stat(real).st_mtime_ns)
+    except OSError:
+        return ""
+    if key == _CC_CACHE["ver_key"]:
+        return _CC_CACHE["ver"]
+    try:
+        r = subprocess.run([_CC_BIN, "--version"], capture_output=True, text=True, timeout=15)
+        line = (r.stdout or "").strip().splitlines()[0] if r.returncode == 0 and (r.stdout or "").strip() else ""
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        line = ""
+    ver = line.split()[0] if line else ""
+    _CC_CACHE.update(ver_key=key, ver=ver)
+    return ver
+
+def _cc_unit_field(key: str) -> str:
+    try:
+        with open("/etc/systemd/system/" + _CC_UNIT, "r", encoding="utf-8") as f:
+            for ln in f:
+                if ln.strip().startswith(key + "="):
+                    return ln.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+def _cc_unit_user() -> str:
+    return _cc_unit_field("User")
+
+def _cc_signin(home: str) -> tuple[bool, str]:
+    if not home:
+        return False, ""
+    signed_in, account = False, ""
+    try:
+        signed_in = os.path.getsize(os.path.join(home, ".claude", ".credentials.json")) > 2
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(home, ".claude.json"), "r", encoding="utf-8") as f:
+            acct = json.load(f).get("oauthAccount") or {}
+        account = acct.get("emailAddress") or acct.get("displayName") or ""
+        signed_in = signed_in or bool(acct)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return signed_in, account
+
+def _cr_done_steps() -> dict[str, str]:
+    done: dict[str, str] = {}
+    node = os.path.join(_CR_NODE_DIR, "bin", "node")
+    if os.access(node, os.X_OK):
+        done["cr_node"] = f"Node.js is installed in {_CR_NODE_DIR}."
+    if os.path.exists(_CC_BIN):
+        ver = _cc_version()
+        done["cr_claude"] = f"Claude Code {ver} is installed." if ver else "Claude Code is installed."
+    user = _cc_unit_user() or _CR_DEFAULT_USER
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except KeyError:
+        home = ""
+    signed_in, account = _cc_signin(home)
+    if signed_in:
+        done["cr_signin"] = f"Signed in as {account or user}."
+    folder = _cc_unit_field("WorkingDirectory")
+    if not folder and home:
+        folder = os.path.join(home, _CR_FOLDER_DEFAULT[2:]) if _CR_FOLDER_DEFAULT.startswith("~/") else _CR_FOLDER_DEFAULT
+    if folder and os.path.isdir(folder):
+        done["cr_folder"] = f"Folder ready: {folder}"
+    unit = _installed_units_show([_CC_UNIT]).get(_CC_UNIT, {})
+    if unit.get("active") == "active":
+        done["cr_service"] = "The service is running" + (" and starts at boot." if unit.get("file") == "enabled" else ".")
+    return done
+
+def _cc_procs() -> list[dict]:
+    out: list[dict] = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm", "r") as f:
+                if f.read().strip() != "claude":
+                    continue
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            uid = os.stat(f"/proc/{pid}").st_uid
+        except OSError:
+            continue
+        try:
+            user = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            user = str(uid)
+        mode = "remote-control" if "remote-control" in argv[1:] else "session"
+        out.append({"pid": int(pid), "user": user, "mode": mode})
+    return sorted(out, key=lambda p: p["pid"])
+
+def _cc_connected_pids() -> set[int] | None:
+    try:
+        r = subprocess.run(["ss", "-tnpH", "state", "established", "( dport = :443 )"],
+                           capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    pids: set[int] = set()
+    for ln in (r.stdout or "").splitlines():
+        parts = ln.split()
+        if len(parts) < 5:
+            continue
+        host = parts[3].rsplit(":", 1)[0].strip("[]").split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if any(ip in n for n in _CC_NETS):
+            pids.update(int(m) for m in re.findall(r"pid=(\d+)", ln))
+    return pids
+
+def _cc_probe() -> tuple[bool, str]:
+    try:
+        with socket.create_connection((_CC_PROBE_HOST, 443), timeout=5):
+            return True, ""
+    except OSError as exc:
+        return False, str(exc) or exc.__class__.__name__
+
+def _cc_compute() -> dict:
+    installed = os.path.exists(_CC_BIN)
+    procs = _cc_procs()
+    unit = _installed_units_show([_CC_UNIT]).get(_CC_UNIT, {})
+    present = unit.get("load") not in (None, "not-found", "unknown")
+    user = (procs[0]["user"] if procs else "") or _cc_unit_user() or _CR_DEFAULT_USER
+    home = ""
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except KeyError:
+        pass
+    signed_in, account = _cc_signin(home)
+    conn = _cc_connected_pids() if procs else set()
+    for p in procs:
+        p["connected"] = conn is not None and p["pid"] in conn
+    connected = any(p["connected"] for p in procs)
+    reach, reach_err = (True, "") if connected else _cc_probe()
+    return {
+        "installed": installed,
+        "version": _cc_version() if installed else "",
+        "pinned": _CR_CLAUDE_PKG.rsplit("@", 1)[-1],
+        "user": user,
+        "signed_in": signed_in,
+        "account": account,
+        "service": {"present": present, "active": unit.get("active", ""), "enabled": unit.get("file", "")},
+        "procs": procs,
+        "connected": connected,
+        "conn_checked": conn is not None,
+        "reach": reach,
+        "reach_err": reach_err,
+    }
+
+def _cc_refresh() -> None:
+    try:
+        data = _cc_compute()
+    except Exception as exc:
+        log(f"overview: Claude Code check failed: {exc}")
+        data = None
+    with _CC_LOCK:
+        if data is not None:
+            _CC_CACHE["data"] = data
+        _CC_CACHE.update(at=time.time(), busy=False)
+
+def _claude_code_status(force: bool = False) -> dict | None:
+    with _CC_LOCK:
+        if force:
+            _CC_CACHE["at"] = 0.0
+        stale = time.time() - _CC_CACHE["at"] >= _CC_TTL
+        start = stale and not _CC_CACHE["busy"]
+        if start:
+            _CC_CACHE["busy"] = True
+        data = _CC_CACHE["data"]
+    if start:
+        threading.Thread(target=_cc_refresh, name="cc-status", daemon=True).start()
+    return data
+
 def build_overview_data(cfg: configparser.ConfigParser) -> dict:
     my_port = cfg.getint("server", "port", fallback=9997)
 
@@ -1345,6 +1535,7 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
 
     return {
         "installed": installed,
+        "claude_code": _claude_code_status(),
         "wg0_present": wg0_present,
         "wg0_conf": wg0_conf,
         "wg0_conf_perms_ok": wg0_perms_ok,
@@ -4298,17 +4489,24 @@ def _amp_hub_config_cmd(node: str, password: str, port: str, authmode: str, allo
             "grep -E '^#?AMP_(NODE0_NUMBER|NODE0_GREETING|IAX_PORT|IAX_AUTHMODE|IAX_ALLOWLIST)=' $f && "
             "echo 'Saved. Start or restart the hub (step 6) to use it.'")
 
+_AMP_OS_CHECK = ("grep -q '^VERSION_CODENAME=trixie$' /etc/os-release || { echo \"STOP: Ampersand needs Debian 13 (Trixie); "
+    "this node is $(. /etc/os-release; echo ${PRETTY_NAME:-unknown}). Nothing was changed.\"; exit 1; }; "
+    "case \"$(uname -m)\" in aarch64|x86_64) ;; *) echo \"STOP: no Ampersand package for $(uname -m) "
+    "(aarch64 and x86_64 only). Nothing was changed.\"; exit 1;; esac; "
+    "echo \"OK: Debian 13 (Trixie), $(uname -m)\"; ")
+
 def _amp_server_install_steps() -> list[dict]:
     return [
-        {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+        {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check the OS, processor and conflicts (read-only)",
+         "cmd": _AMP_OS_CHECK + "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
                 "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; "
                 "systemctl is-enabled asterisk 2>&1; echo; "
                 "echo '== Listeners on IAX 4569/udp and web UI 8080/tcp =='; "
                 "sudo ss -lunp 2>/dev/null | grep -E ':4569' || echo 'nothing on 4569/udp'; "
                 "sudo ss -ltnp 2>/dev/null | grep -E ':8080' || echo 'nothing on 8080/tcp'",
          "timeout": 30,
-         "note": "Read-only — changes nothing. Ampersand REPLACES Asterisk; it does not run alongside "
+         "note": "Read-only — changes nothing. It stops here, before any package is installed, unless the node is "
+                 "Debian 13 (Trixie) on aarch64 or x86_64. Ampersand REPLACES Asterisk; it does not run alongside "
                  "ASL3/app_rpt on the same node. If Asterisk is active here, or something already listens "
                  "on 4569/udp, do NOT also run amp-server as the same node on the same IAX port. Either use "
                  "a dedicated node for Ampersand, or give it a different IAX port and node number. 8080/tcp "
@@ -4400,13 +4598,14 @@ def _amp_server_purge_steps() -> list[dict]:
 
 def _amp_hub_install_steps() -> list[dict]:
     return [
-        {"id": "amp_hub_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+        {"id": "amp_hub_check_conflicts", "num": 1, "title": "Check the OS, processor and conflicts (read-only)",
+         "cmd": _AMP_OS_CHECK + "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
                 "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; echo; "
                 "echo '== Listeners on IAX 4569/udp and VOTER 1667/udp =='; "
                 "sudo ss -lunp 2>/dev/null | grep -E ':(4569|1667)\\b' || echo 'nothing on 4569 or 1667/udp'",
          "timeout": 30,
-         "note": "Read-only — changes nothing. A hub is radio-less, but it still binds an IAX port (4569 by "
+         "note": "Read-only — changes nothing. It stops here, before any package is installed, unless the node is "
+                 "Debian 13 (Trixie) on aarch64 or x86_64. A hub is radio-less, but it still binds an IAX port (4569 by "
                  "default) and the VOTER port 1667, and registers a node number. If this box already runs "
                  "Asterisk/ASL3 on 4569/udp, give the hub another IAX port in step 4 and its own node number."},
         {"id": "amp_hub_deps", "num": 2, "title": "Install required packages",
@@ -13799,6 +13998,14 @@ _CSS_COMPONENTS = """
 .term-screen { flex: 1; padding: .3rem; min-height: 0; }
 .ov-inst-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; padding: .35rem 0; border-bottom: 1px solid var(--border2); }
 .ov-inst-row:last-child { border-bottom: none; }
+/* v0.1.20: Claude Remote tab, done steps collapse */
+.cr-head-right { display: inline-flex; align-items: center; gap: .5rem; }
+.cr-toggle { padding: .1rem .6rem; font-size: var(--fs-sm); }
+.cr-done-why { font-family: var(--sans); font-size: var(--fs-sm); color: var(--muted); margin-top: .3rem; }
+.step-card.cr-done .step-title { color: var(--muted); }
+.cr-next { font-family: var(--sans); font-size: var(--fs-md); color: var(--amber); border: 1px solid var(--amber);
+  background: rgba(255,208,64,.10); border-radius: 6px; padding: .55rem .9rem; margin: .6rem 0; }
+.cr-next.ok { color: var(--green); border-color: var(--green); background: rgba(0,255,176,.10); }
 .ov-inst-name { min-width: 15rem; }
 .ov-inst-state { font-size:var(--fs-base); }
 .ov-inst-state.ok { color: var(--green); } .ov-inst-state.warn { color: var(--amber); }
@@ -19574,10 +19781,6 @@ _JS_OVERVIEW = """
 // ── Overview tab (Stage 2) — fetch/populate logic ──
 var _ovTimer = null;
 
-function _ovLevelLabel(level) {
-  return {ok: 'All clear', info: 'Info', warn: 'Attention', danger: 'Exposure risk'}[level] || level;
-}
-
 function _ovDot(level) {
   return '<span class="ov-dot ' + level + '"></span>';
 }
@@ -19598,6 +19801,7 @@ function renderOverview(data) {
 
   // Installed software card (v0.0.138)
   renderOvInstalled(data.installed || []);
+  renderOvClaude(data.claude_code);
 
   // wg0 / tunnel card
   var wg0html = _ovDot(data.wg0_present ? 'ok' : 'info') +
@@ -19708,6 +19912,54 @@ function renderOvInstalled(list) {
   el.querySelectorAll('[data-ov-tab]').forEach(function(b) {
     b.addEventListener('click', function() { clickTab(b.getAttribute('data-ov-tab')); });
   });
+}
+
+function renderOvClaude(c) {
+  var el = document.getElementById('ov-claude');
+  if (!el) return;
+  if (!c) { el.innerHTML = _ovDot('info') + 'Checking…'; return; }
+  var openBtn = document.getElementById('tab-claude-remote')
+    ? '<br><button type="button" class="btn-recheck ov-inst-open" style="margin:.3rem 0 0" onclick="clickTab(\\'claude-remote\\')">Open Claude Remote tab</button>' : '';
+  var mut = function(s) { return '<br><span style="color:var(--muted);font-size:var(--fs-sm)">' + s + '</span>'; };
+  if (!c.installed) {
+    el.innerHTML = _ovDot('info') + 'Claude Code isn\\'t installed.' +
+      mut('Install it with steps 2 and 3 on the Claude Remote tab.') + openBtn;
+    return;
+  }
+  var h = _ovDot(c.version ? 'ok' : 'warn') + (c.version ? 'Installed: version ' + _ovEsc(c.version)
+            : 'Installed, but <code>claude --version</code> didn\\'t answer');
+  if (c.version && c.pinned && c.version !== c.pinned) h += mut('44helper installs ' + _ovEsc(c.pinned));
+  h += '<br>' + (c.signed_in
+    ? _ovDot('ok') + 'Signed in' + (c.account ? ' as ' + _ovEsc(c.account) : '') + ' (user ' + _ovEsc(c.user) + ')'
+    : _ovDot('warn') + 'Not signed in as ' + _ovEsc(c.user) + mut('Run step 4 (Sign in) on the Claude Remote tab.'));
+  var s = c.service || {};
+  if (s.present) {
+    var lvl = s.active === 'active' ? 'ok' : (s.active === 'failed' ? 'danger' : (s.enabled === 'enabled' ? 'warn' : 'info'));
+    h += '<br>' + _ovDot(lvl) + 'Remote Control service: ' + _ovEsc(s.active || 'unknown') +
+         (s.enabled ? ' (' + (s.enabled === 'enabled' ? 'starts at boot' : _ovEsc(s.enabled)) + ')' : '');
+  } else {
+    h += '<br>' + _ovDot('info') + 'Remote Control service not set up' + mut('Step 6 on the Claude Remote tab runs it at boot.');
+  }
+  var procs = c.procs || [];
+  if (procs.length) {
+    var desc = procs.map(function(p) {
+      return (p.mode === 'remote-control' ? 'remote-control' : 'session') + ' (pid ' + p.pid + ', ' + _ovEsc(p.user) + ')';
+    }).join(', ');
+    if (c.connected) {
+      h += '<br>' + _ovDot('ok') + 'Connected to Anthropic' + mut('Running: ' + desc);
+    } else if (!c.conn_checked) {
+      h += '<br>' + _ovDot('info') + 'Running, connection not checked (ss unavailable)' + mut('Running: ' + desc);
+    } else {
+      h += '<br>' + _ovDot('warn') + 'Running, but no connection to Anthropic' + mut('Running: ' + desc +
+           (c.reach ? '. Anthropic is reachable from this node; check the service log (step 7).' :
+            '. Can\\'t reach api.anthropic.com: ' + _ovEsc(c.reach_err)));
+    }
+  } else {
+    h += '<br>' + (c.reach
+      ? _ovDot('info') + 'Not running' + mut('api.anthropic.com is reachable from this node.')
+      : _ovDot('warn') + 'Not running, and api.anthropic.com can\\'t be reached' + mut(_ovEsc(c.reach_err)));
+  }
+  el.innerHTML = h + openBtn;
 }
 
 function refreshOverview(force) {
@@ -23696,10 +23948,20 @@ function crRenderStepList(mode, distro) {
   steps.forEach(function(step) {
     var stateKey = mode + '_' + distro + '_' + step.id;
     var st = (window._crState || {})[stateKey] || {};
-    html += '<div class="step-card">';
+    // v0.1.20: an install step the system already shows as done starts collapsed, with Show / Hide.
+    var done = mode === 'install' ? ((window._crScripts || {}).done || {})[step.id] : null;
+    var open = !done || st.status === 'attempted' || !!(window._crOpen || {})[step.id];
+    html += '<div class="step-card' + (done ? ' cr-done' : '') + '">';
     html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
+    if (done) {
+      html += '<span class="cr-head-right"><span class="step-pill done">Done</span>' +
+        '<button type="button" class="btn-copy cr-toggle" aria-expanded="' + open + '" onclick="crToggleStep(\\'' + step.id + '\\')">' +
+        (open ? 'Hide' : 'Show') + '</button></span></div>';
+      html += '<div class="cr-done-why">' + crEscapeAttr(done) + '</div>';
+      if (!open) { html += '</div>'; return; }
+    }
     if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
+      html += done ? '' : '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="cr-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
         'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
@@ -23709,7 +23971,7 @@ function crRenderStepList(mode, distro) {
       return;
     }
     if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
+      html += done ? '' : '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
       html += '<input type="text" class="asl3-cmd-input" readonly value="' + crEscapeAttr(step.cmd) + '">';
       html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
@@ -23718,7 +23980,7 @@ function crRenderStepList(mode, distro) {
     }
     var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
     var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="cr-pill-' + stateKey + '">' + pillLabel + '</span></div>';
+    if (!done) html += '<span class="step-pill ' + pillClass + '" id="cr-pill-' + stateKey + '">' + pillLabel + '</span></div>';
     if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
     if (step.fields) {
       step.fields.forEach(function(f) {
@@ -23741,9 +24003,51 @@ function crRender() {
   var purgeBtn = document.getElementById('cr-purge-btn');
   purgeBtn.style.display = 'inline-block';
   stepsEl.style.display = 'block';
-  stepsEl.innerHTML = crRenderStepList('install', distro);
+  stepsEl.innerHTML = crNextHtml(distro) + crRenderStepList('install', distro);
   crReconnectRunningJobs(distro);
 }
+
+// v0.1.20: says which install step comes next. After Claude Code is installed that is the sign-in.
+var _CR_SETUP_ORDER = ['cr_node', 'cr_claude', 'cr_signin', 'cr_folder', 'cr_service'];
+
+function crNextHtml(distro) {
+  var done = (window._crScripts || {}).done || {};
+  var anyDone = _CR_SETUP_ORDER.some(function(id) { return done[id]; });
+  var hint = anyDone ? ' Completed steps are hidden; Show opens one.' : '';
+  for (var i = 0; i < _CR_SETUP_ORDER.length; i++) {
+    var id = _CR_SETUP_ORDER[i];
+    if (done[id]) continue;
+    var step = crFindStep('install', distro, id);
+    if (!step) continue;
+    var why = '';
+    if (id === 'cr_signin' && done.cr_claude) why = ' Claude Code is installed; sign in to finish setting it up.';
+    else if (id === 'cr_folder' && done.cr_signin) why = ' You are signed in.';
+    return '<div class="cr-next"><b>Next: step ' + step.num + ', ' + crEscapeAttr(step.title) + '.</b>' + why + hint + '</div>';
+  }
+  return '<div class="cr-next ok"><b>Claude Remote is set up and running.</b>' + hint + '</div>';
+}
+
+function crToggleStep(id) {
+  window._crOpen = window._crOpen || {};
+  window._crOpen[id] = !window._crOpen[id];
+  crRender();
+}
+
+function crBusy() {
+  var s = window._crState || {};
+  return Object.keys(s).some(function(k) { return s[k] && s[k].status === 'attempted'; });
+}
+
+// Re-reads which steps are done; redraws only when that changed and nothing is running.
+function crRefreshDone() {
+  return fetch('/api/cr/script').then(function(r) { return r.json(); }).then(function(data) {
+    var before = JSON.stringify((window._crScripts || {}).done || {});
+    window._crScripts = data;
+    if (JSON.stringify(data.done || {}) !== before && !crBusy()) crRender();
+  }).catch(function() {});
+}
+
+var _crDoneTimer = null;
 
 function refreshCr() {
   fetch('/api/cr/script').then(function(r) { return r.json(); }).then(function(data) {
@@ -23751,6 +24055,16 @@ function refreshCr() {
     window._crState = window._crState || {};
     crRender();
   });
+  // Sign-in happens in a terminal, so watch for it (and the other steps) while the tab is open.
+  if (!_crDoneTimer) {
+    _crDoneTimer = setInterval(function() {
+      var panel = document.getElementById('panel-claude-remote');
+      var done = (window._crScripts || {}).done || {};
+      if (!panel || panel.classList.contains('hidden') || document.hidden) return;
+      if (_CR_SETUP_ORDER.every(function(id) { return done[id]; })) return;
+      crRefreshDone();
+    }, 10000);
+  }
 }
 
 function crFindStep(mode, distro, stepId) {
@@ -23770,6 +24084,12 @@ function crFinishStep(stateKey, result, pill, btn) {
   if (btn) btn.disabled = false;
   if (result && result.success) { if (typeof jobHelpHide === 'function') jobHelpHide('cr', stateKey); }
   else if (typeof jobHelpShow === 'function') jobHelpShow('cr', stateKey, result);
+  if (result && result.success && stateKey.indexOf('install_') === 0) {
+    // Keep the step just run open so its output stays visible; the next step opens as it isn't done.
+    window._crOpen = window._crOpen || {};
+    window._crOpen[stateKey.replace(/^install_[^_]+_/, '')] = true;
+    crRefreshDone();
+  }
   return result;
 }
 
@@ -25192,9 +25512,6 @@ _JS_QUIET = """
 // triple-quoted JS blocks turn them into real characters at load time).
 var _qmTimer = null;
 var _qmLastRestoreFailed = false;
-function qmEsc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
 function qmNL() { return String.fromCharCode(10); }
 function qmRenderStatus(s) {
   var banner = document.getElementById('qm-banner');
@@ -26936,6 +27253,10 @@ def _render_overview_panel() -> str:
       <div class="ov-card-body" id="ov-installed">…</div>
     </div>
     <div class="ov-card">
+      <span class="ov-card-title">Claude Code</span>
+      <div class="ov-card-body" id="ov-claude">…</div>
+    </div>
+    <div class="ov-card">
       <span class="ov-card-title">Tunnel / wg0</span>
       <div class="ov-card-body" id="ov-wg0">…</div>
     </div>
@@ -27800,6 +28121,7 @@ def _route_log(query: dict) -> tuple[int, str, bytes]:
 def _route_overview(query: dict) -> tuple[int, str, bytes]:
     if (query.get("force") or [""])[0] == "1":
         _detect_installed_products(force=True)
+        _claude_code_status(force=True)
         _OV_HEALTH_CACHE["at"] = 0.0
     return 200, "application/json", json.dumps(build_overview_data(_cfg)).encode("utf-8")
 
@@ -27916,7 +28238,7 @@ def _dispatch_cr_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _cr_lookup_step, "cr", valid_distros=("claude",))
 
 def _route_cr_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_CR_SCRIPTS).encode("utf-8")
+    return 200, "application/json", json.dumps(dict(_CR_SCRIPTS, done=_cr_done_steps())).encode("utf-8")
 
 def _route_amp_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_AMP_SCRIPTS).encode("utf-8")

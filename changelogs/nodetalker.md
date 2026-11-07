@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.22 (2026-11-07)
+
+- **Lock PPT.** A new Lock PPT control stops every transmit, from the page and from the phone, until it is unlocked. Locking drops any transmission in progress, and the phone shows "PPT locked" and disables its talk button. The state is logged when it changes and sent to connected phones.
+- Needs Node Talker Mobile for the phone's lock state; an older app ignores the lock message.
+- Python and page behaviour changed, so this is a release.
+
 ## 0.10.21 (2026-11-06)
 
 - **The phone's last report to the node is timed.** Each report the phone sends now carries how long its previous report took to reach the node (`probe_ms`), counted from the start of the send to the node's answer, so it includes opening a new connection when one is needed. The receive-health report's phone line shows "last report to the node took N ms" when that is 1 second or more. Reports go out about every 2.5 minutes when nothing is wrong, so this is a sample, not a continuous probe.
@@ -44,7 +50,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_21_20261106.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_22_20261107.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
