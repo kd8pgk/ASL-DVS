@@ -56,13 +56,13 @@
    "version": "9.3.102-pi02w"
   },
   "noderecorder": {
-   "blob": "07891b4ce8db131b943f79b03078929efc58e186",
-   "commit": "cc0689083ddb388231210637ec8e717daada4c5e",
-   "file": "noderecorder_v0_5_0_20261104.py",
-   "landed": "2026-11-04T08:56:12Z",
-   "promoted": "2026-11-07T08:56:12Z",
+   "blob": "7c5c439d0d7e77d4d19edb5e26b711bb45205c17",
+   "commit": "c008309ca772b4d311cd5419f7620269ffc1d658",
+   "file": "noderecorder_v0_5_3_20261104.py",
+   "landed": "2026-11-04T21:55:20Z",
+   "promoted": "2026-11-07T21:55:20Z",
    "reason": "count",
-   "version": "0.5.0"
+   "version": "0.5.3"
   },
   "nodetalker": {
    "blob": "036ed66974e7aebbbeef7d1032b3fb36a6c68778",
@@ -119,13 +119,13 @@
    "version": "3.1"
   },
   "wifimon": {
-   "blob": "720790f3004e1de92ddbe24d2bce1c1b481e4252",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "wifimon_v5_42_0_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-11-02T20:16:50Z",
+   "blob": "3072fdaa5d0e2e14342bcf14d8280ef1be83e243",
+   "commit": "c3c654f8d1476b8c485f3712671d78124e96796a",
+   "file": "wifimon_v5_43_0_20261029.py",
+   "landed": "2026-10-29T21:34:12Z",
+   "promoted": "2026-11-07T23:00:43Z",
    "reason": "count",
-   "version": "5.42.0"
+   "version": "5.43.0"
   }
  }
 }
