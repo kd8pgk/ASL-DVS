@@ -4,6 +4,7 @@ Current file: `44helper_v0_1_19_20261107.py`. Newest entries first.
 
 ## 0.1.19 (2026-11-07)
 
+- **Unused functions removed.** `_ovLevelLabel` and `qmEsc` were never called and are gone.
 - **Ampersand needs Trixie, checked first.** The Ampersand server and hub installs check the OS and processor in step 1, before any package is installed. Anything other than Debian 13 (Trixie) on aarch64 or x86_64 stops there with a message and changes nothing. Before this, step 2 installed packages on a Bookworm node before the download step's check stopped it. The download step keeps its own check.
 
 ## 0.1.18 (2026-11-07)
