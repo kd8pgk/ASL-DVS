@@ -1,6 +1,12 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_17_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_18_20261107.py`. Newest entries first.
+
+## 0.1.18 (2026-11-07)
+
+- **Package jobs stop after 60 minutes.** Every apt job the helper runs as a system unit (Update tab apt update and upgrade, the install tabs, the package repair, quiet-mode package jobs) now gets a 60-minute runtime cap (`RuntimeMaxSec=3600`). Before, these jobs had no limit, so a stalled download could run forever with no message.
+- **A stopped package job says so.** When the cap is reached, systemd stops the job and the log ends with the same safety message used for stopped apt steps: wait for apt, run the reconfigure step, re-run the stopped step, and reboot only after that. The job is reported as failed.
+- **Tested here:** the unit start arguments include the cap; a timeout result is reported as a failure with the safety message; a normal finish is unchanged. **Not yet tested on a node:** a real apt upgrade on a slow link that reaches 60 minutes.
 
 ## 0.1.17 (2026-11-03)
 
