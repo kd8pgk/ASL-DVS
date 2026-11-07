@@ -1,5 +1,12 @@
 # Node Talker changelog
 
+## 0.10.23 (2026-11-07)
+
+- **PPT lock is a slider on the PPT button.** A handle sits on the left of the PPT button. Press and hold it, then slide it right to lock PPT (the handle turns red and the button is disabled) or left to unlock it. Past halfway it commits; released before halfway it stays where it was. The lock is set on the node and every open page is told at once, as before. The separate "Lock PPT" button is gone. The handle also works from the keyboard: the right arrow or End locks, the left arrow or Home unlocks. If the node refuses the change, the handle goes back to the current state and the reason is shown under the button.
+- **The lock is kept on the node.** Locking PPT stops a transmission that is under way (it is logged as "locked") and refuses new ones until it is unlocked. Every page that opens reads the current state, so a locked PPT stays locked after a reload. This was added in 0.10.22, which was not released.
+- Page JavaScript logic changed, so this is a release.
+- Tests: `ci/test_ci.py` and `ci/test_servers.py` pass. The slider was also driven in headless Chromium: a quick slide without the hold does nothing; hold and slide past halfway locks and disables the PPT button; the left arrow unlocks; a partial slide released before halfway changes nothing.
+
 ## 0.10.21 (2026-11-06)
 
 - **The phone's last report to the node is timed.** Each report the phone sends now carries how long its previous report took to reach the node (`probe_ms`), counted from the start of the send to the node's answer, so it includes opening a new connection when one is needed. The receive-health report's phone line shows "last report to the node took N ms" when that is 1 second or more. Reports go out about every 2.5 minutes when nothing is wrong, so this is a sample, not a continuous probe.
@@ -44,7 +51,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_21_20261106.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_23_20261107.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
