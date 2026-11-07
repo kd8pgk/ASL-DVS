@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_17_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_18_20261107.py`. Newest entries first.
+
+## 0.1.18 (2026-11-07)
+
+- **Quiet mode actions are logged with who asked.** Each turn-on or turn-off from the page writes a log line with the client's address (`QUIET: user from 192.168.x.x asked to turn quiet mode off`). The pause or restore line that follows records the same user, so the log shows who paused or restored the node services. Requests that are refused (already on, a package job holding the lock, a failed stop) are logged with the reason. Reboot requests from the quiet panel are logged too, with confirm missing or the outcome.
+- **Tested here:** byte-compile and a lint pass on the file. **Not yet tested on a node:** the log lines from the page.
 
 ## 0.1.17 (2026-11-03)
 

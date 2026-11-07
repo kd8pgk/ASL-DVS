@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.17"
+APP_VERSION = "0.1.18"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5897,14 +5897,19 @@ def _dispatch_repair_action(payload: dict) -> dict:
         return {"success": False, "output": "Masked services could not be cleared: " + ", ".join(fix["still_masked"])}
     return _start_quiet_apt_job("repair_packages", _repair_cmd())
 
-def _dispatch_quiet_action(payload: dict) -> dict:
+def _dispatch_quiet_action(payload: dict, client_ip: str = "unknown") -> dict:
     action = str(payload.get("action", ""))
-    if action == "on":
-        return _qm_on("manual")
-    if action == "off":
-        return _qm_off("manual")
+    who = f"user from {client_ip}"
+    if action in ("on", "off"):
+        log(f"QUIET: {who} asked to turn quiet mode {action}")
+        r = _qm_on(f"manual, {who}") if action == "on" else _qm_off(f"manual, {who}")
+        if not r.get("success"):
+            log(f"QUIET: {action} request from {client_ip} not carried out: {r.get('output', '').splitlines()[0] if r.get('output') else 'failed'}")
+        return r
     if action == "reboot":
+        log(f"QUIET: {who} asked to reboot the node")
         if payload.get("confirm") is not True:
+            log(f"QUIET: reboot request from {client_ip} refused -- confirm missing")
             return {"success": False, "output": "Reboot requires confirm:true."}
         err = _require_root()
         if err:
@@ -5912,6 +5917,7 @@ def _dispatch_quiet_action(payload: dict) -> dict:
         unit = f"44helper-reboot-{int(time.time())}"
         r = _run_argv(["systemd-run", "--on-active=3", f"--unit={unit}", "/bin/systemctl", "reboot"], timeout=20)
         r["output"] = ("Reboot scheduled in 3 seconds." if r["success"] else "Could not schedule reboot: " + r["output"])
+        log(f"QUIET: reboot from {client_ip} {'scheduled' if r['success'] else 'could not be scheduled'}")
         return r
     return {"success": False, "output": f"Unknown quiet-mode action: {action}"}
 
@@ -28721,7 +28727,7 @@ class Handler(BaseHTTPRequestHandler):
             if err is not None:
                 self._send(400, "application/json", err)
                 return
-            result = _dispatch_quiet_action(payload)
+            result = _dispatch_quiet_action(payload, self._client_ip())
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
