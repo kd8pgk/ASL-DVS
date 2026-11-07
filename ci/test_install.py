@@ -7,21 +7,24 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_servers as ts
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STUB_BIN = os.path.join(ROOT, "ci", "fixtures", "servers", "bin")
 LAUNCHER = "/usr/local/bin/asl_dvs_launch.py"
 UNIT_DIR = "/etc/systemd/system"
 
-TOOLS = [
-    ("nodecontrol_pi02w_v9_3_107_20261102.py", "nodecontrol", "/usr/local/bin/nodecontrol.py"),
-    ("sysmon_pi02w_v6_13_83_20261028.py", "sysmon", "/usr/local/bin/sysmon.py"),
-    ("instmon_v2_91_1_20261105.py", "instmon", "/usr/local/bin/instmon.py"),
-    ("wifimon_v5_48_0_20261102.py", "wifimon", "/usr/local/bin/wifimon.py"),
-    ("44helper_v0_1_17_20261103.py", "44helper", "/usr/local/bin/44helper.py"),
-    ("nodetalker_v0_10_20_20261105.py", "nodetalker", "/usr/local/bin/nodetalker.py"),
-    ("noderecorder_v0_5_12_20261105.py", "noderecorder", "/usr/local/bin/noderecorder.py"),
-    ("pibrary_v0_16_1_20261104.py", "pibrary", "/usr/local/bin/pibrary.py"),
-]
+TOOLS = [(ts.SERVERS[key]["file"], unit, f"/usr/local/bin/{unit}.py") for key, unit in (
+    ("nodecontrol_pi02w", "nodecontrol"),
+    ("sysmon_pi02w", "sysmon"),
+    ("instmon", "instmon"),
+    ("wifimon", "wifimon"),
+    ("44helper", "44helper"),
+    ("nodetalker", "nodetalker"),
+    ("noderecorder", "noderecorder"),
+    ("pibrary", "pibrary"),
+)]
 
 
 def launcher_code(path):
