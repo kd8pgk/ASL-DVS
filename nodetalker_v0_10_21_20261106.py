@@ -33,8 +33,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.20"
-DATE_STR = "2026-11-05"
+VERSION = "0.10.21"
+DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -1864,7 +1864,8 @@ RXH_OUTQ_NOTE_MS = 100
 RXH_OUTQ_SEC = 0.25
 RXH_CLIENT_NAMES = ("android", "browser", "other")
 RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "stall_ms", "reconn", "why", "ttfb_ms", "gap_ms",
-                   "net_chg", "net", "metered", "vpn", "psave", "idle", "rssi_min", "link_mbps", "mhz")
+                   "net_chg", "net", "metered", "vpn", "psave", "idle", "rssi_min", "link_mbps", "mhz", "probe_ms",
+                   "net_log")
 WIFI_LINK_PATH = os.environ.get("NODETALKER_WIFI_LINK", "/run/asl_dvs/wifi_link.json")
 WIFI_STALE_SEC = 30.0
 WIFI_LINK_KEYS = ("v", "at", "linked", "bssid_id", "signal_dbm", "tx_bitrate", "tx_packets", "tx_retries", "tx_failed",
@@ -1913,9 +1914,24 @@ def read_wifi_link(now=None):
 _RXH_LINK_SUM = ("lost", "drop", "ooo")
 _RXH_LINK_MAX = ("jit", "rtt")
 _RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls", "reconn", "net_chg")
-_RXH_CLIENT_MAX = ("stall_ms", "out_ms", "ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz")
+_RXH_CLIENT_MAX = ("stall_ms", "out_ms", "ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz", "probe_ms")
 _RXH_CLIENT_MIN = ("link_mbps",)
 _RXH_CLIENT_WHY = ("timeout", "connect", "tls", "reset", "closed", "http", "other")
+RXH_NET_LOG_MAX = 8
+_NET_LOG_ENTRY_RE = re.compile(r"[a-z]{2,6}>[a-z]{2,6} \d{2}:\d{2}:\d{2}")
+
+
+def _net_log_join(*parts):
+    items = []
+    for p in parts:
+        items += [x for x in str(p or "").split(";") if x]
+    return ";".join(items[-RXH_NET_LOG_MAX:])
+
+
+def _net_log_clean(raw):
+    if not isinstance(raw, str):
+        return ""
+    return _net_log_join(";".join(x.strip() for x in raw.split(";") if _NET_LOG_ENTRY_RE.fullmatch(x.strip())))
 
 
 def _rxh_loopback(chan):
@@ -2125,12 +2141,14 @@ class RxHealth:
             c = self._client(self._bucket(), client)
             for k in ("reconn", "net_chg"):
                 c[k] += p[k]
-            for k in ("ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz"):
+            for k in ("ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz", "probe_ms"):
                 c[k] = max(c[k], p[k])
             if p["link_mbps"] and (c["link_mbps"] == 0 or p["link_mbps"] < c["link_mbps"]):
                 c["link_mbps"] = p["link_mbps"]
             if p["why"]:
                 c["why"] = p["why"]
+            if p["net_log"]:
+                c["net_log"] = _net_log_join(c.get("net_log"), p["net_log"])
 
     def note_outq(self, client, ms, new_stall):
         with self.lock:
@@ -2282,10 +2300,12 @@ def rxh_sum(rows):
         for name, c in (r.get("clients") or {}).items():
             a = agg["clients"].setdefault(name, {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX + _RXH_CLIENT_MIN})
             a.setdefault("why", "")
+            a.setdefault("net_log", "")
             for k in _RXH_CLIENT_SUM:
                 a[k] += c.get(k, 0)
             for k in _RXH_CLIENT_MAX:
                 a[k] = max(a[k], c.get(k, 0))
+            a["net_log"] = _net_log_join(a["net_log"], c.get("net_log"))
             for k in _RXH_CLIENT_MIN:
                 v = c.get(k, 0)
                 if v and (a[k] == 0 or v < a[k]):
@@ -2318,10 +2338,15 @@ def _rxh_phone_text(c):
         bits.append(t)
     if c.get("net_chg"):
         bits.append(f"network changed {c['net_chg']}x")
+    if c.get("net_log"):
+        last = [re.sub(r"^([a-z]+)>([a-z]+) ", r"\1 to \2 at ", x) for x in c["net_log"].split(";")][-3:]
+        bits.append("network: " + ", ".join(last))
     if c.get("reconn"):
         bits.append(f"reconnected {c['reconn']}x" + (f" (last: {c['why']})" if c.get("why") else ""))
     if c.get("gap_ms", 0) >= 1000:
         bits.append(f"audio stopped arriving for up to {c['gap_ms']} ms")
+    if c.get("probe_ms", 0) >= 1000:
+        bits.append(f"last report to the node took {c['probe_ms']} ms")
     for k, label in (("psave", "battery saver on"), ("idle", "phone idle mode"), ("vpn", "VPN on")):
         if c.get(k):
             bits.append(label)
@@ -2547,7 +2572,8 @@ def rxh_client(body):
         "wifi": 1 if net == "wifi" else 0, "cell": 1 if net == "cell" else 0,
         "psave": 1 if num("psave") else 0, "idle": 1 if num("idle") else 0,
         "metered": 1 if num("metered") else 0, "vpn": 1 if num("vpn") else 0,
-        "mhz": num("mhz"), "link_mbps": num("link_mbps"),
+        "mhz": num("mhz"), "link_mbps": num("link_mbps"), "probe_ms": num("probe_ms"),
+        "net_log": _net_log_clean(body.get("net_log")),
         "why": why if why in _RXH_CLIENT_WHY else ""})
     return {"ok": True}
 

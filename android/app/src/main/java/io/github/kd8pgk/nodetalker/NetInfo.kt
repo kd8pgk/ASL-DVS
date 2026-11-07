@@ -7,7 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 
-class NetInfo(ctx: Context, private val onChange: () -> Unit) {
+class NetInfo(ctx: Context, private val onChange: () -> Unit, private val onKind: (String, String) -> Unit) {
     private val app = ctx.applicationContext
     private val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     @Suppress("DEPRECATION")
@@ -15,6 +15,7 @@ class NetInfo(ctx: Context, private val onChange: () -> Unit) {
     private val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
     private var current: Network? = null
     private var caps: NetworkCapabilities? = null
+    private var lastKind = ""
     private var rssiMin = 0
     private var linkMin = 0
     private var mhz = 0
@@ -32,12 +33,31 @@ class NetInfo(ctx: Context, private val onChange: () -> Unit) {
                 current = null
                 caps = null
                 onChange()
+                noteKind(kindOf(null))
             }
         }
 
         override fun onCapabilitiesChanged(network: Network, c: NetworkCapabilities) {
-            if (current == network) caps = c
+            if (current == network) {
+                caps = c
+                noteKind(kindOf(c))
+            }
         }
+    }
+
+    @Synchronized
+    private fun noteKind(kind: String) {
+        val prev = lastKind
+        lastKind = kind
+        if (prev.isNotEmpty() && prev != kind) onKind(prev, kind)
+    }
+
+    private fun kindOf(c: NetworkCapabilities?): String = when {
+        c == null -> "none"
+        c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+        c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "eth"
+        else -> "other"
     }
 
     @Synchronized
@@ -82,13 +102,7 @@ class NetInfo(ctx: Context, private val onChange: () -> Unit) {
     @Synchronized
     fun take(): String {
         val c = caps
-        val kind = when {
-            c == null -> "none"
-            c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-            c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
-            c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "eth"
-            else -> "other"
-        }
+        val kind = kindOf(c)
         val metered = if (c != null && !c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) 1 else 0
         val vpn = if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) 1 else 0
         val save = if (pm.isPowerSaveMode) 1 else 0

@@ -220,7 +220,7 @@ class ListenService : Service() {
         queue.clear()
         stats.clear()
         netInfo?.stop()
-        netInfo = NetInfo(this) { stats.netChange() }.also { it.start() }
+        netInfo = NetInfo(this, { stats.netChange() }, { from, to -> stats.netKind(from, to) }).also { it.start() }
         net = Thread({ netLoop(n, g) }, "nt-listen-net").apply { start() }
         player = Thread({ playLoop(g) }, "nt-listen-play").apply { start() }
         reporter = Thread({ reportLoop(n, g) }, "nt-listen-report").apply { start() }
@@ -642,8 +642,9 @@ class ListenService : Service() {
                 ListenLog.flush(this)
                 val snap = stats.take(beat, netInfo?.take().orEmpty()) ?: continue
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
+                val t0 = SystemClock.elapsedRealtime()
                 when (RxReport.send(n, cookie, snap)) {
-                    RxReport.SENT -> Unit
+                    RxReport.SENT -> stats.probe(SystemClock.elapsedRealtime() - t0)
                     RxReport.UNSUPPORTED -> return
                     else -> stats.put(snap)
                 }
