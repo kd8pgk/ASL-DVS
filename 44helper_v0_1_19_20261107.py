@@ -19582,10 +19582,6 @@ _JS_OVERVIEW = """
 // ── Overview tab (Stage 2) — fetch/populate logic ──
 var _ovTimer = null;
 
-function _ovLevelLabel(level) {
-  return {ok: 'All clear', info: 'Info', warn: 'Attention', danger: 'Exposure risk'}[level] || level;
-}
-
 function _ovDot(level) {
   return '<span class="ov-dot ' + level + '"></span>';
 }
@@ -25200,9 +25196,6 @@ _JS_QUIET = """
 // triple-quoted JS blocks turn them into real characters at load time).
 var _qmTimer = null;
 var _qmLastRestoreFailed = false;
-function qmEsc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
 function qmNL() { return String.fromCharCode(10); }
 function qmRenderStatus(s) {
   var banner = document.getElementById('qm-banner');
