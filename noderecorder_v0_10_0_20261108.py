@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -5043,7 +5043,8 @@ class RecordingEngine:
             if free < need + RECORD_RESERVE_BYTES:
                 return False, (f"not enough free space in {d}: {free // 1048576} MB free, "
                                f"{(need + RECORD_RESERVE_BYTES) // 1048576} MB needed for this window"), None
-            slug = re.sub(r"[^A-Za-z0-9._-]+", "-", entry["name"]).strip("-.")[:48] or "recording"
+            label = entry["name"] + (f" part {entry['part']}" if entry.get("part") else "")
+            slug = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-.")[:48] or "recording"
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             name = f"{stamp}_{slug}.wav"
             n = 1
@@ -5159,6 +5160,10 @@ SCHEDULE_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 STEP_TIMEOUT = {"connect": 120, "start": 15, "stop": 30, "disconnect": 60}
 LINK_CHECK_SEC = 5
 LINK_LOST_CHECKS = 2
+RETRY_SEC = 30
+RETRY_MAX = 20
+RETRY_MIN_LEFT_SEC = 120
+RETRY_RESULTS = ("link_lost", "connect_failed")
 MISSED_LOOKBACK = timedelta(hours=24)
 ENGINE_READY = True
 _sched_lock = threading.RLock()
@@ -6078,6 +6083,8 @@ class Scheduler:
         self.preempt = False
         self.results = deque(maxlen=20)
         self.done = {}
+        self.parts = {}
+        self.retry_after = 0.0
         self.active = None
         self.booted = False
 
@@ -6088,6 +6095,11 @@ class Scheduler:
             if isinstance(doc, dict):
                 if isinstance(doc.get("done"), dict):
                     self.done = {str(k): str(v) for k, v in doc["done"].items()}
+                if isinstance(doc.get("parts"), dict):
+                    for k, v in doc["parts"].items():
+                        if isinstance(v, dict) and isinstance(v.get("start"), str):
+                            self.parts[str(k)] = {"start": v["start"], "began": int(v.get("began", 0) or 0),
+                                                  "tries": int(v.get("tries", 0) or 0)}
                 a = doc.get("active")
                 if isinstance(a, dict) and a.get("id") and a.get("start"):
                     self.active = {"id": str(a["id"]), "start": str(a["start"])}
@@ -6098,7 +6110,7 @@ class Scheduler:
 
     def _state_save(self):
         try:
-            _atomic_write(self.state_path, json.dumps({"active": self.active, "done": self.done}) + "\n", 0o644)
+            _atomic_write(self.state_path, json.dumps({"active": self.active, "done": self.done, "parts": self.parts}) + "\n", 0o644)
         except OSError as exc:
             log_event(f"Schedule: could not save {self.state_path}: {exc}", "warn")
 
@@ -6109,6 +6121,7 @@ class Scheduler:
     def forget(self, eid):
         with self.lock:
             changed = self.done.pop(eid, None) is not None
+            changed = self.parts.pop(eid, None) is not None or changed
             if self.active and self.active["id"] == eid:
                 self.active, changed = None, True
             if changed:
@@ -6183,6 +6196,10 @@ class Scheduler:
             ids = {e["id"] for e in data["entries"]}
             for k in [k for k in self.done if k not in ids]:
                 del self.done[k]
+            for k in [k for k in self.parts if k not in ids]:
+                del self.parts[k]
+            if self.clock() < self.retry_after:
+                return
             if due:
                 self._start_run(due[0], due[1], now)
                 return
@@ -6246,6 +6263,9 @@ class Scheduler:
         start_at = self.clock() + max(0.0, (window[0] - now).total_seconds() + edge)
         s_iso = window[0].isoformat(timespec="minutes")
         dry = self._dry()
+        prior = self.parts.get(entry["id"])
+        if not manual and prior and prior.get("start") == s_iso and prior.get("began", 0) > 0:
+            entry = dict(entry, part=prior["began"] + 1)
         with self.lock:
             abort = threading.Event()
             self.run_abort = abort
@@ -6286,21 +6306,36 @@ class Scheduler:
         except Exception as exc:
             res = {"result": "error", "detail": str(exc), "steps": []}
         special = entry.get("kind") == "special"
+        retrying = False
         with self.lock:
             preempted = self.preempt and not self.user_stop and res["result"] == "aborted"
             if self.user_stop and res["result"] == "aborted":
                 res["detail"] = "stopped by hand"
             elif preempted:
                 res["detail"] = "a special recording took over; this window resumes after it"
+            if not manual:
+                p = self.parts.get(entry["id"])
+                if not p or p.get("start") != s_iso:
+                    p = {"start": s_iso, "began": 0, "tries": 0}
+                p["tries"] += 1
+                if any(s["step"] == "start" and s["ok"] for s in res["steps"]):
+                    p["began"] += 1
+                self.parts[entry["id"]] = p
+                retrying = (not preempted and not self.user_stop and res["result"] in RETRY_RESULTS and p["began"] > 0
+                            and p["tries"] < RETRY_MAX and end_at - self.clock() > RETRY_MIN_LEFT_SEC and not self.stop.is_set())
+                if retrying:
+                    res["detail"] = (res["detail"] or res["result"]) + f"; trying again in {RETRY_SEC} s for a part {p['began'] + 1}"
             self._note(entry, s_iso, res["result"], res["detail"], manual)
             if not manual:
-                if not preempted:
+                if retrying:
+                    self.retry_after = self.clock() + RETRY_SEC
+                elif not preempted:
                     self.done[entry["id"]] = s_iso
                 self.active = None
                 self._state_save()
             self.cur = None
             self.state = "idle"
-        if special:
+        if special and not retrying:
             _special_remove(entry["id"])
 
     def loop(self):

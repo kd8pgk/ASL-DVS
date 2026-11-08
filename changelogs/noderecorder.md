@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_9_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_10_0_20261108.py`. Newest entries first.
+
+## 0.10.0 (2026-11-08)
+
+- **A second part after a restart.** When a recording ends because the link dropped (an Asterisk restart, a reboot, a node going away) and the window is still open, Node Recorder now links again and records a second part into a new file instead of treating the window as finished. It tries every 30 seconds, up to 20 tries in a window, and only while more than 2 minutes of the window are left. While Asterisk is still coming back, "Asterisk does not know node N yet" is tried again the same way. The file of part 2 is named like `20261108-213320_Net-part-2.wav`, part 3 `-part-3`, and so on.
+- **Only after something was recorded.** A window whose first connect fails is still marked failed, as before, so a wrong number or an offline node is not tried over and over. Stop recording by hand, a special taking over, a write error and a stopped Node Recorder are not retried either.
+- **Specials** are kept until their last part ends, then removed as before.
+- **Across a restart of Node Recorder itself** the part count is kept in the lane's state file, so the part after a reboot continues the numbering. Each lane (the main node and every private node) does this on its own.
+- This is a release, not a cosmetic build.
 
 ## 0.9.0 (2026-11-08)
 

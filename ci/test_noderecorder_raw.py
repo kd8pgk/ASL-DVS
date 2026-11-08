@@ -560,6 +560,140 @@ class DigitalActions(unittest.TestCase):
         self.assertIn(("stop", "1050"), FakeActions.log)
 
 
+class Scripted(FakeActions):
+    script = []
+    seen = []
+
+    def __init__(self, node):
+        super().__init__(node)
+        self.plan = Scripted.script.pop(0) if Scripted.script else {}
+        self.checks = 0
+
+    def connect(self, entry):
+        Scripted.seen.append(dict(entry))
+        if not self.plan.get("connect", True):
+            return False, "Asterisk does not know node yet", None
+        return True, "", None
+
+    def link_alive(self, entry):
+        self.checks += 1
+        drop = self.plan.get("drop_after")
+        return not (drop is not None and self.checks > drop)
+
+
+class SecondPart(unittest.TestCase):
+    def setUp(self):
+        for name, val in (("LINK_CHECK_SEC", 0.05), ("RETRY_SEC", 0.3), ("RETRY_MAX", 20)):
+            p = mock.patch.object(nr, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        Scripted.script, Scripted.seen, FakeActions.log = [], [], []
+        self.now = nr.sched_now()
+        start = (self.now - nr.timedelta(minutes=2)).strftime("%H:%M")
+        end = (self.now + nr.timedelta(minutes=58)).strftime("%H:%M")
+        self.entries = [mk_entry("a", "1050", start, end)]
+        p = mock.patch.object(nr, "schedule_load", lambda: {"entries": self.entries, "error": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        self.removed = []
+        p = mock.patch.object(nr, "_special_remove", lambda eid: self.removed.append(eid))
+        p.start()
+        self.addCleanup(p.stop)
+        self.lane = nr.Scheduler(real_actions=lambda: Scripted("1050"), node="1050")
+        self.lane.state_path = os.path.join(WORK, "state_part_%s.json" % id(self))
+        self.lane.sleep = lambda s: nr.time.sleep(min(s, 0.05))
+        self.addCleanup(self.finish)
+
+    def finish(self):
+        self.lane.stop.set()
+        self.lane.run_abort.set()
+        self.lane.shutdown(5)
+
+    def drive(self, until, secs=15):
+        end = nr.time.time() + secs
+        while nr.time.time() < end:
+            self.lane.tick(self.now)
+            if until():
+                return True
+            nr.time.sleep(0.05)
+        return False
+
+    def test_a_dropped_link_starts_a_second_part_while_the_window_is_open(self):
+        Scripted.script = [{"drop_after": 1}, {}]
+        self.assertTrue(self.drive(lambda: len(Scripted.seen) >= 2))
+        self.assertNotIn("part", Scripted.seen[0])
+        self.assertEqual(Scripted.seen[1]["part"], 2)
+        first = self.lane.results[0]
+        self.assertEqual(first["result"], "link_lost")
+        self.assertIn("trying again", first["detail"])
+        self.assertEqual(self.lane.done, {})
+
+    def test_a_first_connect_failure_is_not_retried(self):
+        Scripted.script = [{"connect": False}]
+        self.assertTrue(self.drive(lambda: self.lane.done))
+        nr.time.sleep(0.6)
+        self.lane.tick(self.now)
+        self.assertEqual(len(Scripted.seen), 1)
+
+    def test_asterisk_still_down_is_tried_again_and_the_part_number_skips_failures(self):
+        Scripted.script = [{"drop_after": 1}, {"connect": False}, {}]
+        self.assertTrue(self.drive(lambda: len(Scripted.seen) >= 3))
+        self.assertEqual(Scripted.seen[2]["part"], 2)
+        self.assertEqual(self.lane.done, {})
+
+    def test_it_gives_up_after_the_retry_limit(self):
+        Scripted.script = [{"drop_after": 1}, {"connect": False}, {"connect": False}]
+        with mock.patch.object(nr, "RETRY_MAX", 3):
+            self.assertTrue(self.drive(lambda: self.lane.done))
+        self.assertEqual(len(Scripted.seen), 3)
+
+    def test_no_second_part_when_the_window_is_nearly_over(self):
+        end = (self.now + nr.timedelta(minutes=1)).strftime("%H:%M")
+        start = (self.now - nr.timedelta(minutes=30)).strftime("%H:%M")
+        self.entries = [mk_entry("a", "1050", start, end)]
+        Scripted.script = [{"drop_after": 1}]
+        self.assertTrue(self.drive(lambda: self.lane.done))
+        self.assertEqual(len(Scripted.seen), 1)
+
+    def test_a_stop_by_hand_is_not_retried(self):
+        Scripted.script = [{}]
+        self.assertTrue(self.drive(lambda: self.lane.state == "recording"))
+        self.lane.stop_by_hand()
+        self.assertTrue(self.drive(lambda: self.lane.state == "idle" and self.lane.done))
+        nr.time.sleep(0.5)
+        self.lane.tick(self.now)
+        self.assertEqual(len(Scripted.seen), 1)
+
+    def test_a_special_is_kept_until_its_last_part(self):
+        raw = {"id": "sp", "name": "sp", "days": [], "start": self.entries[0]["start"], "end": self.entries[0]["end"],
+               "target": {"mode": "ASL", "num": "2000"}, "format": "pcm", "node": "1050", "kind": "special",
+               "date": self.now.strftime("%Y-%m-%d"), "enabled": True}
+        self.entries = [nr.schedule_norm_entry(raw, check_target=False)]
+        Scripted.script = [{"drop_after": 1}, {"drop_after": 1}]
+        self.assertTrue(self.drive(lambda: len(Scripted.seen) >= 2))
+        self.assertEqual(self.removed, [])
+
+    def test_the_part_count_survives_a_restart(self):
+        Scripted.script = [{"drop_after": 1}, {}]
+        self.assertTrue(self.drive(lambda: len(Scripted.seen) >= 2))
+        self.lane._state_save()
+        again = nr.Scheduler(real_actions=lambda: Scripted("1050"), node="1050")
+        again.state_path = self.lane.state_path
+        again._state_load()
+        self.assertEqual(again.parts["a"]["began"], self.lane.parts["a"]["began"])
+        self.assertGreaterEqual(again.parts["a"]["began"], 1)
+
+    def test_the_second_part_gets_its_own_file_name(self):
+        d = tempfile.mkdtemp(prefix="nr_part_")
+        self.addCleanup(shutil.rmtree, d, True)
+        with mock.patch.object(nr, "storage_pick", lambda: {"ok": True, "path": d}):
+            e = nr.RecordingEngine(nr.Hub(nr.RxClean(), None))
+            ok, _msg, name = e.start({"name": "Net", "format": "pcm", "part": 2}, None)
+            self.assertTrue(ok)
+            e.stop()
+        self.assertIn("Net-part-2", name)
+
+
 class NextBridge(unittest.TestCase):
     def test_lists_the_soonest_digital_window_within_the_notice_time(self):
         now = nr.sched_now()
