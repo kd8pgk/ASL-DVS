@@ -1,13 +1,54 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_6_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_10_0_20261108.py`. Newest entries first.
+
+## 0.10.0 (2026-11-08)
+
+- **A second part after a restart.** When a recording ends because the link dropped (an Asterisk restart, a reboot, a node going away) and the window is still open, Node Recorder now links again and records a second part into a new file instead of treating the window as finished. It tries every 30 seconds, up to 20 tries in a window, and only while more than 2 minutes of the window are left. While Asterisk is still coming back, "Asterisk does not know node N yet" is tried again the same way. The file of part 2 is named like `20261108-213320_Net-part-2.wav`, part 3 `-part-3`, and so on.
+- **Only after something was recorded.** A window whose first connect fails is still marked failed, as before, so a wrong number or an offline node is not tried over and over. Stop recording by hand, a special taking over, a write error and a stopped Node Recorder are not retried either.
+- **Specials** are kept until their last part ends, then removed as before.
+- **Across a restart of Node Recorder itself** the part count is kept in the lane's state file, so the part after a reboot continues the numbering. Each lane (the main node and every private node) does this on its own.
+- This is a release, not a cosmetic build.
+
+## 0.9.0 (2026-11-08)
+
+- **Advance notice in the status.** `/api/recorder/status` has a new `next_bridge`: the soonest enabled digital or M17 entry whose window starts within 30 minutes (`name`, `kind`, `start`, `node`), or an empty object. Node Controller and Node Talker use it to warn before a tune would make that recording skip. Older versions of those tools ignore it.
+- Nothing else changes in Node Recorder.
+- This is a release, not a cosmetic build.
+
+## 0.8.0 (2026-11-08)
+
+- **DMR, D-STAR, YSF, P25, NXDN, STFU and M17 entries can record on a private node.** The entry's node links to the digital bridge (`ilink 8`, local monitor only) and records, while the main node and node 1921 stay free. Auto picks a private node for these entries too.
+- **The bridge is tuned for the window.** When the window opens Node Recorder tunes the bridge to the entry's talkgroup, room or reflector (the recording itself starts 60 seconds in, as for every entry, so the tune has time to settle): DVSwitch mode, DMR network login and tune for the digital modes, the USRP2M17 settings and restart for M17. When the window ends it unlinks and puts the bridge back to idle, unless another recording still holds it or someone else tuned it in the meantime.
+- **One tune per bridge.** The digital bridge is shared by every digital mode and M17 has its own, so two entries that overlap on the same bridge must have the same target. Different targets are refused when saving, whatever node they are on, with a message that says a new node would not help. Two entries with the same target can share the bridge.
+- **A live tune wins at window start.** If the main node is linked to the bridge with another tune (Tune on this page, Node Controller or Node Talker), the entry is skipped and logged. If the live tune is the same target, the recording shares it and leaves it alone afterwards.
+- **A live tune during a recording ends it, and the file is kept.** If the main node is linked to the bridge with a different tune while a recording runs, the recording stops with the result "bridge taken by a live tune" and the bridge is left on the new tune.
+- **Tune asks first.** Tuning a digital target on this page while a scheduled recording holds that bridge asks "Tune anyway?", naming the recording and when it ends; Yes stops that recording and keeps what it recorded.
+- **Pre-flight checks.** Saving a digital entry on a private node checks that dvswitch.sh (or USRP2M17 and the callsign and reflector for M17), the DMR network and the bridge node are there, and says what is missing. The same checks run again at the window.
+- **Load warning.** When the 1-minute load is above 4, the schedule note, a save and a digital window start say so. It never blocks a recording.
+- **Status.** `/api/recorder/status` lists the bridges held by recordings (`bridges`) and has `load_warning`, ready for Node Controller and Node Talker to warn before a tune.
+- The Tune and Record now buttons are unchanged apart from the question above; their DVSwitch and M17 steps now live in functions the scheduled recordings use too.
+- Not verified on a node: that tuning the bridge directly leaves Node Controller's own page state alone, and that `ilink 8` carries the bridge's audio into a private node.
+- This is a release, not a cosmetic build.
+
+## 0.7.0 (2026-11-08)
+
+- **Scheduled recordings can run on private nodes, several at once.** Each schedule entry now has a node: **Auto**, **Main node**, or one of the private nodes added on the Setup tab. Auto puts an ASL or EchoLink entry on the first private node that is free at that time; with no private nodes it stays on the main node, as before. Entries on different nodes can overlap and record at the same time, each with its own audio feed, level handling and file. Only entries on the same node conflict, and touching windows are still fine.
+- **Link in local monitor mode.** An entry on a private node links that node to the target with `ilink 8` (local monitor only), records, then drops it with `ilink 1`. The main node and node 1921 are not used, so radio comms carry on during the recording. If the link drops, it is linked again; a drop that lasts two checks ends the recording as before.
+- **A busy node suggests a new one.** When every private node is busy at that time, saving says to add another private node on the Setup tab (restart Asterisk once, then save again). At five nodes it says to pick another time.
+- **Digital entries stay on the main node.** DMR, D-STAR, YSF and M17 entries still record on the main node in this version; a digital entry cannot be given a private node yet.
+- **Node waiting for a restart.** An entry on a node Asterisk has not loaded yet fails that window with "restart Asterisk once" and records from the next window once it is loaded.
+- **Removing a node** is refused while it is recording or a schedule entry uses it.
+- **Status.** `/api/recorder/status` has a new `recordings` list (entry, node, times, file) and `busy` still means the main node is in use. The schedule view lists the private nodes and what is recording on them.
+- **Open recordings are protected.** Header repair, conversion and old-file removal skip every recording that is still being written.
+- This is a release, not a cosmetic build.
 
 ## 0.6.0 (2026-11-08)
 
 - **Private recording nodes.** The Setup tab has a new "Private recording nodes" card. **Add** writes one private node into rpt.conf at a time, as needed: the next free number from 1050 up, with its own USRP port pair, the main node's template and a `[nodes]` line. At most five. Asterisk needs one restart for a new node to load; the node then stays. **Remove** takes out one node, **Remove all** takes out every node Node Recorder added. Only stanzas marked as Node Recorder's are ever removed, and node 1921 is not touched by this card.
 - **Numbers and ports in use are skipped.** A number is skipped when rpt.conf already has a `[node]`, a `[functionsNODE]` or a `[nodes]` line for it, or when it is the main node, node 1921 or a digital bridge node (1999, 1917 or the ones set on the Digital card). A port is skipped when any `rxchannel = USRP/...` already uses it.
 - **Shared code.** The rpt.conf scan, number and port picking, and add and remove of a marked stanza live in `shared/confio.py` (`rpt_scan`, `rpt_next_free`, `rpt_pick_ports`, `rpt_template`, `rpt_add_private`, `rpt_remove_private`) and are copied unchanged into this file.
-- This version only sets the nodes up. Scheduled recordings still use the main node until a later version moves them onto these nodes.
+- This version only sets the nodes up. Scheduled recordings use them from 0.7.0.
 - This is a release, not a cosmetic build.
 
 ## 0.5.14 (2026-11-07)

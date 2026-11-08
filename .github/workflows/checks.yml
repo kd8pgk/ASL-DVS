@@ -40,6 +40,8 @@ jobs:
         run: python3 ci/test_talker_tx_baseline.py
       - name: Node Recorder raw baseline tests
         run: python3 ci/test_noderecorder_raw.py
+      - name: Recording popup tests (Node Controller, Node Talker)
+        run: python3 ci/test_recording_popups.py
       - name: Node Talker baseline tests
         run: python3 ci/test_talker_baseline.py
       - name: Node Talker stream tests (login, handshake, origin, idle, listeners)

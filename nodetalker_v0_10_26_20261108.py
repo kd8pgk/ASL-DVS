@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.25"
+VERSION = "0.10.26"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3400,13 +3400,15 @@ def node_counters():
 
 
 RECORDER_STATUS_URL = os.environ.get("NODETALKER_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
-_recorder_cache = {"t": -1e9, "v": None}
+_recorder_cache = {"t": -1e9, "v": None, "info": None}
 _RECORDING_BLOCKED = frozenset((
-    "/api/node/enable", "/api/node/disable", "/api/tx/enable", "/api/tx/disable", "/api/setup/apply", "/api/connect",
+    "/api/node/enable", "/api/node/disable", "/api/tx/enable", "/api/tx/disable", "/api/connect",
     "/api/disconnect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/tune/disconnect",
-    "/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/digital", "/api/tonetest/start",
-    "/api/tonetest/link"))
+    "/api/digital", "/api/tonetest/start", "/api/tonetest/link"))
 _RECORDING_CFG_KEYS = frozenset(("port", "udp_port", "https", "node"))
+_RECORDING_POWER = frozenset(("/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/setup/apply"))
+_RECORDING_BRIDGE = frozenset(("/api/tune", "/api/tune/disconnect"))
+_RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
 
 def recorder_busy():
@@ -3414,15 +3416,79 @@ def recorder_busy():
     if now - _recorder_cache["t"] < 2.0:
         return _recorder_cache["v"]
     busy = None
+    info = None
     try:
         with urllib.request.urlopen(RECORDER_STATUS_URL, timeout=0.6) as resp:
             d = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("ok"):
+            info = d
         if isinstance(d, dict) and d.get("ok") and d.get("busy"):
             busy = {k: d.get(k, "") for k in ("state", "entry", "start", "end", "elapsed", "file")}
     except (OSError, ValueError, urllib.error.URLError):
         busy = None
-    _recorder_cache.update(t=now, v=busy)
+        info = None
+    _recorder_cache.update(t=now, v=busy, info=info)
     return busy
+
+
+def recorder_info():
+    recorder_busy()
+    return _recorder_cache["info"]
+
+
+def recorder_view():
+    info = recorder_info()
+    if not info:
+        return None
+    return {"recordings": [r for r in (info.get("recordings") or []) if isinstance(r, dict)],
+            "bridges": [b for b in (info.get("bridges") or []) if isinstance(b, dict)],
+            "next_bridge": info.get("next_bridge") if isinstance(info.get("next_bridge"), dict) else {}}
+
+
+def _rec_list(info):
+    recs = [r for r in ((info or {}).get("recordings") or []) if isinstance(r, dict)]
+    if not recs:
+        busy = recorder_busy()
+        if busy:
+            recs = [{"name": busy.get("entry", ""), "end": busy.get("end", ""), "node": ""}]
+    return recs
+
+
+def _rec_names(recs):
+    out = []
+    for r in recs[:3]:
+        end = str(r.get("end") or "")[11:16]
+        out.append(str(r.get("name") or r.get("entry") or "Node Recorder") + (f" on node {r['node']}" if r.get("node") else "")
+                   + (f" (until {end})" if end else ""))
+    more = len(recs) - 3
+    return ", ".join(out) + (f" and {more} more" if more > 0 else "")
+
+
+def rec_confirm_needed(path, body):
+    if path not in _RECORDING_POWER and path not in _RECORDING_BRIDGE:
+        return None
+    info = recorder_info()
+    recs = _rec_list(info)
+    if not recs:
+        return None
+    if path in _RECORDING_POWER:
+        what = {"/api/system/reboot": "Rebooting", "/api/system/shutdown": "Shutting down"}.get(path, "Restarting Asterisk")
+        return {"kind": "power", "message": f"A recording is in progress: {_rec_names(recs)}. {what} now cuts it short; "
+                                            "what was recorded so far is saved as a partial file."}
+    bridges = [b for b in ((info or {}).get("bridges") or []) if isinstance(b, dict)]
+    mode = str(body.get("mode") or "").strip().upper() if path == "/api/tune" else ""
+    if path == "/api/tune":
+        kind = "m17" if mode == "M17" else "digital" if mode in _RECORDING_DIGITAL else ""
+        hold = next((b for b in bridges if b.get("kind") == kind), None) if kind else None
+    else:
+        hold = bridges[0] if bridges else None
+        kind = hold.get("kind", "") if hold else ""
+    if hold is None:
+        return None
+    until = str(hold.get("end") or "")[11:16]
+    return {"kind": kind, "message": f"A scheduled recording ({hold.get('name') or 'Node Recorder'}) is using the "
+                                     f"{'M17' if kind == 'm17' else 'digital'} bridge" + (f" until {until}" if until else "")
+                                     + ". Tuning now stops that recording and keeps what was recorded so far."}
 
 
 def recording_text(rec):
@@ -3440,6 +3506,7 @@ def build_status(full):
     st["ptt_lock"] = ptt_lock_state()
     if full:
         st["recording"] = recorder_busy()
+        st["recorder"] = recorder_view()
         st["pi"] = pi_snapshot()
         st["rxh"] = rxh_status()
         st["feeder_pids"] = feeder_pids()
@@ -7395,11 +7462,12 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 
 _JS = r"""const $ = (id) => document.getElementById(id);
 let recBusy = null;
-const REC_LOCK_IDS = ['c-connect', 'c-disc', 't-go', 't-disc', 'da-btn', 'nd-enable', 'nd-disable', 'tx-add', 'tx-remove', 'setup-restart',
-  'sys-reboot', 'sys-shutdown', 'tone-start', 'tx-tone-start', 'setup-ok', 'dig-save'];
-const REC_PATHS = ['/api/node/enable', '/api/node/disable', '/api/tx/enable', '/api/tx/disable', '/api/setup/apply', '/api/connect', '/api/disconnect',
-  '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot',
-  '/api/system/shutdown', '/api/digital', '/api/tonetest/start', '/api/tonetest/link'];
+const REC_LOCK_IDS = ['c-connect', 'c-disc', 't-go', 't-disc', 'da-btn', 'nd-enable', 'nd-disable', 'tx-add', 'tx-remove',
+  'tone-start', 'tx-tone-start', 'dig-save'];
+const REC_PATHS = ['/api/node/enable', '/api/node/disable', '/api/tx/enable', '/api/tx/disable', '/api/connect', '/api/disconnect',
+  '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/digital', '/api/tonetest/start', '/api/tonetest/link'];
+const REC_ASK_PATHS = ['/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot', '/api/system/shutdown', '/api/setup/apply'];
+let recInfo = null;
 const REC_CFG_KEYS = ['port', 'udp_port', 'https', 'node'];
 
 function recText(rec) {
@@ -7413,6 +7481,42 @@ function recPopup(text) {
   if (!dlg) return;
   document.getElementById('rec-dlg-text').textContent = text;
   if (!dlg.open) dlg.showModal();
+}
+
+function recAsk(j) {
+  return new Promise((res) => {
+    const dlg = document.getElementById('rec-ask');
+    if (!dlg || dlg.open) { res(false); return; }
+    document.getElementById('rec-ask-text').textContent = j.message || j.error || '';
+    const go = document.getElementById('rec-ask-go'), no = document.getElementById('rec-ask-no');
+    go.textContent = j.confirm_kind === 'power' ? 'Go ahead' : 'Tune anyway';
+    dlg.returnValue = '';
+    dlg.onclose = () => res(dlg.returnValue === 'go');
+    go.onclick = () => dlg.close('go');
+    no.onclick = () => dlg.close('no');
+    dlg.showModal();
+  });
+}
+
+function recNoteText() {
+  if (!recInfo) return '';
+  const recs = recInfo.recordings || [], bs = recInfo.bridges || [], nb = recInfo.next_bridge || {};
+  if (recs.length) {
+    const names = recs.map((r) => (r.name || r.entry || 'Node Recorder') + (r.node ? ' on node ' + r.node : '')).join(', ');
+    const hold = bs.map((x) => (x.kind === 'm17' ? 'M17' : 'digital')).join(' and ');
+    return 'Recording: ' + names + '.' + (hold ? ' It holds the ' + hold + ' bridge, so tuning that bridge stops it.' : '');
+  }
+  if (nb.start) return 'A recording starts on the ' + (nb.kind === 'm17' ? 'M17' : 'digital') + ' bridge at ' + String(nb.start).slice(11, 16)
+    + ' (' + nb.name + '). A live tune on that bridge then makes it skip.';
+  return '';
+}
+
+function recApplyNote() {
+  const el = document.getElementById('rec-note');
+  if (!el) return;
+  const n = recNoteText();
+  el.textContent = n;
+  el.classList.toggle('hidden', !n);
 }
 
 function recApplyLocks() {
@@ -7451,6 +7555,22 @@ window.fetch = function (url, opts) {
       return Promise.resolve(new Response(JSON.stringify({ok: false, error: text, message: text}),
         {status: 409, headers: {'Content-Type': 'application/json'}}));
     }
+  }
+  if (opts && String(opts.method || '').toUpperCase() === 'POST' && REC_ASK_PATHS.includes(String(url).split('?')[0])) {
+    return _plainFetch(url, opts).then(async (r) => {
+      if (r.status !== 409) return r;
+      let j = null;
+      try { j = await r.clone().json(); } catch (e) { return r; }
+      if (!j || !j.recording_confirm) return r;
+      if (!(await recAsk(j))) {
+        const text = 'Cancelled: a recording is in progress.';
+        return new Response(JSON.stringify({ok: false, error: text, message: text}), {status: 409, headers: {'Content-Type': 'application/json'}});
+      }
+      let b = {};
+      try { b = JSON.parse(opts.body || '{}'); } catch (e) { b = {}; }
+      b.confirm_recording = true;
+      return _plainFetch(url, Object.assign({}, opts, {body: JSON.stringify(b)}));
+    });
   }
   return _plainFetch(url, opts);
 };
@@ -8029,7 +8149,9 @@ async function pollStatus() {
   if (!d || d.ok === false) return;
   lastStatus = d;
   recBusy = d.recording || null;
+  recInfo = d.recorder || null;
   recApplyLocks();
+  recApplyNote();
   $('ptt-mark').classList.toggle('hidden', !(authed && d.kc_test));
   $('st-node').textContent = d.node || '(not set)';
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
@@ -12063,7 +12185,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </script>
 <meta name="theme-color" content="#161e2e">
 <title>Node Talker</title>
-<style>button.rec-locked{opacity:.45;cursor:not-allowed}</style>
+<style>button.rec-locked{opacity:.45;cursor:not-allowed}#rec-note{margin:0;padding:6px 12px;font-size:13px;text-align:center;background:#1f2a33;color:#b9d4ea;border-bottom:1px solid #4d7fa6}</style>
 <style>__CSS__</style>
 <style>
 /* v0.9.60: mode colours on Connect cards and Listen badge (same palette as Node Controller) */
@@ -12145,6 +12267,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
+<div id="rec-note" class="hidden" role="status"></div>
 <div id="login-screen">
 <div id="login-card">
 <h2>Node Talker Login</h2>
@@ -12684,6 +12807,11 @@ mic volume, so the gain here is applied in the page.</p>
 <p id="rec-dlg-text"></p>
 <div class="row"><button id="rec-dlg-ok" class="btn primary" type="button">OK</button></div>
 </dialog>
+<dialog id="rec-ask" class="setup-dlg" aria-labelledby="rec-ask-title">
+<h2 id="rec-ask-title">Recording in progress</h2>
+<p id="rec-ask-text"></p>
+<div class="row"><button id="rec-ask-no" class="btn" type="button">Cancel</button><button id="rec-ask-go" class="btn danger" type="button">Go ahead</button></div>
+</dialog>
 </body>
 </html>
 """
@@ -13089,6 +13217,14 @@ class Handler(BaseHTTPRequestHandler):
             if rec:
                 text = recording_text(rec)
                 self._json(409, {"ok": False, "error": text, "message": text, "recording": rec})
+                return
+        need = rec_confirm_needed(path, body)
+        if need:
+            if body.get("confirm_recording") is True:
+                log_event(f"{path} went ahead during a recording after the question ({need['kind']})", "warn")
+            else:
+                self._json(409, {"ok": False, "error": need["message"], "message": need["message"],
+                                 "recording_confirm": True, "confirm_kind": need["kind"]})
                 return
         action = _POST_ACTIONS.get(path)
         try:

@@ -1,6 +1,17 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_102_20261102.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_103_20261108.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.103 (2026-11-08)
+
+- **Questions instead of locks for tunes and restarts.** Node Recorder 0.9.0 and later tell the Dashboard what is recording, which bridge a recording holds and when the next digital window starts. The Dashboard now asks before it does something that would cut a recording short:
+  - **Tuning a bridge.** Tuning DMR, D-STAR, YSF, P25, NXDN or STFU (or switching to those tabs, or a DMR network) while a scheduled recording holds the digital bridge, or M17 while one holds the M17 bridge, shows a box naming the recording and when it ends, with **Cancel** and **Tune anyway**. Tune anyway stops that recording; what was recorded so far is kept.
+  - **Reboot, shutdown and Asterisk restarts.** With any recording running, Reboot, Shutdown and a Phone apply, activate or revert that restarts Asterisk show a box saying the recording will be cut short and saved as a partial file, with **Cancel** and **Go ahead**. These were locked behind the Override before.
+- **Radio use is not locked by recordings on private nodes.** Links on the main node are locked only when Node Recorder reports the main node busy (Record now, or a scheduled recording on the main node), as before. A recording on a private node leaves ASL links and the other controls free.
+- **Bar at the top.** While a recording runs on a private node the bar says what is recording and, if it holds a bridge, that tuning that bridge stops it. Up to 30 minutes before a digital recording starts it says when, so a tune just before it can be avoided.
+- Compatible with older Node Recorder versions: without the new fields the Dashboard behaves as in 9.3.102, apart from Reboot and Shutdown now asking instead of being locked.
+- The Pi Zero 2 W build is not changed by this release.
+- This is a release, not a cosmetic build.
 
 ## 9.3.102 (2026-11-02)
 
