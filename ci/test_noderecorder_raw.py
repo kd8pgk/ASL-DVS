@@ -560,6 +560,31 @@ class DigitalActions(unittest.TestCase):
         self.assertIn(("stop", "1050"), FakeActions.log)
 
 
+class NextBridge(unittest.TestCase):
+    def test_lists_the_soonest_digital_window_within_the_notice_time(self):
+        now = nr.sched_now()
+        soon = (now + nr.timedelta(minutes=10)).strftime("%H:%M")
+        later = (now + nr.timedelta(minutes=20)).strftime("%H:%M")
+        far = (now + nr.timedelta(minutes=90)).strftime("%H:%M")
+        end = lambda s: (nr.datetime.strptime(s, "%H:%M") + nr.timedelta(minutes=30)).strftime("%H:%M")
+        entries = [mk_entry("a", "1050", later, end(later), target={"mode": "DMR", "num": "91", "net": "TGIF"}),
+                   mk_entry("b", "1051", soon, end(soon), target={"mode": "M17", "num": "M17-ABC", "module": "A"}),
+                   mk_entry("c", "1052", soon, end(soon)),
+                   mk_entry("d", "1053", far, end(far), target={"mode": "DMR", "num": "3100", "net": "TGIF"})]
+        with mock.patch.object(nr, "schedule_load", lambda: {"entries": entries, "error": ""}):
+            nb = nr.next_bridge_window()
+        self.assertEqual((nb["name"], nb["kind"], nb["node"]), ("b", "m17", "1051"))
+        self.assertEqual(nb["start"][11:16], soon)
+
+    def test_empty_when_nothing_digital_is_near(self):
+        now = nr.sched_now()
+        far = (now + nr.timedelta(minutes=90)).strftime("%H:%M")
+        entries = [mk_entry("d", "1053", far, "23:59", target={"mode": "DMR", "num": "3100", "net": "TGIF"}),
+                   mk_entry("e", "1050", far, "23:59")]
+        with mock.patch.object(nr, "schedule_load", lambda: {"entries": entries, "error": ""}):
+            self.assertEqual(nr.next_bridge_window(), {})
+
+
 class TwoEngines(unittest.TestCase):
     def test_two_recordings_write_two_files_and_are_marked_open(self):
         d = tempfile.mkdtemp(prefix="nr_eng_")

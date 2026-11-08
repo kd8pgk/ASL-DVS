@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6391,6 +6391,27 @@ def schedule_dry_run(body):
             "message": "Dry run finished: nothing was connected or recorded."}
 
 
+BRIDGE_NOTICE_MIN = 30
+
+
+def next_bridge_window():
+    now = sched_now()
+    best = None
+    for e in schedule_load()["entries"]:
+        kind = _entry_bridge(e)
+        if not (e.get("enabled") and kind):
+            continue
+        w = schedule_next(e, now)
+        if w is None or w[0] - now > timedelta(minutes=BRIDGE_NOTICE_MIN):
+            continue
+        if best is None or w[0] < best[0]:
+            best = (w[0], e, kind)
+    if best is None:
+        return {}
+    return {"name": best[1]["name"], "kind": best[2], "start": best[0].isoformat(timespec="minutes"),
+            "node": best[1].get("node", "")}
+
+
 def recorder_status():
     st = SCHED.status()
     cur = st["current"] or {}
@@ -6398,7 +6419,7 @@ def recorder_status():
     return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
             "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
             "elapsed": cur.get("elapsed", 0), "file": cur.get("file", ""), "recordings": lanes_status(),
-            "bridges": bridge_holds(), "load_warning": load_warning()}
+            "bridges": bridge_holds(), "load_warning": load_warning(), "next_bridge": next_bridge_window()}
 
 
 MANUAL_MAX_SEC = 4 * 3600

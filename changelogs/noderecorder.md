@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_8_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_9_0_20261108.py`. Newest entries first.
+
+## 0.9.0 (2026-11-08)
+
+- **Advance notice in the status.** `/api/recorder/status` has a new `next_bridge`: the soonest enabled digital or M17 entry whose window starts within 30 minutes (`name`, `kind`, `start`, `node`), or an empty object. Node Controller and Node Talker use it to warn before a tune would make that recording skip. Older versions of those tools ignore it.
+- Nothing else changes in Node Recorder.
+- This is a release, not a cosmetic build.
 
 ## 0.8.0 (2026-11-08)
 
