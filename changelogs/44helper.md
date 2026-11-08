@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_18_20261107.py`. Newest entries first.
+Current file: `44helper_v0_1_19_20261108.py`. Newest entries first.
+
+## 0.1.19 (2026-11-08)
+
+- **Private nodes on the Config tab use the shared rpt.conf number search.** Which numbers are taken, and which is the next free one from 1000, now come from `rpt_scan` and `rpt_next_free` in `shared/confio.py`, the same code Node Recorder and Node Controller use, so the three tools agree on what is in use. Nothing about how a node is written, previewed or removed changes, and the managed bundle blocks are still left alone.
+- **One stricter check.** A number whose only trace in rpt.conf is a `[functionsN]` section is now counted as taken, so a new private node can no longer be added on top of an old function list. Numbers still skipped as before: the main node's, 1921, 1917 and 1999.
+- **Two unused page functions removed.** `_ovLevelLabel` (Overview tab) and `qmEsc` (Update tab) were never called and are gone, as the repo's unused-code rule asks. No page behaviour changes.
+- This is a release, not a cosmetic build.
 
 ## 0.1.18 (2026-11-07)
 

@@ -22,13 +22,13 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_103_20261108.py", "port": 8989, "scheme": "http"},
+    "nodecontrol": {"file": "nodecontrol_v9_3_104_20261108.py", "port": 8989, "scheme": "http"},
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_107_20261102.py", "port": 8989, "scheme": "http"},
     "sysmon": {"file": "sysmon_v6_13_95_20261028.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_83_20261028.py", "port": 9999, "scheme": "http"},
     "nodetalker": {"file": "nodetalker_v0_10_26_20261108.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "noderecorder": {"file": "noderecorder_v0_10_0_20261108.py", "port": 8995, "scheme": "https", "health": "/api/health"},
+    "noderecorder": {"file": "noderecorder_v0_11_0_20261108.py", "port": 8995, "scheme": "https", "health": "/api/health"},
     "pibrary": {"file": "pibrary_v0_16_1_20261104.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
     "instmon": {"file": "instmon_v2_92_0_20261108.py", "port": 8990, "scheme": "http", "health": "/",
@@ -38,7 +38,7 @@ SERVERS = {
                               "INSTMON_RECORDER_STATUS_URL": None}},
     "wifimon": {"file": "wifimon_v5_49_0_20261107.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
                 "health_expect": b'"version"', "error_keys": ("error",)},
-    "44helper": {"file": "44helper_v0_1_18_20261107.py", "port": 9997, "scheme": "http",
+    "44helper": {"file": "44helper_v0_1_19_20261108.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
 }
 for _spec in SERVERS.values():

@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4180,7 +4180,7 @@ def _put_nodes_line(lines, nodes_line):
 
 def rec_node_state(main=None):
     out = {"node": REC_NODE, "main": main_node() if main is None else main, "defined": False, "owner": "",
-           "nodes_line": False, "ready": False, "linked": None,
+           "nodes_line": False, "ready": False, "linked": None, "wanted": main_recording(),
            "rxchannel": f"USRP/127.0.0.1:{REC_USRP_IN}:{REC_USRP_OUT}"}
     try:
         lines, stanzas = read_rpt()
@@ -4240,8 +4240,38 @@ def rec_node_enable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: added node {REC_NODE} for node {main} (backup {backup})", "ok")
-    return _changed(backup, f"Added node {REC_NODE}. Restart Asterisk, then Node Recorder links it to node {main}."
+    return _changed(backup, f"Added node {REC_NODE}. Restart Asterisk; Node Recorder links it to node {main} only while it records the main node."
                     + allmon_follow([REC_NODE], [], main))
+
+
+def main_recording():
+    st = SCHED.status()
+    cur = st["current"] or {}
+    return st["state"] != "idle" and not cur.get("dry_run")
+
+
+def rec_node_owned():
+    if talker_active():
+        return None
+    st = rec_node_state()
+    if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
+        return None
+    return st
+
+
+def rec_node_link(why):
+    st = rec_node_owned()
+    if st is None or st["linked"]:
+        return
+    ok, out = ilink(st["main"], 3, REC_NODE)
+    log_event(f"Linked node {REC_NODE} to node {st['main']} ({why})" + ("" if ok else f" failed: {out.strip()[:120]}"),
+              "ok" if ok else "warn")
+
+
+def rec_node_release(why):
+    st = rec_node_owned()
+    if st is not None and st["linked"]:
+        rec_node_unlink(why)
 
 
 def rec_node_unlink(why):
@@ -4408,27 +4438,33 @@ def priv_remove(body):
                     + allmon_follow([], pick))
 
 
+def link_keeper_step(last):
+    if talker_active():
+        return None
+    st = rec_node_state()
+    if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
+        return last
+    if not st["wanted"]:
+        if st["linked"]:
+            rec_node_unlink("no recording of the main node")
+        return None
+    if st["linked"]:
+        if last is False:
+            log_event(f"Node {REC_NODE} is linked to node {st['main']} again", "ok")
+        return True
+    ok, out = ilink(st["main"], 3, REC_NODE)
+    if last is not False:
+        log_event(f"Node {REC_NODE} was not linked to node {st['main']}; linking it"
+                  + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
+    return False
+
+
 def link_keeper_loop():
     last = None
     while True:
         time.sleep(20)
         try:
-            if talker_active():
-                last = None
-                continue
-            st = rec_node_state()
-            if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
-                continue
-            if st["linked"]:
-                if last is False:
-                    log_event(f"Node {REC_NODE} is linked to node {st['main']} again", "ok")
-                last = True
-                continue
-            ok, out = ilink(st["main"], 3, REC_NODE)
-            if last is not False:
-                log_event(f"Node {REC_NODE} was not linked to node {st['main']}; linking it"
-                          + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
-            last = False
+            last = link_keeper_step(last)
         except Exception as exc:
             log_event(f"Link keeper error: {exc}", "err")
 
@@ -5590,10 +5626,13 @@ class RealActions:
         return ENGINE.healthy()
 
     def start(self, entry, window):
+        rec_node_link("recording starts")
         return ENGINE.start(entry, window)
 
     def stop(self):
-        return ENGINE.stop()
+        r = ENGINE.stop()
+        rec_node_release("recording ended")
+        return r
 
     def disconnect(self, entry):
         r = tune_disconnect(entry["target"])
@@ -7426,14 +7465,15 @@ async function pollStatus() {
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
   const feedTxt = d.receiving ? ('receiving, ' + d.packets_per_sec + ' packets/s')
     : (d.last_rx_age != null ? 'no audio for ' + Math.round(d.last_rx_age) + ' s' : 'nothing received yet');
-  $('st-feed').className = 'dot ' + feedCls;
-  $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
-  $('st-feed-w').title = 'Audio from Asterisk: ' + feedTxt;
+  const idle1921 = !d.receiving && (d.rec_node || {}).wanted === false && !(d.talker || {}).active;
+  $('st-feed').className = 'dot ' + (idle1921 ? '' : feedCls);
+  $('st-feed-t').textContent = d.receiving ? 'feed' : idle1921 ? 'feed idle' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
+  $('st-feed-w').title = idle1921 ? 'Node 1921 is linked only while the main node is being recorded' : 'Audio from Asterisk: ' + feedTxt;
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
   $('st-level').textContent = fmtDb(d.peak_db);
   $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
-  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : 'listening, no audio yet');
+  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : idle1921 ? 'idle: node 1921 is linked only while the main node is recorded' : 'listening, no audio yet');
   const talker = d.talker || {};
   $('rn-talker').textContent = talker.active ? 'Node Talker is running: audio comes from its forward.'
     : (talker.installed ? 'Node Talker is installed but stopped: Node Recorder listens on the node itself.' : 'Node Talker is not installed.');
@@ -7523,10 +7563,12 @@ async function loadRecNode() {
   else if (!d.nodes_line) s = 'Its [nodes] line is missing or has the wrong IAX port: press Add node ' + d.node + ' to fix it.';
   else if (!d.rx_ok) s = 'Set up, but its rxchannel is not ' + d.rxchannel + '.';
   else if (d.linked === null) s = 'Set up. Asterisk does not know it yet: restart Asterisk.';
-  else s = d.linked ? 'Set up and linked to node ' + d.main + '.' : 'Set up; linking to node ' + d.main + ' (checked every 20 s).';
+  else if (d.wanted) s = d.linked ? 'Recording the main node: linked to node ' + d.main + '.' : 'Recording the main node: linking to node ' + d.main + ' (checked every 20 s).';
+  else s = d.linked ? 'Set up. Still linked to node ' + d.main + '; it is unlinked within 20 s.'
+    : 'Set up and idle. It is linked to node ' + d.main + ' only while Node Recorder records the main node.';
   $('rn-state').textContent = s;
   sum('node', d.error ? 'Could not read rpt.conf' : !d.defined ? 'Not set up' : talker ? 'Node Talker owns it'
-    : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : d.linked === null ? 'Restart Asterisk' : d.linked ? 'Set up and linked' : 'Set up, linking');
+    : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : d.linked === null ? 'Restart Asterisk' : d.wanted ? (d.linked ? 'Recording, linked' : 'Recording, linking') : 'Set up, idle');
   $('rn-add').disabled = d.defined && (talker || d.nodes_line);
   $('rn-remove').disabled = !(d.defined && d.owner === 'recorder') && !d.nodes_line;
 }
@@ -8321,7 +8363,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="card fold" id="cd-node">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-node"><span class="fold-t">Recorder node <span id="rn-node">1921</span></span><span class="fold-sum" id="sum-node"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-node">
-<p class="muted small">Node Recorder records the audio of the private node above, linked to the main node. Node Talker uses the same node: when Node Talker owns it, Node Recorder records the audio Node Recorder forwards.</p>
+<p class="muted small">Node 1921 carries the main node's audio to Node Recorder. Node Recorder links it to the main node only while it records the main node (Record now, or a schedule entry set to the Main node); scheduled recordings on private nodes do not use it, so the main node stays free for radio use. Node Talker uses the same node: when Node Talker owns it, Node Recorder records the audio Node Talker forwards.</p>
 <table>
 <tr><th>State</th><td id="rn-state">-</td></tr>
 <tr><th>Channel</th><td><code id="rn-rxch">-</code></td></tr>
@@ -9017,7 +9059,7 @@ def setup_plan(full=False):
             blocked.append(f"rpt.conf already has a node {REC_NODE} that Node Recorder didn't add. Remove it or pick another node.")
         elif st.get("owner") != "talker" and not st.get("ready"):
             steps.append({"id": "node", "text": f"Add node {REC_NODE} to rpt.conf: its own stanza, a USRP channel on "
-                          f"127.0.0.1 ports {REC_USRP_IN} and {REC_USRP_OUT}, and a [nodes] line. Node Recorder then links it to node {main}."})
+                          f"127.0.0.1 ports {REC_USRP_IN} and {REC_USRP_OUT}, and a [nodes] line. Node Recorder links it to node {main} only while it records the main node."})
     if pending and not steps and not blocked:
         setup_mark(False)
         pending = False

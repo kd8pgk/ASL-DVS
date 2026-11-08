@@ -694,6 +694,85 @@ class SecondPart(unittest.TestCase):
         self.assertIn("Net-part-2", name)
 
 
+class Gate1921(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.events = []
+        self.state = {"node": "1921", "main": "1234", "ready": True, "linked": False, "owner": "recorder", "wanted": False}
+        for name, val in (("rec_node_state", lambda *a, **k: dict(self.state)), ("talker_active", lambda: False),
+                          ("main_node", lambda: "1234"),
+                          ("rpt_links", lambda node, **k: (True, [{"node": "1921", "dir": "OUT", "time": "", "state": "ESTABLISHED"}]
+                                                         if self.state["linked"] else [])),
+                          ("ilink", lambda node, op, peer: (self.calls.append((node, op, peer)), (True, ""))[1])):
+            p = mock.patch.object(nr, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_idle_node_is_left_unlinked(self):
+        self.assertIsNone(nr.link_keeper_step(True))
+        self.assertEqual(self.calls, [])
+
+    def test_a_left_over_link_is_dropped_when_nothing_records_the_main_node(self):
+        self.state["linked"] = True
+        self.assertIsNone(nr.link_keeper_step(True))
+        self.assertEqual(self.calls, [("1234", 1, "1921")])
+
+    def test_it_is_linked_while_the_main_node_records_and_relinked_if_it_drops(self):
+        self.state["wanted"] = True
+        self.assertIs(nr.link_keeper_step(None), False)
+        self.assertEqual(self.calls, [("1234", 3, "1921")])
+        self.state["linked"] = True
+        self.calls.clear()
+        self.assertIs(nr.link_keeper_step(False), True)
+        self.assertEqual(self.calls, [])
+
+    def test_node_talker_owning_the_node_is_never_touched(self):
+        self.state.update(owner="talker", linked=True)
+        self.assertEqual(nr.link_keeper_step("keep"), "keep")
+        self.assertEqual(self.calls, [])
+        self.state.update(owner="recorder", wanted=False)
+        with mock.patch.object(nr, "talker_active", lambda: True):
+            self.assertIsNone(nr.link_keeper_step(True))
+        self.assertEqual(self.calls, [])
+
+    def test_a_node_that_is_not_set_up_is_skipped(self):
+        self.state.update(ready=False, wanted=True)
+        self.assertEqual(nr.link_keeper_step("keep"), "keep")
+        self.assertEqual(self.calls, [])
+
+    def test_the_main_node_actions_link_before_recording_and_release_after(self):
+        self.state["wanted"] = True
+        order = []
+        with mock.patch.object(nr.ENGINE, "start", lambda e, w: (order.append("engine start"), (True, "", "x.wav"))[1]), \
+                mock.patch.object(nr.ENGINE, "stop", lambda: (order.append("engine stop"), (True, "", None))[1]):
+            a = nr.RealActions()
+            self.assertTrue(a.start({"name": "x", "format": "pcm"}, None)[0])
+            self.assertEqual(self.calls, [("1234", 3, "1921")])
+            self.state["linked"] = True
+            self.assertTrue(a.stop()[0])
+        self.assertEqual(self.calls[-1], ("1234", 1, "1921"))
+        self.assertEqual(order, ["engine start", "engine stop"])
+
+    def test_record_now_uses_the_same_link(self):
+        self.state["wanted"] = True
+        with mock.patch.object(nr.ENGINE, "start", lambda e, w: (True, "", "x.wav")):
+            nr.CurrentLinkActions().start({"name": "x", "format": "pcm"}, None)
+        self.assertEqual(self.calls, [("1234", 3, "1921")])
+
+    def test_main_recording_follows_the_main_lane_and_ignores_dry_runs(self):
+        for status, want in (({"state": "idle", "current": None}, False),
+                             ({"state": "recording", "current": {"dry_run": False}}, True),
+                             ({"state": "connecting", "current": {"dry_run": False}}, True),
+                             ({"state": "recording", "current": {"dry_run": True}}, False)):
+            with mock.patch.object(nr.SCHED, "status", lambda s=status: s):
+                self.assertEqual(nr.main_recording(), want, status)
+
+    def test_private_node_recordings_do_not_count(self):
+        with mock.patch.object(nr.SCHED, "status", lambda: {"state": "idle", "current": None}), \
+                mock.patch.object(nr, "lanes_status", lambda: [{"name": "Net", "node": "1050"}]):
+            self.assertFalse(nr.main_recording())
+
+
 class NextBridge(unittest.TestCase):
     def test_lists_the_soonest_digital_window_within_the_notice_time(self):
         now = nr.sched_now()

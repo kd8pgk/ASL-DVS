@@ -1,6 +1,14 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_103_20261108.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_104_20261108.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.104 (2026-11-08)
+
+- **Phone node numbers use the shared rpt.conf number search.** Which numbers rpt.conf already has, and the next free phone node counting up from the Phone Bridge and wrapping at 1999, now come from `rpt_scan` and `rpt_next_free` in `shared/confio.py`, the same code Node Recorder and 44helper use. The numbers it hands out are the same as before: the cycle starts at the Phone Bridge, skips the main node, the bridge nodes and every number rpt.conf already has outside the Dashboard's own block, and starts again at 1000 after 1999.
+- **Slightly stricter.** A section written with spaces inside the brackets, such as `[ 1777 ]`, now counts as a number in use.
+- How the phone nodes are written to rpt.conf (stanzas, function lists, `[nodes]` lines, the Dashboard's own block) is unchanged.
+- The Pi Zero 2 W build is not changed by this release.
+- This is a release, not a cosmetic build.
 
 ## 9.3.103 (2026-11-08)
 

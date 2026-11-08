@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.19"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17445,6 +17445,58 @@ def _fcr_status() -> dict:
     })
     return out
 
+def rpt_scan(text):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]\s*(\([^)]*\))?")
+    rxline = re.compile(r"^\s*rxchannel\s*=>?\s*([^;\s]+)", re.I)
+    usrp = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
+    lines = text.split("\n")
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines),
+                         "template": (m.group(2) or "").replace(" ", "")})
+    used = set()
+    ports = set()
+    notes = {}
+    rx = {}
+    nodes_sec = None
+    for s in secs:
+        name = s["name"]
+        if name.isdigit():
+            used.add(name)
+        elif name.lower().startswith("functions") and name[9:].isdigit():
+            used.add(name[9:])
+        if name.lower() == "nodes":
+            nodes_sec = s
+            for i in range(s["start"] + 1, s["end"]):
+                body = lines[i].split(";", 1)[0]
+                key = body.split("=", 1)[0].strip()
+                if "=" in body and key.isdigit():
+                    used.add(key)
+        for i in range(s["start"] + 1, s["end"]):
+            m = rxline.match(lines[i])
+            if m:
+                rx[name] = m.group(1)
+                u = usrp.match(m.group(1))
+                if u:
+                    ports.update((int(u.group(1)), int(u.group(2))))
+        notes[name] = lines[s["start"] - 1].strip() if s["start"] > 0 else ""
+    return {"lines": lines, "secs": secs, "used": used, "ports": ports, "notes": notes, "rx": rx,
+            "nodes": nodes_sec}
+
+
+def rpt_next_free(used, start, stop, reserved=()):
+    for n in range(int(start), int(stop) + 1):
+        s = str(n)
+        if s not in used and s not in reserved:
+            return s
+    return ""
+
+
 _PN_NOTE = "; 44helper: private node added on the Config tab (remove it there)"
 _PN_RESERVED = ("1921", "1999", "1917")
 _PN_TPL_RE = re.compile(r"^\s*\[[^\]]+\]\s*(\([^)]*\))")
@@ -17452,17 +17504,8 @@ _PN_TPL_RE = re.compile(r"^\s*\[[^\]]+\]\s*(\([^)]*\))")
 def _pn_scan(lines: list[str]) -> dict:
     mask = _cfgr_managed_mask(lines)
     secs = _cfgr_sections(lines, mask)
-    used: set[str] = set()
-    for line in lines:
-        m = _CFGR_HDR_RE.match(line)
-        if m:
-            used.add(m.group(1).strip())
+    used: set[str] = rpt_scan("\n".join(lines))["used"]
     nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
-    if nodes_sec is not None:
-        for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
-            kv = _cfgr_kv(lines[i])
-            if kv and kv[0].isdigit():
-                used.add(kv[0])
     ours: dict[str, dict] = {}
     ports: set[int] = set()
     for s in secs:
@@ -17480,10 +17523,7 @@ def _pn_scan(lines: list[str]) -> dict:
     return {"mask": mask, "secs": secs, "used": used, "ours": ours, "nodes": nodes_sec, "ports": ports}
 
 def _pn_next_free(used: set[str]) -> str:
-    for n in range(_CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX + 1):
-        if str(n) not in used and str(n) not in _PN_RESERVED:
-            return str(n)
-    return ""
+    return rpt_next_free(used, _CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX, _PN_RESERVED)
 
 def _pn_template(lines: list[str], secs: list[dict]) -> tuple[str, str]:
     c = globals().get("_cfg")
@@ -19573,10 +19613,6 @@ function copyTextToClipboard(text, btn) {
 _JS_OVERVIEW = """
 // ── Overview tab (Stage 2) — fetch/populate logic ──
 var _ovTimer = null;
-
-function _ovLevelLabel(level) {
-  return {ok: 'All clear', info: 'Info', warn: 'Attention', danger: 'Exposure risk'}[level] || level;
-}
 
 function _ovDot(level) {
   return '<span class="ov-dot ' + level + '"></span>';
@@ -25192,9 +25228,6 @@ _JS_QUIET = """
 // triple-quoted JS blocks turn them into real characters at load time).
 var _qmTimer = null;
 var _qmLastRestoreFailed = false;
-function qmEsc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
 function qmNL() { return String.fromCharCode(10); }
 function qmRenderStatus(s) {
   var banner = document.getElementById('qm-banner');

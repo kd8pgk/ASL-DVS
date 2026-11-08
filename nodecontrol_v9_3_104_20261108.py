@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.103"
+VERSION      = "9.3.104"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -1128,6 +1128,58 @@ def _phone_tone_mode(n: dict) -> str:
 def _phone_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())[:12] or "net"
 
+def rpt_scan(text):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]\s*(\([^)]*\))?")
+    rxline = re.compile(r"^\s*rxchannel\s*=>?\s*([^;\s]+)", re.I)
+    usrp = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
+    lines = text.split("\n")
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines),
+                         "template": (m.group(2) or "").replace(" ", "")})
+    used = set()
+    ports = set()
+    notes = {}
+    rx = {}
+    nodes_sec = None
+    for s in secs:
+        name = s["name"]
+        if name.isdigit():
+            used.add(name)
+        elif name.lower().startswith("functions") and name[9:].isdigit():
+            used.add(name[9:])
+        if name.lower() == "nodes":
+            nodes_sec = s
+            for i in range(s["start"] + 1, s["end"]):
+                body = lines[i].split(";", 1)[0]
+                key = body.split("=", 1)[0].strip()
+                if "=" in body and key.isdigit():
+                    used.add(key)
+        for i in range(s["start"] + 1, s["end"]):
+            m = rxline.match(lines[i])
+            if m:
+                rx[name] = m.group(1)
+                u = usrp.match(m.group(1))
+                if u:
+                    ports.update((int(u.group(1)), int(u.group(2))))
+        notes[name] = lines[s["start"] - 1].strip() if s["start"] > 0 else ""
+    return {"lines": lines, "secs": secs, "used": used, "ports": ports, "notes": notes, "rx": rx,
+            "nodes": nodes_sec}
+
+
+def rpt_next_free(used, start, stop, reserved=()):
+    for n in range(int(start), int(stop) + 1):
+        s = str(n)
+        if s not in used and s not in reserved:
+            return s
+    return ""
+
+
 _PHONE_NODE_MIN, _PHONE_NODE_MAX = 1000, 1999
 
 def _phone_node_ok(v) -> bool:
@@ -1147,17 +1199,14 @@ def _phone_hand_nodes() -> Set[str]:
     except Exception:
         return set()
     live = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith(";"))
-    return set(re.findall(r"^\s*\[(\d+)\]", live, re.M))
+    return {s["name"] for s in rpt_scan(live)["secs"] if s["name"].isdigit()}
 
 def _phone_next_free(taken: Set[str]) -> str:
     base = _phone_node()
     start = int(base) if _phone_node_ok(base) else int(PHONE_NODE)
-    span = _PHONE_NODE_MAX - _PHONE_NODE_MIN + 1
-    for k in range(span):
-        c = str(_PHONE_NODE_MIN + (start - _PHONE_NODE_MIN + k) % span)
-        if c not in taken:
-            return c
-    return ""
+    if not _PHONE_NODE_MIN <= start <= _PHONE_NODE_MAX:
+        start = _PHONE_NODE_MIN
+    return rpt_next_free(taken, start, _PHONE_NODE_MAX) or rpt_next_free(taken, _PHONE_NODE_MIN, start - 1)
 
 def _phone_assign_nodes(nets: List[dict], hand: Optional[Set[str]] = None) -> bool:
     bad = _phone_reserved_nodes()
