@@ -33,6 +33,8 @@ EXPECT = {
                 "after_login": ("/api/logout", "xhr"), "control_proxy": "/api/radio"},
     "44helper": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
                  "after_login": ("/api/logout", "xhr"), "terminal_proxy": True},
+    "termon": {"xfo": "DENY", "referrer": "same-origin", "csp": True, "login_guard": "xhr",
+               "after_login": ("/api/term/ticket", "xhr")},
 }
 
 KNOWN_GAPS = {

@@ -48,6 +48,8 @@ jobs:
         run: python3 ci/test_talker_baseline.py
       - name: Node Talker stream tests (login, handshake, origin, idle, listeners)
         run: python3 ci/test_talker_stream.py
+      - name: Terminal Monitor tests (termon)
+        run: sudo env PATH="$PATH" python3 ci/test_termon.py
       - name: Repo checks
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
@@ -68,7 +70,7 @@ jobs:
           echo "::add-mask::$PW"
           echo "root:$PW" | sudo chpasswd
           echo "ASL_TEST_ROOT_PASSWORD=$PW" >> "$GITHUB_ENV"
-      - name: Server tests (eleven servers, started through the launcher, stubbed hardware)
+      - name: Server tests (twelve servers, started through the launcher, stubbed hardware)
         run: sudo env PATH="$PATH" ASL_TEST_VIA_LAUNCHER=1 ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_servers.py
       - name: Security tests (headers, request shape, proxy, local key)
         run: sudo env PATH="$PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_security.py

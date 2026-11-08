@@ -40,6 +40,10 @@ SERVERS = {
                 "health_expect": b'"version"', "error_keys": ("error",)},
     "44helper": {"file": "44helper_v0_1_19_20261108.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
+    "termon": {"file": "termon_v0_1_7_20261108.py", "port": 7878, "scheme": "https", "health": "/api/health",
+               "no_launcher": True,
+               "dirs_env": {"TERMON_CONFIG_DIR": "config"},
+               "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
@@ -58,6 +62,7 @@ PUBLIC_BY_DESIGN = {
     "instmon": {"/suitelog"},
     "wifimon": {"/api/whoami", "/api/countries"},
     "44helper": set(),
+    "termon": {"/api/health", "/api/whoami"},
 }
 
 
@@ -174,7 +179,7 @@ class Server:
         raise RuntimeError(f"{self.key} did not answer on port {self.spec['port']}")
 
     def launcher_args(self):
-        if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1":
+        if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1" or self.spec.get("no_launcher"):
             return []
         with open(os.path.join(ROOT, self.spec["file"]), encoding="utf-8") as f:
             tree = ast.parse(f.read())

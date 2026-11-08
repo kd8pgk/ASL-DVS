@@ -89,6 +89,32 @@ class InstallUninstall(unittest.TestCase):
                 self.assertEqual(os.path.exists(LAUNCHER), not last,
                                  "the launcher stays while another unit uses it, and goes with the last one")
 
+    def test_termon_install_then_uninstall(self):
+        file = ts.SERVERS["termon"]["file"]
+        unit_path = os.path.join(UNIT_DIR, "termon.service")
+        link = "/usr/local/bin/termon.py"
+        if os.path.exists(unit_path) or os.path.lexists(link):
+            self.skipTest("termon is already installed here; run on a clean machine")
+        other = os.path.join(UNIT_DIR, "termonitor.service")
+        with open(other, "w") as f:
+            f.write("[Service]\nExecStart=/usr/bin/other\n")
+        try:
+            self.run_cli(file, "--install")
+            with open(unit_path) as f:
+                body = f.read()
+            self.assertIn("Type=notify", body)
+            self.assertIn("ExecStart=/usr/bin/python3 /usr/local/bin/termon.py", body)
+            self.assertTrue(os.path.isfile(os.path.realpath(link)))
+            self.run_cli(file, "--uninstall")
+            self.assertFalse(os.path.exists(unit_path))
+            self.assertFalse(os.path.lexists(link))
+            self.assertTrue(os.path.exists(other), "an unrelated unit whose name starts with termon must stay")
+        finally:
+            for path in (other, unit_path, link):
+                if os.path.lexists(path):
+                    os.unlink(path)
+            shutil.rmtree("/usr/local/lib/asl_dvs/termon", ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
