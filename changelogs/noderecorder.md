@@ -1,13 +1,25 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_6_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_7_0_20261108.py`. Newest entries first.
+
+## 0.7.0 (2026-11-08)
+
+- **Scheduled recordings can run on private nodes, several at once.** Each schedule entry now has a node: **Auto**, **Main node**, or one of the private nodes added on the Setup tab. Auto puts an ASL or EchoLink entry on the first private node that is free at that time; with no private nodes it stays on the main node, as before. Entries on different nodes can overlap and record at the same time, each with its own audio feed, level handling and file. Only entries on the same node conflict, and touching windows are still fine.
+- **Link in local monitor mode.** An entry on a private node links that node to the target with `ilink 8` (local monitor only), records, then drops it with `ilink 1`. The main node and node 1921 are not used, so radio comms carry on during the recording. If the link drops, it is linked again; a drop that lasts two checks ends the recording as before.
+- **A busy node suggests a new one.** When every private node is busy at that time, saving says to add another private node on the Setup tab (restart Asterisk once, then save again). At five nodes it says to pick another time.
+- **Digital entries stay on the main node.** DMR, D-STAR, YSF and M17 entries still record on the main node in this version; a digital entry cannot be given a private node yet.
+- **Node waiting for a restart.** An entry on a node Asterisk has not loaded yet fails that window with "restart Asterisk once" and records from the next window once it is loaded.
+- **Removing a node** is refused while it is recording or a schedule entry uses it.
+- **Status.** `/api/recorder/status` has a new `recordings` list (entry, node, times, file) and `busy` still means the main node is in use. The schedule view lists the private nodes and what is recording on them.
+- **Open recordings are protected.** Header repair, conversion and old-file removal skip every recording that is still being written.
+- This is a release, not a cosmetic build.
 
 ## 0.6.0 (2026-11-08)
 
 - **Private recording nodes.** The Setup tab has a new "Private recording nodes" card. **Add** writes one private node into rpt.conf at a time, as needed: the next free number from 1050 up, with its own USRP port pair, the main node's template and a `[nodes]` line. At most five. Asterisk needs one restart for a new node to load; the node then stays. **Remove** takes out one node, **Remove all** takes out every node Node Recorder added. Only stanzas marked as Node Recorder's are ever removed, and node 1921 is not touched by this card.
 - **Numbers and ports in use are skipped.** A number is skipped when rpt.conf already has a `[node]`, a `[functionsNODE]` or a `[nodes]` line for it, or when it is the main node, node 1921 or a digital bridge node (1999, 1917 or the ones set on the Digital card). A port is skipped when any `rxchannel = USRP/...` already uses it.
 - **Shared code.** The rpt.conf scan, number and port picking, and add and remove of a marked stanza live in `shared/confio.py` (`rpt_scan`, `rpt_next_free`, `rpt_pick_ports`, `rpt_template`, `rpt_add_private`, `rpt_remove_private`) and are copied unchanged into this file.
-- This version only sets the nodes up. Scheduled recordings still use the main node until a later version moves them onto these nodes.
+- This version only sets the nodes up. Scheduled recordings use them from 0.7.0.
 - This is a release, not a cosmetic build.
 
 ## 0.5.14 (2026-11-07)
