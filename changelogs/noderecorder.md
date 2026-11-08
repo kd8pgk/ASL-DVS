@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_14_20261107.py`. Newest entries first.
+Current file: `noderecorder_v0_6_0_20261108.py`. Newest entries first.
+
+## 0.6.0 (2026-11-08)
+
+- **Private recording nodes.** The Setup tab has a new "Private recording nodes" card. **Add** writes one private node into rpt.conf at a time, as needed: the next free number from 1050 up, with its own USRP port pair, the main node's template and a `[nodes]` line. At most five. Asterisk needs one restart for a new node to load; the node then stays. **Remove** takes out one node, **Remove all** takes out every node Node Recorder added. Only stanzas marked as Node Recorder's are ever removed, and node 1921 is not touched by this card.
+- **Numbers and ports in use are skipped.** A number is skipped when rpt.conf already has a `[node]`, a `[functionsNODE]` or a `[nodes]` line for it, or when it is the main node, node 1921 or a digital bridge node (1999, 1917 or the ones set on the Digital card). A port is skipped when any `rxchannel = USRP/...` already uses it.
+- **Shared code.** The rpt.conf scan, number and port picking, and add and remove of a marked stanza live in `shared/confio.py` (`rpt_scan`, `rpt_next_free`, `rpt_pick_ports`, `rpt_template`, `rpt_add_private`, `rpt_remove_private`) and are copied unchanged into this file.
+- This version only sets the nodes up. Scheduled recordings still use the main node until a later version moves them onto these nodes.
+- This is a release, not a cosmetic build.
 
 ## 0.5.14 (2026-11-07)
 

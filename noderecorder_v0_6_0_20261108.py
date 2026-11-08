@@ -35,8 +35,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.14"
-DATE_STR = "2026-11-07"
+VERSION = "0.6.0"
+DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -1485,6 +1485,135 @@ def _write_failed(exc):
     return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
 
 
+def rpt_scan(text):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]\s*(\([^)]*\))?")
+    rxline = re.compile(r"^\s*rxchannel\s*=>?\s*([^;\s]+)", re.I)
+    usrp = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
+    lines = text.split("\n")
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines),
+                         "template": (m.group(2) or "").replace(" ", "")})
+    used = set()
+    ports = set()
+    notes = {}
+    rx = {}
+    nodes_sec = None
+    for s in secs:
+        name = s["name"]
+        if name.isdigit():
+            used.add(name)
+        elif name.lower().startswith("functions") and name[9:].isdigit():
+            used.add(name[9:])
+        if name.lower() == "nodes":
+            nodes_sec = s
+            for i in range(s["start"] + 1, s["end"]):
+                body = lines[i].split(";", 1)[0]
+                key = body.split("=", 1)[0].strip()
+                if "=" in body and key.isdigit():
+                    used.add(key)
+        for i in range(s["start"] + 1, s["end"]):
+            m = rxline.match(lines[i])
+            if m:
+                rx[name] = m.group(1)
+                u = usrp.match(m.group(1))
+                if u:
+                    ports.update((int(u.group(1)), int(u.group(2))))
+        notes[name] = lines[s["start"] - 1].strip() if s["start"] > 0 else ""
+    return {"lines": lines, "secs": secs, "used": used, "ports": ports, "notes": notes, "rx": rx,
+            "nodes": nodes_sec}
+
+
+def rpt_next_free(used, start, stop, reserved=()):
+    for n in range(int(start), int(stop) + 1):
+        s = str(n)
+        if s not in used and s not in reserved:
+            return s
+    return ""
+
+
+def rpt_pick_ports(ports, node, base_in=34000, base_out=32000):
+    off = int(node) - 1000
+    for k in range(1000):
+        a = base_in + (off + k) % 1000
+        b = base_out + (off + k) % 1000
+        if a not in ports and b not in ports:
+            return a, b
+    return 0, 0
+
+
+def rpt_template(scan, own=""):
+    secs = scan["secs"]
+    main = next((s for s in secs if own and s["name"] == own), None)
+    if main is None:
+        main = next((s for s in secs if s["name"].isdigit() and len(s["name"]) >= 4
+                     and not 1000 <= int(s["name"]) <= 1999), None)
+    if main is not None and main["template"]:
+        return main["template"]
+    if any(s["name"] == "node-main" for s in secs):
+        return "(node-main)"
+    return ""
+
+
+def rpt_add_private(text, node, marker, rxchannel, body, nodes_line, template=""):
+    scan = rpt_scan(text)
+    if node in scan["used"]:
+        return None, "node %s is already in rpt.conf" % node
+    lines = text.split("\n")
+    stanza = [marker, "[%s]%s" % (node, template), "rxchannel = %s" % rxchannel] + list(body)
+    sec = scan["nodes"]
+    if sec is not None:
+        last = sec["start"]
+        for i in range(sec["start"] + 1, sec["end"]):
+            if "=" in lines[i].split(";", 1)[0]:
+                last = i
+        lines.insert(last + 1, nodes_line)
+        tail = []
+    else:
+        tail = ["", "[nodes]", nodes_line]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines += [""] + stanza + tail + [""]
+    return "\n".join(lines), ""
+
+
+def rpt_remove_private(text, node, marker):
+    scan = rpt_scan(text)
+    sec = next((s for s in scan["secs"] if s["name"] == node), None)
+    if sec is None or scan["notes"].get(node) != marker:
+        return text, False
+    lines = scan["lines"]
+    stop = sec["end"]
+    if stop - 1 > sec["start"] and lines[stop - 1].strip().startswith(";"):
+        stop -= 1
+    while stop - 1 > sec["start"] and not lines[stop - 1].strip():
+        stop -= 1
+    drop = set(range(sec["start"] - 1, stop))
+    ns = scan["nodes"]
+    if ns is not None:
+        for i in range(ns["start"] + 1, ns["end"]):
+            body = lines[i].split(";", 1)[0]
+            if "=" in body and body.split("=", 1)[0].strip() == node:
+                drop.add(i)
+    out = []
+    after_drop = False
+    for i, line in enumerate(lines):
+        if i in drop:
+            after_drop = True
+            continue
+        if not line.strip() and after_drop and out and not out[-1].strip():
+            continue
+        if line.strip():
+            after_drop = False
+        out.append(line)
+    return "\n".join(out), True
+
+
 ALLMON3_INI = "/etc/allmon3/allmon3.ini"
 
 
@@ -1798,6 +1927,12 @@ REC_NOTE = "; noderecorder: receive node for Node Recorder (remove it from the N
 TALKER_SERVICE = "nodetalker.service"
 TALKER_UNIT = os.environ.get("NODERECORDER_TALKER_UNIT", "/etc/systemd/system/nodetalker.service")
 FWD_PORT = 9995
+PRIV_START = 1050
+PRIV_STOP = 1999
+PRIV_MAX = 5
+PRIV_NOTE = "; noderecorder: private recording node (remove it from the Node Recorder page)"
+PRIV_BODY = ("duplex = 0", "hangtime = 0", "althangtime = 0", "holdofftelem = 1", "telemdefault = 0",
+             "nounkeyct = 1", "idrecording = |t(0,0,10,0)")
 IAX_CONF = os.environ.get("NODERECORDER_IAX_CONF", "/etc/asterisk/iax.conf")
 LOCAL_KEY_PATH = os.environ.get("NODERECORDER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
@@ -4117,6 +4252,107 @@ def rec_node_disable():
     log_event(f"rpt.conf: removed node {REC_NODE} (backup {backup})", "ok")
     return _changed(backup, f"Removed node {REC_NODE}. Restart Asterisk for it to take effect."
                     + allmon_follow([], [REC_NODE]))
+
+
+def priv_reserved():
+    b = bridge_nodes()
+    return {REC_NODE, DEFAULT_BRIDGES[0], DEFAULT_BRIDGES[1], b.get("digital", ""), b.get("m17", ""),
+            main_node() or ""} - {""}
+
+
+def priv_read():
+    with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def priv_nodes_line(node):
+    port = iax_bindport()
+    host = "127.0.0.1" if port == "4569" else f"127.0.0.1:{port}"
+    return f"{node} = radio@{host}/{node},NONE"
+
+
+def priv_owned(scan):
+    return sorted((n for n, note in scan["notes"].items() if note == PRIV_NOTE and n.isdigit()), key=int)
+
+
+def priv_state():
+    out = {"ok": True, "max": PRIV_MAX, "start": PRIV_START, "nodes": [], "can_add": False, "next": "", "main": main_node() or ""}
+    try:
+        text = priv_read()
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
+    scan = rpt_scan(text)
+    owned = priv_owned(scan)
+    file_lines = text.split("\n")
+    for node in owned:
+        rx = scan["rx"].get(node, "")
+        m = re.match(r"USRP/[^:\s]+:(\d+):(\d+)$", rx)
+        known, _links = rpt_links(node, max_age=5.0)
+        has_line = _has_line(file_lines, priv_nodes_line(node))
+        state = "ready" if known and has_line and m else "restart" if has_line and m else "fix"
+        out["nodes"].append({"node": node, "rxchannel": rx, "in_port": int(m.group(1)) if m else 0,
+                             "out_port": int(m.group(2)) if m else 0, "nodes_line": has_line, "asterisk": bool(known),
+                             "state": state})
+    nxt = rpt_next_free(scan["used"], PRIV_START, PRIV_STOP, priv_reserved())
+    out["next"] = nxt
+    out["can_add"] = bool(nxt) and len(owned) < PRIV_MAX and bool(out["main"])
+    return out
+
+
+def priv_add(_body=None):
+    main = main_node()
+    if not main:
+        return {"ok": False, "error": "Set the node first (the Dashboard's node number)."}
+    with _rpt_lock:
+        try:
+            text = priv_read()
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
+        scan = rpt_scan(text)
+        if len(priv_owned(scan)) >= PRIV_MAX:
+            return {"ok": False, "error": f"Node Recorder keeps at most {PRIV_MAX} private nodes. Remove one first."}
+        node = rpt_next_free(scan["used"], PRIV_START, PRIV_STOP, priv_reserved())
+        if not node:
+            return {"ok": False, "error": f"No free private node number from {PRIV_START} to {PRIV_STOP}."}
+        pin, pout = rpt_pick_ports(scan["ports"], node)
+        if not pin:
+            return {"ok": False, "error": "No free USRP port pair for a new private node."}
+        new, err = rpt_add_private(text, node, PRIV_NOTE, f"USRP/127.0.0.1:{pin}:{pout}", PRIV_BODY,
+                                   priv_nodes_line(node), rpt_template(scan, main))
+        if new is None:
+            return {"ok": False, "error": f"Could not add node {node}: {err}."}
+        try:
+            backup = _write_rpt(new.split("\n"))
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: added private node {node} on ports {pin}/{pout} (backup {backup})", "ok")
+    r = _changed(backup, f"Added private node {node}. Restart Asterisk once for it to take effect; it stays after that."
+                 + allmon_follow([node], [], main))
+    r["node"] = node
+    return r
+
+
+def priv_remove(body):
+    which = str((body or {}).get("node", "")).strip()
+    every = bool((body or {}).get("all"))
+    with _rpt_lock:
+        try:
+            text = priv_read()
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
+        owned = priv_owned(rpt_scan(text))
+        pick = owned if every else [which] if which in owned else []
+        if not pick:
+            return {"ok": True, "changed": False, "message": "Node Recorder has no such private node in rpt.conf."}
+        for node in pick:
+            text, _ok = rpt_remove_private(text, node, PRIV_NOTE)
+        try:
+            backup = _write_rpt(text.split("\n"))
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: removed private node{'s' if len(pick) > 1 else ''} {', '.join(pick)} (backup {backup})", "ok")
+    return _changed(backup, f"Removed private node{'s' if len(pick) > 1 else ''} {', '.join(pick)}. Restart Asterisk for it to take effect."
+                    + allmon_follow([], pick))
 
 
 def link_keeper_loop():
@@ -6480,7 +6716,7 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'conv', 'rx', 'log'];
+const FOLDS = ['setup', 'sched', 'dig', 'node', 'priv', 'store', 'conv', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
 function showTab(name) {
@@ -6493,7 +6729,7 @@ function showTab(name) {
   });
   if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); loadSchedule(); }
   if (name === 'record') { loadSchedule(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadDigital(); loadConv(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadPrivNodes(); loadConfig(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 function render() {
@@ -6538,6 +6774,7 @@ function foldSet(k, open) {
   if (k === 'sched') loadSchedule();
   if (k === 'dig') loadDigital();
   if (k === 'node') loadRecNode();
+  if (k === 'priv') loadPrivNodes();
   if (k === 'log') pollLog();
 }
 function pollEvery(fn, ms) {
@@ -6839,6 +7076,48 @@ async function schedDryRun(id) {
   });
   box.classList.toggle('hidden', !(d.steps && d.steps.length));
 }
+const PN_STATE = {ready: 'Ready', restart: 'In rpt.conf: restart Asterisk', fix: 'Needs attention: press Remove, then add it again'};
+async function loadPrivNodes() {
+  const d = await api('/api/privnodes');
+  const body = $('pn-body');
+  body.textContent = '';
+  if (!d.ok) { note('pn-msg', 'err', d.error || 'Could not read rpt.conf.'); sum('priv', 'Could not read rpt.conf'); return; }
+  d.nodes.forEach((n) => {
+    const tr = document.createElement('tr');
+    [n.node, n.in_port ? n.in_port + ' / ' + n.out_port : '-', PN_STATE[n.state] || n.state].forEach((v) => {
+      const td = document.createElement('td');
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const td = document.createElement('td');
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn'; b.textContent = 'Remove';
+    b.addEventListener('click', () => privRemove(n.node));
+    td.appendChild(b);
+    tr.appendChild(td);
+    body.appendChild(tr);
+  });
+  $('pn-empty').classList.toggle('hidden', d.nodes.length > 0);
+  $('pn-add').disabled = !d.can_add;
+  $('pn-add').textContent = d.can_add ? 'Add node ' + d.next : 'Add a private node';
+  $('pn-remove-all').disabled = d.nodes.length === 0;
+  sum('priv', d.nodes.length ? d.nodes.length + ' of ' + d.max : 'None yet');
+}
+async function privAdd() {
+  note('pn-msg', '', 'Adding...');
+  setMsg('pn-msg', await post('/api/privnodes/add', {}));
+  loadPrivNodes();
+}
+async function privRemove(node) {
+  if (!confirm('Remove private node ' + node + ' from rpt.conf? Restart Asterisk afterwards.')) return;
+  setMsg('pn-msg', await post('/api/privnodes/remove', {node: node}));
+  loadPrivNodes();
+}
+async function privRemoveAll() {
+  if (!confirm('Remove every Node Recorder private node from rpt.conf? Node 1921 is not touched. Restart Asterisk afterwards.')) return;
+  setMsg('pn-msg', await post('/api/privnodes/remove', {all: true}));
+  loadPrivNodes();
+}
 async function recNodeEnable() { setMsg('rn-msg', await post('/api/recnode/enable', {})); loadRecNode(); }
 async function recNodeDisable() {
   if (!confirm('Remove node 1921 from rpt.conf? Recording stops working until it is added again.')) return;
@@ -7071,6 +7350,8 @@ function initPage() {
   $('sc-special').addEventListener('change', schedKindShow);
   $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
+  $('pn-add').addEventListener('click', privAdd);
+  $('pn-remove-all').addEventListener('click', privRemoveAll);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
@@ -7394,6 +7675,20 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="rn-msg" class="msg"></div>
 </div>
 </div>
+<div class="card fold" id="cd-priv">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-priv"><span class="fold-t">Private recording nodes</span><span class="fold-sum" id="sum-priv"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-priv">
+<p class="muted small">Private nodes (1050 and up, at most five) are set up here one at a time, as needed. Node Recorder will record scheduled entries on them, so the main node and node 1921 stay free for radio use. After adding one, restart Asterisk once: it stays in rpt.conf from then on. Node 1921 is not touched here.</p>
+<table>
+<thead><tr><th>Node</th><th>Ports in / out</th><th>State</th><th></th></tr></thead>
+<tbody id="pn-body"></tbody>
+</table>
+<p id="pn-empty" class="muted small">No private nodes yet.</p>
+<div class="row"><button id="pn-add" class="btn primary" type="button">Add a private node</button>
+<button id="pn-remove-all" class="btn" type="button">Remove all</button></div>
+<div id="pn-msg" class="msg"></div>
+</div>
+</div>
 <div class="card fold" id="cd-store">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-store"><span class="fold-t">Storage</span><span class="fold-sum" id="sum-store"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-store">
@@ -7489,6 +7784,8 @@ _POST_ACTIONS = {
     "/api/recording/stop": (lambda b: recording_stop(), ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
+    "/api/privnodes/add": (priv_add, (OSError,)),
+    "/api/privnodes/remove": (priv_remove, (OSError,)),
     "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
@@ -7645,6 +7942,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, schedule_view())
             elif path == "/api/recnode":
                 self._json(200, dict(rec_node_state(), ok=True))
+            elif path == "/api/privnodes":
+                self._json(200, priv_state())
             elif path == "/api/setup":
                 self._json(200, dict(setup_plan(), ok=True))
             elif path == "/api/tune-info":
