@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -3155,6 +3155,30 @@ def _has_dvs(favs):
     return any(f["mode"] in DVS_MODES for f in favs)
 
 
+def _dvs_set_tune(f, net):
+    dvs("tune", DVS_DISCONNECT)
+    time.sleep(DVS_SETTLE_SEC)
+    if _dvs_now["mode"] != f["mode"]:
+        ok, out = dvs("mode", f["mode"])
+        _dvs_now["mode"] = f["mode"] if ok else ""
+        if not ok:
+            log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
+        time.sleep(DVS_SETTLE_SEC)
+    if net is not None:
+        tune = f"{net['password']}@{net['address']}"
+        if _dvs_now["dmr"] != tune:
+            ok, out = dvs("tune", tune)
+            if not ok:
+                return f"Could not join DMR network {net['name']}: {_hide(out, net['password'])[:160]}"
+            _dvs_now["dmr"] = tune
+            log_event(f"Joined DMR network {net['name']} ({net['address']})", "ok")
+            time.sleep(1.0)
+    ok, out = dvs("tune", f["num"])
+    if not ok:
+        return f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"
+    return ""
+
+
 def solo_dvs(f, node, net_action=None):
     label = MODE_LABEL.get(f["mode"], f["mode"])
     if nc_running():
@@ -3186,32 +3210,26 @@ def solo_dvs(f, node, net_action=None):
             ok, out = ilink(node, 3, bridge)
             if not ok:
                 return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
-        dvs("tune", DVS_DISCONNECT)
-        time.sleep(DVS_SETTLE_SEC)
-        if _dvs_now["mode"] != f["mode"]:
-            ok, out = dvs("mode", f["mode"])
-            _dvs_now["mode"] = f["mode"] if ok else ""
-            if not ok:
-                log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
-            time.sleep(DVS_SETTLE_SEC)
-        if net is not None:
-            tune = f"{net['password']}@{net['address']}"
-            if _dvs_now["dmr"] != tune:
-                ok, out = dvs("tune", tune)
-                if not ok:
-                    return {"ok": False, "error": f"Could not join DMR network {net['name']}: {_hide(out, net['password'])[:160]}"}
-                _dvs_now["dmr"] = tune
-                log_event(f"Joined DMR network {net['name']} ({net['address']})", "ok")
-                time.sleep(1.0)
-        ok, out = dvs("tune", f["num"])
-        if not ok:
-            return {"ok": False, "error": f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"}
+        err = _dvs_set_tune(f, net)
+        if err:
+            return {"ok": False, "error": err}
         _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge)
     finally:
         _tune_lock.release()
     log_event(f"Tuned {fav_name(f)}; bridge node {bridge} linked to node {node}"
               + (f" (dropped {', '.join(dropped)})" if dropped else ""), "ok")
     return {"ok": True, "message": f"Tuned {fav_name(f)}. Bridge node {bridge} is linked to node {node}."}
+
+
+def _m17_set_tune(f, call, addr):
+    try:
+        _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
+    except OSError as exc:
+        return f"Could not write {M17_INI}: {exc}"
+    r = _systemctl("restart", M17_SERVICE, timeout=30)
+    if r.returncode != 0:
+        return f"{M17_SERVICE} did not restart: {(r.stderr or r.stdout).strip()[:160]}"
+    return ""
 
 
 def solo_m17(f, node):
@@ -3241,13 +3259,9 @@ def solo_m17(f, node):
         _leave(node, "m17")
         if dvs_path():
             dvs("tune", DVS_DISCONNECT)
-        try:
-            _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
-        except OSError as exc:
-            return {"ok": False, "error": f"Could not write {M17_INI}: {exc}"}
-        r = _systemctl("restart", M17_SERVICE, timeout=30)
-        if r.returncode != 0:
-            return {"ok": False, "error": f"{M17_SERVICE} did not restart: {(r.stderr or r.stdout).strip()[:160]}"}
+        err = _m17_set_tune(f, call, addr)
+        if err:
+            return {"ok": False, "error": err}
         if not _linked(node, bridge):
             ok, out = ilink(node, 3, bridge)
             if not ok:
@@ -3766,7 +3780,29 @@ def _tune_connect_impl(b):
     return solo_dvs(f, node, act if act in ("add", "once") else None)
 
 
+def _tune_guard(b):
+    if not isinstance(b, dict) or b.get("force"):
+        return None
+    try:
+        f = _tune_fav(b)
+    except ValueError:
+        return None
+    if f["mode"] in ("ASL", "EchoLink"):
+        return None
+    h = bridge_hold_for(f)
+    if not h or h["target"] == fav_target(f):
+        return None
+    until = h.get("end", "")[11:16]
+    return {"ok": False, "warn": True, "need_confirm": True,
+            "error": f"A scheduled recording ({h['name']}) is using the {bridge_label(bridge_kind(f))} bridge"
+                     + (f" until {until}" if until else "")
+                     + ". Tuning now stops it and keeps what was recorded so far."}
+
+
 def tune_connect(b):
+    blocked = _tune_guard(b)
+    if blocked:
+        return blocked
     r = _tune_connect_impl(b)
     try:
         f = _tune_fav(b)
@@ -5251,6 +5287,39 @@ def schedule_conflicts(entries):
     out = []
     for node in sorted({e.get("node", "") for e in entries}):
         out += _lane_conflicts([e for e in entries if e.get("node", "") == node])
+    return out + _bridge_conflicts(entries)
+
+
+def _entry_bridge(e):
+    mode = (e.get("target") or {}).get("mode")
+    if not mode or mode in ("ASL", "EchoLink"):
+        return ""
+    return "m17" if mode == "M17" else "digital"
+
+
+def _same_target(a, b):
+    return all(str(a.get(k, "")) == str(b.get(k, "")) for k in ("mode", "num", "module", "net"))
+
+
+def _bridge_conflicts(entries):
+    out = []
+    live = [e for e in entries if e.get("enabled") and _entry_bridge(e)]
+    for i in range(len(live)):
+        for j in range(i + 1, len(live)):
+            a, b = live[i], live[j]
+            if _entry_bridge(a) != _entry_bridge(b) or _same_target(a["target"], b["target"]):
+                continue
+            if a.get("kind") == "special" and b.get("kind") == "special":
+                a0, a1 = _special_window(a)
+                b0, b1 = _special_window(b)
+                hit = a0 < b1 and b0 < a1
+            elif a.get("kind") == "special" or b.get("kind") == "special":
+                hit = False
+            else:
+                hit = any(pa[0] < pb[1] and pb[0] < pa[1] for pa in _sched_pieces(a, SCHEDULE_GAP_MIN)
+                          for pb in _sched_pieces(b, SCHEDULE_GAP_MIN))
+            if hit:
+                out.append(f"{a['name']} and {b['name']} need the {bridge_label(_entry_bridge(a))} bridge at the same time for different targets")
     return out
 
 
@@ -5376,8 +5445,6 @@ def schedule_set(body):
     pool = priv_pool()
     asl = e["target"].get("mode") in ("ASL", "EchoLink")
     if e["node"] and e["node"] != "auto":
-        if not asl:
-            return {"ok": False, "error": "DMR, D-STAR, YSF and M17 entries still record on the main node."}
         if e["node"] not in pool:
             return {"ok": False, "error": f"Node {e['node']} is not one of Node Recorder's private nodes (Setup tab)."}
     with _sched_lock:
@@ -5392,7 +5459,7 @@ def schedule_set(body):
         auto = e["node"] == "auto"
         if auto:
             e["node"] = ""
-            if asl and pool:
+            if pool:
                 pick = schedule_assign(entries, e, pool)
                 if pick is None:
                     room = len(pool) < PRIV_MAX
@@ -5401,10 +5468,18 @@ def schedule_set(body):
                         "restart Asterisk once, then save again." if room else
                         f"All {len(pool)} private nodes are busy at that time. Pick another time.")}
                 e["node"] = pick
+        if e["node"] and not asl:
+            try:
+                problems = bridge_preflight(_tune_fav(e["target"]))
+            except ValueError as exc:
+                problems = [str(exc)]
+            if problems:
+                return {"ok": False, "error": "This entry could not be tuned on a private node: " + "; ".join(problems) + "."}
         entries.append(e)
         bad = schedule_conflicts(entries)
         if bad:
-            hint = " Pick another private node, or add one on the Setup tab." if e["node"] and len(pool) < PRIV_MAX else ""
+            node_clash = not any("bridge" in m for m in bad)
+            hint = " Pick another private node, or add one on the Setup tab." if node_clash and e["node"] and len(pool) < PRIV_MAX else ""
             return {"ok": False, "error": "; ".join(bad) + "." + hint, "conflicts": bad}
         order = {x["id"]: i for i, x in enumerate(data["entries"])}
         entries.sort(key=lambda x: order.get(x["id"], len(order)))
@@ -5415,7 +5490,12 @@ def schedule_set(body):
     what = f"special on {e['date']}" if e["kind"] == "special" else ", ".join(SCHEDULE_DAY_NAMES[d] for d in e["days"])
     where = f" on node {e['node']}" if e["node"] else ""
     log_event(f"Schedule: saved {e['name']} ({what} {e['start']}-{e['end']}){where}", "ok")
-    note = "" if e["node"] or not asl or pool else " It records on the main node; add private nodes on the Setup tab to keep the main node free."
+    note = "" if e["node"] or pool else " It records on the main node; add private nodes on the Setup tab to keep the main node free."
+    if e["node"] and not asl:
+        note += " It tunes the " + bridge_label(_entry_bridge(e)) + " bridge for its window, so a live tune on that bridge makes it skip."
+    warn = load_warning()
+    if warn:
+        note += " " + warn
     return {"ok": True, "entry": e, "message": f"Saved{where}." + note}
 
 
@@ -5524,6 +5604,178 @@ class CurrentLinkActions(RealActions):
 
     def disconnect(self, entry):
         return True, "the link was left as it is", None
+
+
+LOAD_WARN = 4.0
+BRIDGE_TUNE_WAIT_SEC = 30.0
+_bridge_lock = threading.Lock()
+_bridge_gate = {"digital": threading.Lock(), "m17": threading.Lock()}
+_bridge_use = {"digital": None, "m17": None}
+
+
+def bridge_kind(f):
+    return "m17" if f["mode"] == "M17" else "digital"
+
+
+def bridge_label(kind):
+    return "M17" if kind == "m17" else "digital"
+
+
+def load_warning():
+    try:
+        one = os.getloadavg()[0]
+    except OSError:
+        return ""
+    return f"The system load is high ({one:.1f}): recordings may stutter." if one > LOAD_WARN else ""
+
+
+def bridge_holds():
+    with _bridge_lock:
+        return [{"kind": k, "bridge": h["bridge"], "target": h["target"], "name": h["name"], "nodes": sorted(h["users"]),
+                 "end": h.get("end", "")} for k, h in _bridge_use.items() if h]
+
+
+def bridge_hold_for(f):
+    with _bridge_lock:
+        h = _bridge_use.get(bridge_kind(f))
+        return dict(h) if h else None
+
+
+def bridge_set_end(f, end):
+    with _bridge_lock:
+        h = _bridge_use.get(bridge_kind(f))
+        if h and not h.get("end"):
+            h["end"] = end
+
+
+def m17_resolve(f):
+    if not _m17_present():
+        return "", "", "USRP2M17 was not found, so M17 can't be tuned here."
+    call = callsign_now()[0]
+    if not call:
+        return "", "", "M17 needs your callsign: set it on the Setup tab (Digital card)."
+    addr, err = m17_lookup(f["num"], f["module"])
+    if err:
+        return "", "", err
+    addr = addr or f.get("ip", "")
+    if not addr:
+        return "", "", f"{f['num']} is not in {M17_HOSTS} and its favorite has no address."
+    return call, addr, ""
+
+
+def bridge_preflight(f):
+    kind = bridge_kind(f)
+    out = []
+    if not bridge_nodes(0).get(kind):
+        out.append(f"no {bridge_label(kind)} bridge node was found (Setup tab, Digital card)")
+    if kind == "m17":
+        _call, _addr, err = m17_resolve(f)
+        if err:
+            out.append(err.rstrip("."))
+    else:
+        if not dvs_path():
+            out.append("dvswitch.sh was not found, so " + MODE_LABEL.get(f["mode"], f["mode"]) + " can't be tuned here")
+        if f["mode"] == "DMR" and not any(n["name"] == f.get("net") for n in nets_load()):
+            out.append(f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)")
+    return out
+
+
+def bridge_live(kind, f):
+    b = bridge_nodes().get(kind, "")
+    main = main_node()
+    if not b or not main:
+        return ""
+    ok, links = rpt_links(main, max_age=2.0)
+    if not ok or not any(l["node"] == b for l in links):
+        return ""
+    target = fav_target(f)
+    if not nc_running(cached=True):
+        if _solo["target"] and _solo["bridge"] == b:
+            return "same" if _solo["target"] == target else _solo["name"]
+        return "a live link"
+    if kind == "digital":
+        if nc_dvs_target(fav_load()) == target:
+            return "same"
+        return tuned_text(nc_dvs_current()) or "a live tune"
+    now = m17_current()
+    return f"M17 {now}" if now else "a live tune"
+
+
+def bridge_tune(kind, f):
+    if not _tune_lock.acquire(timeout=BRIDGE_TUNE_WAIT_SEC):
+        return "another tune is still running; this recording could not tune the bridge"
+    try:
+        if kind == "m17":
+            call, addr, err = m17_resolve(f)
+            return err or _m17_set_tune(f, call, addr)
+        ok, why = _gateway_up(f["mode"])
+        if not ok:
+            return why
+        net = None
+        if f["mode"] == "DMR":
+            net = next((n for n in nets_load() if n["name"] == f.get("net")), None)
+            if net is None:
+                return f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)."
+        return _dvs_set_tune(f, net)
+    finally:
+        _tune_lock.release()
+
+
+def bridge_park(kind, f):
+    if not _tune_lock.acquire(timeout=BRIDGE_TUNE_WAIT_SEC):
+        return
+    try:
+        if kind == "m17":
+            _m17_park()
+        else:
+            if f["mode"] == "DSTAR":
+                dvs("tune", DSTAR_UNLINK)
+            dvs("tune", DVS_DISCONNECT)
+    finally:
+        _tune_lock.release()
+
+
+def bridge_acquire(f, entry, node):
+    kind = bridge_kind(f)
+    label = bridge_label(kind)
+    bridge = bridge_nodes(0).get(kind, "")
+    if not bridge:
+        return False, f"No {label} bridge node was found: set it on the Setup tab (Digital card)."
+    target = fav_target(f)
+    with _bridge_gate[kind]:
+        with _bridge_lock:
+            h = _bridge_use[kind]
+            if h:
+                if h["target"] != target:
+                    return False, f"the {label} bridge is in use by the recording {h['name']}"
+                h["users"].add(node)
+                return True, bridge
+        taken = bridge_live(kind, f)
+        if taken and taken != "same":
+            return False, f"the {label} bridge is in use by a live tune ({taken}); this recording is skipped"
+        if not taken:
+            err = bridge_tune(kind, f)
+            if err:
+                return False, err
+        with _bridge_lock:
+            _bridge_use[kind] = {"bridge": bridge, "target": target, "name": entry["name"], "users": {node},
+                                 "owned": not taken, "end": ""}
+    return True, bridge
+
+
+def bridge_release(f, node, taken=False):
+    kind = bridge_kind(f)
+    with _bridge_gate[kind]:
+        with _bridge_lock:
+            h = _bridge_use[kind]
+            if not h:
+                return
+            h["users"].discard(node)
+            if h["users"]:
+                return
+            _bridge_use[kind] = None
+        if h["owned"] and not taken:
+            bridge_park(kind, f)
 
 
 def priv_udp_loop(stream):
@@ -5639,11 +5891,16 @@ class PrivActions:
     def __init__(self, node):
         self.node = node
         self.peer = ""
+        self.f = None
+        self.taken = ""
 
-    def _peer(self, entry):
-        if not self.peer:
-            self.peer = fav_target(_tune_fav(entry["target"]))
-        return self.peer
+    def _fav(self, entry):
+        if self.f is None:
+            self.f = _tune_fav(entry["target"])
+        return self.f
+
+    def _digital(self, entry):
+        return self._fav(entry)["mode"] not in ("ASL", "EchoLink")
 
     def connect(self, entry):
         if priv_stream(self.node) is None:
@@ -5651,22 +5908,45 @@ class PrivActions:
         known, _links = rpt_links(self.node, max_age=0)
         if not known:
             return False, f"Asterisk does not know node {self.node} yet: restart Asterisk once", None
-        peer = self._peer(entry)
-        ok, out = ilink(self.node, 8, peer)
+        f = self._fav(entry)
+        digital = self._digital(entry)
+        if digital:
+            warn = load_warning()
+            if warn:
+                log_event(f"{entry['name']}: {warn}", "warn")
+            problems = bridge_preflight(f)
+            if problems:
+                return False, "; ".join(problems), None
+            ok, res = bridge_acquire(f, entry, self.node)
+            if not ok:
+                return False, res, None
+            self.peer = res
+        else:
+            self.peer = fav_target(f)
+        ok, out = ilink(self.node, 8, self.peer)
         if not ok:
+            if digital:
+                bridge_release(f, self.node)
             return False, f"Asterisk refused the link: {out.strip()[:160] or 'no answer'}", None
-        state = wait_link(self.node, peer)
+        state = wait_link(self.node, self.peer)
         if state == "up":
-            return True, f"node {self.node} linked to {peer} (local monitor)", None
+            return True, f"node {self.node} linked to {self.peer} (local monitor)", None
         if state == "unknown":
-            return True, f"link sent from node {self.node} to {peer}, but Asterisk did not list the links", None
-        return False, f"node {self.node} did not link to {peer} after {LINK_WAIT_SEC} s", None
+            return True, f"link sent from node {self.node} to {self.peer}, but Asterisk did not list the links", None
+        if digital:
+            ilink(self.node, 1, self.peer)
+            bridge_release(f, self.node)
+        return False, f"node {self.node} did not link to {self.peer} after {LINK_WAIT_SEC} s", None
 
     def link_alive(self, entry):
-        peer = self._peer(entry)
-        if _linked(self.node, peer):
+        if self._digital(entry):
+            taken = bridge_live(bridge_kind(self.f), self.f)
+            if taken not in ("", "same"):
+                self.taken = taken
+                return "taken"
+        if _linked(self.node, self.peer):
             return True
-        ilink(self.node, 8, peer)
+        ilink(self.node, 8, self.peer)
         return False
 
     def healthy(self, entry):
@@ -5677,6 +5957,8 @@ class PrivActions:
         s = priv_stream(self.node)
         if s is None:
             return False, f"private node {self.node} is not set up in rpt.conf", None
+        if window and self._digital(entry):
+            bridge_set_end(self.f, window[1].isoformat(timespec="minutes"))
         return s.start(entry, window)
 
     def stop(self):
@@ -5686,6 +5968,8 @@ class PrivActions:
     def disconnect(self, entry):
         if self.peer:
             ilink(self.node, 1, self.peer)
+        if self.f is not None and self._digital(entry):
+            bridge_release(self.f, self.node, taken=bool(self.taken))
         return True, f"node {self.node} unlinked", None
 
 
@@ -5742,6 +6026,9 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
                 alive = actions.link_alive(entry)
             except Exception:
                 alive = None
+            if alive == "taken":
+                result, detail = "bridge_taken", f"the bridge was taken by {getattr(actions, 'taken', '') or 'a live tune'}; what was recorded is kept"
+                break
             lost = lost + 1 if alive is False else 0
             if lost >= LINK_LOST_CHECKS:
                 result, detail = "link_lost", "the link dropped during the recording"
@@ -6110,7 +6397,8 @@ def recorder_status():
     dry = bool(cur.get("dry_run"))
     return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
             "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
-            "elapsed": cur.get("elapsed", 0), "file": cur.get("file", ""), "recordings": lanes_status()}
+            "elapsed": cur.get("elapsed", 0), "file": cur.get("file", ""), "recordings": lanes_status(),
+            "bridges": bridge_holds(), "load_warning": load_warning()}
 
 
 MANUAL_MAX_SEC = 4 * 3600
@@ -6221,7 +6509,7 @@ def schedule_view():
     rows = [t[2] for t in keyed]
     return {"ok": True, "entries": rows, "error": data["error"], "max": SCHEDULE_MAX, "gap_min": SCHEDULE_GAP_MIN,
             "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "lanes": lanes_status(),
-            "priv_nodes": priv_pool(), "engine_ready": ENGINE_READY,
+            "priv_nodes": priv_pool(), "bridges": bridge_holds(), "load_warning": load_warning(), "engine_ready": ENGINE_READY,
             "dry_run": bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY, "now": now.strftime("%a %d %b %H:%M"),
             "tz": _cfg_get("schedule_tz"), "tz_label": sched_tz_label()}
 
@@ -7126,6 +7414,11 @@ async function connectFlow(body, listenText, connectText, url, box) {
   let d = {};
   try { d = await post(url, body); }
   finally { $(box.btn).disabled = false; connBusy = false; }
+  if (!d.ok && d.need_confirm && confirm(d.error + '\n\nTune anyway?')) {
+    $(box.btn).disabled = true;
+    try { d = await post(url, Object.assign({}, body, {force: true})); }
+    finally { $(box.btn).disabled = false; }
+  }
   setMsg(box.msg, d);
   if (!d.ok && d.need_net) { netAsk = {url: url, body: body, box: box, label: listenText}; $(box.ask).classList.remove('hidden'); }
   pollStatus();
@@ -7182,7 +7475,7 @@ async function loadRecNode() {
   $('rn-remove').disabled = !(d.defined && d.owner === 'recorder') && !d.nodes_line;
 }
 const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
-const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
+const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped', bridge_taken: 'bridge taken by a live tune',
   stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
 function schedDays(days) {
@@ -7211,7 +7504,9 @@ async function loadSchedule() {
   if (others.length) $('rec-state').textContent += ' | Also recording: ' + others.map((l) => l.name + ' on node ' + l.node).join(', ');
   $('rec-start').disabled = st.state !== 'idle';
   $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording';
-  $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
+  $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '')
+    + (d.load_warning ? ' ' + d.load_warning : '')
+    + ((d.bridges || []).length ? ' Holding the bridge: ' + d.bridges.map((b) => b.name + (b.end ? ' until ' + b.end.slice(11) : '')).join(', ') + '.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
   const rows = (id, manage) => {

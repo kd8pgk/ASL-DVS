@@ -1,6 +1,21 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_7_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_8_0_20261108.py`. Newest entries first.
+
+## 0.8.0 (2026-11-08)
+
+- **DMR, D-STAR, YSF, P25, NXDN, STFU and M17 entries can record on a private node.** The entry's node links to the digital bridge (`ilink 8`, local monitor only) and records, while the main node and node 1921 stay free. Auto picks a private node for these entries too.
+- **The bridge is tuned for the window.** When the window opens Node Recorder tunes the bridge to the entry's talkgroup, room or reflector (the recording itself starts 60 seconds in, as for every entry, so the tune has time to settle): DVSwitch mode, DMR network login and tune for the digital modes, the USRP2M17 settings and restart for M17. When the window ends it unlinks and puts the bridge back to idle, unless another recording still holds it or someone else tuned it in the meantime.
+- **One tune per bridge.** The digital bridge is shared by every digital mode and M17 has its own, so two entries that overlap on the same bridge must have the same target. Different targets are refused when saving, whatever node they are on, with a message that says a new node would not help. Two entries with the same target can share the bridge.
+- **A live tune wins at window start.** If the main node is linked to the bridge with another tune (Tune on this page, Node Controller or Node Talker), the entry is skipped and logged. If the live tune is the same target, the recording shares it and leaves it alone afterwards.
+- **A live tune during a recording ends it, and the file is kept.** If the main node is linked to the bridge with a different tune while a recording runs, the recording stops with the result "bridge taken by a live tune" and the bridge is left on the new tune.
+- **Tune asks first.** Tuning a digital target on this page while a scheduled recording holds that bridge asks "Tune anyway?", naming the recording and when it ends; Yes stops that recording and keeps what it recorded.
+- **Pre-flight checks.** Saving a digital entry on a private node checks that dvswitch.sh (or USRP2M17 and the callsign and reflector for M17), the DMR network and the bridge node are there, and says what is missing. The same checks run again at the window.
+- **Load warning.** When the 1-minute load is above 4, the schedule note, a save and a digital window start say so. It never blocks a recording.
+- **Status.** `/api/recorder/status` lists the bridges held by recordings (`bridges`) and has `load_warning`, ready for Node Controller and Node Talker to warn before a tune.
+- The Tune and Record now buttons are unchanged apart from the question above; their DVSwitch and M17 steps now live in functions the scheduled recordings use too.
+- Not verified on a node: that tuning the bridge directly leaves Node Controller's own page state alone, and that `ilink 8` carries the bridge's audio into a private node.
+- This is a release, not a cosmetic build.
 
 ## 0.7.0 (2026-11-08)
 
