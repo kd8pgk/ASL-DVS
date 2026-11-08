@@ -351,7 +351,7 @@ class TerminalTests(TermonBase):
             sid = self.open_shell(self.c)
         self.c.json("POST", "/api/term/input", {"sid": sid, "data": "env | grep -c -E 'NOTIFY_SOCKET|INVOCATION_ID|LISTEN_' ; echo EN''D\n"})
         out = self.read_until(sid, b"\r\nEND").decode("utf-8", "replace")
-        self.assertRegex(out, r"\r0\r\nEND")
+        self.assertRegex(re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", out), r"\r0\r\nEND")
 
     def test_opening_again_replaces_only_that_logins_terminal(self):
         a, b = Client(self.port), Client(self.port)
