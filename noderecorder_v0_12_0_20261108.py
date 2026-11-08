@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 DATE_STR = "2026-11-08"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4403,6 +4403,111 @@ def priv_add(_body=None):
     return r
 
 
+TEST_HOLD_SEC = 3.0
+_test_tune_lock = threading.Lock()
+
+
+def priv_test_pick(want, pool):
+    cands = [want] if want and want != "auto" else list(pool)
+    why = ""
+    for n in cands:
+        s = priv_stream(n)
+        if n not in pool or s is None:
+            why = f"Node {n} is not one of Node Recorder's private nodes."
+            continue
+        lane = lane_of(n)
+        if s.recording() or (lane is not None and lane.status()["state"] != "idle"):
+            why = f"Node {n} is recording."
+            continue
+        known, _links = rpt_links(n, max_age=0)
+        if not known:
+            why = f"Asterisk does not know node {n} yet: restart Asterisk once."
+            continue
+        return n, ""
+    return "", why or "No private node is set up. Add one on this card first."
+
+
+def priv_test_tune(body):
+    eid = str((body or {}).get("id", "")).strip().lower()
+    e = next((x for x in schedule_load()["entries"] if x["id"] == eid), None)
+    if e is None:
+        return {"ok": False, "error": "Pick a schedule entry to test."}
+    try:
+        f = _tune_fav(e["target"])
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    pool = priv_pool()
+    want = str((body or {}).get("node") or "auto").strip().lower()
+    if want == "auto" and e.get("node") in pool:
+        want = e["node"]
+    node, why = priv_test_pick(want, pool)
+    if not node:
+        return {"ok": False, "error": why}
+    if not _test_tune_lock.acquire(blocking=False):
+        return {"ok": False, "error": "A test tune is already running."}
+    steps = []
+    digital = f["mode"] not in ("ASL", "EchoLink")
+    acquired = False
+    linked = False
+    peer = fav_target(f)
+    stream = priv_stream(node)
+
+    def add(name, ok, msg, t0):
+        steps.append({"step": name, "ok": bool(ok), "msg": str(msg), "secs": round(time.monotonic() - t0, 1)})
+        return ok
+
+    def done(ok, msg):
+        log_event(f"Test tune {fav_name(f)} on node {node}: {'ok' if ok else 'failed'} ({msg})", "ok" if ok else "warn")
+        return {"ok": ok, "node": node, "steps": steps, "message" if ok else "error": msg}
+
+    try:
+        if digital:
+            t0 = time.monotonic()
+            problems = bridge_preflight(f)
+            if problems:
+                add("check", False, "; ".join(problems), t0)
+                return done(False, "Not ready: " + "; ".join(problems) + ".")
+            add("check", True, "dvswitch.sh or USRP2M17, the network and the bridge node are there", t0)
+            t0 = time.monotonic()
+            ok, res = bridge_acquire(f, {"name": "Test tune"}, node)
+            add("tune", ok, f"{fav_name(f)} on the {bridge_label(bridge_kind(f))} bridge" if ok else res, t0)
+            if not ok:
+                return done(False, "Could not tune: " + res + ".")
+            acquired = True
+            peer = res
+        t0 = time.monotonic()
+        ok, out = ilink(node, 8, peer)
+        if not ok:
+            add("link", False, f"Asterisk refused the link: {out.strip()[:120] or 'no answer'}", t0)
+            return done(False, "Asterisk refused the link.")
+        linked = True
+        state = wait_link(node, peer)
+        add("link", state in ("up", "unknown"),
+            {"up": f"node {node} linked to {peer} (local monitor)", "unknown": "link sent, but Asterisk did not list the links",
+             "connecting": f"{peer} has not answered after {LINK_WAIT_SEC} s", "down": f"no link to {peer} after {LINK_WAIT_SEC} s"}[state], t0)
+        if state not in ("up", "unknown"):
+            return done(False, f"Node {node} did not link to {peer}.")
+        t0 = time.monotonic()
+        before = stream.hub.packets if stream else 0
+        time.sleep(TEST_HOLD_SEC)
+        still = _linked(node, peer)
+        heard = (stream.hub.packets - before) if stream else 0
+        add("hold", still, f"link still up after {TEST_HOLD_SEC:g} s; {heard} audio packets arrived (none is normal when nobody is talking)"
+            if still else "the link dropped while holding", t0)
+        if not still:
+            return done(False, "The link dropped while holding.")
+        return done(True, f"{fav_name(f)} tuned and linked on node {node}" + (" " + load_warning() if load_warning() else ""))
+    finally:
+        t0 = time.monotonic()
+        if linked:
+            ilink(node, 1, peer)
+        if acquired:
+            bridge_release(f, node)
+        if linked or acquired:
+            add("release", True, "unlinked" + (" and let the bridge go" if acquired else ""), t0)
+        _test_tune_lock.release()
+
+
 def priv_remove(body):
     which = str((body or {}).get("node", "")).strip()
     every = bool((body or {}).get("all"))
@@ -5796,7 +5901,7 @@ def bridge_acquire(f, entry, node):
                 return True, bridge
         taken = bridge_live(kind, f)
         if taken and taken != "same":
-            return False, f"the {label} bridge is in use by a live tune ({taken}); this recording is skipped"
+            return False, f"the {label} bridge is in use by a live tune ({taken})"
         if not taken:
             err = bridge_tune(kind, f)
             if err:
@@ -5963,7 +6068,7 @@ class PrivActions:
                 return False, "; ".join(problems), None
             ok, res = bridge_acquire(f, entry, self.node)
             if not ok:
-                return False, res, None
+                return False, f"{res}; this recording is skipped", None
             self.peer = res
         else:
             self.peer = fav_target(f)
@@ -7789,6 +7894,35 @@ async function loadPrivNodes() {
   $('pn-add').textContent = d.can_add ? 'Add node ' + d.next : 'Add a private node';
   $('pn-remove-all').disabled = d.nodes.length === 0;
   sum('priv', d.nodes.length ? d.nodes.length + ' of ' + d.max : 'None yet');
+  loadPrivTest(d.nodes);
+}
+async function loadPrivTest(nodes) {
+  const s = await api('/api/schedule');
+  const entry = $('pn-test-entry'), node = $('pn-test-node');
+  const keepE = entry.value, keepN = node.value;
+  entry.textContent = '';
+  node.textContent = '';
+  ((s && s.entries) || []).forEach((e) => addOption(entry, e.id, e.name + ' (' + schedTarget(e.target) + ')'));
+  addOption(node, 'auto', 'Auto');
+  nodes.forEach((n) => addOption(node, n.node, 'Node ' + n.node));
+  if (keepE) entry.value = keepE;
+  if (keepN) node.value = keepN;
+  $('pn-test').disabled = !entry.options.length || !nodes.length;
+}
+async function privTest() {
+  $('pn-test').disabled = true;
+  note('pn-test-msg', '', 'Testing...');
+  const d = await post('/api/privnodes/test', {id: $('pn-test-entry').value, node: $('pn-test-node').value});
+  setMsg('pn-test-msg', d);
+  const box = $('pn-test-steps');
+  box.textContent = '';
+  (d.steps || []).forEach((st) => {
+    const row = document.createElement('div');
+    row.textContent = st.step + ': ' + (st.ok ? 'ok' : 'failed') + (st.msg ? ' - ' + st.msg : '') + ' (' + st.secs + ' s)';
+    box.appendChild(row);
+  });
+  box.classList.toggle('hidden', !(d.steps && d.steps.length));
+  $('pn-test').disabled = false;
 }
 async function privAdd() {
   note('pn-msg', '', 'Adding...');
@@ -8052,6 +8186,7 @@ function initPage() {
   $('rn-remove').addEventListener('click', recNodeDisable);
   $('pn-add').addEventListener('click', privAdd);
   $('pn-remove-all').addEventListener('click', privRemoveAll);
+  $('pn-test').addEventListener('click', privTest);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
@@ -8388,6 +8523,12 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><button id="pn-add" class="btn primary" type="button">Add a private node</button>
 <button id="pn-remove-all" class="btn" type="button">Remove all</button></div>
 <div id="pn-msg" class="msg"></div>
+<h3 class="small">Test a target</h3>
+<p class="muted small">Links a free private node to a schedule entry's target for a few seconds, tuning the digital bridge first for DMR, D-STAR, YSF, M17 and the like, then lets go. It does nothing to a bridge that a live tune or a recording is using.</p>
+<div class="row"><label>Entry <select id="pn-test-entry"></select></label><label>Node <select id="pn-test-node"></select></label>
+<button id="pn-test" class="btn" type="button">Test tune</button></div>
+<div id="pn-test-msg" class="msg"></div>
+<div id="pn-test-steps" class="mono small hidden"></div>
 </div>
 </div>
 <div class="card fold" id="cd-store">
@@ -8487,6 +8628,7 @@ _POST_ACTIONS = {
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
     "/api/privnodes/add": (priv_add, (OSError,)),
     "/api/privnodes/remove": (priv_remove, (OSError,)),
+    "/api/privnodes/test": (priv_test_tune, ()),
     "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
