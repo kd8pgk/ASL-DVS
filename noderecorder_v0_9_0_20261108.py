@@ -6340,7 +6340,7 @@ def lanes_status():
     out = []
     for ln in all_lanes():
         cur = ln.status()["current"]
-        if cur:
+        if cur and not cur.get("dry_run"):
             out.append(dict(cur, node=ln.node))
     return out
 

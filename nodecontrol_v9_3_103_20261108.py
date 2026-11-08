@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.102"
+VERSION      = "9.3.103"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -8455,6 +8455,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   background: #3a2a00; color: var(--amber); border-bottom: 1px solid var(--amber); }
 #rec-banner.open { display: block; }
 #rec-banner.ovr { background: #3a1010; color: #ff9a9a; border-bottom-color: #ff6b6b; }
+#rec-banner.info { background: #1f2a33; color: #b9d4ea; border-bottom-color: #4d7fa6; }
 body.rec-locked [id$="-grid"] { opacity: .55; }
 #toast-stack {
   position: fixed;
@@ -9879,20 +9880,35 @@ function modal(msg,buttons){
   });
 }
 const confirm1=msg=>modal(msg,[{label:'Cancel',cls:'btn-muted',value:false},{label:'OK',cls:'btn-amber',value:true}]);
-let recBusy=null,_recAsking=false;
+let recBusy=null,recInfo={},_recAsking=false;
 const REC_API=['switch-tab','retune-tab','tune','quick-tune','asl-connect','asl-disc-current','disc-perm-link','connect-by-number','echo-connect',
   'echo-connect-by-number','echo-disc','dstar-connect','xlx-connect','dstar-disconnect','xlx-disconnect','m17-connect','m17-disconnect','disc-all',
   'switch-dmr-server','save-all','save-dmr-server-tgs','save-xlx','save-m17','save-config','save-phone','phone-select','phone-apply','phone-activate',
-  'phone-revert','phone-dial','phone-test','phone-patch','reboot','shutdown'];
+  'phone-revert','phone-dial','phone-test','phone-patch'];
 function recText(rec){
   const secs=Number(rec.elapsed)||0,end=String(rec.end||'').slice(11,16);
   return 'A recording is in progress: '+(rec.entry||'Node Recorder')+' ('+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0')+' so far'
     +(end?', until '+end:'')+'). Links, settings and restarts are locked until it ends, so the recording is not interrupted.';
 }
+function recNote(){
+  const recs=recInfo.recordings||[],bs=recInfo.bridges||[],nb=recInfo.next_bridge||{};
+  if(recs.length){
+    const names=recs.map(r=>(r.name||r.entry||'Node Recorder')+(r.node?' on node '+r.node:'')).join(', ');
+    const hold=bs.map(x=>x.kind==='m17'?'M17':'digital').join(' and ');
+    return 'Recording: '+names+'.'+(hold?' It holds the '+hold+' bridge, so tuning that bridge stops it.':'');
+  }
+  if(nb.start)return 'A recording starts on the '+(nb.kind==='m17'?'M17':'digital')+' bridge at '+String(nb.start).slice(11,16)
+    +' ('+nb.name+'). A live tune on that bridge then makes it skip.';
+  return '';
+}
 function recBanner(){
   const b=byId('rec-banner');
   document.body.classList.toggle('rec-locked',!!recBusy&&!recBusy.override);
-  if(!recBusy){b.className='';b.textContent='';return}
+  if(!recBusy){
+    const n=recNote();
+    b.className=n?'open info':'';b.textContent=n;
+    return;
+  }
   b.className='open'+(recBusy.override?' ovr':'');
   b.textContent=recBusy.override?'Recording in progress: override is on, so changes go through. It ends with the recording.'
     :'Recording in progress: '+(recBusy.entry||'Node Recorder')+'. Links, settings and restarts are locked until it ends.';
@@ -9903,8 +9919,17 @@ async function recPoll(){
     if(!r.ok)return;
     const d=await r.json();
     recBusy=d.recording||null;
+    recInfo=d||{};
     recBanner();
   }catch(e){}
+}
+async function recConfirm(j){
+  if(_recAsking)return false;
+  _recAsking=true;
+  try{
+    return !!(await modal(j.message,[{label:'Cancel',cls:'btn-muted',value:false},
+      {label:j.confirm_kind==='power'?'Go ahead':'Tune anyway',cls:'btn-red',value:true}]));
+  }finally{_recAsking=false}
 }
 async function recPopup(rec){
   if(_recAsking)return false;
@@ -9985,6 +10010,10 @@ async function api(body,ms=25000,_again=false){
       body:JSON.stringify(body),signal:ctrl.signal});
     clearTimeout(tid);
     const j=await r.json();
+    if(r.status===409&&j.recording_confirm&&!body.confirm_recording){
+      if(await recConfirm(j))return api(Object.assign({},body,{confirm_recording:true}),ms,true);
+      return{ok:false,message:'Cancelled: a recording is in progress.'};
+    }
     if(r.status===409&&j.recording_block&&!_again){
       recBusy=j.recording;recBanner();
       if(await recPopup(j.recording))return api(body,ms,true);
@@ -14232,11 +14261,20 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "message": recording_text(rec), "recording_block": True,
                                     "recording": rec}, 409)
                     raise _EarlyReturn()
+        need = rec_confirm_needed(action, data)
+        if need:
+            if data.get("confirm_recording") is True:
+                with _rec_lock:
+                    _rec_note(f"{action} went ahead during a recording after the question ({need['kind']})")
+            else:
+                self.send_json({"ok": False, "message": need["message"], "recording_confirm": True,
+                                "confirm_kind": need["kind"]}, 409)
+                raise _EarlyReturn()
         return fn(self, data)
 
 RECORDER_STATUS_URL = os.environ.get("NODECONTROL_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
 _rec_lock = threading.Lock()
-_rec_cache: dict = {"t": -1e9, "v": None}
+_rec_cache: dict = {"t": -1e9, "v": None, "info": None}
 _rec_override: dict = {"key": ""}
 _rec_override_log: deque = deque(maxlen=50)
 _REC_BLOCKED_ACTIONS = frozenset((
@@ -14244,7 +14282,13 @@ _REC_BLOCKED_ACTIONS = frozenset((
     "connect-by-number", "echo-connect", "echo-connect-by-number", "echo-disc", "dstar-connect", "xlx-connect",
     "dstar-disconnect", "xlx-disconnect", "m17-connect", "m17-disconnect", "disc-all", "switch-dmr-server",
     "save-all", "save-dmr-server-tgs", "save-xlx", "save-m17", "save-config", "save-phone", "phone-select",
-    "phone-apply", "phone-activate", "phone-revert", "phone-dial", "phone-test", "phone-patch", "reboot", "shutdown"))
+    "phone-apply", "phone-activate", "phone-revert", "phone-dial", "phone-test", "phone-patch"))
+_REC_BRIDGE_ACTIONS = frozenset((
+    "switch-tab", "retune-tab", "tune", "quick-tune", "dstar-connect", "xlx-connect", "dstar-disconnect", "xlx-disconnect",
+    "m17-connect", "m17-disconnect", "switch-dmr-server"))
+_REC_POWER_ACTIONS = frozenset(("reboot", "shutdown"))
+_REC_RESTART_ACTIONS = frozenset(("phone-apply", "phone-activate", "phone-revert"))
+_REC_DIGITAL_MODES = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
 def _rec_note(text: str) -> None:
     _rec_override_log.append({"at": datetime.now().isoformat(timespec="seconds"), "text": text})
@@ -14258,19 +14302,75 @@ def recorder_busy() -> Optional[dict]:
         if now - _rec_cache["t"] < 2.0:
             return _rec_cache["v"]
     busy = None
+    info = None
     try:
         with urllib.request.urlopen(RECORDER_STATUS_URL, timeout=0.6) as resp:
             d = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("ok"):
+            info = d
         if isinstance(d, dict) and d.get("ok") and d.get("busy"):
             busy = {k: d.get(k, "") for k in ("state", "entry", "start", "end", "elapsed", "file")}
     except (OSError, ValueError, urllib.error.URLError):
         busy = None
+        info = None
     with _rec_lock:
-        _rec_cache.update(t=now, v=busy)
+        _rec_cache.update(t=now, v=busy, info=info)
         if _rec_override["key"] and (busy is None or _rec_key(busy) != _rec_override["key"]):
             _rec_override["key"] = ""
             _rec_note("Override cleared: the recording ended")
     return busy
+
+def recorder_info() -> Optional[dict]:
+    recorder_busy()
+    with _rec_lock:
+        return _rec_cache["info"]
+
+def _rec_list(info: Optional[dict]) -> list:
+    recs = [r for r in ((info or {}).get("recordings") or []) if isinstance(r, dict)]
+    if not recs:
+        busy = recorder_busy()
+        if busy:
+            recs = [{"name": busy.get("entry", ""), "end": busy.get("end", ""), "node": ""}]
+    return recs
+
+def _rec_bridge_kind(action: str, d: dict) -> str:
+    if action not in _REC_BRIDGE_ACTIONS:
+        return ""
+    if action in ("m17-connect", "m17-disconnect"):
+        return "m17"
+    if action in ("switch-tab", "retune-tab", "tune", "quick-tune"):
+        mode = str(d.get("page") or d.get("mode") or "").strip().upper()
+        return "m17" if mode == "M17" else "digital" if mode in _REC_DIGITAL_MODES else ""
+    return "digital"
+
+def _rec_names(recs: list) -> str:
+    out = []
+    for r in recs[:3]:
+        end = str(r.get("end") or "")[11:16]
+        out.append(str(r.get("name") or r.get("entry") or "Node Recorder") + (f" on node {r['node']}" if r.get("node") else "")
+                   + (f" (until {end})" if end else ""))
+    more = len(recs) - 3
+    return ", ".join(out) + (f" and {more} more" if more > 0 else "")
+
+def rec_confirm_needed(action: str, d: dict) -> Optional[dict]:
+    if action not in _REC_BRIDGE_ACTIONS and action not in _REC_POWER_ACTIONS and action not in _REC_RESTART_ACTIONS:
+        return None
+    info = recorder_info()
+    recs = _rec_list(info)
+    if not recs:
+        return None
+    if action in _REC_POWER_ACTIONS or (action in _REC_RESTART_ACTIONS and d.get("restart")):
+        what = {"reboot": "Rebooting", "shutdown": "Shutting down"}.get(action, "Restarting Asterisk")
+        return {"kind": "power", "message": f"A recording is in progress: {_rec_names(recs)}. {what} now cuts it short; "
+                                            "what was recorded so far is saved as a partial file."}
+    kind = _rec_bridge_kind(action, d)
+    hold = next((b for b in ((info or {}).get("bridges") or []) if isinstance(b, dict) and b.get("kind") == kind), None)
+    if not kind or hold is None:
+        return None
+    until = str(hold.get("end") or "")[11:16]
+    return {"kind": kind, "message": f"A scheduled recording ({hold.get('name') or 'Node Recorder'}) is using the "
+                                     f"{'M17' if kind == 'm17' else 'digital'} bridge" + (f" until {until}" if until else "")
+                                     + ". Tuning now stops that recording and keeps what was recorded so far."}
 
 def _rec_override_active(rec: Optional[dict]) -> bool:
     with _rec_lock:
@@ -14299,7 +14399,10 @@ def recording_view() -> dict:
     active = _rec_override_active(rec)
     with _rec_lock:
         feed = list(_rec_override_log)
-    return {"ok": True, "recording": dict(rec, override=active) if rec else None, "override_log": feed}
+    info = recorder_info() or {}
+    return {"ok": True, "recording": dict(rec, override=active) if rec else None, "override_log": feed,
+            "recordings": _rec_list(info) if info else [], "bridges": info.get("bridges") or [],
+            "next_bridge": info.get("next_bridge") or {}}
 
 def _arg(d: dict, key: str) -> str:
     return str(d.get(key, ""))

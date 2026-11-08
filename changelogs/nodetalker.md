@@ -1,5 +1,15 @@
 # Node Talker changelog
 
+## 0.10.26 (2026-11-08)
+
+- **Questions instead of locks for tunes and restarts.** Node Recorder 0.9.0 and later tell Node Talker what is recording, which bridge a recording holds and when the next digital window starts. Node Talker now asks before it does something that would cut a recording short:
+  - **Tune and Disconnect (tune).** Tuning DMR, D-STAR, YSF, P25, NXDN or STFU while a scheduled recording holds the digital bridge, or M17 while one holds the M17 bridge, shows a box naming the recording and when it ends, with **Cancel** and **Tune anyway**. Tune anyway stops that recording; what was recorded so far is kept. A tune disconnect asks the same while any recording holds a bridge.
+  - **Asterisk restart, Reboot, Shutdown and Setup apply.** With any recording running they show a box saying the recording will be cut short and saved as a partial file, with **Cancel** and **Go ahead**. They were locked before. Their buttons are no longer greyed out.
+- **Radio use is not locked by recordings on private nodes.** The other controls stay locked only when Node Recorder reports the main node busy (Record now, or a scheduled recording on the main node), as before.
+- **Note under the header.** While a recording runs it says what is recording and, if it holds a bridge, that tuning that bridge stops it. Up to 30 minutes before a digital recording starts it says when, so a tune just before it can be avoided.
+- Compatible with older Node Recorder versions: without the new fields Node Talker behaves as in 0.10.25, apart from the restart, reboot, shutdown and setup actions asking instead of being locked.
+- This is a release, not a cosmetic build.
+
 ## 0.10.25 (2026-11-08)
 
 - **The PPT lock message reads "PPT is Locked".** The line under the PPT button, shown while the PPT lock is on, now says only "PPT is Locked" instead of "PPT is locked: nobody can transmit until it is unlocked." The same short text is used when a press is refused because the lock is on, and in the Listen tab's refused-transmit message. The font size is unchanged.
@@ -54,7 +64,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_25_20261108.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_26_20261108.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
