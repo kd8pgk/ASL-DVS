@@ -7465,14 +7465,15 @@ async function pollStatus() {
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
   const feedTxt = d.receiving ? ('receiving, ' + d.packets_per_sec + ' packets/s')
     : (d.last_rx_age != null ? 'no audio for ' + Math.round(d.last_rx_age) + ' s' : 'nothing received yet');
-  $('st-feed').className = 'dot ' + feedCls;
-  $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
-  $('st-feed-w').title = 'Audio from Asterisk: ' + feedTxt;
+  const idle1921 = !d.receiving && (d.rec_node || {}).wanted === false && !(d.talker || {}).active;
+  $('st-feed').className = 'dot ' + (idle1921 ? '' : feedCls);
+  $('st-feed-t').textContent = d.receiving ? 'feed' : idle1921 ? 'feed idle' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
+  $('st-feed-w').title = idle1921 ? 'Node 1921 is linked only while the main node is being recorded' : 'Audio from Asterisk: ' + feedTxt;
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
   $('st-level').textContent = fmtDb(d.peak_db);
   $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
-  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : 'listening, no audio yet');
+  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : idle1921 ? 'idle: node 1921 is linked only while the main node is recorded' : 'listening, no audio yet');
   const talker = d.talker || {};
   $('rn-talker').textContent = talker.active ? 'Node Talker is running: audio comes from its forward.'
     : (talker.installed ? 'Node Talker is installed but stopped: Node Recorder listens on the node itself.' : 'Node Talker is not installed.');
