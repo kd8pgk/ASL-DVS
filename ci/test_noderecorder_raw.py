@@ -535,6 +535,7 @@ class DigitalActions(unittest.TestCase):
             ok, msg, _ = nr.PrivActions("1050").connect(self.entry)
         self.assertFalse(ok)
         self.assertIn("TGIF", msg)
+        self.assertIn("this recording is skipped", msg)
         self.assertEqual(self.calls, [])
         self.assertEqual(nr.bridge_holds(), [])
 
@@ -771,6 +772,111 @@ class Gate1921(unittest.TestCase):
         with mock.patch.object(nr.SCHED, "status", lambda: {"state": "idle", "current": None}), \
                 mock.patch.object(nr, "lanes_status", lambda: [{"name": "Net", "node": "1050"}]):
             self.assertFalse(nr.main_recording())
+
+
+class TestTune(unittest.TestCase):
+    def setUp(self):
+        self.log = []
+        self.recording = False
+        self.known = True
+        self.state = "up"
+        self.preflight = []
+        self.acquire = (True, "1999")
+        self.stream = mock.Mock()
+        self.stream.recording = lambda: self.recording
+        self.stream.hub.packets = 0
+        self.asl = mk_entry("a", "", "20:00", "21:00")
+        self.dmr = mk_entry("d", "1050", "20:00", "21:00", target={"mode": "DMR", "num": "3100", "net": "TGIF"})
+        self.entries = [self.asl, self.dmr]
+        for name, val in (("schedule_load", lambda: {"entries": self.entries, "error": ""}), ("priv_pool", lambda: ["1050", "1051"]),
+                          ("priv_stream", lambda n: self.stream), ("lane_of", lambda n: None),
+                          ("rpt_links", lambda *a, **k: (self.known, [])), ("wait_link", lambda *a, **k: self.state),
+                          ("_linked", lambda *a, **k: self.state == "up"),
+                          ("ilink", lambda node, op, peer: (self.log.append(("ilink", node, op, peer)), (True, ""))[1]),
+                          ("bridge_preflight", lambda f: self.preflight),
+                          ("bridge_acquire", lambda f, e, n: (self.log.append(("acquire", n)), self.acquire)[1]),
+                          ("bridge_release", lambda f, n, taken=False: self.log.append(("release", n))),
+                          ("_tune_fav", lambda b: {"mode": b["mode"], "num": b["num"], "net": b.get("net", ""), "label": ""}),
+                          ("TEST_HOLD_SEC", 0.0)):
+            p = mock.patch.object(nr, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_an_asl_target_is_linked_held_and_let_go(self):
+        r = nr.priv_test_tune({"id": "a", "node": "auto"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["node"], "1050")
+        self.assertEqual(self.log, [("ilink", "1050", 8, "2000"), ("ilink", "1050", 1, "2000")])
+        self.assertEqual([s["step"] for s in r["steps"]], ["link", "hold", "release"])
+
+    def test_a_digital_target_tunes_the_bridge_first_and_gives_it_back(self):
+        r = nr.priv_test_tune({"id": "d", "node": "auto"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.log, [("acquire", "1050"), ("ilink", "1050", 8, "1999"), ("ilink", "1050", 1, "1999"), ("release", "1050")])
+        self.assertEqual([s["step"] for s in r["steps"]], ["check", "tune", "link", "hold", "release"])
+
+    def test_missing_pieces_stop_it_before_any_tune(self):
+        self.preflight = ["dvswitch.sh was not found, so DMR can't be tuned here"]
+        r = nr.priv_test_tune({"id": "d"})
+        self.assertFalse(r["ok"])
+        self.assertIn("dvswitch.sh", r["error"])
+        self.assertEqual(self.log, [])
+
+    def test_a_bridge_in_use_is_not_touched(self):
+        self.acquire = (False, "the digital bridge is in use by a live tune (DMR TGIF 91)")
+        r = nr.priv_test_tune({"id": "d"})
+        self.assertFalse(r["ok"])
+        self.assertIn("live tune", r["error"])
+        self.assertEqual(self.log, [("acquire", "1050")])
+
+    def test_a_link_that_does_not_come_up_is_reported_and_cleaned_up(self):
+        self.state = "down"
+        r = nr.priv_test_tune({"id": "d"})
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.log[-2:], [("ilink", "1050", 1, "1999"), ("release", "1050")])
+        self.assertEqual(r["steps"][-1]["step"], "release")
+
+    def test_a_dropped_link_while_holding_fails_the_test(self):
+        with mock.patch.object(nr, "_linked", lambda *a, **k: False):
+            r = nr.priv_test_tune({"id": "a"})
+        self.assertFalse(r["ok"])
+        self.assertIn("dropped", r["error"])
+
+    def test_it_skips_a_recording_node_and_says_so_when_none_is_free(self):
+        self.recording = True
+        r = nr.priv_test_tune({"id": "a"})
+        self.assertFalse(r["ok"])
+        self.assertIn("recording", r["error"])
+        self.assertEqual(self.log, [])
+        self.recording = False
+        self.known = False
+        self.assertIn("restart Asterisk", nr.priv_test_tune({"id": "a", "node": "1051"})["error"])
+
+    def test_a_node_that_is_not_ours_is_refused(self):
+        r = nr.priv_test_tune({"id": "a", "node": "1077"})
+        self.assertFalse(r["ok"])
+        self.assertIn("not one of", r["error"])
+
+    def test_unknown_entry_and_no_nodes(self):
+        self.assertFalse(nr.priv_test_tune({"id": "zz"})["ok"])
+        with mock.patch.object(nr, "priv_pool", lambda: []):
+            self.assertIn("Add one", nr.priv_test_tune({"id": "a"})["error"])
+
+    def test_only_one_test_at_a_time(self):
+        self.assertTrue(nr._test_tune_lock.acquire(blocking=False))
+        try:
+            r = nr.priv_test_tune({"id": "a"})
+        finally:
+            nr._test_tune_lock.release()
+        self.assertFalse(r["ok"])
+        self.assertIn("already running", r["error"])
+        self.assertEqual(self.log, [])
+
+    def test_the_entrys_own_node_is_preferred(self):
+        r = nr.priv_test_tune({"id": "d", "node": "auto"})
+        self.assertEqual(r["node"], "1050")
+        self.entries = [mk_entry("e", "1051", "20:00", "21:00")]
+        self.assertEqual(nr.priv_test_tune({"id": "e", "node": "auto"})["node"], "1051")
 
 
 class NextBridge(unittest.TestCase):

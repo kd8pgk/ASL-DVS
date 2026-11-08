@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_11_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_12_0_20261108.py`. Newest entries first.
+
+## 0.12.0 (2026-11-08)
+
+- **Test tune.** The Private recording nodes card on the Setup tab has a new "Test a target" row: pick a schedule entry and a node (Auto uses the entry's own private node if it has one, otherwise the first one that is ready and free) and press **Test tune**. For an ASL or EchoLink entry it links the node to the target in local monitor mode, holds for 3 seconds, checks the link is still up and lets go. For a DMR, D-STAR, YSF, P25, NXDN, STFU or M17 entry it first checks that dvswitch.sh (or USRP2M17), the network, the callsign and the bridge node are there, tunes the bridge to the entry's target, links the node to the bridge, holds, then unlinks and puts the bridge back. Each step is listed with its time, and the number of audio packets that reached the node during the hold is shown (none is normal when nobody is talking).
+- **It leaves live use alone.** The test does nothing to a bridge that a live tune or a recording holds, skips a node that is recording and runs one test at a time. Whatever happens, the node is unlinked and the bridge let go at the end.
+- **Wording.** A scheduled recording skipped because the bridge is in use says so at the end of its reason ("...; this recording is skipped"); the reason itself is now the same text the test shows.
+- A new route, `POST /api/privnodes/test`, takes an entry id and a node.
+- This is a release, not a cosmetic build.
 
 ## 0.11.0 (2026-11-08)
 
