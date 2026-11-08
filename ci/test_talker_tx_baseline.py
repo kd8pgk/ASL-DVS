@@ -130,7 +130,10 @@ class TalkerTxBaseline(unittest.TestCase):
         for _ in range(50):
             op, payload = ws.recv_frame()
             if op == 1:
-                return payload.decode("utf-8", "replace")
+                text = payload.decode("utf-8", "replace")
+                if '"ev": "lock"' in text or '"ev":"lock"' in text:
+                    continue
+                return text
         raise AssertionError("no reply to key")
 
     def send_tone_and_release(self, pause_at=None):

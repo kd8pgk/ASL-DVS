@@ -38,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.91.1"
+VERSION ="2.92.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -14230,6 +14230,8 @@ def suitelog_redact(text, salt):
         return m.group(1) + "[hidden]"
 
     def ip4(m):
+        if m.string[max(0, m.start() - 5):m.start()] == '"v":"':
+            return m.group(0)
         try:
             a = ipaddress.IPv4Address(m.group(0))
         except ValueError:

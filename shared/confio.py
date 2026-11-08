@@ -436,6 +436,8 @@ def suitelog_redact(text, salt):
         return m.group(1) + "[hidden]"
 
     def ip4(m):
+        if m.string[max(0, m.start() - 5):m.start()] == '"v":"':
+            return m.group(0)
         try:
             a = ipaddress.IPv4Address(m.group(0))
         except ValueError:

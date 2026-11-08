@@ -252,7 +252,11 @@ def talk_open(cookie):
     s, status, hd, key, rest = ws_handshake(cookie, origin=f"http://127.0.0.1:{PORT}")
     if status != 101:
         raise RuntimeError(f"talk handshake gave {status}")
-    return WS(s, rest)
+    ws = WS(s, rest)
+    op, payload = ws.recv_frame()
+    if op != 1 or b'"ev": "lock"' not in payload:
+        raise RuntimeError(f"talk socket did not send its lock state first: {op} {payload!r}")
+    return ws
 
 
 class Node:

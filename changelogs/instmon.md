@@ -1,5 +1,10 @@
 # instmon changelog
 
+## 2.92.0 (2026-11-08)
+
+- **The suite log keeps its version.** The shared suite-log redactor (`suitelog_redact` in `shared/confio.py`) masked any value that looked like an IPv4 address. A four-part version such as `0.10.24.1` looks like one, so the `v` field of each row was written as `ip:xxxx`. The `v` value is now left alone; every other IP address is still masked. Same change as Node Talker 0.10.25.
+- Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
+
 ## 2.91.1 (2026-11-05)
 
 - **A busy suite-log lock no longer holds a write up.** The shared `suitelog_append` waited on the suite-log file lock for as long as another process kept it. It now tries for up to half a second and, if the lock is still held, writes the row without it and skips rotating that time. No row is lost and nothing waits. Same change as Node Talker 0.10.17, which was held up by it.
@@ -10,7 +15,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_91_1_20261105.py`. Newest entries first.
+Current file: `instmon_v2_92_0_20261108.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
