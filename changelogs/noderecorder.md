@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_10_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_11_0_20261108.py`. Newest entries first.
+
+## 0.11.0 (2026-11-08)
+
+- **Node 1921 is linked only while the main node is being recorded.** Before, Node Recorder kept 1921 linked to the main node all the time. Now it links it when a main-node recording starts, which is Record now or a schedule entry set to the Main node (or an entry saved before private nodes existed), and unlinks it when that recording ends. Scheduled recordings on private nodes never use it. A left-over link, for example after Node Recorder was stopped mid-recording, is dropped within 20 seconds. If the link drops during a main-node recording it is linked again within 20 seconds, as before.
+- **Node Talker is not affected.** When Node Talker is running or owns node 1921 it keeps the link itself, and Node Recorder does not touch it.
+- **The level meter is quiet at idle.** The audio on the Setup tab's Receive card and the live level (used to set the RX gain, gate and CTCSS notch) only appear while 1921 is linked, so tune them during a Record now.
+- **Wording.** The Recorder node card says when node 1921 is linked, and its states read "Recording the main node", "Set up and idle" and "Recording, linked".
+- The link keeper's check is now a function of its own (`link_keeper_step`) so it can be tested; it behaves as before apart from the rule above.
+- This is a release, not a cosmetic build.
 
 ## 0.10.0 (2026-11-08)
 
