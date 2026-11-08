@@ -28,6 +28,7 @@ def load(name, path):
 
 
 nc = load("nc_popups_under_test", newest("nodecontrol_v[0-9]*.py"))
+ncp = load("ncp_popups_under_test", newest("nodecontrol_pi02w_v[0-9]*.py"))
 nt = load("nt_popups_under_test", newest("nodetalker_v[0-9]*.py"))
 
 HOLD = {"kind": "digital", "bridge": "1999", "target": "DMR|TGIF|3100", "name": "DMR rec", "nodes": ["1050"], "end": "2026-11-08T21:00"}
@@ -39,13 +40,15 @@ def info(recs=(), bridges=(), busy=False):
     return {"ok": True, "busy": busy, "recordings": list(recs), "bridges": list(bridges), "next_bridge": {}}
 
 
-class NodeControllerPopups(unittest.TestCase):
+class _NcPopups:
+    mod = None
+
     def ask(self, action, data=None, status=None, busy=None):
-        with mock.patch.object(nc, "recorder_info", lambda: status), mock.patch.object(nc, "recorder_busy", lambda: busy):
-            return nc.rec_confirm_needed(action, data or {})
+        with mock.patch.object(self.mod, "recorder_info", lambda: status), mock.patch.object(self.mod, "recorder_busy", lambda: busy):
+            return self.mod.rec_confirm_needed(action, data or {})
 
     def test_bridge_kind_follows_the_target(self):
-        k = nc._rec_bridge_kind
+        k = self.mod._rec_bridge_kind
         self.assertEqual(k("m17-connect", {}), "m17")
         self.assertEqual(k("dstar-connect", {}), "digital")
         self.assertEqual(k("switch-dmr-server", {}), "digital")
@@ -95,15 +98,15 @@ class NodeControllerPopups(unittest.TestCase):
                 sent.append((code, body))
 
         ran = []
-        with mock.patch.dict(nc._POST_ACTIONS, {"reboot": lambda h, d: (ran.append(d), (True, "ok"))[1]}), \
-                mock.patch.object(nc, "recorder_info", lambda: info([ASL_REC])), mock.patch.object(nc, "recorder_busy", lambda: None):
-            with self.assertRaises(nc._EarlyReturn):
-                nc.Handler._dispatch_action(H(), {"action": "reboot"})
+        with mock.patch.dict(self.mod._POST_ACTIONS, {"reboot": lambda h, d: (ran.append(d), (True, "ok"))[1]}), \
+                mock.patch.object(self.mod, "recorder_info", lambda: info([ASL_REC])), mock.patch.object(self.mod, "recorder_busy", lambda: None):
+            with self.assertRaises(self.mod._EarlyReturn):
+                self.mod.Handler._dispatch_action(H(), {"action": "reboot"})
             self.assertEqual(sent[-1][0], 409)
             self.assertTrue(sent[-1][1]["recording_confirm"])
             self.assertEqual(sent[-1][1]["confirm_kind"], "power")
             self.assertEqual(ran, [])
-            self.assertEqual(nc.Handler._dispatch_action(H(), {"action": "reboot", "confirm_recording": True}), (True, "ok"))
+            self.assertEqual(self.mod.Handler._dispatch_action(H(), {"action": "reboot", "confirm_recording": True}), (True, "ok"))
             self.assertEqual(len(ran), 1)
 
     def test_links_on_the_main_node_are_not_locked_by_a_private_node_recording(self):
@@ -113,9 +116,9 @@ class NodeControllerPopups(unittest.TestCase):
             def send_json(self, body, code=200):
                 sent.append((code, body))
 
-        with mock.patch.dict(nc._POST_ACTIONS, {"asl-connect": lambda h, d: (True, "linked")}), \
-                mock.patch.object(nc, "recorder_info", lambda: info([ASL_REC])), mock.patch.object(nc, "recorder_busy", lambda: None):
-            self.assertEqual(nc.Handler._dispatch_action(H(), {"action": "asl-connect"}), (True, "linked"))
+        with mock.patch.dict(self.mod._POST_ACTIONS, {"asl-connect": lambda h, d: (True, "linked")}), \
+                mock.patch.object(self.mod, "recorder_info", lambda: info([ASL_REC])), mock.patch.object(self.mod, "recorder_busy", lambda: None):
+            self.assertEqual(self.mod.Handler._dispatch_action(H(), {"action": "asl-connect"}), (True, "linked"))
         self.assertEqual(sent, [])
 
     def test_the_main_node_lock_still_holds_for_a_busy_recorder(self):
@@ -126,14 +129,14 @@ class NodeControllerPopups(unittest.TestCase):
                 sent.append((code, body))
 
         sent = []
-        with mock.patch.dict(nc._POST_ACTIONS, {"asl-connect": lambda h, d: (True, "linked")}), \
-                mock.patch.object(nc, "recorder_info", lambda: {"ok": True, "busy": True}), mock.patch.object(nc, "recorder_busy", lambda: busy):
-            with self.assertRaises(nc._EarlyReturn):
-                nc.Handler._dispatch_action(H(), {"action": "asl-connect"})
+        with mock.patch.dict(self.mod._POST_ACTIONS, {"asl-connect": lambda h, d: (True, "linked")}), \
+                mock.patch.object(self.mod, "recorder_info", lambda: {"ok": True, "busy": True}), mock.patch.object(self.mod, "recorder_busy", lambda: busy):
+            with self.assertRaises(self.mod._EarlyReturn):
+                self.mod.Handler._dispatch_action(H(), {"action": "asl-connect"})
         self.assertTrue(sent[-1][1]["recording_block"])
 
     def test_the_page_script_has_the_question_and_the_note(self):
-        with open(nc.__file__, encoding="utf-8") as fh:
+        with open(self.mod.__file__, encoding="utf-8") as fh:
             text = fh.read()
         for needle in ("recConfirm", "recording_confirm", "confirm_recording", "recNote", "'reboot','shutdown'"):
             if needle == "'reboot','shutdown'":
@@ -142,6 +145,12 @@ class NodeControllerPopups(unittest.TestCase):
                 self.assertIn(needle, text)
 
 
+class FullNodeControllerPopups(_NcPopups, unittest.TestCase):
+    mod = nc
+
+
+class Pi02wNodeControllerPopups(_NcPopups, unittest.TestCase):
+    mod = ncp
 class NodeTalkerPopups(unittest.TestCase):
     def ask(self, path, body=None, status=None, busy=None):
         with mock.patch.object(nt, "recorder_info", lambda: status), mock.patch.object(nt, "recorder_busy", lambda: busy):

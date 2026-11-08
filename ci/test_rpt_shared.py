@@ -28,6 +28,7 @@ def load(name, path):
 
 
 nc = load("nc_rpt_under_test", newest("nodecontrol_v[0-9]*.py"))
+ncp = load("ncp_rpt_under_test", newest("nodecontrol_pi02w_v[0-9]*.py"))
 h44 = load("h44_rpt_under_test", newest("44helper_v[0-9]*.py"))
 
 
@@ -47,42 +48,50 @@ def old_pn_next_free(used, lo, hi, reserved):
     return ""
 
 
-class NodeControllerNumbers(unittest.TestCase):
+class _NcNumbers:
+    mod = None
+
     def test_next_free_counts_up_from_the_phone_node_and_wraps_like_before(self):
         rnd = random.Random(11)
-        lo, hi = nc._PHONE_NODE_MIN, nc._PHONE_NODE_MAX
+        lo, hi = self.mod._PHONE_NODE_MIN, self.mod._PHONE_NODE_MAX
         for _ in range(300):
             start = rnd.randint(lo, hi)
             taken = {str(rnd.randint(lo, hi)) for _ in range(rnd.choice((0, 5, 200, 900)))}
-            with mock.patch.object(nc, "_phone_node", lambda s=start: str(s)):
-                self.assertEqual(nc._phone_next_free(taken), old_phone_next_free(taken, start, lo, hi), (start, len(taken)))
+            with mock.patch.object(self.mod, "_phone_node", lambda s=start: str(s)):
+                self.assertEqual(self.mod._phone_next_free(taken), old_phone_next_free(taken, start, lo, hi), (start, len(taken)))
 
     def test_next_free_with_every_number_taken_is_empty(self):
-        taken = {str(n) for n in range(nc._PHONE_NODE_MIN, nc._PHONE_NODE_MAX + 1)}
-        with mock.patch.object(nc, "_phone_node", lambda: "1500"):
-            self.assertEqual(nc._phone_next_free(taken), "")
+        taken = {str(n) for n in range(self.mod._PHONE_NODE_MIN, self.mod._PHONE_NODE_MAX + 1)}
+        with mock.patch.object(self.mod, "_phone_node", lambda: "1500"):
+            self.assertEqual(self.mod._phone_next_free(taken), "")
 
     def test_next_free_skips_to_the_end_and_wraps_to_the_start(self):
         taken = {str(n) for n in range(1500, 2000)}
-        with mock.patch.object(nc, "_phone_node", lambda: "1500"):
-            self.assertEqual(nc._phone_next_free(taken), "1000")
+        with mock.patch.object(self.mod, "_phone_node", lambda: "1500"):
+            self.assertEqual(self.mod._phone_next_free(taken), "1000")
 
     def test_hand_nodes_are_the_live_numeric_sections(self):
         text = ("[general]\nx=1\n\n; [1500]\n[1234](node-main)\nrxchannel = Local/pseudo\n\n[1001]\n[functions1002]\n"
                 "[nodes]\n1999 = radio@127.0.0.1/1999,NONE\n[ 1777 ]\n[node-main]\n")
-        with mock.patch.object(nc, "_ph_read", lambda p: text), mock.patch.object(nc, "_ph_path", lambda n: "/x/" + n):
-            got = nc._phone_hand_nodes()
+        with mock.patch.object(self.mod, "_ph_read", lambda p: text), mock.patch.object(self.mod, "_ph_path", lambda n: "/x/" + n):
+            got = self.mod._phone_hand_nodes()
         old = set(re.findall(r"^\s*\[(\d+)\]", "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(";")), re.M))
         self.assertEqual(old, {"1234", "1001"})
         self.assertEqual(got, old | {"1777"})
 
     def test_hand_nodes_ignore_the_dashboards_own_block(self):
         body = "[1001](node-main)\nrxchannel = Local/pseudo\n"
-        text = "[general]\n\n[1234]\n\n" + nc._PH_BEGIN + "\n" + body + nc._PH_END + "\n"
-        with mock.patch.object(nc, "_ph_read", lambda p: text), mock.patch.object(nc, "_ph_path", lambda n: "/x/" + n):
-            self.assertEqual(nc._phone_hand_nodes(), {"1234"})
+        text = "[general]\n\n[1234]\n\n" + self.mod._PH_BEGIN + "\n" + body + self.mod._PH_END + "\n"
+        with mock.patch.object(self.mod, "_ph_read", lambda p: text), mock.patch.object(self.mod, "_ph_path", lambda n: "/x/" + n):
+            self.assertEqual(self.mod._phone_hand_nodes(), {"1234"})
 
 
+class FullNodeControllerNumbers(_NcNumbers, unittest.TestCase):
+    mod = nc
+
+
+class Pi02wNodeControllerNumbers(_NcNumbers, unittest.TestCase):
+    mod = ncp
 class HelperNumbers(unittest.TestCase):
     def test_next_free_matches_the_old_search(self):
         rnd = random.Random(5)
@@ -110,7 +119,7 @@ class HelperNumbers(unittest.TestCase):
 
 class SharedCopies(unittest.TestCase):
     def test_both_tools_carry_the_shared_functions(self):
-        for mod in (nc, h44):
+        for mod in (nc, ncp, h44):
             self.assertTrue(callable(mod.rpt_scan))
             self.assertTrue(callable(mod.rpt_next_free))
 
