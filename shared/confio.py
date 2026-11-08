@@ -16,6 +16,12 @@ USED_BY = {
     "suitelog_append": ("nodetalker", "instmon"),
     "suitelog_rows": ("nodetalker", "instmon"),
     "suitelog_flag": ("nodetalker", "instmon"),
+    "rpt_scan": ("noderecorder",),
+    "rpt_next_free": ("noderecorder",),
+    "rpt_pick_ports": ("noderecorder",),
+    "rpt_template": ("noderecorder",),
+    "rpt_add_private": ("noderecorder",),
+    "rpt_remove_private": ("noderecorder",),
 }
 
 
@@ -528,3 +534,132 @@ def suitelog_flag(path):
             return fh.read(64).strip() or "x"
     except OSError:
         return None
+
+
+def rpt_scan(text):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]\s*(\([^)]*\))?")
+    rxline = re.compile(r"^\s*rxchannel\s*=>?\s*([^;\s]+)", re.I)
+    usrp = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
+    lines = text.split("\n")
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines),
+                         "template": (m.group(2) or "").replace(" ", "")})
+    used = set()
+    ports = set()
+    notes = {}
+    rx = {}
+    nodes_sec = None
+    for s in secs:
+        name = s["name"]
+        if name.isdigit():
+            used.add(name)
+        elif name.lower().startswith("functions") and name[9:].isdigit():
+            used.add(name[9:])
+        if name.lower() == "nodes":
+            nodes_sec = s
+            for i in range(s["start"] + 1, s["end"]):
+                body = lines[i].split(";", 1)[0]
+                key = body.split("=", 1)[0].strip()
+                if "=" in body and key.isdigit():
+                    used.add(key)
+        for i in range(s["start"] + 1, s["end"]):
+            m = rxline.match(lines[i])
+            if m:
+                rx[name] = m.group(1)
+                u = usrp.match(m.group(1))
+                if u:
+                    ports.update((int(u.group(1)), int(u.group(2))))
+        notes[name] = lines[s["start"] - 1].strip() if s["start"] > 0 else ""
+    return {"lines": lines, "secs": secs, "used": used, "ports": ports, "notes": notes, "rx": rx,
+            "nodes": nodes_sec}
+
+
+def rpt_next_free(used, start, stop, reserved=()):
+    for n in range(int(start), int(stop) + 1):
+        s = str(n)
+        if s not in used and s not in reserved:
+            return s
+    return ""
+
+
+def rpt_pick_ports(ports, node, base_in=34000, base_out=32000):
+    off = int(node) - 1000
+    for k in range(1000):
+        a = base_in + (off + k) % 1000
+        b = base_out + (off + k) % 1000
+        if a not in ports and b not in ports:
+            return a, b
+    return 0, 0
+
+
+def rpt_template(scan, own=""):
+    secs = scan["secs"]
+    main = next((s for s in secs if own and s["name"] == own), None)
+    if main is None:
+        main = next((s for s in secs if s["name"].isdigit() and len(s["name"]) >= 4
+                     and not 1000 <= int(s["name"]) <= 1999), None)
+    if main is not None and main["template"]:
+        return main["template"]
+    if any(s["name"] == "node-main" for s in secs):
+        return "(node-main)"
+    return ""
+
+
+def rpt_add_private(text, node, marker, rxchannel, body, nodes_line, template=""):
+    scan = rpt_scan(text)
+    if node in scan["used"]:
+        return None, "node %s is already in rpt.conf" % node
+    lines = text.split("\n")
+    stanza = [marker, "[%s]%s" % (node, template), "rxchannel = %s" % rxchannel] + list(body)
+    sec = scan["nodes"]
+    if sec is not None:
+        last = sec["start"]
+        for i in range(sec["start"] + 1, sec["end"]):
+            if "=" in lines[i].split(";", 1)[0]:
+                last = i
+        lines.insert(last + 1, nodes_line)
+        tail = []
+    else:
+        tail = ["", "[nodes]", nodes_line]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines += [""] + stanza + tail + [""]
+    return "\n".join(lines), ""
+
+
+def rpt_remove_private(text, node, marker):
+    scan = rpt_scan(text)
+    sec = next((s for s in scan["secs"] if s["name"] == node), None)
+    if sec is None or scan["notes"].get(node) != marker:
+        return text, False
+    lines = scan["lines"]
+    stop = sec["end"]
+    if stop - 1 > sec["start"] and lines[stop - 1].strip().startswith(";"):
+        stop -= 1
+    while stop - 1 > sec["start"] and not lines[stop - 1].strip():
+        stop -= 1
+    drop = set(range(sec["start"] - 1, stop))
+    ns = scan["nodes"]
+    if ns is not None:
+        for i in range(ns["start"] + 1, ns["end"]):
+            body = lines[i].split(";", 1)[0]
+            if "=" in body and body.split("=", 1)[0].strip() == node:
+                drop.add(i)
+    out = []
+    after_drop = False
+    for i, line in enumerate(lines):
+        if i in drop:
+            after_drop = True
+            continue
+        if not line.strip() and after_drop and out and not out[-1].strip():
+            continue
+        if line.strip():
+            after_drop = False
+        out.append(line)
+    return "\n".join(out), True
