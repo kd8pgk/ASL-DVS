@@ -17,10 +17,7 @@ USED_BY = {
     "suitelog_rows": ("nodetalker", "instmon"),
     "suitelog_flag": ("nodetalker", "instmon"),
     "rpt_scan": ("noderecorder", "44helper", "nodecontrol", "nodecontrol_pi02w"),
-    "rpt_next_free": ("noderecorder", "44helper", "nodecontrol", "nodecontrol_pi02w"),
-    "rpt_pick_ports": ("noderecorder",),
-    "rpt_template": ("noderecorder",),
-    "rpt_add_private": ("noderecorder",),
+    "rpt_next_free": ("44helper", "nodecontrol", "nodecontrol_pi02w"),
     "rpt_remove_private": ("noderecorder",),
 }
 
@@ -586,51 +583,6 @@ def rpt_next_free(used, start, stop, reserved=()):
         if s not in used and s not in reserved:
             return s
     return ""
-
-
-def rpt_pick_ports(ports, node, base_in=34000, base_out=32000):
-    off = int(node) - 1000
-    for k in range(1000):
-        a = base_in + (off + k) % 1000
-        b = base_out + (off + k) % 1000
-        if a not in ports and b not in ports:
-            return a, b
-    return 0, 0
-
-
-def rpt_template(scan, own=""):
-    secs = scan["secs"]
-    main = next((s for s in secs if own and s["name"] == own), None)
-    if main is None:
-        main = next((s for s in secs if s["name"].isdigit() and len(s["name"]) >= 4
-                     and not 1000 <= int(s["name"]) <= 1999), None)
-    if main is not None and main["template"]:
-        return main["template"]
-    if any(s["name"] == "node-main" for s in secs):
-        return "(node-main)"
-    return ""
-
-
-def rpt_add_private(text, node, marker, rxchannel, body, nodes_line, template=""):
-    scan = rpt_scan(text)
-    if node in scan["used"]:
-        return None, "node %s is already in rpt.conf" % node
-    lines = text.split("\n")
-    stanza = [marker, "[%s]%s" % (node, template), "rxchannel = %s" % rxchannel] + list(body)
-    sec = scan["nodes"]
-    if sec is not None:
-        last = sec["start"]
-        for i in range(sec["start"] + 1, sec["end"]):
-            if "=" in lines[i].split(";", 1)[0]:
-                last = i
-        lines.insert(last + 1, nodes_line)
-        tail = []
-    else:
-        tail = ["", "[nodes]", nodes_line]
-    while lines and not lines[-1].strip():
-        lines.pop()
-    lines += [""] + stanza + tail + [""]
-    return "\n".join(lines), ""
 
 
 def rpt_remove_private(text, node, marker):

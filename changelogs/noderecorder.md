@@ -1,6 +1,16 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_12_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_14_0_20261109.py`. Newest entries first.
+
+## 0.14.0 (2026-11-09)
+
+- **Private recording nodes are gone.** This version goes back to the code of 0.5.14 and removes everything 0.6.0 to 0.12.0 added around private nodes numbered 1050 and up: the Private recording nodes card and its Add, Remove and Test tune buttons, the node choice on schedule entries and the runner per node, simultaneous recordings, the digital bridge tuning for entries, the "Tune anyway" question on the Tune button, the load warning, and the extra status fields. A private node (1000-1999) does not connect to the AllStarLink network, so it could never link to a public node; the plan now is a dedicated recorder node, a separate registered node that runs Node Recorder alone.
+- **Node 1921 works as in 0.5.14.** It is linked to the node all the time again, so the feed light, the level meter and the Audio row are live at idle and RX gain, gate and CTCSS notch can be set by ear. The rule that linked it only while the main node was recorded (0.11.0) is removed.
+- **New: Link choice on schedule entries.** Each entry can link its target **Transceive** (as before) or **Local monitor only** (`ilink 8`), which hears the target but never sends audio to it. A dedicated recorder node should use local monitor only so it can never transmit into the network. It applies to every link Node Recorder makes for the entry: an ASL or EchoLink node, and the digital bridge for DMR, D-STAR, YSF, P25, NXDN, STFU or M17 when Node Recorder tunes it itself. When Node Controller is running and owns the node, it makes the link and the choice does not apply. The schedule list shows "local monitor only" on such entries. Entries saved before have no choice and stay transceive.
+- **Kept: a second part after a restart (from 0.10.0).** When a recording ends because the link dropped and the window is still open, Node Recorder links again and records a second part into a new file named like `...-part-2.wav`. It tries every 30 seconds, up to 20 tries in a window, and only while more than 2 minutes of the window are left. "Asterisk is still starting" is tried again the same way. It only happens after something was recorded in that window. The part count is kept across a restart of Node Recorder.
+- **One-time cleanup of the old nodes.** If rpt.conf still has private recording nodes added by an older version (marked "noderecorder: private recording node"), the Recorder node card on the Setup tab lists them with a **Remove old private nodes** button, then restart Asterisk once. Only nodes carrying that mark are removed; node 1921 and nodes written by hand are not touched. Leftover per-node schedule state files are deleted when Node Recorder starts. Entries that were saved on a private node now record on the main node (one warning in the log).
+- Node Controller and Node Talker keep their questions before tunes and restarts: without the removed status fields they ask only before Reboot, Shutdown and an Asterisk restart, using the busy state, as they did for a main-node recording.
+- This is a release, not a cosmetic build.
 
 ## 0.12.0 (2026-11-08)
 
