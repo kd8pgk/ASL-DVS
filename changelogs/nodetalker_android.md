@@ -1,6 +1,12 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.21`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.27`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.27 (2026-11-09)
+
+- **Builds are signed with a private release key.** Until now every build was signed with the key committed in `android/app/debug.keystore`, which anyone can read, so anyone could make an APK that Android accepts as an update to the app. The workflow now signs the published APK with a key kept in the repository secrets and publishes nothing when they are missing. It prints the signing certificate's SHA-256 in the log and fails if the APK carries the shared key. Pull-request and local builds still use the shared key so they build without secrets.
+- **Needs one uninstall.** Android does not install an app over one signed with a different key. A phone with 0.10.26 or older must uninstall the app first (note your nodes, as they are kept inside the app), then install this build. After that, updates install over each other as before.
+- No change in what the app does. The version takes the next number after Node Talker's 0.10.26.
 
 ## 0.10.21 (2026-11-06)
 

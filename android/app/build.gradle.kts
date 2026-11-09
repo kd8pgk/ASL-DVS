@@ -5,7 +5,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.10.21"
+val appVersion = "0.10.27"
+
+val releaseKeystore = System.getenv("NODETALKER_KEYSTORE")?.let { file(it) }?.takeIf { it.isFile }
+val releaseStorePassword = System.getenv("NODETALKER_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("NODETALKER_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("NODETALKER_KEY_PASSWORD")
+val privateKey = releaseKeystore != null &&
+    !releaseStorePassword.isNullOrEmpty() &&
+    !releaseKeyAlias.isNullOrEmpty() &&
+    !releaseKeyPassword.isNullOrEmpty()
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"
@@ -26,12 +35,20 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (privateKey) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (privateKey) "release" else "debug")
         }
     }
 

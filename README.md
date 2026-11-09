@@ -330,10 +330,10 @@ It comes in phases:
 `android-v…` release and download `NodeTalker-….apk` (`NodeTalker-…-debug.apk`
 before 0.3.2). Android asks to
 allow installs from the browser once. From 0.3.1 every test build is signed
-with the same debug key (`android/app/debug.keystore`), so a new build
-installs over the old one and keeps your nodes; going from 0.3.0 or older to
-0.3.1 needs one uninstall first. When signed release builds start, uninstall
-the test build once more.
+with the same key, so a new build installs over the old one and keeps your
+nodes; going from 0.3.0 or older to 0.3.1 needs one uninstall first. From
+0.10.27 the test builds are signed with a private release key, so a build from
+0.10.26 or older needs one uninstall first (note your nodes first).
 
 **From the node itself (instmon 2.74.0 and later):** instmon downloads the
 newest APK from GitHub into its library and lists **Node Talker Mobile** in
