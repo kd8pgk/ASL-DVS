@@ -35,8 +35,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.12.0"
-DATE_STR = "2026-11-08"
+VERSION = "0.14.0"
+DATE_STR = "2026-11-09"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -1091,9 +1091,9 @@ class RxClean:
 RXC = RxClean()
 
 
-def paced_loop(step, what, stop=None):
+def paced_loop(step, what):
     nxt = time.monotonic()
-    while stop is None or not stop.is_set():
+    while True:
         nxt += FRAME_SEC
         delay = nxt - time.monotonic()
         if delay > 0:
@@ -1317,9 +1317,7 @@ KEYED = KeyedWatch()
 
 
 class Hub:
-    def __init__(self, rxc=None, keyed=None):
-        self.rxc = rxc
-        self.keyed = keyed
+    def __init__(self):
         self.lock = threading.Lock()
         self.inbuf = bytearray()
         self.frames = deque()
@@ -1357,9 +1355,8 @@ class Hub:
     def audio_active(self):
         now = time.monotonic()
         heard = self.usrp_keyed or now - self.last_active < ACTIVE_HOLD_SEC
-        k = self.keyed
-        if k is not None and k.ok:
-            return heard or k.keyed or now - k.unkey_at < ACTIVE_HOLD_SEC
+        if KEYED.ok:
+            return heard or KEYED.keyed or now - KEYED.unkey_at < ACTIVE_HOLD_SEC
         return heard
 
     def tick(self):
@@ -1375,8 +1372,7 @@ class Hub:
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
-                if self.keyed is not None:
-                    self.keyed.wake(now)
+                KEYED.wake(now)
                 self.last_active = now
         else:
             self.level_db = -120.0
@@ -1384,14 +1380,14 @@ class Hub:
         rec = self.recorder
         if rec is not None:
             if frame is not None:
-                pcm = self.rxc.process(frame, tune_value("rx_gain_db"), db)
+                pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
             else:
-                self.rxc.idle_tick()
+                RXC.idle_tick()
                 pcm = PCM_SILENCE
             rec.feed(pcm)
         self.pump_beat = now
 
-    def pump_loop(self, stop=None):
+    def pump_loop(self):
         rate = {"t": time.monotonic(), "packets": 0}
 
         def count_rate():
@@ -1406,7 +1402,7 @@ class Hub:
             finally:
                 count_rate()
 
-        paced_loop(step, "Audio pump", stop)
+        paced_loop(step, "Audio pump")
 
     def snapshot(self):
         now = time.monotonic()
@@ -1422,11 +1418,11 @@ class Hub:
             "peak_db": round(self.peak_db, 1),
             "audio_active": self.audio_active(),
             "udp_error": "; ".join(self.udp_errors.values()),
-            "rx_load_pct": self.rxc.load_pct,
+            "rx_load_pct": RXC.load_pct,
         }
 
 
-HUB = Hub(RXC, KEYED)
+HUB = Hub()
 
 
 _STANZA_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?")
@@ -1531,59 +1527,6 @@ def rpt_scan(text):
         notes[name] = lines[s["start"] - 1].strip() if s["start"] > 0 else ""
     return {"lines": lines, "secs": secs, "used": used, "ports": ports, "notes": notes, "rx": rx,
             "nodes": nodes_sec}
-
-
-def rpt_next_free(used, start, stop, reserved=()):
-    for n in range(int(start), int(stop) + 1):
-        s = str(n)
-        if s not in used and s not in reserved:
-            return s
-    return ""
-
-
-def rpt_pick_ports(ports, node, base_in=34000, base_out=32000):
-    off = int(node) - 1000
-    for k in range(1000):
-        a = base_in + (off + k) % 1000
-        b = base_out + (off + k) % 1000
-        if a not in ports and b not in ports:
-            return a, b
-    return 0, 0
-
-
-def rpt_template(scan, own=""):
-    secs = scan["secs"]
-    main = next((s for s in secs if own and s["name"] == own), None)
-    if main is None:
-        main = next((s for s in secs if s["name"].isdigit() and len(s["name"]) >= 4
-                     and not 1000 <= int(s["name"]) <= 1999), None)
-    if main is not None and main["template"]:
-        return main["template"]
-    if any(s["name"] == "node-main" for s in secs):
-        return "(node-main)"
-    return ""
-
-
-def rpt_add_private(text, node, marker, rxchannel, body, nodes_line, template=""):
-    scan = rpt_scan(text)
-    if node in scan["used"]:
-        return None, "node %s is already in rpt.conf" % node
-    lines = text.split("\n")
-    stanza = [marker, "[%s]%s" % (node, template), "rxchannel = %s" % rxchannel] + list(body)
-    sec = scan["nodes"]
-    if sec is not None:
-        last = sec["start"]
-        for i in range(sec["start"] + 1, sec["end"]):
-            if "=" in lines[i].split(";", 1)[0]:
-                last = i
-        lines.insert(last + 1, nodes_line)
-        tail = []
-    else:
-        tail = ["", "[nodes]", nodes_line]
-    while lines and not lines[-1].strip():
-        lines.pop()
-    lines += [""] + stanza + tail + [""]
-    return "\n".join(lines), ""
 
 
 def rpt_remove_private(text, node, marker):
@@ -1931,12 +1874,6 @@ REC_NOTE = "; noderecorder: receive node for Node Recorder (remove it from the N
 TALKER_SERVICE = "nodetalker.service"
 TALKER_UNIT = os.environ.get("NODERECORDER_TALKER_UNIT", "/etc/systemd/system/nodetalker.service")
 FWD_PORT = 9995
-PRIV_START = 1050
-PRIV_STOP = 1999
-PRIV_MAX = 5
-PRIV_NOTE = "; noderecorder: private recording node (remove it from the Node Recorder page)"
-PRIV_BODY = ("duplex = 0", "hangtime = 0", "althangtime = 0", "holdofftelem = 1", "telemdefault = 0",
-             "nounkeyct = 1", "idrecording = |t(0,0,10,0)")
 IAX_CONF = os.environ.get("NODERECORDER_IAX_CONF", "/etc/asterisk/iax.conf")
 LOCAL_KEY_PATH = os.environ.get("NODERECORDER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
@@ -2811,11 +2748,16 @@ def _linked(node, peer, max_age=0):
 
 
 _tune_lock = threading.Lock()
-_solo = {"mode": "", "target": "", "name": "", "bridge": ""}
+_solo = {"mode": "", "target": "", "name": "", "bridge": "", "op": ""}
+LINK_MODES = {"": 3, "transceive": 3, "monitor": 8}
+
+
+def link_op(b):
+    return LINK_MODES.get(str(b.get("link_mode") or "").strip().lower(), 3) if isinstance(b, dict) else 3
 
 
 def _solo_set(**kw):
-    _solo.update(mode="", target="", name="", bridge="")
+    _solo.update(mode="", target="", name="", bridge="", op="")
     _solo.update({k: str(v) for k, v in kw.items() if k in _solo})
     try:
         _atomic_write(TUNED_PATH, json.dumps(_solo) + "\n", 0o644)
@@ -3028,7 +2970,7 @@ def guard_tick():
                 and _tune_lock.acquire(blocking=False):
             try:
                 g["last"]["watchdog"], g["down"] = now, 0
-                ok, out = ilink(node, 3, own)
+                ok, out = ilink(node, int(_solo.get("op") or 3), own)
                 log_event(f"Guard: bridge node {own} for {_solo['name']} was not linked; linking it again"
                           + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
             finally:
@@ -3155,31 +3097,7 @@ def _has_dvs(favs):
     return any(f["mode"] in DVS_MODES for f in favs)
 
 
-def _dvs_set_tune(f, net):
-    dvs("tune", DVS_DISCONNECT)
-    time.sleep(DVS_SETTLE_SEC)
-    if _dvs_now["mode"] != f["mode"]:
-        ok, out = dvs("mode", f["mode"])
-        _dvs_now["mode"] = f["mode"] if ok else ""
-        if not ok:
-            log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
-        time.sleep(DVS_SETTLE_SEC)
-    if net is not None:
-        tune = f"{net['password']}@{net['address']}"
-        if _dvs_now["dmr"] != tune:
-            ok, out = dvs("tune", tune)
-            if not ok:
-                return f"Could not join DMR network {net['name']}: {_hide(out, net['password'])[:160]}"
-            _dvs_now["dmr"] = tune
-            log_event(f"Joined DMR network {net['name']} ({net['address']})", "ok")
-            time.sleep(1.0)
-    ok, out = dvs("tune", f["num"])
-    if not ok:
-        return f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"
-    return ""
-
-
-def solo_dvs(f, node, net_action=None):
+def solo_dvs(f, node, net_action=None, op=3):
     label = MODE_LABEL.get(f["mode"], f["mode"])
     if nc_running():
         return nc_dvs(f, node, net_action)
@@ -3207,13 +3125,30 @@ def solo_dvs(f, node, net_action=None):
         if not ok:
             return {"ok": False, "error": why}
         if not _linked(node, bridge):
-            ok, out = ilink(node, 3, bridge)
+            ok, out = ilink(node, op, bridge)
             if not ok:
                 return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
-        err = _dvs_set_tune(f, net)
-        if err:
-            return {"ok": False, "error": err}
-        _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge)
+        dvs("tune", DVS_DISCONNECT)
+        time.sleep(DVS_SETTLE_SEC)
+        if _dvs_now["mode"] != f["mode"]:
+            ok, out = dvs("mode", f["mode"])
+            _dvs_now["mode"] = f["mode"] if ok else ""
+            if not ok:
+                log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
+            time.sleep(DVS_SETTLE_SEC)
+        if net is not None:
+            tune = f"{net['password']}@{net['address']}"
+            if _dvs_now["dmr"] != tune:
+                ok, out = dvs("tune", tune)
+                if not ok:
+                    return {"ok": False, "error": f"Could not join DMR network {net['name']}: {_hide(out, net['password'])[:160]}"}
+                _dvs_now["dmr"] = tune
+                log_event(f"Joined DMR network {net['name']} ({net['address']})", "ok")
+                time.sleep(1.0)
+        ok, out = dvs("tune", f["num"])
+        if not ok:
+            return {"ok": False, "error": f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"}
+        _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge, op=op)
     finally:
         _tune_lock.release()
     log_event(f"Tuned {fav_name(f)}; bridge node {bridge} linked to node {node}"
@@ -3221,18 +3156,7 @@ def solo_dvs(f, node, net_action=None):
     return {"ok": True, "message": f"Tuned {fav_name(f)}. Bridge node {bridge} is linked to node {node}."}
 
 
-def _m17_set_tune(f, call, addr):
-    try:
-        _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
-    except OSError as exc:
-        return f"Could not write {M17_INI}: {exc}"
-    r = _systemctl("restart", M17_SERVICE, timeout=30)
-    if r.returncode != 0:
-        return f"{M17_SERVICE} did not restart: {(r.stderr or r.stdout).strip()[:160]}"
-    return ""
-
-
-def solo_m17(f, node):
+def solo_m17(f, node, op=3):
     if not _m17_present():
         return {"ok": False, "error": "USRP2M17 was not found, so M17 can't be tuned here."}
     b = bridge_nodes(0)
@@ -3259,14 +3183,18 @@ def solo_m17(f, node):
         _leave(node, "m17")
         if dvs_path():
             dvs("tune", DVS_DISCONNECT)
-        err = _m17_set_tune(f, call, addr)
-        if err:
-            return {"ok": False, "error": err}
+        try:
+            _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not write {M17_INI}: {exc}"}
+        r = _systemctl("restart", M17_SERVICE, timeout=30)
+        if r.returncode != 0:
+            return {"ok": False, "error": f"{M17_SERVICE} did not restart: {(r.stderr or r.stdout).strip()[:160]}"}
         if not _linked(node, bridge):
-            ok, out = ilink(node, 3, bridge)
+            ok, out = ilink(node, op, bridge)
             if not ok:
                 return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
-        _solo_set(mode="M17", target=fav_target(f), name=fav_name(f), bridge=bridge)
+        _solo_set(mode="M17", target=fav_target(f), name=fav_name(f), bridge=bridge, op=op)
     finally:
         _tune_lock.release()
     log_event(f"Tuned {fav_name(f)} ({addr}); bridge node {bridge} linked to node {node}"
@@ -3323,9 +3251,9 @@ def digital_info():
             "file": FAV_CONF_PATH}
 
 
-def m17_connect(f, node):
+def m17_connect(f, node, op=3):
     if not nc_running():
-        return solo_m17(f, node)
+        return solo_m17(f, node, op)
     dash_node = dashboard_conf()["asl_node"]
     if not dash_node:
         return {"ok": False, "error": "M17 goes through Node Controller; set its node first."}
@@ -3393,7 +3321,7 @@ def _fav_at(favs, index):
     return favs[i] if 0 <= i < len(favs) else None
 
 
-def node_connect(f, node):
+def node_connect(f, node, op=3):
     if node == dashboard_conf()["asl_node"]:
         r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
         if r is not None:
@@ -3412,7 +3340,7 @@ def node_connect(f, node):
         if _solo["mode"]:
             _leave(node, "asl")
         _asl_keep["v"] = fav_target(f)
-        ok, out = ilink(node, 3, fav_target(f))
+        ok, out = ilink(node, op, fav_target(f))
     finally:
         _tune_lock.release()
     if not ok:
@@ -3772,37 +3700,16 @@ def _tune_connect_impl(b):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
+    op = link_op(b)
     if f["mode"] == "M17":
-        return m17_connect(f, node)
+        return m17_connect(f, node, op)
     if f["mode"] in ("ASL", "EchoLink"):
-        return node_connect(f, node)
+        return node_connect(f, node, op)
     act = b.get("net_action")
-    return solo_dvs(f, node, act if act in ("add", "once") else None)
-
-
-def _tune_guard(b):
-    if not isinstance(b, dict) or b.get("force"):
-        return None
-    try:
-        f = _tune_fav(b)
-    except ValueError:
-        return None
-    if f["mode"] in ("ASL", "EchoLink"):
-        return None
-    h = bridge_hold_for(f)
-    if not h or h["target"] == fav_target(f):
-        return None
-    until = h.get("end", "")[11:16]
-    return {"ok": False, "warn": True, "need_confirm": True,
-            "error": f"A scheduled recording ({h['name']}) is using the {bridge_label(bridge_kind(f))} bridge"
-                     + (f" until {until}" if until else "")
-                     + ". Tuning now stops it and keeps what was recorded so far."}
+    return solo_dvs(f, node, act if act in ("add", "once") else None, op)
 
 
 def tune_connect(b):
-    blocked = _tune_guard(b)
-    if blocked:
-        return blocked
     r = _tune_connect_impl(b)
     try:
         f = _tune_fav(b)
@@ -4180,7 +4087,7 @@ def _put_nodes_line(lines, nodes_line):
 
 def rec_node_state(main=None):
     out = {"node": REC_NODE, "main": main_node() if main is None else main, "defined": False, "owner": "",
-           "nodes_line": False, "ready": False, "linked": None, "wanted": main_recording(),
+           "nodes_line": False, "ready": False, "linked": None,
            "rxchannel": f"USRP/127.0.0.1:{REC_USRP_IN}:{REC_USRP_OUT}"}
     try:
         lines, stanzas = read_rpt()
@@ -4240,38 +4147,46 @@ def rec_node_enable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: added node {REC_NODE} for node {main} (backup {backup})", "ok")
-    return _changed(backup, f"Added node {REC_NODE}. Restart Asterisk; Node Recorder links it to node {main} only while it records the main node."
+    return _changed(backup, f"Added node {REC_NODE}. Restart Asterisk, then Node Recorder links it to node {main}."
                     + allmon_follow([REC_NODE], [], main))
 
 
-def main_recording():
-    st = SCHED.status()
-    cur = st["current"] or {}
-    return st["state"] != "idle" and not cur.get("dry_run")
+OLD_PRIV_NOTE = "; noderecorder: private recording node (remove it from the Node Recorder page)"
 
 
-def rec_node_owned():
-    if talker_active():
-        return None
-    st = rec_node_state()
-    if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
-        return None
-    return st
+def old_private_nodes():
+    try:
+        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+            scan = rpt_scan(fh.read())
+    except OSError:
+        return []
+    return sorted((n for n, note in scan["notes"].items() if note == OLD_PRIV_NOTE and n.isdigit()), key=int)
 
 
-def rec_node_link(why):
-    st = rec_node_owned()
-    if st is None or st["linked"]:
-        return
-    ok, out = ilink(st["main"], 3, REC_NODE)
-    log_event(f"Linked node {REC_NODE} to node {st['main']} ({why})" + ("" if ok else f" failed: {out.strip()[:120]}"),
-              "ok" if ok else "warn")
+def old_private_remove(_body=None):
+    with _rpt_lock:
+        try:
+            with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
+        nodes = sorted((n for n, note in rpt_scan(text)["notes"].items() if note == OLD_PRIV_NOTE and n.isdigit()), key=int)
+        if not nodes:
+            return {"ok": True, "changed": False, "message": "No old private recording nodes are in rpt.conf."}
+        for n in nodes:
+            text, _ok = rpt_remove_private(text, n, OLD_PRIV_NOTE)
+        try:
+            backup = _write_rpt(text.split("\n"))
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: removed old private recording node{'s' if len(nodes) > 1 else ''} {', '.join(nodes)} (backup {backup})", "ok")
+    return _changed(backup, f"Removed old private recording node{'s' if len(nodes) > 1 else ''} {', '.join(nodes)}. "
+                    "Restart Asterisk for it to take effect." + allmon_follow([], nodes))
 
 
-def rec_node_release(why):
-    st = rec_node_owned()
-    if st is not None and st["linked"]:
-        rec_node_unlink(why)
+def drop_old_lane_state():
+    for path in glob.glob(os.path.join(CONFIG_DIR, "schedule_state_[0-9][0-9][0-9][0-9].json")):
+        _remove_quiet(path)
 
 
 def rec_node_unlink(why):
@@ -4324,252 +4239,27 @@ def rec_node_disable():
                     + allmon_follow([], [REC_NODE]))
 
 
-def priv_reserved():
-    b = bridge_nodes()
-    return {REC_NODE, DEFAULT_BRIDGES[0], DEFAULT_BRIDGES[1], b.get("digital", ""), b.get("m17", ""),
-            main_node() or ""} - {""}
-
-
-def priv_read():
-    with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-        return fh.read()
-
-
-def priv_nodes_line(node):
-    port = iax_bindport()
-    host = "127.0.0.1" if port == "4569" else f"127.0.0.1:{port}"
-    return f"{node} = radio@{host}/{node},NONE"
-
-
-def priv_owned(scan):
-    return sorted((n for n, note in scan["notes"].items() if note == PRIV_NOTE and n.isdigit()), key=int)
-
-
-def priv_state():
-    out = {"ok": True, "max": PRIV_MAX, "start": PRIV_START, "nodes": [], "can_add": False, "next": "", "main": main_node() or ""}
-    try:
-        text = priv_read()
-    except OSError as exc:
-        return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
-    scan = rpt_scan(text)
-    owned = priv_owned(scan)
-    file_lines = text.split("\n")
-    for node in owned:
-        rx = scan["rx"].get(node, "")
-        m = re.match(r"USRP/[^:\s]+:(\d+):(\d+)$", rx)
-        known, _links = rpt_links(node, max_age=5.0)
-        has_line = _has_line(file_lines, priv_nodes_line(node))
-        state = "ready" if known and has_line and m else "restart" if has_line and m else "fix"
-        out["nodes"].append({"node": node, "rxchannel": rx, "in_port": int(m.group(1)) if m else 0,
-                             "out_port": int(m.group(2)) if m else 0, "nodes_line": has_line, "asterisk": bool(known),
-                             "state": state})
-    nxt = rpt_next_free(scan["used"], PRIV_START, PRIV_STOP, priv_reserved())
-    out["next"] = nxt
-    out["can_add"] = bool(nxt) and len(owned) < PRIV_MAX and bool(out["main"])
-    return out
-
-
-def priv_add(_body=None):
-    main = main_node()
-    if not main:
-        return {"ok": False, "error": "Set the node first (the Dashboard's node number)."}
-    with _rpt_lock:
-        try:
-            text = priv_read()
-        except OSError as exc:
-            return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
-        scan = rpt_scan(text)
-        if len(priv_owned(scan)) >= PRIV_MAX:
-            return {"ok": False, "error": f"Node Recorder keeps at most {PRIV_MAX} private nodes. Remove one first."}
-        node = rpt_next_free(scan["used"], PRIV_START, PRIV_STOP, priv_reserved())
-        if not node:
-            return {"ok": False, "error": f"No free private node number from {PRIV_START} to {PRIV_STOP}."}
-        pin, pout = rpt_pick_ports(scan["ports"], node)
-        if not pin:
-            return {"ok": False, "error": "No free USRP port pair for a new private node."}
-        new, err = rpt_add_private(text, node, PRIV_NOTE, f"USRP/127.0.0.1:{pin}:{pout}", PRIV_BODY,
-                                   priv_nodes_line(node), rpt_template(scan, main))
-        if new is None:
-            return {"ok": False, "error": f"Could not add node {node}: {err}."}
-        try:
-            backup = _write_rpt(new.split("\n"))
-        except OSError as exc:
-            return _write_failed(exc)
-    priv_streams_sync()
-    log_event(f"rpt.conf: added private node {node} on ports {pin}/{pout} (backup {backup})", "ok")
-    r = _changed(backup, f"Added private node {node}. Restart Asterisk once for it to take effect; it stays after that."
-                 + allmon_follow([node], [], main))
-    r["node"] = node
-    return r
-
-
-TEST_HOLD_SEC = 3.0
-_test_tune_lock = threading.Lock()
-
-
-def priv_test_pick(want, pool):
-    cands = [want] if want and want != "auto" else list(pool)
-    why = ""
-    for n in cands:
-        s = priv_stream(n)
-        if n not in pool or s is None:
-            why = f"Node {n} is not one of Node Recorder's private nodes."
-            continue
-        lane = lane_of(n)
-        if s.recording() or (lane is not None and lane.status()["state"] != "idle"):
-            why = f"Node {n} is recording."
-            continue
-        known, _links = rpt_links(n, max_age=0)
-        if not known:
-            why = f"Asterisk does not know node {n} yet: restart Asterisk once."
-            continue
-        return n, ""
-    return "", why or "No private node is set up. Add one on this card first."
-
-
-def priv_test_tune(body):
-    eid = str((body or {}).get("id", "")).strip().lower()
-    e = next((x for x in schedule_load()["entries"] if x["id"] == eid), None)
-    if e is None:
-        return {"ok": False, "error": "Pick a schedule entry to test."}
-    try:
-        f = _tune_fav(e["target"])
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    pool = priv_pool()
-    want = str((body or {}).get("node") or "auto").strip().lower()
-    if want == "auto" and e.get("node") in pool:
-        want = e["node"]
-    node, why = priv_test_pick(want, pool)
-    if not node:
-        return {"ok": False, "error": why}
-    if not _test_tune_lock.acquire(blocking=False):
-        return {"ok": False, "error": "A test tune is already running."}
-    steps = []
-    digital = f["mode"] not in ("ASL", "EchoLink")
-    acquired = False
-    linked = False
-    peer = fav_target(f)
-    stream = priv_stream(node)
-
-    def add(name, ok, msg, t0):
-        steps.append({"step": name, "ok": bool(ok), "msg": str(msg), "secs": round(time.monotonic() - t0, 1)})
-        return ok
-
-    def done(ok, msg):
-        log_event(f"Test tune {fav_name(f)} on node {node}: {'ok' if ok else 'failed'} ({msg})", "ok" if ok else "warn")
-        return {"ok": ok, "node": node, "steps": steps, "message" if ok else "error": msg}
-
-    try:
-        if digital:
-            t0 = time.monotonic()
-            problems = bridge_preflight(f)
-            if problems:
-                add("check", False, "; ".join(problems), t0)
-                return done(False, "Not ready: " + "; ".join(problems) + ".")
-            add("check", True, "dvswitch.sh or USRP2M17, the network and the bridge node are there", t0)
-            t0 = time.monotonic()
-            ok, res = bridge_acquire(f, {"name": "Test tune"}, node)
-            add("tune", ok, f"{fav_name(f)} on the {bridge_label(bridge_kind(f))} bridge" if ok else res, t0)
-            if not ok:
-                return done(False, "Could not tune: " + res + ".")
-            acquired = True
-            peer = res
-        t0 = time.monotonic()
-        ok, out = ilink(node, 8, peer)
-        if not ok:
-            add("link", False, f"Asterisk refused the link: {out.strip()[:120] or 'no answer'}", t0)
-            return done(False, "Asterisk refused the link.")
-        linked = True
-        state = wait_link(node, peer)
-        add("link", state in ("up", "unknown"),
-            {"up": f"node {node} linked to {peer} (local monitor)", "unknown": "link sent, but Asterisk did not list the links",
-             "connecting": f"{peer} has not answered after {LINK_WAIT_SEC} s", "down": f"no link to {peer} after {LINK_WAIT_SEC} s"}[state], t0)
-        if state not in ("up", "unknown"):
-            return done(False, f"Node {node} did not link to {peer}.")
-        t0 = time.monotonic()
-        before = stream.hub.packets if stream else 0
-        time.sleep(TEST_HOLD_SEC)
-        still = _linked(node, peer)
-        heard = (stream.hub.packets - before) if stream else 0
-        add("hold", still, f"link still up after {TEST_HOLD_SEC:g} s; {heard} audio packets arrived (none is normal when nobody is talking)"
-            if still else "the link dropped while holding", t0)
-        if not still:
-            return done(False, "The link dropped while holding.")
-        return done(True, f"{fav_name(f)} tuned and linked on node {node}" + (" " + load_warning() if load_warning() else ""))
-    finally:
-        t0 = time.monotonic()
-        if linked:
-            ilink(node, 1, peer)
-        if acquired:
-            bridge_release(f, node)
-        if linked or acquired:
-            add("release", True, "unlinked" + (" and let the bridge go" if acquired else ""), t0)
-        _test_tune_lock.release()
-
-
-def priv_remove(body):
-    which = str((body or {}).get("node", "")).strip()
-    every = bool((body or {}).get("all"))
-    with _rpt_lock:
-        try:
-            text = priv_read()
-        except OSError as exc:
-            return {"ok": False, "error": f"Could not read {RPT_CONF}: {exc}"}
-        owned = priv_owned(rpt_scan(text))
-        pick = owned if every else [which] if which in owned else []
-        if not pick:
-            return {"ok": True, "changed": False, "message": "Node Recorder has no such private node in rpt.conf."}
-        used = {}
-        for e in schedule_load()["entries"]:
-            if e.get("node") in pick:
-                used.setdefault(e["node"], []).append(e["name"])
-        for node in pick:
-            s = priv_stream(node)
-            if s is not None and s.recording():
-                return {"ok": False, "error": f"Node {node} is recording now. Remove it when the recording ends."}
-            if node in used:
-                return {"ok": False, "error": f"Node {node} is used by the schedule entries {', '.join(used[node])}. "
-                                              "Change them to another node (or Auto) first."}
-        for node in pick:
-            text, _ok = rpt_remove_private(text, node, PRIV_NOTE)
-        try:
-            backup = _write_rpt(text.split("\n"))
-        except OSError as exc:
-            return _write_failed(exc)
-    priv_streams_sync()
-    log_event(f"rpt.conf: removed private node{'s' if len(pick) > 1 else ''} {', '.join(pick)} (backup {backup})", "ok")
-    return _changed(backup, f"Removed private node{'s' if len(pick) > 1 else ''} {', '.join(pick)}. Restart Asterisk for it to take effect."
-                    + allmon_follow([], pick))
-
-
-def link_keeper_step(last):
-    if talker_active():
-        return None
-    st = rec_node_state()
-    if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
-        return last
-    if not st["wanted"]:
-        if st["linked"]:
-            rec_node_unlink("no recording of the main node")
-        return None
-    if st["linked"]:
-        if last is False:
-            log_event(f"Node {REC_NODE} is linked to node {st['main']} again", "ok")
-        return True
-    ok, out = ilink(st["main"], 3, REC_NODE)
-    if last is not False:
-        log_event(f"Node {REC_NODE} was not linked to node {st['main']}; linking it"
-                  + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
-    return False
-
-
 def link_keeper_loop():
     last = None
     while True:
         time.sleep(20)
         try:
-            last = link_keeper_step(last)
+            if talker_active():
+                last = None
+                continue
+            st = rec_node_state()
+            if not st["ready"] or st["linked"] is None or st["owner"] != "recorder":
+                continue
+            if st["linked"]:
+                if last is False:
+                    log_event(f"Node {REC_NODE} is linked to node {st['main']} again", "ok")
+                last = True
+                continue
+            ok, out = ilink(st["main"], 3, REC_NODE)
+            if last is not False:
+                log_event(f"Node {REC_NODE} was not linked to node {st['main']}; linking it"
+                          + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
+            last = False
         except Exception as exc:
             log_event(f"Link keeper error: {exc}", "err")
 
@@ -4686,15 +4376,6 @@ def storage_pick():
     return out
 
 
-_open_paths = set()
-_open_lock = threading.Lock()
-
-
-def open_paths():
-    with _open_lock:
-        return set(_open_paths)
-
-
 def recordings_list(d):
     out = []
     try:
@@ -4720,7 +4401,7 @@ def retention_enforce(d, need):
     total = sum(f[1] for f in files)
     removed = 0
     with _enc_lock:
-        busy = set(_enc["pending"]) | open_paths()
+        busy = set(_enc["pending"])
     for name, size in files:
         if total <= budget:
             break
@@ -4801,9 +4482,8 @@ def repair_recording(path):
 
 def repair_recordings(d):
     fixed = 0
-    skip = open_paths()
     for name, _size in recordings_list(d):
-        if not name.endswith(".wav") or os.path.join(d, name) in skip:
+        if not name.endswith(".wav"):
             continue
         if repair_recording(os.path.join(d, name)):
             fixed += 1
@@ -5051,11 +4731,12 @@ def enc_enqueue(wav):
 def enc_sweep(d):
     if not _cfg_get("record_convert") or not encoder_path():
         return 0
-    skip = open_paths()
+    a = ENGINE.a
+    skip = a["path"] if a else ""
     n = 0
     for name, _size in recordings_list(d):
         p = os.path.join(d, name)
-        if name.endswith(".wav") and p not in skip and enc_enqueue(p):
+        if name.endswith(".wav") and p != skip and enc_enqueue(p):
             n += 1
     return n
 
@@ -5131,8 +4812,7 @@ def encoder_view():
 
 
 class RecordingEngine:
-    def __init__(self, hub=None):
-        self.hub = hub or HUB
+    def __init__(self):
         self.lock = threading.Lock()
         self.a = None
         self.closing = None
@@ -5204,10 +4884,8 @@ class RecordingEngine:
                  "stop": threading.Event()}
             a["thread"] = threading.Thread(target=self._writer, args=(a,), name="rec-writer", daemon=True)
             self.a = a
-            with _open_lock:
-                _open_paths.add(path)
             a["thread"].start()
-            self.hub.recorder = self
+            HUB.recorder = self
         log_event(f"Recording started: {path} ({'u-law' if fmt == 'ulaw' else 'PCM'})", "ok")
         return True, f"recording to {path}", name
 
@@ -5247,16 +4925,14 @@ class RecordingEngine:
             os.fsync(fh.fileno())
         except (OSError, ValueError) as exc:
             a["error"] = f"writing {a['name']} failed: {exc}"
-            if self.hub.recorder is self:
-                self.hub.recorder = None
+            if HUB.recorder is self:
+                HUB.recorder = None
             log_event(a["error"], "err")
         finally:
             try:
                 fh.close()
             except (OSError, ValueError):
                 pass
-            with _open_lock:
-                _open_paths.discard(a["path"])
 
     def stop(self):
         with self.lock:
@@ -5264,8 +4940,8 @@ class RecordingEngine:
             if a is None:
                 return True, "no recording was open", None
             self.a = None
-            if self.hub.recorder is self:
-                self.hub.recorder = None
+            if HUB.recorder is self:
+                HUB.recorder = None
             a["stop"].set()
             a["thread"].join(RECORD_CLOSE_SEC)
             alive = a["thread"].is_alive()
@@ -5286,7 +4962,7 @@ class RecordingEngine:
         return True, f"saved {a['name']} ({round(secs)} s, {a['bytes'] / 1048576:.1f} MB{note})" + (f"; removed {removed} old" if removed else ""), None
 
 
-ENGINE = RecordingEngine(HUB)
+ENGINE = RecordingEngine()
 
 
 SCHEDULE_PATH = os.path.join(CONFIG_DIR, "schedule.json")
@@ -5384,11 +5060,9 @@ def schedule_norm_entry(raw, check_target=True):
         datetime.fromisoformat(rev)
     except ValueError:
         rev = ""
-    node = str(raw.get("node") or "").strip().lower()
-    if node not in ("", "auto") and not re.fullmatch(r"\d{4}", node):
-        raise ValueError("bad node")
-    if node == "auto" and not check_target:
-        node = ""
+    link_mode = str(raw.get("link_mode") or "").strip().lower()
+    if link_mode not in LINK_MODES:
+        raise ValueError("link must be transceive or local monitor only")
     kind = str(raw.get("kind") or "regular").strip().lower()
     if kind not in ("regular", "special"):
         raise ValueError("kind must be regular or special")
@@ -5407,7 +5081,7 @@ def schedule_norm_entry(raw, check_target=True):
     return {"id": eid, "name": name, "enabled": _parse_bool(raw.get("enabled", True)),
             "days": days, "start": _hm_text(start), "end": _hm_text(end),
             "duration_min": (end - start) % 1440, "target": target, "format": fmt, "rev": rev,
-            "kind": kind, "date": date, "node": node}
+            "kind": kind, "date": date, "link_mode": "" if link_mode == "transceive" else link_mode}
 
 
 def _special_window(e):
@@ -5430,54 +5104,6 @@ def _sched_pieces(e, gap):
 
 
 def schedule_conflicts(entries):
-    out = []
-    for node in sorted({e.get("node", "") for e in entries}):
-        out += _lane_conflicts([e for e in entries if e.get("node", "") == node])
-    return out + _bridge_conflicts(entries)
-
-
-def _entry_bridge(e):
-    mode = (e.get("target") or {}).get("mode")
-    if not mode or mode in ("ASL", "EchoLink"):
-        return ""
-    return "m17" if mode == "M17" else "digital"
-
-
-def _same_target(a, b):
-    return all(str(a.get(k, "")) == str(b.get(k, "")) for k in ("mode", "num", "module", "net"))
-
-
-def _bridge_conflicts(entries):
-    out = []
-    live = [e for e in entries if e.get("enabled") and _entry_bridge(e)]
-    for i in range(len(live)):
-        for j in range(i + 1, len(live)):
-            a, b = live[i], live[j]
-            if _entry_bridge(a) != _entry_bridge(b) or _same_target(a["target"], b["target"]):
-                continue
-            if a.get("kind") == "special" and b.get("kind") == "special":
-                a0, a1 = _special_window(a)
-                b0, b1 = _special_window(b)
-                hit = a0 < b1 and b0 < a1
-            elif a.get("kind") == "special" or b.get("kind") == "special":
-                hit = False
-            else:
-                hit = any(pa[0] < pb[1] and pb[0] < pa[1] for pa in _sched_pieces(a, SCHEDULE_GAP_MIN)
-                          for pb in _sched_pieces(b, SCHEDULE_GAP_MIN))
-            if hit:
-                out.append(f"{a['name']} and {b['name']} need the {bridge_label(_entry_bridge(a))} bridge at the same time for different targets")
-    return out
-
-
-def schedule_assign(entries, e, pool):
-    for node in pool:
-        lane = [x for x in entries if x.get("node", "") == node and x["id"] != e["id"]]
-        if not _lane_conflicts(lane + [dict(e, node=node)]):
-            return node
-    return None
-
-
-def _lane_conflicts(entries):
     items = []
     for e in entries:
         if e.get("enabled") and e.get("kind") != "special":
@@ -5556,6 +5182,9 @@ def schedule_load():
             raw = doc.get("entries") if isinstance(doc, dict) else None
             if not isinstance(raw, list):
                 raise ValueError("the file has no entries list")
+            if any(isinstance(r, dict) and r.get("node") for r in raw) and not _sched_cache.get("node_warned"):
+                _sched_cache["node_warned"] = True
+                log_event("Schedule: entries saved on a private node now record on the main node (private nodes are gone)", "warn")
             for r in raw[:SCHEDULE_MAX]:
                 try:
                     data["entries"].append(schedule_norm_entry(r, check_target=False))
@@ -5587,12 +5216,7 @@ def schedule_set(body):
     e["rev"] = datetime.now().isoformat(timespec="seconds")
     if e["kind"] == "special" and _special_window(e)[1] <= sched_now():
         return {"ok": False, "error": "That special has already ended. Pick a later date or time."}
-    running = any(ln.is_running(e["id"]) for ln in all_lanes())
-    pool = priv_pool()
-    asl = e["target"].get("mode") in ("ASL", "EchoLink")
-    if e["node"] and e["node"] != "auto":
-        if e["node"] not in pool:
-            return {"ok": False, "error": f"Node {e['node']} is not one of Node Recorder's private nodes (Setup tab)."}
+    running = SCHED.is_running(e["id"])
     with _sched_lock:
         data = schedule_load()
         if data["error"]:
@@ -5602,31 +5226,10 @@ def schedule_set(body):
             return {"ok": False, "error": f"The schedule is full ({SCHEDULE_MAX} entries)."}
         if running:
             return {"ok": False, "error": f"{e['name']} is recording now; change it when the recording ends."}
-        auto = e["node"] == "auto"
-        if auto:
-            e["node"] = ""
-            if pool:
-                pick = schedule_assign(entries, e, pool)
-                if pick is None:
-                    room = len(pool) < PRIV_MAX
-                    return {"ok": False, "need_node": room, "error": (
-                        "Every private node is busy at that time. Add another on the Setup tab (Private recording nodes), "
-                        "restart Asterisk once, then save again." if room else
-                        f"All {len(pool)} private nodes are busy at that time. Pick another time.")}
-                e["node"] = pick
-        if e["node"] and not asl:
-            try:
-                problems = bridge_preflight(_tune_fav(e["target"]))
-            except ValueError as exc:
-                problems = [str(exc)]
-            if problems:
-                return {"ok": False, "error": "This entry could not be tuned on a private node: " + "; ".join(problems) + "."}
         entries.append(e)
         bad = schedule_conflicts(entries)
         if bad:
-            node_clash = not any("bridge" in m for m in bad)
-            hint = " Pick another private node, or add one on the Setup tab." if node_clash and e["node"] and len(pool) < PRIV_MAX else ""
-            return {"ok": False, "error": "; ".join(bad) + "." + hint, "conflicts": bad}
+            return {"ok": False, "error": "; ".join(bad) + ".", "conflicts": bad}
         order = {x["id"]: i for i, x in enumerate(data["entries"])}
         entries.sort(key=lambda x: order.get(x["id"], len(order)))
         try:
@@ -5634,22 +5237,14 @@ def schedule_set(body):
         except OSError as exc:
             return {"ok": False, "error": f"could not save {SCHEDULE_PATH}: {exc}"}
     what = f"special on {e['date']}" if e["kind"] == "special" else ", ".join(SCHEDULE_DAY_NAMES[d] for d in e["days"])
-    where = f" on node {e['node']}" if e["node"] else ""
-    log_event(f"Schedule: saved {e['name']} ({what} {e['start']}-{e['end']}){where}", "ok")
-    note = "" if e["node"] or pool else " It records on the main node; add private nodes on the Setup tab to keep the main node free."
-    if e["node"] and not asl:
-        note += " It tunes the " + bridge_label(_entry_bridge(e)) + " bridge for its window, so a live tune on that bridge makes it skip."
-    warn = load_warning()
-    if warn:
-        note += " " + warn
-    return {"ok": True, "entry": e, "message": f"Saved{where}." + note}
+    log_event(f"Schedule: saved {e['name']} ({what} {e['start']}-{e['end']})", "ok")
+    return {"ok": True, "entry": e, "message": "Saved."}
 
 
 def schedule_remove(body):
     eid = str(body.get("id", "") if isinstance(body, dict) else "").strip().lower()
-    for ln in all_lanes():
-        if ln.is_running(eid):
-            ln.stop_by_hand()
+    if SCHED.is_running(eid):
+        SCHED.stop_by_hand()
     with _sched_lock:
         data = schedule_load()
         if data["error"]:
@@ -5661,8 +5256,7 @@ def schedule_remove(body):
             schedule_store([x for x in data["entries"] if x["id"] != eid])
         except OSError as exc:
             return {"ok": False, "error": f"could not save {SCHEDULE_PATH}: {exc}"}
-    for ln in all_lanes():
-        ln.forget(eid)
+    SCHED.forget(eid)
     log_event(f"Schedule: removed {hit['name']}", "ok")
     return {"ok": True, "message": f"Removed {hit['name']}."}
 
@@ -5721,7 +5315,7 @@ class DryActions:
 
 class RealActions:
     def connect(self, entry):
-        r = tune_connect(entry["target"])
+        r = tune_connect(dict(entry["target"], link_mode=entry.get("link_mode", "")))
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
     def link_alive(self, entry):
@@ -5731,13 +5325,10 @@ class RealActions:
         return ENGINE.healthy()
 
     def start(self, entry, window):
-        rec_node_link("recording starts")
         return ENGINE.start(entry, window)
 
     def stop(self):
-        r = ENGINE.stop()
-        rec_node_release("recording ended")
-        return r
+        return ENGINE.stop()
 
     def disconnect(self, entry):
         r = tune_disconnect(entry["target"])
@@ -5753,373 +5344,6 @@ class CurrentLinkActions(RealActions):
 
     def disconnect(self, entry):
         return True, "the link was left as it is", None
-
-
-LOAD_WARN = 4.0
-BRIDGE_TUNE_WAIT_SEC = 30.0
-_bridge_lock = threading.Lock()
-_bridge_gate = {"digital": threading.Lock(), "m17": threading.Lock()}
-_bridge_use = {"digital": None, "m17": None}
-
-
-def bridge_kind(f):
-    return "m17" if f["mode"] == "M17" else "digital"
-
-
-def bridge_label(kind):
-    return "M17" if kind == "m17" else "digital"
-
-
-def load_warning():
-    try:
-        one = os.getloadavg()[0]
-    except OSError:
-        return ""
-    return f"The system load is high ({one:.1f}): recordings may stutter." if one > LOAD_WARN else ""
-
-
-def bridge_holds():
-    with _bridge_lock:
-        return [{"kind": k, "bridge": h["bridge"], "target": h["target"], "name": h["name"], "nodes": sorted(h["users"]),
-                 "end": h.get("end", "")} for k, h in _bridge_use.items() if h]
-
-
-def bridge_hold_for(f):
-    with _bridge_lock:
-        h = _bridge_use.get(bridge_kind(f))
-        return dict(h) if h else None
-
-
-def bridge_set_end(f, end):
-    with _bridge_lock:
-        h = _bridge_use.get(bridge_kind(f))
-        if h and not h.get("end"):
-            h["end"] = end
-
-
-def m17_resolve(f):
-    if not _m17_present():
-        return "", "", "USRP2M17 was not found, so M17 can't be tuned here."
-    call = callsign_now()[0]
-    if not call:
-        return "", "", "M17 needs your callsign: set it on the Setup tab (Digital card)."
-    addr, err = m17_lookup(f["num"], f["module"])
-    if err:
-        return "", "", err
-    addr = addr or f.get("ip", "")
-    if not addr:
-        return "", "", f"{f['num']} is not in {M17_HOSTS} and its favorite has no address."
-    return call, addr, ""
-
-
-def bridge_preflight(f):
-    kind = bridge_kind(f)
-    out = []
-    if not bridge_nodes(0).get(kind):
-        out.append(f"no {bridge_label(kind)} bridge node was found (Setup tab, Digital card)")
-    if kind == "m17":
-        _call, _addr, err = m17_resolve(f)
-        if err:
-            out.append(err.rstrip("."))
-    else:
-        if not dvs_path():
-            out.append("dvswitch.sh was not found, so " + MODE_LABEL.get(f["mode"], f["mode"]) + " can't be tuned here")
-        if f["mode"] == "DMR" and not any(n["name"] == f.get("net") for n in nets_load()):
-            out.append(f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)")
-    return out
-
-
-def bridge_live(kind, f):
-    b = bridge_nodes().get(kind, "")
-    main = main_node()
-    if not b or not main:
-        return ""
-    ok, links = rpt_links(main, max_age=2.0)
-    if not ok or not any(l["node"] == b for l in links):
-        return ""
-    target = fav_target(f)
-    if not nc_running(cached=True):
-        if _solo["target"] and _solo["bridge"] == b:
-            return "same" if _solo["target"] == target else _solo["name"]
-        return "a live link"
-    if kind == "digital":
-        if nc_dvs_target(fav_load()) == target:
-            return "same"
-        return tuned_text(nc_dvs_current()) or "a live tune"
-    now = m17_current()
-    return f"M17 {now}" if now else "a live tune"
-
-
-def bridge_tune(kind, f):
-    if not _tune_lock.acquire(timeout=BRIDGE_TUNE_WAIT_SEC):
-        return "another tune is still running; this recording could not tune the bridge"
-    try:
-        if kind == "m17":
-            call, addr, err = m17_resolve(f)
-            return err or _m17_set_tune(f, call, addr)
-        ok, why = _gateway_up(f["mode"])
-        if not ok:
-            return why
-        net = None
-        if f["mode"] == "DMR":
-            net = next((n for n in nets_load() if n["name"] == f.get("net")), None)
-            if net is None:
-                return f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)."
-        return _dvs_set_tune(f, net)
-    finally:
-        _tune_lock.release()
-
-
-def bridge_park(kind, f):
-    if not _tune_lock.acquire(timeout=BRIDGE_TUNE_WAIT_SEC):
-        return
-    try:
-        if kind == "m17":
-            _m17_park()
-        else:
-            if f["mode"] == "DSTAR":
-                dvs("tune", DSTAR_UNLINK)
-            dvs("tune", DVS_DISCONNECT)
-    finally:
-        _tune_lock.release()
-
-
-def bridge_acquire(f, entry, node):
-    kind = bridge_kind(f)
-    label = bridge_label(kind)
-    bridge = bridge_nodes(0).get(kind, "")
-    if not bridge:
-        return False, f"No {label} bridge node was found: set it on the Setup tab (Digital card)."
-    target = fav_target(f)
-    with _bridge_gate[kind]:
-        with _bridge_lock:
-            h = _bridge_use[kind]
-            if h:
-                if h["target"] != target:
-                    return False, f"the {label} bridge is in use by the recording {h['name']}"
-                h["users"].add(node)
-                return True, bridge
-        taken = bridge_live(kind, f)
-        if taken and taken != "same":
-            return False, f"the {label} bridge is in use by a live tune ({taken})"
-        if not taken:
-            err = bridge_tune(kind, f)
-            if err:
-                return False, err
-        with _bridge_lock:
-            _bridge_use[kind] = {"bridge": bridge, "target": target, "name": entry["name"], "users": {node},
-                                 "owned": not taken, "end": ""}
-    return True, bridge
-
-
-def bridge_release(f, node, taken=False):
-    kind = bridge_kind(f)
-    with _bridge_gate[kind]:
-        with _bridge_lock:
-            h = _bridge_use[kind]
-            if not h:
-                return
-            h["users"].discard(node)
-            if h["users"]:
-                return
-            _bridge_use[kind] = None
-        if h["owned"] and not taken:
-            bridge_park(kind, f)
-
-
-def priv_udp_loop(stream):
-    hub = stream.hub
-    while not stream.closed.is_set():
-        try:
-            sock = udp_socket(stream.port)
-        except OSError as exc:
-            stream.error = f"cannot listen on 127.0.0.1:{stream.port}: {exc}"
-            log_event(f"Node {stream.node}: {stream.error}; retrying in 10s", "err")
-            if stream.closed.wait(10):
-                return
-            continue
-        stream.error = ""
-        sock.settimeout(1.0)
-        try:
-            while not stream.closed.is_set():
-                try:
-                    data = sock.recv(8192)
-                except socket.timeout:
-                    continue
-                pcm, keyed = usrp_payload(data)
-                if keyed is not None:
-                    hub.note_usrp(keyed)
-                if pcm:
-                    hub.feed(pcm)
-        except OSError as exc:
-            stream.error = f"UDP receive error: {exc}"
-        finally:
-            sock.close()
-        stream.closed.wait(1)
-
-
-class PrivStream:
-    def __init__(self, node, port):
-        self.node = node
-        self.port = port
-        self.error = ""
-        self.hub = Hub(RxClean(), None)
-        self.engine = RecordingEngine(self.hub)
-        self.closed = threading.Event()
-        self.pump = None
-        self.pump_stop = None
-        self.listener = threading.Thread(target=priv_udp_loop, args=(self,), name=f"usrp-{node}", daemon=True)
-        self.listener.start()
-
-    def recording(self):
-        return self.engine.a is not None
-
-    def start(self, entry, window):
-        if self.pump is None or not self.pump.is_alive():
-            self.pump_stop = threading.Event()
-            self.pump = threading.Thread(target=self.hub.pump_loop, args=(self.pump_stop,), name=f"pump-{self.node}", daemon=True)
-            self.pump.start()
-        ok, msg, name = self.engine.start(entry, window)
-        if not ok:
-            self.pump_stop.set()
-        return ok, msg, name
-
-    def stop(self):
-        r = self.engine.stop()
-        if self.pump_stop is not None:
-            self.pump_stop.set()
-        return r
-
-    def close(self):
-        self.closed.set()
-        if self.pump_stop is not None:
-            self.pump_stop.set()
-
-
-_priv_streams = {}
-_priv_streams_lock = threading.Lock()
-
-
-def priv_pool():
-    try:
-        return priv_owned(rpt_scan(priv_read()))
-    except OSError:
-        return []
-
-
-def priv_stream(node):
-    with _priv_streams_lock:
-        return _priv_streams.get(node)
-
-
-def priv_streams_sync():
-    try:
-        scan = rpt_scan(priv_read())
-    except OSError:
-        return
-    want = {}
-    for node in priv_owned(scan):
-        m = re.match(r"USRP/[^:\s]+:(\d+):(\d+)$", scan["rx"].get(node, ""))
-        if m:
-            want[node] = int(m.group(1))
-    with _priv_streams_lock:
-        for node, port in want.items():
-            have = _priv_streams.get(node)
-            if have is not None and have.port != port and not have.recording():
-                have.close()
-                del _priv_streams[node]
-            if node not in _priv_streams:
-                _priv_streams[node] = PrivStream(node, port)
-        for node in [n for n in _priv_streams if n not in want]:
-            if not _priv_streams[node].recording():
-                _priv_streams[node].close()
-                del _priv_streams[node]
-
-
-class PrivActions:
-    def __init__(self, node):
-        self.node = node
-        self.peer = ""
-        self.f = None
-        self.taken = ""
-
-    def _fav(self, entry):
-        if self.f is None:
-            self.f = _tune_fav(entry["target"])
-        return self.f
-
-    def _digital(self, entry):
-        return self._fav(entry)["mode"] not in ("ASL", "EchoLink")
-
-    def connect(self, entry):
-        if priv_stream(self.node) is None:
-            return False, f"private node {self.node} is not set up in rpt.conf", None
-        known, _links = rpt_links(self.node, max_age=0)
-        if not known:
-            return False, f"Asterisk does not know node {self.node} yet: restart Asterisk once", None
-        f = self._fav(entry)
-        digital = self._digital(entry)
-        if digital:
-            warn = load_warning()
-            if warn:
-                log_event(f"{entry['name']}: {warn}", "warn")
-            problems = bridge_preflight(f)
-            if problems:
-                return False, "; ".join(problems), None
-            ok, res = bridge_acquire(f, entry, self.node)
-            if not ok:
-                return False, f"{res}; this recording is skipped", None
-            self.peer = res
-        else:
-            self.peer = fav_target(f)
-        ok, out = ilink(self.node, 8, self.peer)
-        if not ok:
-            if digital:
-                bridge_release(f, self.node)
-            return False, f"Asterisk refused the link: {out.strip()[:160] or 'no answer'}", None
-        state = wait_link(self.node, self.peer)
-        if state == "up":
-            return True, f"node {self.node} linked to {self.peer} (local monitor)", None
-        if state == "unknown":
-            return True, f"link sent from node {self.node} to {self.peer}, but Asterisk did not list the links", None
-        if digital:
-            ilink(self.node, 1, self.peer)
-            bridge_release(f, self.node)
-        return False, f"node {self.node} did not link to {self.peer} after {LINK_WAIT_SEC} s", None
-
-    def link_alive(self, entry):
-        if self._digital(entry):
-            taken = bridge_live(bridge_kind(self.f), self.f)
-            if taken not in ("", "same"):
-                self.taken = taken
-                return "taken"
-        if _linked(self.node, self.peer):
-            return True
-        ilink(self.node, 8, self.peer)
-        return False
-
-    def healthy(self, entry):
-        s = priv_stream(self.node)
-        return s.engine.healthy() if s is not None else (False, f"node {self.node} was removed")
-
-    def start(self, entry, window):
-        s = priv_stream(self.node)
-        if s is None:
-            return False, f"private node {self.node} is not set up in rpt.conf", None
-        if window and self._digital(entry):
-            bridge_set_end(self.f, window[1].isoformat(timespec="minutes"))
-        return s.start(entry, window)
-
-    def stop(self):
-        s = priv_stream(self.node)
-        return s.stop() if s is not None else (True, "no recording was open", None)
-
-    def disconnect(self, entry):
-        if self.peer:
-            ilink(self.node, 1, self.peer)
-        if self.f is not None and self._digital(entry):
-            bridge_release(self.f, self.node, taken=bool(self.taken))
-        return True, f"node {self.node} unlinked", None
 
 
 def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, timeouts=None, window=None, start_at=None):
@@ -6175,9 +5399,6 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
                 alive = actions.link_alive(entry)
             except Exception:
                 alive = None
-            if alive == "taken":
-                result, detail = "bridge_taken", f"the bridge was taken by {getattr(actions, 'taken', '') or 'a live tune'}; what was recorded is kept"
-                break
             lost = lost + 1 if alive is False else 0
             if lost >= LINK_LOST_CHECKS:
                 result, detail = "link_lost", "the link dropped during the recording"
@@ -6210,9 +5431,7 @@ def _special_remove(eid):
 
 
 class Scheduler:
-    def __init__(self, real_actions=None, dry_actions=None, node=""):
-        self.node = node
-        self.state_path = SCHEDULE_STATE_PATH if not node else os.path.join(CONFIG_DIR, f"schedule_state_{node}.json")
+    def __init__(self, real_actions=None, dry_actions=None):
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.real = real_actions or RealActions
@@ -6234,7 +5453,7 @@ class Scheduler:
 
     def _state_load(self):
         try:
-            with open(self.state_path, "r", encoding="utf-8") as fh:
+            with open(SCHEDULE_STATE_PATH, "r", encoding="utf-8") as fh:
                 doc = json.load(fh)
             if isinstance(doc, dict):
                 if isinstance(doc.get("done"), dict):
@@ -6250,13 +5469,13 @@ class Scheduler:
         except FileNotFoundError:
             pass
         except (OSError, ValueError) as exc:
-            log_event(f"Schedule: {self.state_path} could not be read ({exc}); starting without it", "warn")
+            log_event(f"Schedule: {SCHEDULE_STATE_PATH} could not be read ({exc}); starting without it", "warn")
 
     def _state_save(self):
         try:
-            _atomic_write(self.state_path, json.dumps({"active": self.active, "done": self.done, "parts": self.parts}) + "\n", 0o644)
+            _atomic_write(SCHEDULE_STATE_PATH, json.dumps({"active": self.active, "done": self.done, "parts": self.parts}) + "\n", 0o644)
         except OSError as exc:
-            log_event(f"Schedule: could not save {self.state_path}: {exc}", "warn")
+            log_event(f"Schedule: could not save {SCHEDULE_STATE_PATH}: {exc}", "warn")
 
     def is_running(self, eid):
         with self.lock:
@@ -6305,7 +5524,6 @@ class Scheduler:
     def tick(self, now=None):
         now = now or sched_now()
         data = schedule_load()
-        data = dict(data, entries=[e for e in data["entries"] if e.get("node", "") == self.node])
         entries = [e for e in data["entries"] if e["enabled"]]
         specials = [e for e in entries if e.get("kind") == "special"]
         regulars = [e for e in entries if e.get("kind") != "special"]
@@ -6395,7 +5613,7 @@ class Scheduler:
                 return False, "A recording is already running."
             now = sched_now()
             data = schedule_load()
-            due = [e["name"] for e in data["entries"] if e["enabled"] and e.get("node", "") == self.node and schedule_current(e, now)]
+            due = [e["name"] for e in data["entries"] if e["enabled"] and schedule_current(e, now)]
             if due:
                 return False, f"{due[0]} is due now; record by hand after its window ends."
             self._start_run(entry, window, now, manual=True)
@@ -6435,7 +5653,7 @@ class Scheduler:
             self.user_stop = True
             name = self.cur["name"]
             now = sched_now()
-            for e in [x for x in schedule_load()["entries"] if x["enabled"] and x.get("node", "") == self.node]:
+            for e in [x for x in schedule_load()["entries"] if x["enabled"]]:
                 w = schedule_current(e, now)
                 if w:
                     self.done[e["id"]] = w[0].isoformat(timespec="minutes")
@@ -6498,53 +5716,6 @@ class Scheduler:
 
 
 SCHED = Scheduler()
-LANES = {}
-_lanes_lock = threading.Lock()
-_lanes_stop = threading.Event()
-
-
-def lane_of(node):
-    if not node:
-        return SCHED
-    with _lanes_lock:
-        return LANES.get(node)
-
-
-def all_lanes():
-    with _lanes_lock:
-        return [SCHED] + list(LANES.values())
-
-
-def lanes_status():
-    out = []
-    for ln in all_lanes():
-        cur = ln.status()["current"]
-        if cur and not cur.get("dry_run"):
-            out.append(dict(cur, node=ln.node))
-    return out
-
-
-def lanes_tick():
-    nodes = {e.get("node", "") for e in schedule_load()["entries"]} - {""}
-    with _lanes_lock:
-        for n in nodes:
-            if n not in LANES:
-                LANES[n] = Scheduler(real_actions=lambda n=n: PrivActions(n), node=n)
-        lanes = list(LANES.values())
-    for ln in lanes:
-        ln.tick()
-
-
-def lanes_loop():
-    last = -1e9
-    while not _lanes_stop.wait(1.0):
-        try:
-            if time.monotonic() - last >= 30:
-                last = time.monotonic()
-                priv_streams_sync()
-            lanes_tick()
-        except Exception as exc:
-            log_event(f"Schedule lanes: {exc}", "err")
 
 
 def schedule_dry_run(body):
@@ -6570,35 +5741,13 @@ def schedule_dry_run(body):
             "message": "Dry run finished: nothing was connected or recorded."}
 
 
-BRIDGE_NOTICE_MIN = 30
-
-
-def next_bridge_window():
-    now = sched_now()
-    best = None
-    for e in schedule_load()["entries"]:
-        kind = _entry_bridge(e)
-        if not (e.get("enabled") and kind):
-            continue
-        w = schedule_next(e, now)
-        if w is None or w[0] - now > timedelta(minutes=BRIDGE_NOTICE_MIN):
-            continue
-        if best is None or w[0] < best[0]:
-            best = (w[0], e, kind)
-    if best is None:
-        return {}
-    return {"name": best[1]["name"], "kind": best[2], "start": best[0].isoformat(timespec="minutes"),
-            "node": best[1].get("node", "")}
-
-
 def recorder_status():
     st = SCHED.status()
     cur = st["current"] or {}
     dry = bool(cur.get("dry_run"))
     return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
             "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
-            "elapsed": cur.get("elapsed", 0), "file": cur.get("file", ""), "recordings": lanes_status(),
-            "bridges": bridge_holds(), "load_warning": load_warning(), "next_bridge": next_bridge_window()}
+            "elapsed": cur.get("elapsed", 0), "file": cur.get("file", "")}
 
 
 MANUAL_MAX_SEC = 4 * 3600
@@ -6692,9 +5841,8 @@ def schedule_view():
         row["next"] = shown[0].strftime("%a %d %b %H:%M") if shown else ""
         row["now"] = bool(cur)
         last = schedule_last_ended(e, now)
-        lane = lane_of(e.get("node", ""))
-        row["done"] = bool(e["enabled"] and e.get("kind") != "special" and not cur and last and lane is not None
-                           and lane.done.get(e["id"]) == last[0].isoformat(timespec="minutes"))
+        row["done"] = bool(e["enabled"] and e.get("kind") != "special" and not cur and last
+                           and SCHED.done.get(e["id"]) == last[0].isoformat(timespec="minutes"))
         if cur:
             group, key = 0, cur[0]
         elif nxt and not row["done"]:
@@ -6708,8 +5856,7 @@ def schedule_view():
     keyed.sort(key=lambda t: (t[0], t[1]))
     rows = [t[2] for t in keyed]
     return {"ok": True, "entries": rows, "error": data["error"], "max": SCHEDULE_MAX, "gap_min": SCHEDULE_GAP_MIN,
-            "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "lanes": lanes_status(),
-            "priv_nodes": priv_pool(), "bridges": bridge_holds(), "load_warning": load_warning(), "engine_ready": ENGINE_READY,
+            "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "engine_ready": ENGINE_READY,
             "dry_run": bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY, "now": now.strftime("%a %d %b %H:%M"),
             "tz": _cfg_get("schedule_tz"), "tz_label": sched_tz_label()}
 
@@ -7494,7 +6641,7 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'sched', 'dig', 'node', 'priv', 'store', 'conv', 'rx', 'log'];
+const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'conv', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
 function showTab(name) {
@@ -7507,7 +6654,7 @@ function showTab(name) {
   });
   if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); loadSchedule(); }
   if (name === 'record') { loadSchedule(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadPrivNodes(); loadConfig(); loadDigital(); loadConv(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 function render() {
@@ -7552,7 +6699,6 @@ function foldSet(k, open) {
   if (k === 'sched') loadSchedule();
   if (k === 'dig') loadDigital();
   if (k === 'node') loadRecNode();
-  if (k === 'priv') loadPrivNodes();
   if (k === 'log') pollLog();
 }
 function pollEvery(fn, ms) {
@@ -7570,15 +6716,14 @@ async function pollStatus() {
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
   const feedTxt = d.receiving ? ('receiving, ' + d.packets_per_sec + ' packets/s')
     : (d.last_rx_age != null ? 'no audio for ' + Math.round(d.last_rx_age) + ' s' : 'nothing received yet');
-  const idle1921 = !d.receiving && (d.rec_node || {}).wanted === false && !(d.talker || {}).active;
-  $('st-feed').className = 'dot ' + (idle1921 ? '' : feedCls);
-  $('st-feed-t').textContent = d.receiving ? 'feed' : idle1921 ? 'feed idle' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
-  $('st-feed-w').title = idle1921 ? 'Node 1921 is linked only while the main node is being recorded' : 'Audio from Asterisk: ' + feedTxt;
+  $('st-feed').className = 'dot ' + feedCls;
+  $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
+  $('st-feed-w').title = 'Audio from Asterisk: ' + feedTxt;
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
   $('st-level').textContent = fmtDb(d.peak_db);
   $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
-  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : idle1921 ? 'idle: node 1921 is linked only while the main node is recorded' : 'listening, no audio yet');
+  $('rn-udp').textContent = d.udp_error ? d.udp_error : (d.receiving ? 'receiving audio' : 'listening, no audio yet');
   const talker = d.talker || {};
   $('rn-talker').textContent = talker.active ? 'Node Talker is running: audio comes from its forward.'
     : (talker.installed ? 'Node Talker is installed but stopped: Node Recorder listens on the node itself.' : 'Node Talker is not installed.');
@@ -7615,11 +6760,6 @@ async function connectFlow(body, listenText, connectText, url, box) {
   let d = {};
   try { d = await post(url, body); }
   finally { $(box.btn).disabled = false; connBusy = false; }
-  if (!d.ok && d.need_confirm && confirm(d.error + '\n\nTune anyway?')) {
-    $(box.btn).disabled = true;
-    try { d = await post(url, Object.assign({}, body, {force: true})); }
-    finally { $(box.btn).disabled = false; }
-  }
   setMsg(box.msg, d);
   if (!d.ok && d.need_net) { netAsk = {url: url, body: body, box: box, label: listenText}; $(box.ask).classList.remove('hidden'); }
   pollStatus();
@@ -7668,17 +6808,23 @@ async function loadRecNode() {
   else if (!d.nodes_line) s = 'Its [nodes] line is missing or has the wrong IAX port: press Add node ' + d.node + ' to fix it.';
   else if (!d.rx_ok) s = 'Set up, but its rxchannel is not ' + d.rxchannel + '.';
   else if (d.linked === null) s = 'Set up. Asterisk does not know it yet: restart Asterisk.';
-  else if (d.wanted) s = d.linked ? 'Recording the main node: linked to node ' + d.main + '.' : 'Recording the main node: linking to node ' + d.main + ' (checked every 20 s).';
-  else s = d.linked ? 'Set up. Still linked to node ' + d.main + '; it is unlinked within 20 s.'
-    : 'Set up and idle. It is linked to node ' + d.main + ' only while Node Recorder records the main node.';
+  else s = d.linked ? 'Set up and linked to node ' + d.main + '.' : 'Set up; linking to node ' + d.main + ' (checked every 20 s).';
   $('rn-state').textContent = s;
   sum('node', d.error ? 'Could not read rpt.conf' : !d.defined ? 'Not set up' : talker ? 'Node Talker owns it'
-    : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : d.linked === null ? 'Restart Asterisk' : d.wanted ? (d.linked ? 'Recording, linked' : 'Recording, linking') : 'Set up, idle');
+    : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : d.linked === null ? 'Restart Asterisk' : d.linked ? 'Set up and linked' : 'Set up, linking');
   $('rn-add').disabled = d.defined && (talker || d.nodes_line);
   $('rn-remove').disabled = !(d.defined && d.owner === 'recorder') && !d.nodes_line;
+  const old = d.old_nodes || [];
+  $('rn-old').classList.toggle('hidden', !old.length);
+  $('rn-old-text').textContent = old.length ? 'Older versions added private recording nodes (' + old.join(', ') + ') to rpt.conf. Node Recorder no longer uses them. Remove them, then restart Asterisk once.' : '';
+}
+async function oldNodesRemove() {
+  if (!confirm('Remove the old private recording nodes from rpt.conf? Node 1921 is not touched. Restart Asterisk afterwards.')) return;
+  setMsg('rn-msg', await post('/api/oldnodes/remove', {}));
+  loadRecNode();
 }
 const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
-const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped', bridge_taken: 'bridge taken by a live tune',
+const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
   stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
 function schedDays(days) {
@@ -7699,17 +6845,11 @@ async function loadSchedule() {
   const d = await api('/api/schedule');
   if (!d.ok) return;
   schedRows = d.entries;
-  const privChanged = (d.priv_nodes || []).join(',') !== schedPrivNodes.join(',');
-  if (privChanged) { const keep = $('sc-node').value; schedPrivNodes = d.priv_nodes || []; schedNodeFill(keep); }
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
-  const others = (d.lanes || []).filter((l) => l.node);
-  if (others.length) $('rec-state').textContent += ' | Also recording: ' + others.map((l) => l.name + ' on node ' + l.node).join(', ');
   $('rec-start').disabled = st.state !== 'idle';
   $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording';
-  $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '')
-    + (d.load_warning ? ' ' + d.load_warning : '')
-    + ((d.bridges || []).length ? ' Holding the bridge: ' + d.bridges.map((b) => b.name + (b.end ? ' until ' + b.end.slice(11) : '')).join(', ') + '.' : '');
+  $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
   const rows = (id, manage) => {
@@ -7719,7 +6859,7 @@ async function loadSchedule() {
       const tr = document.createElement('tr');
       tr.className = 'sched-entry' + (e.done ? ' sched-done' : '') + (e.enabled ? '' : ' sched-off');
       const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
-      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target) + (e.node ? ' | node ' + e.node : '')]);
+      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target) + (e.link_mode === 'monitor' ? ' | local monitor only' : '')]);
       cell([(e.kind === 'special' ? 'Special ' + e.date : schedDays(e.days)) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
       const tr2 = document.createElement('tr');
       const act = document.createElement('td');
@@ -7868,77 +7008,6 @@ async function schedDryRun(id) {
   });
   box.classList.toggle('hidden', !(d.steps && d.steps.length));
 }
-const PN_STATE = {ready: 'Ready', restart: 'In rpt.conf: restart Asterisk', fix: 'Needs attention: press Remove, then add it again'};
-async function loadPrivNodes() {
-  const d = await api('/api/privnodes');
-  const body = $('pn-body');
-  body.textContent = '';
-  if (!d.ok) { note('pn-msg', 'err', d.error || 'Could not read rpt.conf.'); sum('priv', 'Could not read rpt.conf'); return; }
-  d.nodes.forEach((n) => {
-    const tr = document.createElement('tr');
-    [n.node, n.in_port ? n.in_port + ' / ' + n.out_port : '-', PN_STATE[n.state] || n.state].forEach((v) => {
-      const td = document.createElement('td');
-      td.textContent = v;
-      tr.appendChild(td);
-    });
-    const td = document.createElement('td');
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'btn'; b.textContent = 'Remove';
-    b.addEventListener('click', () => privRemove(n.node));
-    td.appendChild(b);
-    tr.appendChild(td);
-    body.appendChild(tr);
-  });
-  $('pn-empty').classList.toggle('hidden', d.nodes.length > 0);
-  $('pn-add').disabled = !d.can_add;
-  $('pn-add').textContent = d.can_add ? 'Add node ' + d.next : 'Add a private node';
-  $('pn-remove-all').disabled = d.nodes.length === 0;
-  sum('priv', d.nodes.length ? d.nodes.length + ' of ' + d.max : 'None yet');
-  loadPrivTest(d.nodes);
-}
-async function loadPrivTest(nodes) {
-  const s = await api('/api/schedule');
-  const entry = $('pn-test-entry'), node = $('pn-test-node');
-  const keepE = entry.value, keepN = node.value;
-  entry.textContent = '';
-  node.textContent = '';
-  ((s && s.entries) || []).forEach((e) => addOption(entry, e.id, e.name + ' (' + schedTarget(e.target) + ')'));
-  addOption(node, 'auto', 'Auto');
-  nodes.forEach((n) => addOption(node, n.node, 'Node ' + n.node));
-  if (keepE) entry.value = keepE;
-  if (keepN) node.value = keepN;
-  $('pn-test').disabled = !entry.options.length || !nodes.length;
-}
-async function privTest() {
-  $('pn-test').disabled = true;
-  note('pn-test-msg', '', 'Testing...');
-  const d = await post('/api/privnodes/test', {id: $('pn-test-entry').value, node: $('pn-test-node').value});
-  setMsg('pn-test-msg', d);
-  const box = $('pn-test-steps');
-  box.textContent = '';
-  (d.steps || []).forEach((st) => {
-    const row = document.createElement('div');
-    row.textContent = st.step + ': ' + (st.ok ? 'ok' : 'failed') + (st.msg ? ' - ' + st.msg : '') + ' (' + st.secs + ' s)';
-    box.appendChild(row);
-  });
-  box.classList.toggle('hidden', !(d.steps && d.steps.length));
-  $('pn-test').disabled = false;
-}
-async function privAdd() {
-  note('pn-msg', '', 'Adding...');
-  setMsg('pn-msg', await post('/api/privnodes/add', {}));
-  loadPrivNodes();
-}
-async function privRemove(node) {
-  if (!confirm('Remove private node ' + node + ' from rpt.conf? Restart Asterisk afterwards.')) return;
-  setMsg('pn-msg', await post('/api/privnodes/remove', {node: node}));
-  loadPrivNodes();
-}
-async function privRemoveAll() {
-  if (!confirm('Remove every Node Recorder private node from rpt.conf? Node 1921 is not touched. Restart Asterisk afterwards.')) return;
-  setMsg('pn-msg', await post('/api/privnodes/remove', {all: true}));
-  loadPrivNodes();
-}
 async function recNodeEnable() { setMsg('rn-msg', await post('/api/recnode/enable', {})); loadRecNode(); }
 async function recNodeDisable() {
   if (!confirm('Remove node 1921 from rpt.conf? Recording stops working until it is added again.')) return;
@@ -8045,16 +7114,6 @@ function schedPick() {
   schedLabel = f.label || '';
   note('sc-msg', 'ok', 'Copied ' + (f.label || schedTarget(f)) + '. Changing it later in ' + (parts[0] === 'talker' ? 'Node Talker' : 'Node Controller') + ' will not change this entry.');
 }
-let schedPrivNodes = [];
-function schedNodeFill(want) {
-  const sel = $('sc-node');
-  sel.textContent = '';
-  addOption(sel, 'auto', 'Auto (a private node if any, else the main node)');
-  addOption(sel, '', 'Main node');
-  schedPrivNodes.forEach((n) => addOption(sel, n, 'Private node ' + n));
-  sel.value = want == null ? 'auto' : want;
-  if (sel.value !== String(want == null ? 'auto' : want)) sel.value = 'auto';
-}
 function schedClear(keepMsg) {
   schedEditId = ''; schedLabel = '';
   $('sc-title').textContent = 'Schedule a recording';
@@ -8066,11 +7125,11 @@ function schedClear(keepMsg) {
   schedFieldsShow(); schedPickFill();
   $('sc-num').value = ''; $('sc-mod').value = ''; schedNetFill('');
   $('sc-format').value = 'pcm'; $('sc-enabled').checked = true;
-  schedNodeFill('auto');
+  $('sc-link').value = '';
   if (!keepMsg) note('sc-msg', '', '');
 }
 function schedEntry(e, on) {
-  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format, kind: e.kind || 'regular', date: e.date || '', node: e.node || ''};
+  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format, kind: e.kind || 'regular', date: e.date || '', link_mode: e.link_mode || ''};
 }
 function schedKindShow() {
   const sp = $('sc-special').checked;
@@ -8090,7 +7149,7 @@ function schedFormEntry() {
   const sp = $('sc-special').checked;
   return {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: sp ? [] : schedDaysValue(), start: hmGet('sc-start'),
     end: hmGet('sc-end'), target: target, format: $('sc-format').value, kind: sp ? 'special' : 'regular', date: sp ? $('sc-date').value : '',
-    node: $('sc-node').value};
+    link_mode: $('sc-link').value};
 }
 async function recStart() {
   $('rec-start').disabled = true;
@@ -8126,7 +7185,7 @@ function schedEdit(e) {
   schedNetFill(e.target.net || '');
   schedLabel = e.target.label || '';
   $('sc-format').value = e.format; $('sc-enabled').checked = e.enabled;
-  schedNodeFill(e.node || '');
+  $('sc-link').value = e.link_mode || '';
   showTab('connect');
   note('sc-msg', '', 'Change it and press Set.');
   $('cd-sched-form').scrollIntoView();
@@ -8184,9 +7243,7 @@ function initPage() {
   $('sc-special').addEventListener('change', schedKindShow);
   $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
-  $('pn-add').addEventListener('click', privAdd);
-  $('pn-remove-all').addEventListener('click', privRemoveAll);
-  $('pn-test').addEventListener('click', privTest);
+  $('rn-old-remove').addEventListener('click', oldNodesRemove);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
@@ -8358,7 +7415,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><label><span id="sc-num-l">Node</span> <input type="text" id="sc-num" maxlength="40" style="width:150px"></label>
 <label id="sc-net-w" class="hidden">Network <select id="sc-net"></select></label>
 <label id="sc-mod-w" class="hidden">Module <input type="text" id="sc-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
-<div class="row"><label>Node <select id="sc-node"><option value="auto">Auto (a private node if any, else the main node)</option><option value="">Main node</option></select></label></div>
+<div class="row"><label>Link <select id="sc-link"><option value="">Transceive (as before)</option><option value="monitor">Local monitor only (never sends audio to the target)</option></select></label></div>
 <div class="row"><label>Format <select id="sc-format"><option value="pcm">PCM (best; becomes an MP3 after recording when Convert is on)</option><option value="ulaw">u-law (half the size, noisier)</option></select></label>
 <label><input type="checkbox" id="sc-enabled" checked> On</label></div>
 <div class="row"><button id="sc-set" class="btn primary" type="button">Set</button><button id="sc-clear" class="btn" type="button">Clear</button></div>
@@ -8498,7 +7555,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="card fold" id="cd-node">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-node"><span class="fold-t">Recorder node <span id="rn-node">1921</span></span><span class="fold-sum" id="sum-node"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-node">
-<p class="muted small">Node 1921 carries the main node's audio to Node Recorder. Node Recorder links it to the main node only while it records the main node (Record now, or a schedule entry set to the Main node); scheduled recordings on private nodes do not use it, so the main node stays free for radio use. Node Talker uses the same node: when Node Talker owns it, Node Recorder records the audio Node Talker forwards.</p>
+<p class="muted small">Node Recorder records the audio of the private node above, linked to the main node. Node Talker uses the same node: when Node Talker owns it, Node Recorder records the audio Node Recorder forwards.</p>
 <table>
 <tr><th>State</th><td id="rn-state">-</td></tr>
 <tr><th>Channel</th><td><code id="rn-rxch">-</code></td></tr>
@@ -8508,27 +7565,9 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 </table>
 <div class="row"><button id="rn-add" class="btn primary" type="button">Add node 1921</button>
 <button id="rn-remove" class="btn" type="button">Remove</button></div>
+<div id="rn-old" class="hidden"><p id="rn-old-text" class="muted small"></p>
+<div class="row"><button id="rn-old-remove" class="btn" type="button">Remove old private nodes</button></div></div>
 <div id="rn-msg" class="msg"></div>
-</div>
-</div>
-<div class="card fold" id="cd-priv">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-priv"><span class="fold-t">Private recording nodes</span><span class="fold-sum" id="sum-priv"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-priv">
-<p class="muted small">Private nodes (1050 and up, at most five) are set up here one at a time, as needed. Node Recorder will record scheduled entries on them, so the main node and node 1921 stay free for radio use. After adding one, restart Asterisk once: it stays in rpt.conf from then on. Node 1921 is not touched here.</p>
-<table>
-<thead><tr><th>Node</th><th>Ports in / out</th><th>State</th><th></th></tr></thead>
-<tbody id="pn-body"></tbody>
-</table>
-<p id="pn-empty" class="muted small">No private nodes yet.</p>
-<div class="row"><button id="pn-add" class="btn primary" type="button">Add a private node</button>
-<button id="pn-remove-all" class="btn" type="button">Remove all</button></div>
-<div id="pn-msg" class="msg"></div>
-<h3 class="small">Test a target</h3>
-<p class="muted small">Links a free private node to a schedule entry's target for a few seconds, tuning the digital bridge first for DMR, D-STAR, YSF, M17 and the like, then lets go. It does nothing to a bridge that a live tune or a recording is using.</p>
-<div class="row"><label>Entry <select id="pn-test-entry"></select></label><label>Node <select id="pn-test-node"></select></label>
-<button id="pn-test" class="btn" type="button">Test tune</button></div>
-<div id="pn-test-msg" class="msg"></div>
-<div id="pn-test-steps" class="mono small hidden"></div>
 </div>
 </div>
 <div class="card fold" id="cd-store">
@@ -8626,9 +7665,7 @@ _POST_ACTIONS = {
     "/api/recording/stop": (lambda b: recording_stop(), ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
-    "/api/privnodes/add": (priv_add, (OSError,)),
-    "/api/privnodes/remove": (priv_remove, (OSError,)),
-    "/api/privnodes/test": (priv_test_tune, ()),
+    "/api/oldnodes/remove": (old_private_remove, (OSError,)),
     "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
@@ -8784,9 +7821,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/schedule":
                 self._json(200, schedule_view())
             elif path == "/api/recnode":
-                self._json(200, dict(rec_node_state(), ok=True))
-            elif path == "/api/privnodes":
-                self._json(200, priv_state())
+                self._json(200, dict(rec_node_state(), ok=True, old_nodes=old_private_nodes()))
             elif path == "/api/setup":
                 self._json(200, dict(setup_plan(), ok=True))
             elif path == "/api/tune-info":
@@ -8945,9 +7980,8 @@ def run_server():
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
     threading.Thread(target=lambda: (repair_recordings(storage_pick()["path"]), enc_sweep(storage_pick()["path"])),
                      name="rec-repair", daemon=True).start()
+    drop_old_lane_state()
     threading.Thread(target=SCHED.loop, name="schedule", daemon=True).start()
-    priv_streams_sync()
-    threading.Thread(target=lanes_loop, name="schedule-lanes", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(FWD_PORT, None), name="usrp-fwd", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(REC_USRP_IN, talker_idle), name="usrp-node", daemon=True).start()
     threading.Thread(target=link_keeper_loop, name="link-keeper", daemon=True).start()
@@ -8968,13 +8002,7 @@ def run_server():
         pass
     finally:
         _sd_notify("STOPPING=1")
-        _lanes_stop.set()
-        lanes = all_lanes()
-        for ln in lanes:
-            ln.stop.set()
-            ln.run_abort.set()
-        for ln in lanes:
-            ln.shutdown()
+        SCHED.shutdown()
         httpd.server_close()
     return 0
 
@@ -9201,7 +8229,7 @@ def setup_plan(full=False):
             blocked.append(f"rpt.conf already has a node {REC_NODE} that Node Recorder didn't add. Remove it or pick another node.")
         elif st.get("owner") != "talker" and not st.get("ready"):
             steps.append({"id": "node", "text": f"Add node {REC_NODE} to rpt.conf: its own stanza, a USRP channel on "
-                          f"127.0.0.1 ports {REC_USRP_IN} and {REC_USRP_OUT}, and a [nodes] line. Node Recorder links it to node {main} only while it records the main node."})
+                          f"127.0.0.1 ports {REC_USRP_IN} and {REC_USRP_OUT}, and a [nodes] line. Node Recorder then links it to node {main}."})
     if pending and not steps and not blocked:
         setup_mark(False)
         pending = False

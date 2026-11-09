@@ -517,7 +517,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_49_0_20261107.py` | common |
 | `44helper_v0_1_19_20261108.py` | common |
 | `nodetalker_v0_10_26_20261108.py` | common |
-| `noderecorder_v0_12_0_20261108.py` | common |
+| `noderecorder_v0_14_0_20261109.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
 | `termon_v0_2_4_20261109.py` | common (stands alone for now) |
