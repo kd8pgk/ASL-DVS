@@ -65,13 +65,13 @@
    "version": "0.5.12"
   },
   "nodetalker": {
-   "blob": "ea6c276b8295259e79dc7dd7f0a99cd2ec4cb9e1",
-   "commit": "396fe55fde754589c30d9c34c9490809b02988a2",
-   "file": "nodetalker_v0_10_18_20261105.py",
-   "landed": "2026-11-06T08:02:40Z",
-   "promoted": "2026-11-09T08:02:40Z",
+   "blob": "15aab20a116b439049d60f55a5d076d3b72cceb6",
+   "commit": "573cb771c369c29e1365a2cad6446b7e5314f8a5",
+   "file": "nodetalker_v0_10_19_20261105.py",
+   "landed": "2026-11-06T08:50:16Z",
+   "promoted": "2026-11-09T08:50:16Z",
    "reason": "count",
-   "version": "0.10.18"
+   "version": "0.10.19"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
