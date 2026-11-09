@@ -29,6 +29,29 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Private signing key
+        id: key
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.NODETALKER_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.NODETALKER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.NODETALKER_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.NODETALKER_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::notice::The signing secrets are not set, so this build is signed with the shared debug key and is not published."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jks="$RUNNER_TEMP/nodetalker-release.jks"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$jks"
+          {
+            echo "NODETALKER_KEYSTORE=$jks"
+            echo "NODETALKER_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "NODETALKER_KEY_ALIAS=$KEY_ALIAS"
+            echo "NODETALKER_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - name: Android SDK packages
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
       - uses: gradle/actions/setup-gradle@v4
@@ -43,6 +66,14 @@ jobs:
           v=$(sed -n 's/^val appVersion = "\(.*\)"/\1/p' android/app/build.gradle.kts)
           echo "version=$v" >> "$GITHUB_OUTPUT"
           cp android/app/build/outputs/apk/release/app-release.apk "NodeTalker-$v.apk"
+      - name: Check the signing key
+        if: steps.key.outputs.signed == 'true'
+        run: |
+          shared=$(keytool -list -keystore android/app/debug.keystore -storepass android 2>/dev/null | sed -n 's/.*SHA-256): *//p;s/.*(SHA256): *//p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+          used=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "NodeTalker-${{ steps.apk.outputs.version }}.apk" | sed -n 's/.*certificate SHA-256 digest: *//p' | head -1 | tr 'A-F' 'a-f')
+          echo "APK signing certificate SHA-256: $used"
+          if [ -z "$used" ]; then echo "::error::Could not read the APK's signing certificate."; exit 1; fi
+          if [ -n "$shared" ] && [ "$used" = "$shared" ]; then echo "::error::The APK is signed with the shared debug key, not the private key."; exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: NodeTalker-${{ steps.apk.outputs.version }}
@@ -53,7 +84,7 @@ jobs:
           name: lint-report
           path: android/app/build/reports/lint-results-release.html
       - name: Publish the test build
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.key.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.apk.outputs.version }}
@@ -64,5 +95,5 @@ jobs:
           else
             gh release create "$tag" "NodeTalker-$V.apk" --prerelease --target "$GITHUB_SHA" \
               --title "Node Talker Mobile $V (test build)" \
-              --notes "Test build for sideloading, signed with the repository's shared key (android/app/debug.keystore). See changelogs/nodetalker_android.md."
+              --notes "Test build for sideloading, signed with the project's private release key. It cannot be installed over a build signed with the old shared key: uninstall that one first. See changelogs/nodetalker_android.md."
           fi
