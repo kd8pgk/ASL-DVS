@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.97.0"
+VERSION ="2.98.0"
 DATE_STR ="2026-11-09"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4719,6 +4719,7 @@ GITHUB_API_DOCS_URL = (f"https://api.github.com/repos/{GITHUB_REPO}/contents/doc
                        f"?ref={urllib.parse.quote(GITHUB_BRANCH, safe='')}")
 DOCS_MAX_BYTES = 64 * 1024 * 1024
 _DOCS_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.pdf$')
+_DOCS_MANUAL_RE = re.compile(r'^ASL-DVS_[A-Za-z0-9._-]*_(?:Manual|Guide)\.pdf$')
 _docs_lock = threading.Lock()
 _docs_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None}
 _DOCS_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_fetched")
@@ -4805,7 +4806,7 @@ def _docs_parse_listing(raw):
         if not isinstance(item, dict) or item.get("type") != "file":
             continue
         name, blob, size = item.get("name"), item.get("sha"), item.get("size")
-        if not isinstance(name, str) or not _DOCS_NAME_RE.match(name):
+        if not isinstance(name, str) or not _DOCS_NAME_RE.match(name) or not _DOCS_MANUAL_RE.match(name):
             continue
         if not isinstance(blob, str) or not _GH_SHA1_RE.match(blob):
             continue

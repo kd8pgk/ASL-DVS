@@ -285,6 +285,30 @@ class Stalls(unittest.TestCase):
             im._gh_state.update(phase="idle", error=None)
 
 
+class ManualsOnly(unittest.TestCase):
+    def listing(self, names):
+        import json
+        return json.dumps([{"type": "file", "name": n, "sha": "a" * 40, "size": 1000} for n in names]).encode()
+
+    def test_only_manuals_and_guides_are_listed(self):
+        names = ["ASL-DVS_User_Manual.pdf", "ASL-DVS_44helper_Manual.pdf", "ASL-DVS_Node_Talker_Manual.pdf",
+                 "ASL-DVS_Full_Build_Install_Manual.pdf", "ASL-DVS_Pi02w_Install_Manual.pdf",
+                 "ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf", "ASL-DVS_Idealized_Node_Configuration.pdf",
+                 "Node_Controller_Security_Hardening.pdf", "Node_Controller_instmon_1_GitHub_Updates.pdf",
+                 "Node_Controller_Code_Summary_CSS.pdf", "notes.txt"]
+        got = [c["name"] for c in im._docs_parse_listing(self.listing(names))]
+        self.assertEqual(got, names[:6])
+
+    def test_the_real_docs_folder_gives_six(self):
+        names = sorted(n for n in os.listdir(os.path.join(ROOT, "docs")) if n.endswith(".pdf"))
+        got = [c["name"] for c in im._docs_parse_listing(self.listing(names))]
+        self.assertEqual(len(got), 6, got)
+        self.assertTrue(all(n.startswith("ASL-DVS_") for n in got))
+
+    def test_files_already_on_the_node_stay_listed(self):
+        self.assertTrue(im._DOCS_NAME_RE.match("Node_Controller_Security_Hardening.pdf"))
+
+
 class Slow(unittest.TestCase):
     def setUp(self):
         self.addCleanup(im._gh_rate.update, bps=im._gh_rate["bps"])
