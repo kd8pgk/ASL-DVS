@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_12_0_20261108.py`. Newest entries first.
+Current file: `noderecorder_v0_13_0_20261109.py`. Newest entries first.
+
+## 0.13.0 (2026-11-09)
+
+- **Correction: a private node cannot link to public AllStarLink nodes.** Versions 0.7.0 to 0.12.0 put an ASL or EchoLink schedule entry on a private node (1050 and up) and linked that node to the target. A private node number (1000-1999) does not connect to the AllStarLink network, and the network cannot reach it, so those links never came up (the node stayed "connecting"). A private node can only link to nodes on this server that are listed in rpt.conf's `[nodes]`, with entries pointing at each other. That is why the digital bridges (1999, 1917) work and a node such as 2000 does not.
+- **ASL and EchoLink entries now stay on the main node unless their target is local.** Auto puts an entry on a private node only when its target is listed in rpt.conf's `[nodes]` (for example a public node that runs on this same server). Any other ASL or EchoLink entry is saved on the main node, and the saving message says why. Choosing a private node by hand for such an entry is refused with the same explanation. Entries already saved on a private node for a public target fail their window at once with that explanation instead of waiting 15 seconds, and are not retried.
+- **Test tune** refuses such a target before linking and says why. Digital entries (DMR, D-STAR, YSF, P25, NXDN, STFU, M17) are unchanged: they link to the local bridge nodes.
+- **Wording.** The Node choice reads "Auto (a private node for targets on this server, else the main node)", and the Private recording nodes card explains what a private node can reach.
+- **What still needs registered node numbers.** Recording a public ASL node without using the main node needs a node number the network knows about (an extra registered node number, "NNX", from your AllStarLink account). Node Recorder does not set that up yet.
+- This is a release, not a cosmetic build.
 
 ## 0.12.0 (2026-11-08)
 

@@ -35,8 +35,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.12.0"
-DATE_STR = "2026-11-08"
+VERSION = "0.13.0"
+DATE_STR = "2026-11-09"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -4369,6 +4369,33 @@ def priv_state():
     return out
 
 
+def priv_local_nodes():
+    try:
+        scan = rpt_scan(priv_read())
+    except OSError:
+        return None
+    out = set()
+    sec = scan["nodes"]
+    if sec is not None:
+        for i in range(sec["start"] + 1, sec["end"]):
+            body = scan["lines"][i].split(";", 1)[0]
+            key = body.split("=", 1)[0].strip()
+            if "=" in body and key.isdigit():
+                out.add(key)
+    return out
+
+
+def priv_reach_problem(f):
+    if f["mode"] not in ("ASL", "EchoLink"):
+        return ""
+    local = priv_local_nodes()
+    if local is None or fav_target(f) in local:
+        return ""
+    return (f"A private node (1000-1999) does not connect to the AllStarLink network, so it cannot link to {fav_name(f)}. "
+            "It can only link to nodes on this server that are listed in rpt.conf's [nodes], such as the digital bridges. "
+            "Record this one on the main node.")
+
+
 def priv_add(_body=None):
     main = main_node()
     if not main:
@@ -4436,6 +4463,9 @@ def priv_test_tune(body):
         f = _tune_fav(e["target"])
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    problem = priv_reach_problem(f)
+    if problem:
+        return {"ok": False, "error": problem}
     pool = priv_pool()
     want = str((body or {}).get("node") or "auto").strip().lower()
     if want == "auto" and e.get("node") in pool:
@@ -5590,9 +5620,17 @@ def schedule_set(body):
     running = any(ln.is_running(e["id"]) for ln in all_lanes())
     pool = priv_pool()
     asl = e["target"].get("mode") in ("ASL", "EchoLink")
+    reach = ""
+    if asl:
+        try:
+            reach = priv_reach_problem(_tune_fav(e["target"]))
+        except ValueError:
+            reach = ""
     if e["node"] and e["node"] != "auto":
         if e["node"] not in pool:
             return {"ok": False, "error": f"Node {e['node']} is not one of Node Recorder's private nodes (Setup tab)."}
+        if reach:
+            return {"ok": False, "error": reach}
     with _sched_lock:
         data = schedule_load()
         if data["error"]:
@@ -5605,7 +5643,7 @@ def schedule_set(body):
         auto = e["node"] == "auto"
         if auto:
             e["node"] = ""
-            if pool:
+            if pool and not reach:
                 pick = schedule_assign(entries, e, pool)
                 if pick is None:
                     room = len(pool) < PRIV_MAX
@@ -5637,6 +5675,8 @@ def schedule_set(body):
     where = f" on node {e['node']}" if e["node"] else ""
     log_event(f"Schedule: saved {e['name']} ({what} {e['start']}-{e['end']}){where}", "ok")
     note = "" if e["node"] or pool else " It records on the main node; add private nodes on the Setup tab to keep the main node free."
+    if not e["node"] and pool and reach:
+        note = " It records on the main node, because a private node cannot link to public AllStarLink nodes."
     if e["node"] and not asl:
         note += " It tunes the " + bridge_label(_entry_bridge(e)) + " bridge for its window, so a live tune on that bridge makes it skip."
     warn = load_warning()
@@ -6059,6 +6099,10 @@ class PrivActions:
             return False, f"Asterisk does not know node {self.node} yet: restart Asterisk once", None
         f = self._fav(entry)
         digital = self._digital(entry)
+        if not digital:
+            problem = priv_reach_problem(f)
+            if problem:
+                return False, problem, None
         if digital:
             warn = load_warning()
             if warn:
@@ -8049,7 +8093,7 @@ let schedPrivNodes = [];
 function schedNodeFill(want) {
   const sel = $('sc-node');
   sel.textContent = '';
-  addOption(sel, 'auto', 'Auto (a private node if any, else the main node)');
+  addOption(sel, 'auto', 'Auto (a private node for targets on this server, else the main node)');
   addOption(sel, '', 'Main node');
   schedPrivNodes.forEach((n) => addOption(sel, n, 'Private node ' + n));
   sel.value = want == null ? 'auto' : want;
@@ -8358,7 +8402,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><label><span id="sc-num-l">Node</span> <input type="text" id="sc-num" maxlength="40" style="width:150px"></label>
 <label id="sc-net-w" class="hidden">Network <select id="sc-net"></select></label>
 <label id="sc-mod-w" class="hidden">Module <input type="text" id="sc-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
-<div class="row"><label>Node <select id="sc-node"><option value="auto">Auto (a private node if any, else the main node)</option><option value="">Main node</option></select></label></div>
+<div class="row"><label>Node <select id="sc-node"><option value="auto">Auto (a private node for targets on this server, else the main node)</option><option value="">Main node</option></select></label></div>
 <div class="row"><label>Format <select id="sc-format"><option value="pcm">PCM (best; becomes an MP3 after recording when Convert is on)</option><option value="ulaw">u-law (half the size, noisier)</option></select></label>
 <label><input type="checkbox" id="sc-enabled" checked> On</label></div>
 <div class="row"><button id="sc-set" class="btn primary" type="button">Set</button><button id="sc-clear" class="btn" type="button">Clear</button></div>
@@ -8514,7 +8558,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="card fold" id="cd-priv">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-priv"><span class="fold-t">Private recording nodes</span><span class="fold-sum" id="sum-priv"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-priv">
-<p class="muted small">Private nodes (1050 and up, at most five) are set up here one at a time, as needed. Node Recorder will record scheduled entries on them, so the main node and node 1921 stay free for radio use. After adding one, restart Asterisk once: it stays in rpt.conf from then on. Node 1921 is not touched here.</p>
+<p class="muted small">Private nodes (1050 and up, at most five) are set up here one at a time, as needed. Node Recorder will record scheduled entries on them, so the main node and node 1921 stay free for radio use. After adding one, restart Asterisk once: it stays in rpt.conf from then on. Node 1921 is not touched here. A private node does not connect to the AllStarLink network: it can link only to nodes on this server that are listed in rpt.conf's [nodes], such as the digital bridges, so entries for other ASL and EchoLink nodes stay on the main node.</p>
 <table>
 <thead><tr><th>Node</th><th>Ports in / out</th><th>State</th><th></th></tr></thead>
 <tbody id="pn-body"></tbody>
@@ -8524,7 +8568,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <button id="pn-remove-all" class="btn" type="button">Remove all</button></div>
 <div id="pn-msg" class="msg"></div>
 <h3 class="small">Test a target</h3>
-<p class="muted small">Links a free private node to a schedule entry's target for a few seconds, tuning the digital bridge first for DMR, D-STAR, YSF, M17 and the like, then lets go. It does nothing to a bridge that a live tune or a recording is using.</p>
+<p class="muted small">Links a free private node to a schedule entry's target (a digital bridge, or a node on this server) for a few seconds, tuning the digital bridge first for DMR, D-STAR, YSF, M17 and the like, then lets go. It does nothing to a bridge that a live tune or a recording is using.</p>
 <div class="row"><label>Entry <select id="pn-test-entry"></select></label><label>Node <select id="pn-test-node"></select></label>
 <button id="pn-test" class="btn" type="button">Test tune</button></div>
 <div id="pn-test-msg" class="msg"></div>

@@ -209,7 +209,8 @@ class ScheduleAssign(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.pool = []
         self.problems = []
-        for name, val in (("SCHEDULE_PATH", os.path.join(self.dir, "schedule.json")),
+        self.reach = ""
+        for name, val in (("priv_reach_problem", lambda f: self.reach), ("SCHEDULE_PATH", os.path.join(self.dir, "schedule.json")),
                           ("_tune_fav", lambda b: {"mode": b["mode"], "num": b["num"], "net": "", "label": ""}),
                           ("priv_pool", lambda: list(self.pool))):
             p = mock.patch.object(nr, name, val)
@@ -271,6 +272,29 @@ class ScheduleAssign(unittest.TestCase):
         self.assertNotIn("Add another", r["error"])
         self.assertTrue(self.save("f", "20:30", "21:30", mode="DMR", num="3100")["ok"])
         self.assertTrue(self.save("g", "20:30", "21:30", mode="M17", num="M17-ABC")["ok"])
+
+    def test_a_public_asl_target_stays_on_the_main_node_under_auto(self):
+        self.pool = ["1050"]
+        self.reach = "A private node (1000-1999) does not connect to the AllStarLink network"
+        r = self.save("a", "20:00", "21:00")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["entry"]["node"], "")
+        self.assertIn("main node", r["message"])
+        self.assertIn("cannot link to public AllStarLink nodes", r["message"])
+
+    def test_a_public_asl_target_is_refused_on_an_explicit_private_node(self):
+        self.pool = ["1050"]
+        self.reach = "A private node (1000-1999) does not connect to the AllStarLink network, so it cannot link to ASL 2000."
+        r = self.save("a", "20:00", "21:00", node="1050")
+        self.assertFalse(r["ok"])
+        self.assertIn("does not connect to the AllStarLink network", r["error"])
+
+    def test_digital_targets_are_not_affected_by_the_reach_rule(self):
+        self.pool = ["1050"]
+        self.reach = "would refuse an ASL target"
+        r = self.save("d", "20:00", "21:00", mode="DMR", num="3100")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["entry"]["node"], "1050")
 
     def test_explicit_node_must_be_one_of_ours(self):
         self.pool = ["1050"]
@@ -352,7 +376,9 @@ class PrivActionsTest(unittest.TestCase):
         self.stream.engine.healthy.return_value = (True, "")
         entry = {"target": {"mode": "ASL", "num": "2000"}}
         self.entry = entry
+        self.reach = ""
         for name, val in (("priv_stream", lambda n: self.stream), ("rpt_links", lambda *a, **k: (True, [])),
+                          ("priv_reach_problem", lambda f: self.reach),
                           ("ilink", lambda node, op, peer: (self.calls.append((node, op, peer)), (True, ""))[1]),
                           ("wait_link", lambda *a, **k: "up"),
                           ("_tune_fav", lambda b: {"mode": "ASL", "num": b["num"], "net": "", "label": ""})):
@@ -367,6 +393,13 @@ class PrivActionsTest(unittest.TestCase):
         self.assertEqual(self.calls, [("1050", 8, "2000")])
         a.disconnect(self.entry)
         self.assertEqual(self.calls[-1], ("1050", 1, "2000"))
+
+    def test_a_target_a_private_node_cannot_reach_fails_at_once_without_linking(self):
+        self.reach = "A private node (1000-1999) does not connect to the AllStarLink network"
+        ok, msg, _ = nr.PrivActions("1050").connect(self.entry)
+        self.assertFalse(ok)
+        self.assertIn("AllStarLink network", msg)
+        self.assertEqual(self.calls, [])
 
     def test_a_node_asterisk_does_not_know_yet_asks_for_a_restart(self):
         with mock.patch.object(nr, "rpt_links", lambda *a, **k: (False, [])):
@@ -781,6 +814,7 @@ class TestTune(unittest.TestCase):
         self.known = True
         self.state = "up"
         self.preflight = []
+        self.reach = ""
         self.acquire = (True, "1999")
         self.stream = mock.Mock()
         self.stream.recording = lambda: self.recording
@@ -789,6 +823,7 @@ class TestTune(unittest.TestCase):
         self.dmr = mk_entry("d", "1050", "20:00", "21:00", target={"mode": "DMR", "num": "3100", "net": "TGIF"})
         self.entries = [self.asl, self.dmr]
         for name, val in (("schedule_load", lambda: {"entries": self.entries, "error": ""}), ("priv_pool", lambda: ["1050", "1051"]),
+                          ("priv_reach_problem", lambda f: self.reach),
                           ("priv_stream", lambda n: self.stream), ("lane_of", lambda n: None),
                           ("rpt_links", lambda *a, **k: (self.known, [])), ("wait_link", lambda *a, **k: self.state),
                           ("_linked", lambda *a, **k: self.state == "up"),
@@ -814,6 +849,13 @@ class TestTune(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(self.log, [("acquire", "1050"), ("ilink", "1050", 8, "1999"), ("ilink", "1050", 1, "1999"), ("release", "1050")])
         self.assertEqual([s["step"] for s in r["steps"]], ["check", "tune", "link", "hold", "release"])
+
+    def test_an_asl_target_a_private_node_cannot_reach_is_refused_before_linking(self):
+        self.reach = "A private node (1000-1999) does not connect to the AllStarLink network, so it cannot link to ASL 2000."
+        r = nr.priv_test_tune({"id": "a"})
+        self.assertFalse(r["ok"])
+        self.assertIn("does not connect to the AllStarLink network", r["error"])
+        self.assertEqual(self.log, [])
 
     def test_missing_pieces_stop_it_before_any_tune(self):
         self.preflight = ["dvswitch.sh was not found, so DMR can't be tuned here"]
@@ -877,6 +919,48 @@ class TestTune(unittest.TestCase):
         self.assertEqual(r["node"], "1050")
         self.entries = [mk_entry("e", "1051", "20:00", "21:00")]
         self.assertEqual(nr.priv_test_tune({"id": "e", "node": "auto"})["node"], "1051")
+
+
+class ReachRule(unittest.TestCase):
+    def setUp(self):
+        self.path = os.path.join(WORK, "rpt_reach.conf")
+        with open(self.path, "w") as fh:
+            fh.write("[general]\nx=1\n\n[nodes]\n1234 = radio@127.0.0.1/1234,NONE\n1999 = radio@127.0.0.1/1999,NONE\n"
+                     "2501 = radio@127.0.0.1:4570/2501,NONE ; public node on this server\n; 7777 = radio@x/7777,NONE\n\n[1234]\n")
+        p = mock.patch.object(nr, "RPT_CONF", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def f(self, mode="ASL", num="2000"):
+        return {"mode": mode, "num": num, "net": "", "label": ""}
+
+    def test_nodes_in_the_nodes_list_are_local(self):
+        self.assertEqual(nr.priv_local_nodes(), {"1234", "1999", "2501"})
+
+    def test_a_node_on_this_server_can_be_linked_from_a_private_node(self):
+        self.assertEqual(nr.priv_reach_problem(self.f(num="2501")), "")
+        self.assertEqual(nr.priv_reach_problem(self.f(num="1234")), "")
+
+    def test_a_public_node_cannot(self):
+        msg = nr.priv_reach_problem(self.f(num="2000"))
+        self.assertIn("does not connect to the AllStarLink network", msg)
+        self.assertIn("ASL 2000", msg)
+        self.assertIn("Record this one on the main node", msg)
+
+    def test_a_commented_node_is_not_local(self):
+        self.assertNotEqual(nr.priv_reach_problem(self.f(num="7777")), "")
+
+    def test_echolink_is_never_reachable(self):
+        self.assertNotEqual(nr.priv_reach_problem(self.f(mode="EchoLink", num="12345")), "")
+
+    def test_digital_targets_are_not_judged_here(self):
+        for mode in ("DMR", "DSTAR", "M17", "YSF"):
+            self.assertEqual(nr.priv_reach_problem(self.f(mode=mode, num="91")), "")
+
+    def test_an_unreadable_rpt_conf_does_not_block_anything(self):
+        os.remove(self.path)
+        self.assertIsNone(nr.priv_local_nodes())
+        self.assertEqual(nr.priv_reach_problem(self.f()), "")
 
 
 class NextBridge(unittest.TestCase):
