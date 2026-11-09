@@ -90,30 +90,56 @@ class InstallUninstall(unittest.TestCase):
                                  "the launcher stays while another unit uses it, and goes with the last one")
 
     def test_termon_install_then_uninstall(self):
+        import pwd
         file = ts.SERVERS["termon"]["file"]
-        unit_path = os.path.join(UNIT_DIR, "termon.service")
+        web_unit = os.path.join(UNIT_DIR, "termon.service")
+        helper_unit = os.path.join(UNIT_DIR, "termon-helper.service")
         link = "/usr/local/bin/termon.py"
-        if os.path.exists(unit_path) or os.path.lexists(link):
+        if os.path.exists(web_unit) or os.path.exists(helper_unit) or os.path.lexists(link):
             self.skipTest("termon is already installed here; run on a clean machine")
+        had_user = True
+        try:
+            pwd.getpwnam("termon")
+        except KeyError:
+            had_user = False
         other = os.path.join(UNIT_DIR, "termonitor.service")
         with open(other, "w") as f:
             f.write("[Service]\nExecStart=/usr/bin/other\n")
         try:
             self.run_cli(file, "--install")
-            with open(unit_path) as f:
-                body = f.read()
-            self.assertIn("Type=notify", body)
-            self.assertIn("ExecStart=/usr/bin/python3 /usr/local/bin/termon.py", body)
+            with open(web_unit) as f:
+                web = f.read()
+            with open(helper_unit) as f:
+                helper = f.read()
+            self.assertIn("Type=notify", web)
+            self.assertIn("User=termon\n", web)
+            self.assertIn("NoNewPrivileges=yes", web)
+            self.assertIn("ExecStart=/usr/bin/python3 /usr/local/bin/termon.py\n", web)
+            self.assertIn("ExecStart=/usr/bin/python3 /usr/local/bin/termon.py --helper\n", helper)
+            self.assertNotIn("User=", helper)
+            pw = pwd.getpwnam("termon")
+            self.assertGreater(pw.pw_uid, 0)
+            self.assertTrue(pw.pw_shell.endswith(("nologin", "false")))
             self.assertTrue(os.path.isfile(os.path.realpath(link)))
+            key = "/etc/asl_dvs/termon_tls/key.pem"
+            self.assertEqual(os.stat(key).st_uid, pw.pw_uid)
+            self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat("/etc/asl_dvs/termon.conf").st_mode & 0o777, 0o644)
             self.run_cli(file, "--uninstall")
-            self.assertFalse(os.path.exists(unit_path))
+            self.assertFalse(os.path.exists(web_unit))
+            self.assertFalse(os.path.exists(helper_unit))
             self.assertFalse(os.path.lexists(link))
             self.assertTrue(os.path.exists(other), "an unrelated unit whose name starts with termon must stay")
         finally:
-            for path in (other, unit_path, link):
+            for path in (other, web_unit, helper_unit, link):
                 if os.path.lexists(path):
                     os.unlink(path)
             shutil.rmtree("/usr/local/lib/asl_dvs/termon", ignore_errors=True)
+            shutil.rmtree("/etc/asl_dvs/termon_tls", ignore_errors=True)
+            if os.path.exists("/etc/asl_dvs/termon.conf"):
+                os.unlink("/etc/asl_dvs/termon.conf")
+            if not had_user:
+                subprocess.run(["userdel", "termon"], capture_output=True)
 
 
 if __name__ == "__main__":

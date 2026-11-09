@@ -8,6 +8,7 @@ import ctypes.util
 import fcntl
 import gzip
 import hashlib
+import grp
 import hmac
 import http.cookies
 import io
@@ -15,6 +16,7 @@ import ipaddress
 import re
 import json
 import os
+import pwd
 import secrets
 import shutil
 import signal
@@ -32,8 +34,8 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.1.7"
-DATE_STR = "2026-11-08"
+VERSION = "0.2.0"
+DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
 INSTALL_BIN_PATH = "/usr/local/bin/termon.py"
@@ -46,7 +48,18 @@ DEFAULT_PORT = 7878
 PYTHON_BIN = "/usr/bin/python3"
 RPT_CONF = os.environ.get("TERMON_RPT_CONF", "/etc/asterisk/rpt.conf")
 TALKER_SERVICES = ("nodetalker.service", "nodelisten.service")
-LOCK_PATH = os.environ.get("TERMON_LOCK", "/run/termon.lock")
+LOCK_PATH = os.environ.get("TERMON_LOCK", "/run/termon.lock" if os.geteuid() == 0 else "/run/termon/termon.lock")
+HELPER_SOCK = os.environ.get("TERMON_HELPER_SOCK", "/run/termon-helper/helper.sock")
+HELPER_LOCK = os.environ.get("TERMON_HELPER_LOCK", "/run/termon-helper/helper.lock")
+HELPER_SERVICE = "termon-helper.service"
+HELPER_SERVICE_PATH = "/etc/systemd/system/termon-helper.service"
+DEFAULT_WEB_USER = "termon"
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+RPC_MAX_BYTES = 65536
+RPC_MAX_CONNS = 32
+SUDO_CACHE_SEC = 30
+REAP_AFTER_SEC = 300
+
 
 MAX_JSON_BYTES = 64 * 1024
 MAX_SESSIONS = 4
@@ -75,7 +88,7 @@ TLS_CERT = os.path.join(TLS_DIR, "cert.pem")
 TLS_KEY = os.path.join(TLS_DIR, "key.pem")
 _SERVICE_ENV = ("NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID", "INVOCATION_ID", "JOURNAL_STREAM",
                 "MAINPID", "MANAGERPID", "SYSTEMD_EXEC_PID", "TERMON_CONFIG_DIR", "TERMON_LOCK",
-                "TERMON_RPT_CONF")
+                "TERMON_RPT_CONF", "TERMON_HELPER_SOCK", "TERMON_HELPER_LOCK")
 
 MONITOR_PROGS = {"top": "top", "htop": "htop", "btop": "btop"}
 INSTALL_PKGS = {"procps": "top", "htop": "htop", "btop": "btop"}
@@ -176,14 +189,22 @@ def load_config():
     if last not in MONITOR_PROGS:
         last = "top"
     https = str(sec.get("https", "true")).strip().lower() not in ("0", "false", "no", "off")
-    return {"port": port, "monitor_last": last, "https": https,
-            "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
+    shell_user = str(sec.get("shell_user", "")).strip()
+    if shell_user == "root" or not USER_RE.match(shell_user):
+        shell_user = ""
+    web_user = str(sec.get("web_user", DEFAULT_WEB_USER)).strip()
+    if web_user == "root" or not USER_RE.match(web_user):
+        web_user = DEFAULT_WEB_USER
+    return {"port": port, "monitor_last": last, "https": https, "shell_user": shell_user,
+            "web_user": web_user, "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
 
 
 def save_config(cfg):
     cp = configparser.ConfigParser()
     cp[CONFIG_SECTION] = {"port": str(cfg["port"]), "monitor_last": cfg["monitor_last"],
                           "https": "true" if cfg.get("https", True) else "false",
+                          "shell_user": cfg.get("shell_user", ""),
+                          "web_user": cfg.get("web_user", DEFAULT_WEB_USER),
                           "allowed_hosts": ",".join(cfg.get("allowed_hosts", []))}
     buf = io.StringIO()
     cp.write(buf)
@@ -191,10 +212,11 @@ def save_config(cfg):
     try:
         with open(CONFIG_PATH, encoding="utf-8") as fh:
             if fh.read() == content:
+                os.chmod(CONFIG_PATH, 0o644)
                 return
     except OSError:
         pass
-    atomic_write(CONFIG_PATH, content, mode=0o600)
+    atomic_write(CONFIG_PATH, content, mode=0o644)
 
 
 def _remember_monitor(prog):
@@ -203,7 +225,10 @@ def _remember_monitor(prog):
         if cfg["monitor_last"] == prog:
             return
         cfg["monitor_last"] = prog
-        save_config(cfg)
+        try:
+            save_config(cfg)
+        except OSError as exc:
+            log(f"cannot remember the monitor program: {exc}")
 
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
@@ -343,21 +368,21 @@ def _shadow_hash(account):
     return None
 
 
-def _verify_root_password(password):
+def _verify_account_password(account, password):
     try:
         import pam as _pam
     except ImportError:
         _pam = None
     if _pam is not None:
         try:
-            return bool(_pam.pam().authenticate("root", password, service="login"))
+            return bool(_pam.pam().authenticate(account, password, service="login"))
         except Exception as exc:
             log(f"login: PAM check failed: {exc!r}")
             return False
     try:
-        stored = _shadow_hash("root")
+        stored = _shadow_hash(account)
     except OSError as exc:
-        log(f"login: cannot read /etc/shadow ({exc}); run termon as root")
+        log(f"login: cannot read /etc/shadow ({exc}); the helper must run as root")
         return False
     if stored is None:
         return False
@@ -518,16 +543,13 @@ _pty_lock = threading.Lock()
 _ptys = {}
 
 
-_PTY_EXEC = ("import os, sys, fcntl, termios\n"
-             "os.setsid()\n"
-             "fcntl.ioctl(0, termios.TIOCSCTTY, 1)\n"
-             "os.execvp(sys.argv[1], sys.argv[1:])\n")
-
-
 class PtySession:
-    def __init__(self, argv, cwd, rows, cols, label, owner, peer=""):
+    def __init__(self, kind, prog, rows, cols, owner, peer=""):
+        info = _priv(BACKEND.spawn, kind, prog, rows, cols)
+        self.pid = info["pid"]
+        self.fd = info["fd"]
+        self.label = info["label"]
         self.sid = secrets.token_hex(16)
-        self.label = label
         self.owner = owner
         self.peer = peer
         self.cond = threading.Condition()
@@ -540,22 +562,8 @@ class PtySession:
         self.ended_at = 0.0
         self.attached = 0
         self.idle_since = self.started_at
-        env = _clean_env(TERM="xterm-256color", COLORTERM="truecolor",
-                         LANG="C.UTF-8", LC_ALL="C.UTF-8", HOME="/root")
-        master, slave = os.openpty()
-        try:
-            self.proc = subprocess.Popen([sys.executable, "-I", "-S", "-c", _PTY_EXEC] + list(argv),
-                                         stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env,
-                                         close_fds=True)
-        except BaseException:
-            os.close(master)
-            raise
-        finally:
-            os.close(slave)
-        self.pid = self.proc.pid
-        self.fd = master
         self.resize(rows, cols)
-        audit(f"terminal {label} opened from {peer or 'unknown'} (pid {self.pid})")
+        audit(f"terminal {self.label} opened from {peer or 'unknown'} (pid {self.pid})")
         threading.Thread(target=self._pump, daemon=True).start()
 
     def _pump(self):
@@ -576,8 +584,8 @@ class PtySession:
                 self.cond.notify_all()
         code = None
         try:
-            code = self.proc.wait()
-        except OSError:
+            code = BACKEND.wait(self.pid)
+        except PrivError:
             pass
         with self.cond:
             try:
@@ -621,22 +629,22 @@ class PtySession:
         except OSError:
             pass
 
+    def _signal(self, name):
+        try:
+            BACKEND.signal(self.pid, name)
+        except PrivError as exc:
+            log(f"terminal {self.label}: could not signal it: {exc.msg}")
+
     def close(self):
         if self.alive:
-            try:
-                os.killpg(self.pid, signal.SIGHUP)
-            except OSError:
-                pass
+            self._signal("HUP")
             timer = threading.Timer(2.0, self._force)
             timer.daemon = True
             timer.start()
 
     def _force(self):
         if self.alive:
-            try:
-                os.killpg(self.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            self._signal("KILL")
 
 
 def _reap_locked():
@@ -650,7 +658,7 @@ def _reap_locked():
             del _ptys[sid]
 
 
-def _start_session(argv, cwd, rows, cols, label, owner, peer=""):
+def _start_session(kind, prog, rows, cols, owner, peer=""):
     with _pty_lock:
         _reap_locked()
         for sid, s in list(_ptys.items()):
@@ -660,7 +668,7 @@ def _start_session(argv, cwd, rows, cols, label, owner, peer=""):
                 del _ptys[sid]
         if sum(1 for s in _ptys.values() if s.alive) >= MAX_SESSIONS:
             raise HttpErr(409, f"{MAX_SESSIONS} terminals are already open for other logins. Try again later.")
-        sess = PtySession(argv, cwd, rows, cols, label, owner, peer)
+        sess = PtySession(kind, prog, rows, cols, owner, peer)
         _ptys[sess.sid] = sess
     return sess
 
@@ -792,6 +800,565 @@ def _restart_later():
                         "systemctl", "restart", SERVICE_NAME], check=False)
     except OSError:
         subprocess.run(["systemctl", "restart", "--no-block", SERVICE_NAME], check=False)
+
+
+class PrivError(Exception):
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+        self.msg = msg
+
+
+BACKEND = None
+_PTY_EXEC = ("import os, sys, fcntl, termios\n"
+             "uid, gid, user = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]\n"
+             "os.setsid()\n"
+             "fcntl.ioctl(0, termios.TIOCSCTTY, 1)\n"
+             "if uid != 0:\n"
+             "    os.initgroups(user, gid)\n"
+             "    os.setgid(gid)\n"
+             "    os.setuid(uid)\n"
+             "os.execvp(sys.argv[4], sys.argv[4:])\n")
+_NO_LOGIN_SHELLS = ("nologin", "false")
+_sudo_cache = {}
+
+
+def _priv(fn, *args):
+    try:
+        return fn(*args)
+    except PrivError as exc:
+        raise HttpErr(exc.code, exc.msg)
+
+
+def _no_login_shell(pw):
+    return not pw.pw_shell or os.path.basename(pw.pw_shell) in _NO_LOGIN_SHELLS
+
+
+def _sudo_state(user):
+    if user == "root":
+        return "root"
+    now = time.time()
+    hit = _sudo_cache.get(user)
+    if hit and now - hit[0] < SUDO_CACHE_SEC:
+        return hit[1]
+    state = "unknown"
+    exe = shutil.which("sudo")
+    if not exe:
+        state = "none"
+    else:
+        try:
+            r = subprocess.run([exe, "-n", "-l", "-U", user], capture_output=True, text=True, timeout=10,
+                               stdin=subprocess.DEVNULL, env=_clean_env(LC_ALL="C"))
+            out = r.stdout + r.stderr
+            if "not allowed to run sudo" in out:
+                state = "none"
+            elif "NOPASSWD" in out:
+                state = "nopasswd"
+            elif r.returncode == 0:
+                state = "password"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    _sudo_cache[user] = (now, state)
+    return state
+
+
+def _ensure_system_user(name):
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        nologin = shutil.which("nologin") or "/usr/sbin/nologin"
+        r = subprocess.run(["useradd", "--system", "--no-create-home", "--user-group",
+                            "--home-dir", "/nonexistent", "--shell", nologin, name],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise PrivError(500, "Could not create the user: " + (r.stderr.strip() or r.stdout.strip())[:200])
+        return pwd.getpwnam(name)
+    if pw.pw_uid == 0:
+        raise PrivError(400, "The web service user cannot be root.")
+    if not _no_login_shell(pw):
+        raise PrivError(400, "That account can log in. Use a system account with no login shell.")
+    return pw
+
+
+def _chown_tls(owner):
+    try:
+        pw = pwd.getpwnam(owner)
+    except KeyError:
+        return
+    for path, mode in ((TLS_DIR, 0o700), (TLS_KEY, 0o600), (TLS_CERT, 0o644)):
+        if os.path.exists(path):
+            os.chown(path, pw.pw_uid, pw.pw_gid)
+            os.chmod(path, mode)
+
+
+class Privileged:
+    split = False
+
+    def __init__(self):
+        self._procs = {}
+        self._lock = threading.Lock()
+        self._fails = deque()
+        self.sock_path = None
+        threading.Thread(target=self._reap_loop, daemon=True).start()
+
+    def available(self):
+        return True
+
+    def ping(self):
+        return True
+
+    def _penalty(self, failed):
+        now = time.time()
+        with self._lock:
+            while self._fails and now - self._fails[0] > 60:
+                self._fails.popleft()
+            if failed:
+                self._fails.append(now)
+            n = len(self._fails)
+        if failed and n > 3:
+            time.sleep(min(0.5 * (n - 3), 2.0))
+
+    def _reap_loop(self):
+        while True:
+            time.sleep(30)
+            now = time.time()
+            with self._lock:
+                for pid, (proc, born) in list(self._procs.items()):
+                    if proc.poll() is not None and now - born > REAP_AFTER_SEC:
+                        del self._procs[pid]
+
+    def verify(self, password):
+        account = load_config()["shell_user"] or "root"
+        ok = _verify_account_password(account, password)
+        self._penalty(not ok)
+        return ok
+
+    def spawn(self, kind, prog, rows, cols):
+        cfg = load_config()
+        account = cfg["shell_user"] or "root"
+        try:
+            pw = pwd.getpwnam(account)
+        except KeyError:
+            raise PrivError(409, f"The shell account {account} does not exist. Fix it in Setup.")
+        if kind == "shell":
+            argv = ["bash", "-l"]
+            label = "Root shell" if account == "root" else f"Shell ({account})"
+        elif kind == "monitor":
+            if not isinstance(prog, str) or prog not in MONITOR_PROGS:
+                raise PrivError(400, "Unknown program.")
+            exe = shutil.which(MONITOR_PROGS[prog])
+            if not exe:
+                raise PrivError(409, f"{prog} is not installed. Use the Setup card to install it.")
+            argv, label = [exe], prog
+            _remember_monitor(prog)
+        else:
+            raise PrivError(400, "Unknown terminal kind.")
+        cwd = pw.pw_dir if os.path.isdir(pw.pw_dir) else "/"
+        env = _clean_env(TERM="xterm-256color", COLORTERM="truecolor", LANG="C.UTF-8", LC_ALL="C.UTF-8",
+                         HOME=pw.pw_dir, USER=account, LOGNAME=account)
+        master, slave = os.openpty()
+        try:
+            if pw.pw_uid != 0:
+                try:
+                    tty_gid = grp.getgrnam("tty").gr_gid
+                except KeyError:
+                    tty_gid = pw.pw_gid
+                os.fchown(slave, pw.pw_uid, tty_gid)
+                os.fchmod(slave, 0o620)
+            proc = subprocess.Popen([sys.executable, "-I", "-S", "-c", _PTY_EXEC,
+                                     str(pw.pw_uid), str(pw.pw_gid), account] + argv,
+                                    stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env, close_fds=True)
+        except BaseException:
+            os.close(master)
+            raise
+        finally:
+            os.close(slave)
+        with self._lock:
+            self._procs[proc.pid] = (proc, time.time())
+        return {"pid": proc.pid, "fd": master, "label": label}
+
+    def signal(self, pid, name):
+        sig = {"HUP": signal.SIGHUP, "KILL": signal.SIGKILL}.get(name)
+        with self._lock:
+            known = pid in self._procs
+        if sig is None or not known:
+            return
+        try:
+            os.killpg(pid, sig)
+        except OSError:
+            pass
+
+    def wait(self, pid):
+        with self._lock:
+            rec = self._procs.get(pid)
+        if rec is None:
+            return None
+        code = rec[0].wait()
+        with self._lock:
+            self._procs.pop(pid, None)
+        return code
+
+    def install(self, pkg, who=""):
+        if not isinstance(pkg, str) or pkg not in INSTALL_PKGS:
+            raise PrivError(400, "Only top (procps), htop and btop can be installed here.")
+        if shutil.which(INSTALL_PKGS[pkg]):
+            raise PrivError(409, "Already installed.")
+        busy = _dpkg_busy()
+        if busy:
+            raise PrivError(409, "Another package job holds: " + ", ".join(busy) + ". Try again shortly.")
+        with _job_lock:
+            if _job["state"] == "running":
+                raise PrivError(409, "An install is already running.")
+            _job["id"] += 1
+            jid = _job["id"]
+            _job.update(pkg=pkg, state="running", output="", code=None)
+        audit(f"install: apt {pkg} started (requested from {who})")
+        threading.Thread(target=_run_install, args=(jid, pkg), daemon=True).start()
+        return jid
+
+    def job_view(self):
+        return _job_view()
+
+    def set_port(self, port, who=""):
+        port = _norm_port(port)
+        if port is None:
+            raise PrivError(400, "Use a port from 1024 to 65535.")
+        with _CFG_LOCK:
+            cfg = load_config()
+            cur = cfg["port"]
+            if port != cur:
+                if not _port_free(port):
+                    raise PrivError(409, f"Port {port} is in use. Pick another.")
+                cfg["port"] = port
+                try:
+                    save_config(cfg)
+                except OSError as exc:
+                    raise PrivError(500, f"Could not save the config: {exc}")
+                audit(f"port: changed from {cur} to {port} (requested from {who})")
+        restarting = port != cur
+        if restarting:
+            threading.Thread(target=_restart_later, daemon=True).start()
+        return restarting
+
+    def set_hosts(self, names, who=""):
+        out = []
+        if not isinstance(names, list) or len(names) > MAX_ALLOWED_HOSTS:
+            raise PrivError(400, f"At most {MAX_ALLOWED_HOSTS} names.")
+        for x in names:
+            n = _norm_host(x)
+            if n is None or _is_ip_text(n):
+                raise PrivError(400, "Not a valid host name (IP addresses are always allowed): " + str(x)[:60])
+            if n not in out:
+                out.append(n)
+        with _CFG_LOCK:
+            cfg = load_config()
+            cfg["allowed_hosts"] = out
+            try:
+                save_config(cfg)
+            except OSError as exc:
+                raise PrivError(500, f"Could not save the config: {exc}")
+        audit(f"allowed names changed to {out or 'none'} (requested from {who})")
+        return out
+
+    def set_shell_user(self, user, password, who=""):
+        user = str(user or "").strip()
+        if user == "root":
+            user = ""
+        if user and not USER_RE.match(user):
+            raise PrivError(400, "Not a valid user name.")
+        account = user or "root"
+        try:
+            pw = pwd.getpwnam(account)
+        except KeyError:
+            raise PrivError(400, "No such user.")
+        if user:
+            if pw.pw_uid == 0:
+                raise PrivError(400, "Use root by leaving the name empty.")
+            if _no_login_shell(pw):
+                raise PrivError(400, "That account has no login shell.")
+            if user == load_config()["web_user"]:
+                raise PrivError(400, "That is the web service user.")
+        if not isinstance(password, str) or not password or len(password) > 1024 or "\0" in password:
+            raise PrivError(400, "Enter that account's password.")
+        ok = _verify_account_password(account, password)
+        self._penalty(not ok)
+        if not ok:
+            audit(f"setup: shell account change to {account} refused, wrong password (from {who})")
+            raise PrivError(401, "Incorrect password for that account.")
+        with _CFG_LOCK:
+            cfg = load_config()
+            cfg["shell_user"] = user
+            try:
+                save_config(cfg)
+            except OSError as exc:
+                raise PrivError(500, f"Could not save the config: {exc}")
+        audit(f"setup: shell account is now {account} (requested from {who})")
+        return {"account": account, "sudo": _sudo_state(account)}
+
+    def set_web_user(self, name, who=""):
+        name = str(name or "").strip()
+        if not USER_RE.match(name) or name == "root":
+            raise PrivError(400, "Not a valid user name.")
+        cfg = load_config()
+        if name == cfg["shell_user"]:
+            raise PrivError(400, "That is the shell account.")
+        pw = _ensure_system_user(name)
+        with _CFG_LOCK:
+            cfg = load_config()
+            cfg["web_user"] = name
+            try:
+                save_config(cfg)
+                _chown_tls(name)
+            except OSError as exc:
+                raise PrivError(500, f"Could not apply the change: {exc}")
+        if os.path.exists(SYSTEMD_SERVICE_PATH):
+            try:
+                atomic_write(SYSTEMD_SERVICE_PATH, _web_unit_text(name), mode=0o644)
+            except OSError as exc:
+                raise PrivError(500, f"Could not rewrite the unit: {exc}")
+            _systemctl("daemon-reload")
+        if self.sock_path and os.path.exists(self.sock_path):
+            try:
+                os.chown(self.sock_path, pw.pw_uid, -1)
+            except OSError:
+                pass
+        audit(f"setup: web service user is now {name} (requested from {who})")
+        restarting = os.path.exists(SYSTEMD_SERVICE_PATH)
+        if restarting:
+            threading.Thread(target=_restart_later, daemon=True).start()
+        return restarting
+
+    def account_info(self):
+        cfg = load_config()
+        account = cfg["shell_user"] or "root"
+        return {"account": account, "sudo": _sudo_state(account), "web_user": cfg["web_user"],
+                "split": self.split}
+
+
+def _clean_text(value, limit=64):
+    return "".join(c for c in str(value or "")[:limit] if c.isprintable())
+
+
+class HelperServer:
+    def __init__(self, path, priv):
+        self.path = path
+        self.priv = priv
+        self.slots = threading.BoundedSemaphore(RPC_MAX_CONNS)
+        self.sock = None
+
+    def _web_uid(self):
+        try:
+            return pwd.getpwnam(load_config()["web_user"]).pw_uid
+        except KeyError:
+            return None
+
+    def bind(self):
+        folder = os.path.dirname(self.path)
+        os.makedirs(folder, mode=0o755, exist_ok=True)
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old = os.umask(0o177)
+        try:
+            self.sock.bind(self.path)
+        finally:
+            os.umask(old)
+        uid = self._web_uid()
+        if uid is not None:
+            try:
+                os.chown(self.path, uid, -1)
+            except OSError:
+                pass
+        self.priv.sock_path = self.path
+        self.sock.listen(16)
+
+    def serve_forever(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            if not self.slots.acquire(blocking=False):
+                conn.close()
+                continue
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def _handle(self, conn):
+        try:
+            try:
+                uid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                          struct.calcsize("3i")))[1]
+            except OSError:
+                return
+            if uid != 0 and uid != self._web_uid():
+                log(f"helper: refused a connection from uid {uid}")
+                return
+            conn.settimeout(30)
+            raw = b""
+            while b"\n" not in raw and len(raw) < RPC_MAX_BYTES:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                raw += chunk
+            try:
+                req = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
+                op, args = req["op"], req.get("args", {})
+                if not isinstance(op, str) or not isinstance(args, dict):
+                    raise ValueError("bad request")
+            except (ValueError, KeyError, UnicodeDecodeError):
+                conn.sendall(b'{"ok":false,"code":400,"message":"Bad request."}\n')
+                return
+            fd = None
+            try:
+                result, fd = self._run(op, args, conn)
+                payload = json.dumps(dict(result, ok=True)).encode("utf-8") + b"\n"
+            except PrivError as exc:
+                payload = json.dumps({"ok": False, "code": exc.code, "message": exc.msg}).encode("utf-8") + b"\n"
+            except Exception as exc:
+                log(f"helper: error in {op}: {exc!r}")
+                payload = b'{"ok":false,"code":500,"message":"Internal error in the helper."}\n'
+            try:
+                if fd is not None:
+                    socket.send_fds(conn, [payload], [fd])
+                else:
+                    conn.sendall(payload)
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+            self.slots.release()
+
+    def _run(self, op, args, conn):
+        p = self.priv
+        who = _clean_text(args.get("who"))
+        if op == "ping":
+            return {}, None
+        if op == "verify":
+            pw = args.get("password")
+            if not isinstance(pw, str) or not pw or len(pw) > 1024 or "\0" in pw:
+                return {"valid": False}, None
+            return {"valid": p.verify(pw)}, None
+        if op == "spawn":
+            info = p.spawn(args.get("kind"), args.get("prog"), _clamp(args.get("rows"), 2, 500, 24),
+                           _clamp(args.get("cols"), 2, 500, 80))
+            return {"pid": info["pid"], "label": info["label"]}, info["fd"]
+        if op == "signal":
+            p.signal(_clamp(args.get("pid"), 1, 2 ** 31 - 1, 0), str(args.get("name")))
+            return {}, None
+        if op == "wait":
+            conn.settimeout(None)
+            return {"code": p.wait(_clamp(args.get("pid"), 1, 2 ** 31 - 1, 0))}, None
+        if op == "install":
+            return {"job": p.install(args.get("pkg"), who)}, None
+        if op == "job":
+            return {"job": p.job_view()}, None
+        if op == "set_port":
+            return {"restarting": p.set_port(args.get("port"), who)}, None
+        if op == "set_hosts":
+            return {"hosts": p.set_hosts(args.get("hosts"), who)}, None
+        if op == "set_shell_user":
+            return p.set_shell_user(args.get("user"), args.get("password"), who), None
+        if op == "set_web_user":
+            return {"restarting": p.set_web_user(args.get("name"), who)}, None
+        if op == "account":
+            return {"info": dict(p.account_info(), split=True)}, None
+        raise PrivError(400, "Unknown request.")
+
+
+class RemoteBackend:
+    split = True
+
+    def __init__(self, path):
+        self.path = path
+
+    def _call(self, op, args=None, want_fd=False, timeout=30):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        fds = []
+        try:
+            try:
+                s.connect(self.path)
+                s.sendall(json.dumps({"op": op, "args": args or {}}).encode("utf-8") + b"\n")
+                if want_fd:
+                    data, fds, _, _ = socket.recv_fds(s, RPC_MAX_BYTES, 1)
+                else:
+                    data = b""
+                    while not data.endswith(b"\n") and len(data) < RPC_MAX_BYTES:
+                        chunk = s.recv(65536)
+                        if not chunk:
+                            break
+                        data += chunk
+            except (OSError, ValueError):
+                raise PrivError(503, "The Terminal Monitor helper is not running.")
+        finally:
+            s.close()
+        try:
+            res = json.loads(data.decode("utf-8"))
+        except ValueError:
+            for fd in fds:
+                os.close(fd)
+            raise PrivError(502, "The helper sent a bad reply.")
+        if not res.get("ok"):
+            for fd in fds:
+                os.close(fd)
+            raise PrivError(int(res.get("code", 500)), str(res.get("message", "The helper refused.")))
+        if want_fd:
+            if not fds:
+                raise PrivError(502, "The helper sent no terminal.")
+            res["fd"] = fds[0]
+            for extra in fds[1:]:
+                os.close(extra)
+        return res
+
+    def available(self):
+        try:
+            self._call("ping")
+            return True
+        except PrivError:
+            return False
+
+    def ping(self):
+        return self.available()
+
+    def verify(self, password):
+        return bool(self._call("verify", {"password": password})["valid"])
+
+    def spawn(self, kind, prog, rows, cols):
+        res = self._call("spawn", {"kind": kind, "prog": prog, "rows": rows, "cols": cols}, want_fd=True)
+        return {"pid": res["pid"], "fd": res["fd"], "label": res["label"]}
+
+    def signal(self, pid, name):
+        self._call("signal", {"pid": pid, "name": name})
+
+    def wait(self, pid):
+        return self._call("wait", {"pid": pid}, timeout=None)["code"]
+
+    def install(self, pkg, who=""):
+        return self._call("install", {"pkg": pkg, "who": who})["job"]
+
+    def job_view(self):
+        return self._call("job")["job"]
+
+    def set_port(self, port, who=""):
+        return self._call("set_port", {"port": port, "who": who})["restarting"]
+
+    def set_hosts(self, names, who=""):
+        return self._call("set_hosts", {"hosts": names, "who": who})["hosts"]
+
+    def set_shell_user(self, user, password, who=""):
+        res = self._call("set_shell_user", {"user": user, "password": password, "who": who})
+        return {"account": res["account"], "sudo": res["sudo"]}
+
+    def set_web_user(self, name, who=""):
+        return self._call("set_web_user", {"name": name, "who": who})["restarting"]
+
+    def account_info(self):
+        return self._call("account")["info"]
 
 
 _ASSET_RAW = {
@@ -1803,25 +2370,25 @@ def r_login(h, q):
     body = h._body()
     pw = body.get("password", "")
     if not isinstance(pw, str) or not pw or len(pw) > 1024 or "\0" in pw:
-        raise HttpErr(400, "Enter the root password.")
+        raise HttpErr(400, "Enter the password.")
     delay = 0.0
     with _login_lock:
         wait = _lock_remaining(ip)
         if wait:
             raise HttpErr(429, f"Too many attempts. Wait {wait} seconds.")
-        ok = _verify_root_password(pw)
+        ok = bool(_priv(BACKEND.verify, pw))
         if ok:
             _record_ok(ip)
         else:
             _record_fail(ip)
             delay = _global_delay()
     if not ok:
-        audit(f"login: failed root sign-in from {ip}")
+        audit(f"login: failed sign-in from {ip}")
         if delay:
             time.sleep(delay)
-        raise HttpErr(401, "Incorrect root password.")
+        raise HttpErr(401, "Incorrect password.")
     tok = _issue_session()
-    audit(f"login: root signed in from {ip}")
+    audit(f"login: signed in from {ip}")
     h._json(200, {"ok": True}, extra=[_set_cookie(h, tok)])
 
 
@@ -1835,10 +2402,19 @@ def r_setup(h, q):
     cfg = load_config()
     installed = {name: shutil.which(binary) is not None for name, binary in
                  (("top", "top"), ("htop", "htop"), ("btop", "btop"))}
+    helper = True
+    try:
+        account = BACKEND.account_info()
+        job = BACKEND.job_view()
+    except PrivError:
+        helper = False
+        account = {"account": cfg["shell_user"] or "root", "sudo": "unknown", "web_user": cfg["web_user"],
+                   "split": getattr(BACKEND, "split", False)}
+        job = _job_view()
     h._json(200, {"ok": True, "installed": installed, "port": cfg["port"],
-                  "monitor_last": cfg["monitor_last"], "root": os.geteuid() == 0,
+                  "monitor_last": cfg["monitor_last"], "helper": helper, "account": account,
                   "hosts": {"own": sorted(_OWN_NAMES), "extra": sorted(_EXTRA_HOSTS)},
-                  "job": _job_view(), "version": VERSION})
+                  "job": job, "version": VERSION})
 
 
 def r_setup_install(h, q):
@@ -1846,24 +2422,7 @@ def r_setup_install(h, q):
     body = h._body()
     if body.get("confirm") is not True:
         raise HttpErr(400, "Confirmation required.")
-    pkg = body.get("pkg")
-    if not isinstance(pkg, str) or pkg not in INSTALL_PKGS:
-        raise HttpErr(400, "Only top (procps), htop and btop can be installed here.")
-    if os.geteuid() != 0:
-        raise HttpErr(403, "termon is not running as root, so it cannot install packages.")
-    if shutil.which(INSTALL_PKGS[pkg]):
-        raise HttpErr(409, "Already installed.")
-    busy = _dpkg_busy()
-    if busy:
-        raise HttpErr(409, "Another package job holds: " + ", ".join(busy) + ". Try again shortly.")
-    with _job_lock:
-        if _job["state"] == "running":
-            raise HttpErr(409, "An install is already running.")
-        _job["id"] += 1
-        jid = _job["id"]
-        _job.update(pkg=pkg, state="running", output="", code=None)
-    audit(f"install: apt {pkg} started (requested from {h._peer()})")
-    threading.Thread(target=_run_install, args=(jid, pkg), daemon=True).start()
+    jid = _priv(BACKEND.install, body.get("pkg"), h._peer())
     h._json(200, {"ok": True, "job": jid})
 
 
@@ -1875,22 +2434,9 @@ def r_setup_port(h, q):
     port = _norm_port(body.get("port"))
     if port is None:
         raise HttpErr(400, "Use a port from 1024 to 65535.")
-    if os.geteuid() != 0:
-        raise HttpErr(403, "termon is not running as root, so it cannot change its port.")
-    with _CFG_LOCK:
-        cfg = load_config()
-        cur = cfg["port"]
-        if port != cur:
-            if not _port_free(port):
-                raise HttpErr(409, f"Port {port} is in use. Pick another.")
-            cfg["port"] = port
-            save_config(cfg)
-            audit(f"port: changed from {cur} to {port} (requested from {h._peer()})")
-    restarting = port != cur
-    if restarting:
-        threading.Thread(target=_restart_later, daemon=True).start()
+    restarting = _priv(BACKEND.set_port, port, h._peer())
     scheme = "https" if _is_tls(h) else "http"
-    h._json(200, {"ok": True, "url": f"{scheme}://{_host_only(h)}:{port}/", "restarting": restarting})
+    h._json(200, {"ok": True, "url": f"{scheme}://{_host_only(h)}:{port}/", "restarting": bool(restarting)})
 
 
 def r_setup_hosts(h, q):
@@ -1905,22 +2451,47 @@ def r_setup_hosts(h, q):
     items = [x.strip() for x in raw.split(",") if x.strip()]
     if len(items) > MAX_ALLOWED_HOSTS:
         raise HttpErr(400, f"At most {MAX_ALLOWED_HOSTS} names.")
-    names = []
-    for x in items:
-        n = _norm_host(x)
-        if n is None or _is_ip_text(n):
-            raise HttpErr(400, "Not a valid host name (IP addresses are always allowed): " + x[:60])
-        if n not in names:
-            names.append(n)
-    if os.geteuid() != 0:
-        raise HttpErr(403, "termon is not running as root, so it cannot save names.")
-    with _CFG_LOCK:
-        cfg = load_config()
-        cfg["allowed_hosts"] = names
-        save_config(cfg)
+    names = _priv(BACKEND.set_hosts, items, h._peer())
     _EXTRA_HOSTS = frozenset(names)
-    audit(f"allowed names changed to {names or 'none'} (requested from {h._peer()})")
     h._json(200, {"ok": True, "hosts": names})
+
+
+def r_setup_shell_user(h, q):
+    _need(h)
+    ip = h._peer()
+    wait = _lock_remaining(ip)
+    if wait:
+        raise HttpErr(429, f"Too many attempts. Wait {wait} seconds.")
+    body = h._body()
+    if body.get("confirm") is not True:
+        raise HttpErr(400, "Confirmation required.")
+    user, pw = body.get("user", ""), body.get("password", "")
+    if not isinstance(user, str) or not isinstance(pw, str):
+        raise HttpErr(400, "Send the user name and its password as text.")
+    try:
+        res = BACKEND.set_shell_user(user, pw, ip)
+    except PrivError as exc:
+        if exc.code == 401:
+            _record_fail(ip)
+        raise HttpErr(exc.code, exc.msg)
+    _record_ok(ip)
+    with _sess_lock:
+        _sessions.clear()
+    _close_all_sessions()
+    h._json(200, {"ok": True, "account": res["account"], "sudo": res["sudo"]},
+            extra=[_set_cookie(h, "", clear=True)])
+
+
+def r_setup_web_user(h, q):
+    _need(h)
+    body = h._body()
+    if body.get("confirm") is not True:
+        raise HttpErr(400, "Confirmation required.")
+    name = body.get("name", "")
+    if not isinstance(name, str):
+        raise HttpErr(400, "Send the user name as text.")
+    restarting = _priv(BACKEND.set_web_user, name, h._peer())
+    h._json(200, {"ok": True, "restarting": bool(restarting)})
 
 
 def r_term_ticket(h, q):
@@ -1936,21 +2507,13 @@ def r_term_open(h, q):
     kind = body.get("kind")
     rows = _clamp(body.get("rows"), 2, 500, 24)
     cols = _clamp(body.get("cols"), 2, 500, 80)
-    if kind == "shell":
-        argv, label = ["bash", "-l"], "Root shell"
-    elif kind == "monitor":
-        prog = body.get("prog")
-        if not isinstance(prog, str) or prog not in MONITOR_PROGS:
-            raise HttpErr(400, "Unknown program.")
-        exe = shutil.which(MONITOR_PROGS[prog])
-        if not exe:
-            raise HttpErr(409, f"{prog} is not installed. Use the Setup card to install it.")
-        argv, label = [exe], prog
-        _remember_monitor(prog)
-    else:
+    prog = body.get("prog")
+    if kind not in ("shell", "monitor"):
         raise HttpErr(400, "Unknown terminal kind.")
-    sess = _start_session(argv, "/root", rows, cols, label, _digest(tok), h._peer())
-    h._json(200, {"ok": True, "sid": sess.sid, "label": label})
+    if kind == "monitor" and (not isinstance(prog, str) or prog not in MONITOR_PROGS):
+        raise HttpErr(400, "Unknown program.")
+    sess = _start_session(kind, prog, rows, cols, _digest(tok), h._peer())
+    h._json(200, {"ok": True, "sid": sess.sid, "label": sess.label})
 
 
 def r_term_stream(h, q):
@@ -2051,6 +2614,8 @@ POST_ROUTES = {
     "/api/setup/install": r_setup_install,
     "/api/setup/port": r_setup_port,
     "/api/setup/hosts": r_setup_hosts,
+    "/api/setup/shell_user": r_setup_shell_user,
+    "/api/setup/web_user": r_setup_web_user,
     "/api/term/ticket": r_term_ticket,
     "/api/term/open": r_term_open,
     "/api/term/input": r_term_input,
@@ -2196,12 +2761,14 @@ _lock_fh = None
 _TERMON_CMD = re.compile(r"^termon([-_].*)?\.py$")
 
 
-def acquire_instance_lock():
+def acquire_instance_lock(path=None):
     global _lock_fh
+    path = path or LOCK_PATH
     try:
-        fh = open(LOCK_PATH, "a+")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fh = open(path, "a+")
     except OSError as exc:
-        log(f"cannot open {LOCK_PATH}: {exc}")
+        log(f"cannot open {path}: {exc}")
         return False
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2501,18 +3068,47 @@ def _require_root(action):
         sys.exit(f"{action} needs root (use sudo).")
 
 
-def _unit_text():
+def _web_unit_text(user):
     return (f"[Unit]\n"
-            f"Description={APP_NAME} v{VERSION} (LAN only)\n"
-            f"After=network-online.target\n"
-            f"Wants=network-online.target\n\n"
+            f"Description={APP_NAME} v{VERSION} (LAN only, web side)\n"
+            f"After=network-online.target {HELPER_SERVICE}\n"
+            f"Wants=network-online.target\n"
+            f"Requires={HELPER_SERVICE}\n\n"
             f"[Service]\n"
             f"Type=notify\n"
+            f"User={user}\n"
             f"ExecStart={PYTHON_BIN} {INSTALL_BIN_PATH}\n"
             f"Environment=PYTHONUNBUFFERED=1\n"
+            f"RuntimeDirectory=termon\n"
             f"WatchdogSec=60\n"
             f"Restart=on-failure\n"
-            f"RestartSec=3\n\n"
+            f"RestartSec=3\n"
+            f"NoNewPrivileges=yes\n"
+            f"CapabilityBoundingSet=\n"
+            f"ProtectSystem=strict\n"
+            f"ProtectHome=yes\n"
+            f"PrivateTmp=yes\n"
+            f"ProtectKernelTunables=yes\n"
+            f"ProtectControlGroups=yes\n"
+            f"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n"
+            f"[Install]\n"
+            f"WantedBy=multi-user.target\n")
+
+
+def _helper_unit_text():
+    return (f"[Unit]\n"
+            f"Description={APP_NAME} v{VERSION} helper (root, starts the terminals)\n"
+            f"After=network-online.target\n"
+            f"Before={SERVICE_NAME}\n\n"
+            f"[Service]\n"
+            f"Type=notify\n"
+            f"ExecStart={PYTHON_BIN} {INSTALL_BIN_PATH} --helper\n"
+            f"Environment=PYTHONUNBUFFERED=1\n"
+            f"RuntimeDirectory=termon-helper\n"
+            f"WatchdogSec=60\n"
+            f"Restart=on-failure\n"
+            f"RestartSec=3\n"
+            f"KillMode=control-group\n\n"
             f"[Install]\n"
             f"WantedBy=multi-user.target\n")
 
@@ -2551,14 +3147,27 @@ def install_service():
     os.replace(tmp_link, INSTALL_BIN_PATH)
     os.makedirs(CONFIG_DIR, exist_ok=True)
     cfg = load_config()
+    try:
+        _ensure_system_user(cfg["web_user"])
+    except PrivError as exc:
+        sys.exit(exc.msg)
     save_config(cfg)
-    atomic_write(SYSTEMD_SERVICE_PATH, _unit_text(), mode=0o644)
+    if cfg["https"]:
+        if not ensure_tls_cert():
+            sys.exit("Could not create the HTTPS certificate (is openssl installed?). "
+                     "Install it, or set https = false in " + CONFIG_PATH + ".")
+        _chown_tls(cfg["web_user"])
+    atomic_write(HELPER_SERVICE_PATH, _helper_unit_text(), mode=0o644)
+    atomic_write(SYSTEMD_SERVICE_PATH, _web_unit_text(cfg["web_user"]), mode=0o644)
     _report_talker()
     _systemctl("daemon-reload")
-    r = _systemctl("enable", "--now", SERVICE_NAME)
-    if r.returncode != 0:
-        sys.exit((r.stderr or r.stdout).strip() or "systemctl enable failed")
+    for unit in (HELPER_SERVICE, SERVICE_NAME):
+        r = _systemctl("enable", "--now", unit)
+        if r.returncode != 0:
+            sys.exit((r.stderr or r.stdout).strip() or f"systemctl enable {unit} failed")
     print(f"{APP_NAME} v{VERSION} installed and started.\n"
+          f"  The web page runs as '{cfg['web_user']}'; the root helper starts the terminals.\n"
+          f"  The shell account is {cfg['shell_user'] or 'root'} (change it under Setup).\n"
           f"  Open {'https' if cfg['https'] else 'http'}://<this node's LAN address>:{cfg['port']}/")
 
 
@@ -2566,7 +3175,7 @@ def uninstall_service():
     _require_root("--uninstall")
     _refuse_inside_termon("--uninstall")
     _remove_existing()
-    print(f"{APP_NAME} removed. Config kept at {CONFIG_PATH}.")
+    print(f"{APP_NAME} removed. Config kept at {CONFIG_PATH}. The '{load_config()['web_user']}' user is kept.")
 
 
 PAGE = r"""<!doctype html>
@@ -2660,6 +3269,19 @@ a.lnk{color:var(--accent);word-break:break-all}
         <button class="btn" id="hosts-apply" type="button">Save names</button>
       </div>
       <div class="muted" id="hosts-note" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:12px">
+        <span class="muted">Shell account</span>
+        <input class="port" id="shell-user" type="text" style="width:150px" placeholder="root" autocomplete="off" spellcheck="false">
+        <input class="port" id="shell-pw" type="password" style="width:190px" placeholder="that account's password" autocomplete="new-password">
+        <button class="btn" id="shell-apply" type="button">Save account</button>
+      </div>
+      <div class="muted" id="shell-note" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:12px">
+        <span class="muted">Web service user</span>
+        <input class="port" id="web-user" type="text" style="width:150px" placeholder="termon" autocomplete="off" spellcheck="false">
+        <button class="btn" id="web-apply" type="button">Save user</button>
+      </div>
+      <div class="muted" id="web-note" style="margin-top:6px"></div>
       <div class="muted" id="setup-note" style="margin-top:8px"></div>
       </div>
     </div>
@@ -2680,7 +3302,7 @@ a.lnk{color:var(--accent);word-break:break-all}
 <div id="login" hidden>
   <div id="login-card">
     <h2>Terminal Monitor</h2>
-    <div class="muted" style="margin-bottom:12px">Sign in with the root password of this node.</div>
+    <div class="muted" style="margin-bottom:12px">Sign in with the password of the shell account (root unless Setup says otherwise).</div>
     <input id="pw" type="password" autocomplete="current-password" placeholder="Root password">
     <button class="btn on" id="login-btn" type="button">Sign in</button>
     <div id="login-msg"></div>
@@ -2744,7 +3366,7 @@ a.lnk{color:var(--accent);word-break:break-all}
 
   function doLogin() {
     var pw = $('pw').value;
-    if (!pw) { $('login-msg').textContent = 'Enter the root password.'; return; }
+    if (!pw) { $('login-msg').textContent = 'Enter the password.'; return; }
     $('login-btn').disabled = true;
     api('POST', '/api/login', { password: pw }).then(function (j) {
       $('login-btn').disabled = false;
@@ -3061,19 +3683,41 @@ a.lnk{color:var(--accent);word-break:break-all}
         b.className = 'btn';
         b.type = 'button';
         b.textContent = 'Install ' + label;
-        b.disabled = !s.root || s.job.state === 'running';
+        b.disabled = !s.helper || s.job.state === 'running';
         b.onclick = function () { installPkg(pkg, label); };
         row.appendChild(b);
       }
       box.appendChild(row);
     });
-    $('setup-note').textContent = s.root ? '' : 'termon is not running as root, so installs are disabled.';
+    $('setup-note').textContent = s.helper ? '' : 'The root helper is not answering, so installs and settings are disabled.';
+    applyAccount(s);
     if (s.hosts) {
       var hi = $('hosts');
       if (document.activeElement !== hi) hi.value = s.hosts.extra.join(', ');
       $('hosts-note').textContent = 'Always allowed: IP addresses, localhost' +
         (s.hosts.own.length ? ', ' + s.hosts.own.join(', ') : '') + '.';
     }
+  }
+
+  var SUDO_TEXT = {
+    root: 'This is root.',
+    password: 'sudo asks for this account\'s password, so root needs a second step.',
+    nopasswd: 'Warning: sudo does not ask this account for a password, so it is as strong as root.',
+    none: 'This account has no sudo rights, so it cannot become root.',
+    unknown: 'Its sudo rights could not be read.'
+  };
+
+  function applyAccount(s) {
+    var a = s.account;
+    if (!a) return;
+    var su = $('shell-user');
+    if (document.activeElement !== su) su.value = a.account === 'root' ? '' : a.account;
+    var wu = $('web-user');
+    if (document.activeElement !== wu) wu.value = a.web_user;
+    $('shell-note').textContent = 'Terminals run as ' + a.account + '. ' + (SUDO_TEXT[a.sudo] || '');
+    $('web-note').textContent = a.split
+      ? 'This page runs as ' + a.web_user + ' and asks the root helper for terminals.'
+      : 'Single-process mode: this page runs as root (started by hand, not by the service).';
   }
 
   function installPkg(pkg, label) {
@@ -3117,6 +3761,30 @@ a.lnk{color:var(--accent);word-break:break-all}
       $('setup-note').textContent = j.restarting
         ? 'Restarting on port ' + p + '. Open the new address once the service is back.'
         : 'Port unchanged.';
+    });
+  };
+
+  $('shell-apply').onclick = function () {
+    var u = $('shell-user').value.trim();
+    var pw = $('shell-pw').value;
+    if (!pw) { $('shell-note').textContent = 'Enter that account\'s password to confirm the change.'; return; }
+    if (!window.confirm('Run terminals as ' + (u || 'root') + '? Everyone is signed out and must use that account\'s password.')) return;
+    api('POST', '/api/setup/shell_user', { user: u, password: pw, confirm: true }).then(function (j) {
+      $('shell-pw').value = '';
+      if (!j.ok) { $('shell-note').textContent = j.message; return; }
+      stopAll();
+      showLogin('Shell account is now ' + j.account + '. Sign in with its password.');
+    });
+  };
+
+  $('web-apply').onclick = function () {
+    var n = $('web-user').value.trim();
+    if (!n) { $('web-note').textContent = 'Enter a user name.'; return; }
+    if (!window.confirm('Run this page as ' + n + '? It is created as a system user with no login if it does not exist, and the page restarts.')) return;
+    api('POST', '/api/setup/web_user', { name: n, confirm: true }).then(function (j) {
+      $('web-note').textContent = j.ok
+        ? (j.restarting ? 'Saved. The page restarts in a moment; reload it.' : 'Saved. It applies when the service is installed.')
+        : j.message;
     });
   };
 
@@ -3176,10 +3844,37 @@ a.lnk{color:var(--accent);word-break:break-all}
 """
 
 
+def run_helper():
+    if os.geteuid() != 0:
+        log("the helper must run as root")
+        return 1
+    if not acquire_instance_lock(HELPER_LOCK):
+        log(f"another helper is already running (lock {HELPER_LOCK}); not starting")
+        return 1
+    priv = Privileged()
+    priv.split = True
+    server = HelperServer(HELPER_SOCK, priv)
+    try:
+        server.bind()
+    except OSError as exc:
+        log(f"cannot open {HELPER_SOCK}: {exc}")
+        return 1
+    log(f"{APP_NAME} v{VERSION} helper listening on {HELPER_SOCK}")
+    sd_notify("READY=1")
+    _start_watchdog()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv=None):
+    global BACKEND
     ap = argparse.ArgumentParser(description=f"{APP_NAME} v{VERSION}: LAN-only web terminal and process monitor")
-    ap.add_argument("--install", action="store_true", help="Install as a systemd service and start it")
-    ap.add_argument("--uninstall", action="store_true", help="Stop and remove the systemd service")
+    ap.add_argument("--install", action="store_true", help="Install as systemd services and start them")
+    ap.add_argument("--uninstall", action="store_true", help="Stop and remove the systemd services")
+    ap.add_argument("--helper", action="store_true", help="Run the root helper (started by systemd)")
     ap.add_argument("--port", type=int, metavar="PORT",
                     help="Listen on PORT instead of the configured port (testing)")
     ap.add_argument("--version", action="version", version=f"{APP_NAME} {VERSION} ({DATE_STR})")
@@ -3190,6 +3885,8 @@ def main(argv=None):
     if args.uninstall:
         uninstall_service()
         return 0
+    if args.helper:
+        return run_helper()
     cfg = load_config()
     _init_names(cfg)
     port = args.port or cfg["port"]
@@ -3207,7 +3904,8 @@ def main(argv=None):
             log(f"cannot load the HTTPS certificate: {exc}")
             return 1
     else:
-        log("WARNING: HTTPS is off; the root password and terminal travel in clear text")
+        log("WARNING: HTTPS is off; the password and terminal travel in clear text")
+    BACKEND = Privileged() if os.geteuid() == 0 else RemoteBackend(HELPER_SOCK)
     try:
         server = LimitedServer(("0.0.0.0", port), Handler, ssl_ctx=ctx)
     except OSError as exc:
@@ -3219,8 +3917,10 @@ def main(argv=None):
         server.server_close()
         return 1
     log(f"{APP_NAME} v{VERSION} listening on 0.0.0.0:{port} ({'HTTPS' if ctx else 'HTTP'}, LAN only)")
-    if os.geteuid() != 0:
-        log("WARNING: not running as root; the shell and installs need root")
+    if os.geteuid() == 0:
+        log("single-process mode: the web side runs as root. --install sets up the split service.")
+    elif not BACKEND.ping():
+        log("WARNING: the root helper is not answering; sign-in and terminals will fail until it starts")
     sd_notify("READY=1")
     _start_watchdog()
     threading.Thread(target=_maint_loop, daemon=True).start()

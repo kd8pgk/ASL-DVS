@@ -32,7 +32,7 @@ spec.loader.exec_module(tm)
 GOOD_PW = "correct horse"
 
 
-def fake_verify(password):
+def fake_verify(account, password):
     return password == GOOD_PW
 
 
@@ -97,9 +97,10 @@ def raw_exchange(port, payload):
 class TermonBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.patch = mock.patch.object(tm, "_verify_root_password", fake_verify)
+        cls.patch = mock.patch.object(tm, "_verify_account_password", fake_verify)
         cls.patch.start()
         tm._init_names(tm.load_config())
+        tm.BACKEND = tm.Privileged()
         assert tm.ensure_tls_cert()
         cls.server = tm.LimitedServer(("127.0.0.1", 0), tm.Handler, ssl_ctx=tm.make_ssl_context())
         cls.port = cls.server.server_address[1]
@@ -532,6 +533,290 @@ class ConfigTests(unittest.TestCase):
             self.assertFalse(tm._host_ok([v]), v)
         self.assertFalse(tm._host_ok([]))
         self.assertFalse(tm._host_ok(["127.0.0.1", "127.0.0.1"]))
+
+
+def run(*cmd):
+    import subprocess
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def make_user(name, shell="/bin/bash", system=False):
+    if system:
+        r = run("useradd", "--system", "--no-create-home", "--user-group", "--shell", "/usr/sbin/nologin", name)
+    else:
+        r = run("useradd", "-m", "-s", shell, name)
+    if r.returncode != 0:
+        raise unittest.SkipTest(f"cannot create test user: {r.stderr.strip()}")
+
+
+def drop_user(name):
+    run("userdel", "-r", name)
+
+
+class SplitModeTests(TermonBase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.sock = os.path.join(WORK, "helper.sock")
+        cls.priv = tm.Privileged()
+        cls.priv.split = True
+        cls.helper = tm.HelperServer(cls.sock, cls.priv)
+        cls.helper.bind()
+        threading.Thread(target=cls.helper.serve_forever, daemon=True).start()
+        cls.remote = tm.RemoteBackend(cls.sock)
+
+    @classmethod
+    def tearDownClass(cls):
+        tm.BACKEND = tm.Privileged()
+        try:
+            cls.helper.sock.close()
+        except OSError:
+            pass
+        super().tearDownClass()
+
+    def setUp(self):
+        super().setUp()
+        tm.BACKEND = self.remote
+
+    def open_shell(self, c):
+        st, _, t = c.json("POST", "/api/term/ticket", {})
+        st, _, o = c.json("POST", "/api/term/open", {"ticket": t["ticket"], "kind": "shell", "rows": 24, "cols": 80})
+        self.assertEqual(st, 200, o)
+        return o["sid"]
+
+    def test_sign_in_and_a_shell_through_the_helper(self):
+        self.assertEqual(self.c.login()[0], 200)
+        self.assertEqual(self.c.login("wrong")[0], 401)
+        self.c.login()
+        sid = self.open_shell(self.c)
+        sess = tm._ptys[sid]
+        self.c.json("POST", "/api/term/input", {"sid": sid, "data": "echo AB''C\n"})
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            with sess.cond:
+                if b"ABC\r\n" in b"".join(d for _, d in sess.ring):
+                    break
+                sess.cond.wait(0.3)
+        else:
+            self.fail("no output through the helper")
+        self.c.json("POST", "/api/term/close", {"sid": sid})
+        deadline = time.time() + 10
+        while time.time() < deadline and sess.alive:
+            time.sleep(0.2)
+        self.assertFalse(sess.alive)
+        self.assertIsNotNone(sess.exit_code)
+
+    def test_setup_reports_the_account(self):
+        self.c.login()
+        st, _, j = self.c.json("GET", "/api/setup")
+        self.assertEqual(st, 200)
+        self.assertTrue(j["helper"])
+        self.assertEqual(j["account"]["account"], "root")
+        self.assertTrue(j["account"]["split"])
+
+    def test_helper_down_gives_503(self):
+        tm.BACKEND = tm.RemoteBackend(os.path.join(WORK, "nothing.sock"))
+        st, _, j = self.c.json("POST", "/api/login", {"password": GOOD_PW})
+        self.assertEqual(st, 503, j)
+        self.assertIn("helper", j["message"])
+
+    def test_helper_only_signals_its_own_children(self):
+        import subprocess
+        outsider = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        try:
+            self.remote.signal(outsider.pid, "KILL")
+            time.sleep(0.3)
+            self.assertIsNone(outsider.poll())
+        finally:
+            outsider.kill()
+            outsider.wait()
+
+    def test_helper_refuses_unknown_requests_and_programs(self):
+        with self.assertRaises(tm.PrivError):
+            self.remote._call("rm-rf", {})
+        with self.assertRaises(tm.PrivError) as ctx:
+            self.remote.spawn("monitor", "bash", 24, 80)
+        self.assertEqual(ctx.exception.code, 400)
+        with self.assertRaises(tm.PrivError):
+            self.remote.spawn("exec", "x", 24, 80)
+
+    def test_helper_never_takes_a_command_line_from_the_web_side(self):
+        info = self.remote.spawn("shell", None, 24, 80)
+        try:
+            self.assertGreater(info["pid"], 1)
+            deadline = time.time() + 10
+            argv = []
+            while time.time() < deadline:
+                with open(f"/proc/{info['pid']}/cmdline", "rb") as fh:
+                    argv = fh.read().split(b"\0")
+                if argv[0] == b"bash":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(argv[:2], [b"bash", b"-l"])
+        finally:
+            self.remote.signal(info["pid"], "KILL")
+            os.close(info["fd"])
+            self.remote.wait(info["pid"])
+
+    def test_socket_is_not_open_to_everyone(self):
+        self.assertEqual(os.stat(self.sock).st_mode & 0o077, 0)
+
+
+class ShellUserTests(TermonBase):
+    USER = "termontst"
+
+    @classmethod
+    def setUpClass(cls):
+        if os.geteuid() != 0:
+            raise unittest.SkipTest("needs root to create a test user")
+        super().setUpClass()
+        make_user(cls.USER)
+
+    def setUp(self):
+        super().setUp()
+        cfg = tm.load_config()
+        cfg["shell_user"] = ""
+        tm.save_config(cfg)
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            tm.BACKEND.set_shell_user("", GOOD_PW)
+        except tm.PrivError:
+            pass
+        drop_user(cls.USER)
+        super().tearDownClass()
+
+    def test_shell_runs_as_that_user_with_a_tty_and_no_root_group(self):
+        self.c.login()
+        st, _, j = self.c.json("POST", "/api/setup/shell_user", {"user": self.USER, "password": GOOD_PW, "confirm": True})
+        self.assertEqual(st, 200, j)
+        self.assertEqual(j["account"], self.USER)
+        self.assertEqual(self.c.json("GET", "/api/whoami")[2]["logged_in"], False)
+        self.assertEqual(tm.load_config()["shell_user"], self.USER)
+        self.c.login()
+        st, _, t = self.c.json("POST", "/api/term/ticket", {})
+        st, _, o = self.c.json("POST", "/api/term/open", {"ticket": t["ticket"], "kind": "shell"})
+        self.assertEqual(st, 200, o)
+        self.assertIn(self.USER, o["label"])
+        sid = o["sid"]
+        sess = tm._ptys[sid]
+        self.c.json("POST", "/api/term/input", {"sid": sid, "data": "echo U=$(id -u) G=$(id -g) H=$HOME T=$(tty) ; echo DO''NE\n"})
+        deadline = time.time() + 15
+        seen = b""
+        while time.time() < deadline:
+            with sess.cond:
+                seen = b"".join(d for _, d in sess.ring)
+                if b"\r\nDONE" in seen:
+                    break
+                sess.cond.wait(0.3)
+        import pwd
+        pw = pwd.getpwnam(self.USER)
+        text = seen.decode("utf-8", "replace")
+        self.assertIn(f"U={pw.pw_uid} G={pw.pw_gid} H={pw.pw_dir} T=/dev/pts/", text)
+        st = os.stat(f"/proc/{sess.pid}")
+        self.assertEqual(st.st_uid, pw.pw_uid)
+        self.assertEqual(os.getsid(sess.pid), sess.pid)
+
+    def test_monitor_runs_as_that_user(self):
+        import pwd
+        tm.BACKEND.set_shell_user(self.USER, GOOD_PW)
+        info = tm.BACKEND.spawn("monitor", "top", 24, 80) if tm.shutil.which("top") else None
+        if info is None:
+            self.skipTest("top is not installed")
+        try:
+            want = pwd.getpwnam(self.USER).pw_uid
+            deadline = time.time() + 10
+            while time.time() < deadline and os.stat(f"/proc/{info['pid']}").st_uid != want:
+                time.sleep(0.1)
+            self.assertEqual(os.stat(f"/proc/{info['pid']}").st_uid, want)
+        finally:
+            tm.BACKEND.signal(info["pid"], "KILL")
+            os.close(info["fd"])
+            tm.BACKEND.wait(info["pid"])
+
+    def test_wrong_password_is_refused_and_counts_as_a_failure(self):
+        self.c.login()
+        for _ in range(tm.AUTH_MAX_FAILURES):
+            st, _, _ = self.c.json("POST", "/api/setup/shell_user", {"user": self.USER, "password": "no", "confirm": True})
+            self.assertIn(st, (401, 429))
+        st, _, _ = self.c.json("POST", "/api/setup/shell_user", {"user": self.USER, "password": GOOD_PW, "confirm": True})
+        self.assertEqual(st, 429)
+        self.assertEqual(tm.load_config()["shell_user"], "")
+
+    def test_refused_accounts(self):
+        for user, code in (("nobody-here-xyz", 400), ("daemon", 400), ("Bad Name", 400)):
+            with self.assertRaises(tm.PrivError) as ctx:
+                tm.BACKEND.set_shell_user(user, GOOD_PW)
+            self.assertEqual(ctx.exception.code, code, user)
+        self.assertEqual(tm.load_config()["shell_user"], "")
+
+    def test_root_can_be_chosen_again(self):
+        tm.BACKEND.set_shell_user(self.USER, GOOD_PW)
+        res = tm.BACKEND.set_shell_user("root", GOOD_PW)
+        self.assertEqual(res["account"], "root")
+        self.assertEqual(tm.load_config()["shell_user"], "")
+
+    def test_sudo_state_is_one_of_the_known_values(self):
+        self.assertIn(tm._sudo_state(self.USER), ("none", "password", "nopasswd", "unknown"))
+        self.assertEqual(tm._sudo_state("root"), "root")
+
+    def test_web_user_cannot_also_be_the_shell_account(self):
+        tm.BACKEND.set_shell_user(self.USER, GOOD_PW)
+        with self.assertRaises(tm.PrivError):
+            tm.BACKEND.set_web_user(self.USER)
+        with self.assertRaises(tm.PrivError):
+            tm.BACKEND.set_web_user("root")
+
+
+class WebUserTests(TermonBase):
+    NAME = "termonwebtst"
+
+    @classmethod
+    def setUpClass(cls):
+        if os.geteuid() != 0:
+            raise unittest.SkipTest("needs root to create a test user")
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        drop_user(cls.NAME)
+
+    def test_web_user_is_created_as_a_system_account_and_the_unit_follows(self):
+        import pwd
+        unit = os.path.join(WORK, "termon.service")
+        with open(unit, "w") as f:
+            f.write("old")
+        with mock.patch.object(tm, "SYSTEMD_SERVICE_PATH", unit), \
+                mock.patch.object(tm, "_systemctl", lambda *a: mock.Mock(returncode=0, stdout="", stderr="")), \
+                mock.patch.object(tm, "_restart_later", lambda: None):
+            self.assertTrue(tm.BACKEND.set_web_user(self.NAME))
+        pw = pwd.getpwnam(self.NAME)
+        self.assertTrue(pw.pw_shell.endswith(("nologin", "false")))
+        self.assertGreater(pw.pw_uid, 0)
+        with open(unit) as f:
+            body = f.read()
+        self.assertIn(f"User={self.NAME}\n", body)
+        self.assertIn("NoNewPrivileges=yes", body)
+        self.assertIn("Requires=termon-helper.service", body)
+        self.assertEqual(tm.load_config()["web_user"], self.NAME)
+        self.assertEqual(os.stat(tm.TLS_KEY).st_uid, pw.pw_uid)
+        self.assertEqual(os.stat(tm.TLS_KEY).st_mode & 0o777, 0o600)
+
+    def test_login_accounts_are_not_accepted_as_the_web_user(self):
+        with self.assertRaises(tm.PrivError):
+            tm.BACKEND.set_web_user("bin") if False else tm.BACKEND.set_web_user("Bad Name")
+
+    def test_unit_files_are_hardened(self):
+        web = tm._web_unit_text("termon")
+        for line in ("User=termon", "NoNewPrivileges=yes", "CapabilityBoundingSet=", "ProtectSystem=strict",
+                     "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "Type=notify"):
+            self.assertIn(line + ("\n" if not line.endswith("=") else ""), web + "\n")
+        helper = tm._helper_unit_text()
+        self.assertIn("--helper", helper)
+        self.assertIn("KillMode=control-group", helper)
+        self.assertNotIn("User=", helper)
 
 
 def tearDownModule():
