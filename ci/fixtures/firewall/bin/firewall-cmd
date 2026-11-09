@@ -1,0 +1,24 @@
+#!/bin/sh
+D="${STUB_DIR:?STUB_DIR not set}/firewalld"
+mkdir -p "$D"
+R="$D/ports"
+touch "$R"
+zone=public
+perm=0
+for a in "$@"; do
+  case "$a" in
+    --zone=*) zone="${a#--zone=}" ;;
+    --permanent) perm=1 ;;
+  esac
+done
+for a in "$@"; do
+  case "$a" in
+    --state) [ -f "$D/stopped" ] && { echo "not running"; exit 252; }; echo running; exit 0 ;;
+    --get-default-zone) echo public; exit 0 ;;
+    --get-target) [ -f "$D/accept" ] && echo ACCEPT || echo default; exit 0 ;;
+    --query-port=*) grep -qx "${a#--query-port=}" "$R" && echo yes || echo no; exit 0 ;;
+    --add-port=*) [ -f "$D/refuse" ] && exit 1; grep -qx "${a#--add-port=}" "$R" || echo "${a#--add-port=}" >> "$R"; echo success; exit 0 ;;
+    --remove-port=*) grep -vx "${a#--remove-port=}" "$R" > "$R.t"; mv "$R.t" "$R"; echo success; exit 0 ;;
+  esac
+done
+exit 0

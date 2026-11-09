@@ -1115,6 +1115,134 @@ class LeftoverTests(unittest.TestCase):
         self.assertFalse(os.path.exists(f"/proc/{info['pid']}"))
 
 
+FW_BIN = os.path.join(ROOT, "ci", "fixtures", "firewall", "bin")
+
+
+class FirewallTests(unittest.TestCase):
+    def setUp(self):
+        self.stub = tempfile.mkdtemp(prefix="fw-", dir=WORK)
+        only = tempfile.mkdtemp(prefix="path-", dir=WORK)
+        for name in ("sh", "cat", "grep", "mv", "mkdir", "touch", "echo"):
+            real = shutil.which(name)
+            if real:
+                os.symlink(real, os.path.join(only, name))
+        self.only = only
+        self.bin = tempfile.mkdtemp(prefix="bin-", dir=WORK)
+        self.env = mock.patch.dict(os.environ, {"STUB_DIR": self.stub, "PATH": self.bin + os.pathsep + only})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def use(self, *names):
+        for name in names:
+            shutil.copy(os.path.join(FW_BIN, name), os.path.join(self.bin, name))
+
+    def rules(self, kind):
+        path = os.path.join(self.stub, kind, "rules" if kind == "ufw" else "ports")
+        if not os.path.exists(path):
+            return []
+        with open(path) as fh:
+            return [x.strip() for x in fh if x.strip()]
+
+    def flag(self, kind, name):
+        os.makedirs(os.path.join(self.stub, kind), exist_ok=True)
+        with open(os.path.join(self.stub, kind, name), "w") as fh:
+            fh.write("1")
+
+    def test_ufw_port_is_opened_once_and_closed(self):
+        self.use("ufw")
+        self.assertEqual(tm.firewall_backend(), "ufw")
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual(mark, "+", msg)
+        self.assertEqual(self.rules("ufw"), ["7878/tcp"])
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual((mark, self.rules("ufw")), ("=", ["7878/tcp"]))
+        self.assertIn("already open", msg)
+        mark, msg = tm.close_firewall_port(7878)
+        self.assertEqual((mark, self.rules("ufw")), ("-", []))
+        mark, msg = tm.close_firewall_port(7878)
+        self.assertEqual(mark, "=")
+        self.assertIn("was not open", msg)
+
+    def test_ufw_other_rules_are_left_alone(self):
+        self.use("ufw")
+        tm.open_firewall_port(8993)
+        tm.open_firewall_port(7878)
+        tm.close_firewall_port(7878)
+        self.assertEqual(self.rules("ufw"), ["8993/tcp"])
+
+    def test_ufw_with_an_allow_default_needs_no_rule(self):
+        self.use("ufw")
+        self.flag("ufw", "default_allow")
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual((mark, self.rules("ufw")), ("=", []))
+
+    def test_ufw_that_refuses_is_reported_not_raised(self):
+        self.use("ufw")
+        self.flag("ufw", "refuse")
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual(mark, "!")
+        self.assertIn("could not open", msg)
+
+    def test_inactive_ufw_means_no_firewall(self):
+        self.use("ufw")
+        self.flag("ufw", "inactive")
+        self.assertEqual(tm.firewall_backend(), "none")
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual(mark, "=")
+        self.assertIn("no active firewall", msg)
+        self.assertEqual(self.rules("ufw"), [])
+
+    def test_firewalld_port_is_opened_now_and_permanently_then_closed(self):
+        self.use("firewall-cmd")
+        self.assertEqual(tm.firewall_backend(), "firewalld")
+        mark, msg = tm.open_firewall_port(7878)
+        self.assertEqual((mark, self.rules("firewalld")), ("+", ["7878/tcp"]))
+        self.assertIn("after a reboot", msg)
+        mark, _ = tm.open_firewall_port(7878)
+        self.assertEqual(mark, "=")
+        mark, msg = tm.close_firewall_port(7878)
+        self.assertEqual((mark, self.rules("firewalld")), ("-", []))
+        self.assertEqual(tm.close_firewall_port(7878)[0], "=")
+
+    def test_firewalld_that_refuses_is_reported(self):
+        self.use("firewall-cmd")
+        self.flag("firewalld", "refuse")
+        self.assertEqual(tm.open_firewall_port(7878)[0], "!")
+
+    def test_firewalld_wins_when_both_are_there(self):
+        self.use("ufw", "firewall-cmd")
+        self.assertEqual(tm.firewall_backend(), "firewalld")
+
+    def test_no_tools_at_all_is_not_an_error(self):
+        with mock.patch.dict(os.environ, {"PATH": self.only}):
+            self.assertEqual(tm.firewall_backend(), "none")
+            self.assertEqual(tm.open_firewall_port(7878)[0], "=")
+            self.assertEqual(tm.close_firewall_port(7878)[0], "=")
+
+    def test_changing_the_port_opens_the_new_one_and_closes_the_old(self):
+        self.use("ufw")
+        cfg = tm.load_config()
+        old = cfg["port"]
+        tm.open_firewall_port(old)
+        priv = tm.Privileged()
+        new = 17999 if old != 17999 else 17998
+        with mock.patch.object(tm, "_restart_later", lambda: None), mock.patch.object(tm, "_port_free", lambda p: True), \
+                mock.patch.object(tm, "audit"):
+            try:
+                self.assertTrue(priv.set_port(new, "test"))
+                self.assertEqual(self.rules("ufw"), [f"{new}/tcp"])
+            finally:
+                cfg["port"] = old
+                tm.save_config(cfg)
+
+    def test_the_same_port_touches_nothing(self):
+        self.use("ufw")
+        priv = tm.Privileged()
+        with mock.patch.object(tm, "_restart_later", lambda: None):
+            self.assertFalse(priv.set_port(tm.load_config()["port"], "test"))
+        self.assertEqual(self.rules("ufw"), [])
+
+
 def tearDownModule():
     shutil.rmtree(WORK, ignore_errors=True)
 

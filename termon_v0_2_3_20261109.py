@@ -35,7 +35,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -799,6 +799,81 @@ def _run_install(jid, pkg):
     audit(f"install: apt {pkg} {'finished' if ok else 'failed'} (exit {code})")
 
 
+def firewall_backend():
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "none"
+
+
+def _fw_run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def open_firewall_port(port, proto="tcp"):
+    spec = f"{port}/{proto}"
+    backend = firewall_backend()
+    try:
+        if backend == "firewalld":
+            zone = _fw_run(["firewall-cmd", "--get-default-zone"])
+            check = ["firewall-cmd", f"--zone={zone}", f"--query-port={spec}"]
+            if _fw_run(["firewall-cmd", f"--zone={zone}", "--get-target"]) == "ACCEPT" or _fw_run(check) == "yes":
+                return "=", f"{spec} is already open in firewalld zone {zone}"
+            _fw_run(["firewall-cmd", f"--zone={zone}", f"--add-port={spec}"])
+            _fw_run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={spec}"])
+            if _fw_run(check) == "yes":
+                return "+", f"opened {spec} in firewalld zone {zone} (now and after a reboot)"
+            return "!", f"could not open {spec} in firewalld zone {zone}"
+        if backend == "ufw":
+            allow = rf"^{port}/{proto}\s+ALLOW"
+            status = _fw_run(["ufw", "status", "verbose"])
+            if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+                return "=", f"{spec} is already open in ufw"
+            _fw_run(["ufw", "allow", spec])
+            if re.search(allow, _fw_run(["ufw", "status", "verbose"]), re.M):
+                return "+", f"opened {spec} in ufw"
+            return "!", f"could not open {spec} in ufw"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "!", f"could not open {spec} in {backend}: {exc}"
+    return "=", f"no active firewall (ufw or firewalld), so {spec} is not blocked"
+
+
+def close_firewall_port(port, proto="tcp"):
+    spec = f"{port}/{proto}"
+    backend = firewall_backend()
+    try:
+        if backend == "firewalld":
+            zone = _fw_run(["firewall-cmd", "--get-default-zone"])
+            check = ["firewall-cmd", f"--zone={zone}", f"--query-port={spec}"]
+            was_open = _fw_run(check) == "yes"
+            _fw_run(["firewall-cmd", f"--zone={zone}", f"--remove-port={spec}"])
+            _fw_run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--remove-port={spec}"])
+            if _fw_run(check) == "yes":
+                return "!", f"could not close {spec} in firewalld zone {zone}"
+            return ("-", f"closed {spec} in firewalld zone {zone}") if was_open else \
+                ("=", f"{spec} was not open in firewalld zone {zone}")
+        if backend == "ufw":
+            allow = rf"^{port}/{proto}\s+ALLOW"
+            if not re.search(allow, _fw_run(["ufw", "status", "verbose"]), re.M):
+                return "=", f"{spec} was not open in ufw"
+            _fw_run(["ufw", "--force", "delete", "allow", spec])
+            status = _fw_run(["ufw", "status", "verbose"])
+            if re.search(allow, status, re.M):
+                return "!", f"could not close {spec} in ufw"
+            if "Default: allow (incoming)" in status:
+                return "!", f"closed {spec} in ufw, but ufw's default allows incoming traffic, so it stays reachable"
+            return "-", f"closed {spec} in ufw"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "!", f"could not close {spec} in {backend}: {exc}"
+    return "=", f"no active firewall (ufw or firewalld), so {spec} was not blocked"
+
+
 def _port_free(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -1137,6 +1212,12 @@ class Privileged:
                 except OSError as exc:
                     raise PrivError(500, f"Could not save the config: {exc}")
                 audit(f"port: changed from {cur} to {port} (requested from {who})")
+                for action, number in ((open_firewall_port, port), (close_firewall_port, cur)):
+                    mark, msg = action(number)
+                    if mark == "=":
+                        log(f"firewall: {msg}")
+                    else:
+                        audit(f"firewall: {msg}")
         restarting = port != cur
         if restarting:
             threading.Thread(target=_restart_later, daemon=True).start()
@@ -3392,6 +3473,8 @@ def install_service():
         r = _systemctl("enable", "--now", unit)
         if r.returncode != 0:
             sys.exit((r.stderr or r.stdout).strip() or f"systemctl enable {unit} failed")
+    mark, fw_msg = open_firewall_port(cfg["port"])
+    print(f"  Firewall: {fw_msg}" + ("  (open it by hand, or the page will not answer from the LAN)" if mark == "!" else ""))
     print(f"{APP_NAME} v{VERSION} installed and started.\n"
           f"  The web page runs as '{cfg['web_user']}'; the root helper starts the terminals.\n"
           f"  The shell account is {cfg['shell_user'] or 'root'} (change it under Setup).\n"
@@ -3403,6 +3486,8 @@ def uninstall_service():
     _require_root("--uninstall")
     _refuse_inside_termon("--uninstall")
     _remove_existing()
+    mark, fw_msg = close_firewall_port(load_config()["port"])
+    print(f"Firewall: {fw_msg}")
     print(f"{APP_NAME} removed. Config kept at {CONFIG_PATH}. The '{load_config()['web_user']}' user is kept.")
 
 

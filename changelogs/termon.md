@@ -1,6 +1,18 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_2_20261109.py`. Newest entries first.
+Current file: `termon_v0_2_3_20261109.py`. Newest entries first.
+
+## 0.2.3 (2026-11-09)
+
+Fix: the page did not answer from the LAN on a node with an active firewall. Node Talker, Node Recorder and Pibrary open their own port when they install; Terminal Monitor did not, so ufw or firewalld refused the connection ("Unable to connect" in the browser) while instmon's Go button, which tests from the node itself, stayed enabled. This is a release: Python behaviour changed.
+
+- **`--install` opens the port.** After the services start it opens the configured port (7878 unless changed) in the active firewall and prints what it did. ufw (rule `PORT/tcp`) and firewalld (the default zone, now and permanently) are supported; firewalld wins if both are there. With no active firewall, or a ufw whose default already allows incoming traffic, it changes nothing. If the firewall refuses, the install still finishes and says to open the port by hand.
+- **`--uninstall` closes it.** Only the termon port rule is removed; other rules are left alone. It says so when the port was not open.
+- **Changing the port in Setup moves the rule.** The new port is opened first, then the old one is closed, so the page is reachable on the new address as soon as it restarts. The same-port case touches nothing.
+- Existing nodes: run `sudo python3 termon_v0_2_3_20261109.py --install` once, or open the port by hand (`sudo ufw allow 7878/tcp`, or `sudo firewall-cmd --permanent --add-port=7878/tcp && sudo firewall-cmd --reload`).
+- Same behaviour and the same functions as Node Talker's firewall code; the rule opens the port to any source, as theirs does. Terminal Monitor itself still refuses anything that is not on the LAN.
+
+Tests: ufw and firewalld stubs that keep real state (`ci/fixtures/firewall/bin`): open once, already open, other rules untouched, default-allow, refusal reported not raised, inactive ufw, firewalld, both installed, no tools, port change and same port (`ci/test_termon.py`); install and uninstall with the ufw stub checking the rule and the printed line (`ci/test_install.py`).
 
 ## 0.2.2 (2026-11-09)
 
