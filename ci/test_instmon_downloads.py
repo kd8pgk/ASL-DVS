@@ -151,17 +151,17 @@ class Resume(unittest.TestCase):
 
 class Head(unittest.TestCase):
     def test_header_peek_asks_for_a_range_without_gzip(self):
-        net = Net(Resp(SOURCE[:16384], code=206, headers={"Content-Length": "16384"}))
-        data = fetch(net, head=16384)
-        self.assertEqual(data, SOURCE[:16384])
-        self.assertEqual(net.requests[0]["range"], "bytes=0-16383")
+        net = Net(Resp(SOURCE[:im.GITHUB_HEAD_BYTES], code=206, headers={"Content-Length": "im.GITHUB_HEAD_BYTES"}))
+        data = fetch(net, head=im.GITHUB_HEAD_BYTES)
+        self.assertEqual(data, SOURCE[:im.GITHUB_HEAD_BYTES])
+        self.assertEqual(net.requests[0]["range"], "bytes=0-4095")
         self.assertEqual(net.requests[0]["accept-encoding"], "identity")
 
     def test_peek_stops_early_when_range_is_ignored(self):
         big = SOURCE * 40
         resp = Resp(big, headers={"Content-Length": str(len(big))})
-        data = fetch(Net(resp), head=16384)
-        self.assertEqual(data, big[:16384])
+        data = fetch(Net(resp), head=im.GITHUB_HEAD_BYTES)
+        self.assertEqual(data, big[:im.GITHUB_HEAD_BYTES])
         self.assertLess(resp.pos, 40000)
 
     def test_version_read_uses_the_peek(self):
@@ -183,6 +183,106 @@ class Head(unittest.TestCase):
             whole = im._scan_header_text(raw.decode("utf-8"))[0]
             part = im._scan_header_text(raw[:im.GITHUB_HEAD_BYTES].decode("utf-8", "ignore"))[0]
             self.assertEqual(whole, part, os.path.basename(path))
+
+
+class Stalls(unittest.TestCase):
+    def cand(self, name, data):
+        return {"name": name, "blob": im._git_blob_id(data), "category": "termon", "glob": "termon_v*.py", "size": len(data)}
+
+    def test_version_far_down_the_file_escalates(self):
+        filler = b"# pad\n" * 1500
+        data = b"#!/usr/bin/env python3\n" + filler + b'VERSION = "4.5.6"\n' + b"x = 1\n" * 100
+        calls = []
+
+        def impl(url, limit, head=None):
+            calls.append(head)
+            return data[:head] if head else data
+
+        with mock.patch.object(im, "_gh_fetch_impl", impl), mock.patch.dict(im._gh_version_cache, clear=True):
+            self.assertEqual(im._gh_version_of(self.cand("t.py", data), []), "4.5.6")
+        self.assertEqual(calls, [4096, 65536][:len(calls)])
+        self.assertGreater(len(calls), 1)
+
+    def test_timeouts_grow_with_each_try(self):
+        seen = []
+
+        def once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc=None):
+            seen.append(enc["timeout"])
+            raise im.socket.timeout()
+
+        with mock.patch.object(im, "_gh_fetch_once", once), mock.patch.object(im.time, "sleep", lambda s: None):
+            with self.assertRaises(im.GhRejected) as cm:
+                im._gh_fetch_https(URL, 1000, head=100)
+        self.assertEqual(seen, [30, 60, 90])
+        self.assertIn("90s", str(cm.exception))
+
+    def collect(self, outcomes):
+        cands = [{"name": f"t{i}.py", "blob": str(i) * 40, "category": "termon", "glob": "termon_v*.py", "size": 5}
+                 for i in range(len(outcomes))]
+
+        def version_of(cand, local):
+            out = outcomes[int(cand["blob"][0])]
+            if isinstance(out, Exception):
+                raise out
+            return out
+
+        with mock.patch.object(im, "_gh_fetch_impl", lambda url, limit, head=None: b"[]"), \
+                mock.patch.object(im, "_gh_parse_listing", lambda raw: (cands, 0)), \
+                mock.patch.object(im, "channel_get", lambda: "testing"), \
+                mock.patch.object(im, "_gh_version_of", version_of), \
+                mock.patch.object(im, "_gh_version_known", lambda c, l: True), \
+                mock.patch.object(im, "_gh_local_files", lambda cat, g: []), \
+                mock.patch.object(im, "_gh_compare", lambda e: e), \
+                mock.patch.object(im, "log_event", lambda m, level="info": None):
+            return im._gh_collect_full()
+
+    def test_two_stalled_files_are_skipped_not_fatal(self):
+        stall = im.GhRejected("GitHub did not answer within 90s (tried 3 times)")
+        entries, skipped, listed = self.collect(["1.0.0", stall, "1.0.1", stall, "1.0.2"])
+        self.assertEqual(skipped, 2)
+        self.assertEqual(len(listed), 5)
+
+    def test_three_stalled_files_in_a_row_stop_the_check(self):
+        stall = im.GhRejected("GitHub did not answer within 90s (tried 3 times)")
+        with self.assertRaises(im.GhRejected):
+            self.collect(["1.0.0", stall, stall, stall, "1.0.2"])
+
+    def test_a_success_resets_the_stall_count(self):
+        stall = im.GhRejected("GitHub stopped sending t.py -- nothing arrived for 90s (tried 3 times)")
+        entries, skipped, listed = self.collect([stall, stall, "1.0.0", stall, stall, "1.0.1"])
+        self.assertEqual(skipped, 4)
+
+    def test_offline_stops_at_once(self):
+        gone = im.GhRejected("cannot reach GitHub -- is this node online? (x) (tried 3 times)")
+        with self.assertRaises(im.GhRejected):
+            self.collect([gone, "1.0.0"])
+
+    def test_check_timer_waits_while_files_keep_arriving(self):
+        started = []
+
+        class T:
+            def __init__(self, delay, fn, args=()):
+                started.append(delay)
+                self.daemon = False
+
+            def start(self):
+                pass
+
+        now = 1000.0
+        with im._gh_lock:
+            im._gh_state.update(phase="checking", gen=77, started_at=now - 500, progress_at=now - 20, entries=[])
+        with mock.patch.object(im.threading, "Timer", T), mock.patch.object(im.time, "monotonic", lambda: now):
+            im._gh_check_timeout(77)
+        self.assertEqual(im._gh_state["phase"], "checking")
+        self.assertEqual(len(started), 1)
+        with im._gh_lock:
+            im._gh_state.update(progress_at=now - 400)
+        with mock.patch.object(im.threading, "Timer", T), mock.patch.object(im.time, "monotonic", lambda: now), \
+                mock.patch.object(im, "_gh_event", lambda m, l: None):
+            im._gh_check_timeout(77)
+        self.assertEqual(im._gh_state["phase"], "error")
+        with im._gh_lock:
+            im._gh_state.update(phase="idle", error=None)
 
 
 class Slow(unittest.TestCase):
