@@ -520,7 +520,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `noderecorder_v0_12_0_20261108.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
-| `termon_v0_2_0_20261109.py` | common (stands alone for now) |
+| `termon_v0_2_1_20261109.py` | common (stands alone for now) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |

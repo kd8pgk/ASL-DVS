@@ -819,6 +819,148 @@ class WebUserTests(TermonBase):
         self.assertNotIn("User=", helper)
 
 
+class SessionLimitTests(TermonBase):
+    def tearDown(self):
+        tm._BIND_IP = False
+
+    def test_a_session_ends_at_the_absolute_limit_even_while_in_use(self):
+        with mock.patch.object(tm, "SESSION_MAX_SEC", 1), mock.patch.object(tm, "SESSION_TTL_SEC", 100):
+            tok = tm._issue_session("127.0.0.1")
+            deadline = time.time() + 0.8
+            while time.time() < deadline:
+                self.assertTrue(tm._session_valid(tok))
+                time.sleep(0.2)
+            time.sleep(0.5)
+            self.assertFalse(tm._session_valid(tok))
+            self.assertNotIn(tm._digest(tok), tm._sessions)
+
+    def test_the_idle_limit_still_applies(self):
+        with mock.patch.object(tm, "SESSION_TTL_SEC", 1):
+            tok = tm._issue_session("127.0.0.1")
+            self.assertTrue(tm._session_valid(tok))
+            time.sleep(1.3)
+            self.assertFalse(tm._session_valid(tok))
+
+    def test_watching_the_stream_does_not_extend_the_idle_limit(self):
+        with mock.patch.object(tm, "SESSION_TTL_SEC", 1):
+            tok = tm._issue_session("127.0.0.1")
+            for _ in range(5):
+                time.sleep(0.3)
+                tm._session_valid(tok, touch=False)
+            self.assertFalse(tm._session_valid(tok, touch=False))
+
+    def test_sign_out_everywhere_ends_every_login_and_terminal(self):
+        a, b = Client(self.port), Client(self.port)
+        a.login()
+        b.login()
+        st, _, t = b.json("POST", "/api/term/ticket", {})
+        st, _, o = b.json("POST", "/api/term/open", {"ticket": t["ticket"], "kind": "shell"})
+        sess = tm._ptys[o["sid"]]
+        st, h, _ = a.json("POST", "/api/logout_all", {})
+        self.assertEqual(st, 200)
+        self.assertIn("Max-Age=0", h["Set-Cookie"])
+        self.assertFalse(a.json("GET", "/api/whoami")[2]["logged_in"])
+        self.assertFalse(b.json("GET", "/api/whoami")[2]["logged_in"])
+        deadline = time.time() + 10
+        while time.time() < deadline and sess.alive:
+            time.sleep(0.2)
+        self.assertFalse(sess.alive)
+
+    def test_binding_is_off_by_default_and_ends_a_session_used_from_elsewhere_when_on(self):
+        self.assertFalse(tm._BIND_IP)
+        tok = tm._issue_session("10.0.0.1")
+        self.assertTrue(tm._session_valid(tok, ip="10.0.0.2"))
+        tm._BIND_IP = True
+        self.assertTrue(tm._session_valid(tok, ip="10.0.0.1"))
+        self.assertFalse(tm._session_valid(tok, ip="10.0.0.2"))
+        self.assertFalse(tm._session_valid(tok, ip="10.0.0.1"))
+
+    def test_binding_uses_the_ipv6_prefix_and_ipv4_mapping(self):
+        tm._BIND_IP = True
+        tok = tm._issue_session("2001:db8:5:6::10")
+        self.assertTrue(tm._session_valid(tok, ip="2001:db8:5:6:aaaa:bbbb:cccc:dddd"))
+        tok2 = tm._issue_session("192.168.1.7")
+        self.assertTrue(tm._session_valid(tok2, ip="::ffff:192.168.1.7"))
+        tok3 = tm._issue_session("2001:db8:5:6::10")
+        self.assertFalse(tm._session_valid(tok3, ip="2001:db8:5:7::10"))
+
+    def test_switch_in_setup_changes_behaviour_and_is_saved(self):
+        self.c.login()
+        st, _, j = self.c.json("POST", "/api/setup/options", {"bind_session_ip": True, "confirm": True})
+        self.assertEqual(st, 200, j)
+        self.assertTrue(tm._BIND_IP)
+        self.assertTrue(tm.load_config()["bind_session_ip"])
+        self.assertTrue(self.c.json("GET", "/api/setup")[2]["options"]["bind_session_ip"])
+        with tm._sess_lock:
+            for rec in tm._sessions.values():
+                rec[2] = "203.0.113.50"
+        self.assertEqual(self.c.json("GET", "/api/setup")[0], 401)
+        self.c.login()
+        st, _, j = self.c.json("POST", "/api/setup/options", {"bind_session_ip": False, "confirm": True})
+        self.assertEqual(st, 200)
+        self.assertFalse(tm._BIND_IP)
+        self.assertFalse(tm.load_config()["bind_session_ip"])
+
+    def test_option_input_is_checked(self):
+        self.c.login()
+        for body in ({"bind_session_ip": "yes", "confirm": True}, {"bind_session_ip": True}, {"confirm": True}):
+            self.assertEqual(self.c.json("POST", "/api/setup/options", body)[0], 400, body)
+        with self.assertRaises(tm.PrivError):
+            tm.BACKEND.set_option("shell_user", "root")
+
+
+class CertificateTests(TermonBase):
+    def fingerprint_with_openssl(self):
+        r = run("openssl", "x509", "-in", tm.TLS_CERT, "-noout", "-fingerprint", "-sha256")
+        return r.stdout.strip().split("=", 1)[1]
+
+    def test_fingerprint_matches_openssl_and_setup(self):
+        self.assertEqual(tm._cert_fingerprint(), self.fingerprint_with_openssl())
+        self.c.login()
+        st, _, j = self.c.json("GET", "/api/setup")
+        self.assertEqual(j["cert"], {"https": True, "sha256": tm._cert_fingerprint()})
+
+    def test_certificate_download_needs_a_login(self):
+        self.assertEqual(self.c.request("GET", "/api/cert.pem")[0], 401)
+        self.c.login()
+        st, h, body = self.c.request("GET", "/api/cert.pem")
+        self.assertEqual(st, 200)
+        self.assertIn("attachment", h["Content-Disposition"])
+        self.assertTrue(body.startswith(b"-----BEGIN CERTIFICATE-----"))
+        self.assertNotIn(b"PRIVATE KEY", body)
+        with open(tm.TLS_CERT, "rb") as fh:
+            self.assertEqual(body, fh.read())
+
+    def test_new_certificate_replaces_the_old_one_and_keeps_the_key_private(self):
+        old = tm._cert_fingerprint()
+        self.c.login()
+        with mock.patch.object(tm, "_restart_later", lambda: None):
+            st, _, j = self.c.json("POST", "/api/setup/cert", {"confirm": True})
+        self.assertEqual(st, 200, j)
+        self.assertNotEqual(j["sha256"], old)
+        self.assertEqual(j["sha256"], tm._cert_fingerprint())
+        self.assertEqual(os.stat(tm.TLS_KEY).st_mode & 0o777, 0o600)
+        self.assertFalse(os.path.exists(tm.TLS_KEY + ".old"))
+        self.assertFalse(os.path.exists(tm.TLS_CERT + ".old"))
+
+    def test_a_failed_replacement_keeps_the_old_certificate(self):
+        old = tm._cert_fingerprint()
+        with mock.patch.object(tm, "ensure_tls_cert", lambda: False):
+            with self.assertRaises(tm.PrivError) as ctx:
+                tm.BACKEND.regen_cert()
+        self.assertEqual(ctx.exception.code, 500)
+        self.assertEqual(tm._cert_fingerprint(), old)
+        self.assertTrue(os.path.exists(tm.TLS_KEY))
+
+    def test_regeneration_needs_confirmation(self):
+        self.c.login()
+        self.assertEqual(self.c.json("POST", "/api/setup/cert", {})[0], 400)
+
+    def test_new_routes_need_a_login(self):
+        for path in ("/api/logout_all", "/api/setup/options", "/api/setup/cert"):
+            self.assertEqual(self.c.json("POST", path, {"confirm": True})[0], 401, path)
+
+
 def tearDownModule():
     shutil.rmtree(WORK, ignore_errors=True)
 

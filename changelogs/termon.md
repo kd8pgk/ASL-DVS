@@ -1,6 +1,20 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_0_20261109.py`. Newest entries first.
+Current file: `termon_v0_2_1_20261109.py`. Newest entries first.
+
+## 0.2.1 (2026-11-09)
+
+Release B of the hardening plan: certificate trust and session limits. Python and page JavaScript behaviour changed, so this is a release.
+
+- **Certificate fingerprint.** The Setup card shows the certificate's SHA-256 fingerprint. It is also written to the journal at start and printed by `--install`, so you can compare it with what the browser shows the first time you accept it. It is not on the login page on purpose: a man in the middle would show their own.
+- **Download and replace.** A Download link (`/api/cert.pem`, needs a sign-in, certificate only, never the key) for installing it on a phone. A "New certificate" button asks the root helper to make a new one; the old one is kept until the new one exists, the key stays 0600 and owned by the web user, and the page restarts.
+- **Absolute session limit.** A sign-in now also ends 12 hours after it started, whatever its activity. The 2-hour idle limit stays. The Setup card says both.
+- **Sign out everywhere.** A button in Setup ends every sign-in, in every browser, and closes every terminal.
+- **Tie a sign-in to its address.** An option in Setup, off by default. When on, a sign-in used from another address (IPv6 compared by /64, IPv4-mapped addresses as IPv4) is ended at once and logged. Switching networks on a phone then means signing in again, which is why it is off by default. Saved as `bind_session_ip` in the config.
+- **`style-src 'unsafe-inline'` stays.** Tried without it in Chromium: xterm.js and the page's own styles produced dozens of violations. Script execution (`script-src`) is the part that is locked to a nonce.
+- Compatible with 0.2.0 configs and helpers; without the new helper requests, the new Setup buttons answer "Unknown request" and the rest works.
+
+Tests: absolute and idle limits, sign out everywhere, address binding (IPv4, IPv6 prefix, mapped addresses, switch saved and applied), fingerprint against `openssl`, download, replacement and a failed replacement keeping the old certificate (`ci/test_termon.py`).
 
 ## 0.2.0 (2026-11-09)
 
