@@ -40,7 +40,7 @@ SERVERS = {
                 "health_expect": b'"version"', "error_keys": ("error",)},
     "44helper": {"file": "44helper_v0_1_19_20261108.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
-    "termon": {"file": "termon_v0_2_0_20261109.py", "port": 7878, "scheme": "https", "health": "/api/health",
+    "termon": {"file": "termon_v0_2_2_20261109.py", "port": 7878, "scheme": "https", "health": "/api/health",
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},

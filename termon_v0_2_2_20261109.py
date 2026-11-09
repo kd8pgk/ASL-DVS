@@ -21,6 +21,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import ssl
 import struct
 import syslog
@@ -34,7 +35,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.0"
+VERSION = "0.2.2"
 DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -68,6 +69,7 @@ TERM_INPUT_MAX = 16 * 1024
 TICKET_TTL_SEC = 60
 SESSION_COOKIE = "termon_session"
 SESSION_TTL_SEC = 2 * 3600
+SESSION_MAX_SEC = 12 * 3600
 AUTH_MAX_FAILURES = 5
 AUTH_LOCKOUT_BASE_SEC = 5
 AUTH_LOCKOUT_MAX_SEC = 900
@@ -195,8 +197,10 @@ def load_config():
     web_user = str(sec.get("web_user", DEFAULT_WEB_USER)).strip()
     if web_user == "root" or not USER_RE.match(web_user):
         web_user = DEFAULT_WEB_USER
+    bind_ip = str(sec.get("bind_session_ip", "false")).strip().lower() in ("1", "true", "yes", "on")
     return {"port": port, "monitor_last": last, "https": https, "shell_user": shell_user,
-            "web_user": web_user, "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
+            "web_user": web_user, "bind_session_ip": bind_ip,
+            "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
 
 
 def save_config(cfg):
@@ -205,6 +209,7 @@ def save_config(cfg):
                           "https": "true" if cfg.get("https", True) else "false",
                           "shell_user": cfg.get("shell_user", ""),
                           "web_user": cfg.get("web_user", DEFAULT_WEB_USER),
+                          "bind_session_ip": "true" if cfg.get("bind_session_ip") else "false",
                           "allowed_hosts": ",".join(cfg.get("allowed_hosts", []))}
     buf = io.StringIO()
     cp.write(buf)
@@ -403,31 +408,47 @@ def _digest(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _issue_session():
+_BIND_IP = False
+
+
+def _session_dead(rec, now):
+    return rec[0] < now or rec[1] < now
+
+
+def _issue_session(ip=""):
     token = secrets.token_urlsafe(32)
     now = time.time()
     with _sess_lock:
-        for k in [k for k, v in _sessions.items() if v < now]:
+        for k in [k for k, v in _sessions.items() if _session_dead(v, now)]:
             del _sessions[k]
-        _sessions[_digest(token)] = now + SESSION_TTL_SEC
+        _sessions[_digest(token)] = [now + SESSION_TTL_SEC, now + SESSION_MAX_SEC, _lock_key(ip) if ip else ""]
     return token
 
 
-def _session_valid(token, touch=True):
+def _session_valid(token, touch=True, ip=None):
     if not token:
         return False
     now = time.time()
     d = _digest(token)
     with _sess_lock:
-        exp = _sessions.get(d)
-        if exp is None:
+        rec = _sessions.get(d)
+        if rec is None:
             return False
-        if exp < now:
+        if _session_dead(rec, now):
             _sessions.pop(d, None)
             return False
-        if touch:
-            _sessions[d] = now + SESSION_TTL_SEC
-        return True
+        if _BIND_IP and ip is not None and rec[2] and rec[2] != _lock_key(ip):
+            _sessions.pop(d, None)
+            refused = True
+        else:
+            refused = False
+            if touch:
+                rec[0] = now + SESSION_TTL_SEC
+    if refused:
+        audit(f"session: ended, it was used from {_lock_key(ip)} but signed in from {rec[2]}")
+        _close_owner(d)
+        return False
+    return True
 
 
 def _revoke_session(token):
@@ -699,7 +720,7 @@ def _close_owner(owner):
 def _sweep():
     now = time.time()
     with _sess_lock:
-        for k in [k for k, v in _sessions.items() if v < now]:
+        for k in [k for k, v in _sessions.items() if _session_dead(v, now)]:
             del _sessions[k]
         live = set(_sessions)
     with _pty_lock:
@@ -830,6 +851,47 @@ def _priv(fn, *args):
         raise HttpErr(exc.code, exc.msg)
 
 
+def _proc_start(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return ""
+
+
+def _file_problem(path):
+    real = os.path.realpath(path)
+    cur = real
+    while True:
+        try:
+            st = os.stat(cur)
+        except OSError as exc:
+            return f"{cur}: {exc.strerror}"
+        if st.st_uid != 0:
+            return f"{cur} does not belong to root"
+        sticky_dir = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
+        if st.st_mode & 0o022 and not sticky_dir:
+            return f"{cur} can be changed by group or others"
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return ""
+        cur = parent
+
+
+def _install_source_problem(path):
+    st = os.stat(path)
+    if st.st_mode & 0o022:
+        return "it can be changed by group or others"
+    allowed = {0}
+    try:
+        allowed.add(int(os.environ.get("SUDO_UID", "")))
+    except ValueError:
+        pass
+    if st.st_uid not in allowed:
+        return f"it belongs to uid {st.st_uid}, not root or the user running sudo"
+    return ""
+
+
 def _no_login_shell(pw):
     return not pw.pw_shell or os.path.basename(pw.pw_shell) in _NO_LOGIN_SHELLS
 
@@ -899,7 +961,45 @@ class Privileged:
         self._lock = threading.Lock()
         self._fails = deque()
         self.sock_path = None
+        self.pids_path = None
         threading.Thread(target=self._reap_loop, daemon=True).start()
+
+    def _save_pids(self):
+        if not self.pids_path:
+            return
+        with self._lock:
+            table = {str(pid): rec[2] for pid, rec in self._procs.items()}
+        try:
+            atomic_write(self.pids_path, json.dumps(table), mode=0o600)
+        except OSError as exc:
+            log(f"cannot record running terminals: {exc}")
+
+    def kill_leftovers(self):
+        if not self.pids_path:
+            return 0
+        try:
+            with open(self.pids_path, encoding="utf-8") as fh:
+                table = json.load(fh)
+        except (OSError, ValueError):
+            return 0
+        killed = 0
+        for pid_text, started in (table.items() if isinstance(table, dict) else ()):
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid > 1 and started and _proc_start(pid) == started:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                    killed += 1
+                    log(f"helper: ended terminal process {pid} left by an earlier helper")
+                except OSError:
+                    pass
+        try:
+            atomic_write(self.pids_path, "{}", mode=0o600)
+        except OSError:
+            pass
+        return killed
 
     def available(self):
         return True
@@ -923,7 +1023,7 @@ class Privileged:
             time.sleep(30)
             now = time.time()
             with self._lock:
-                for pid, (proc, born) in list(self._procs.items()):
+                for pid, (proc, born, _) in list(self._procs.items()):
                     if proc.poll() is not None and now - born > REAP_AFTER_SEC:
                         del self._procs[pid]
 
@@ -974,7 +1074,8 @@ class Privileged:
         finally:
             os.close(slave)
         with self._lock:
-            self._procs[proc.pid] = (proc, time.time())
+            self._procs[proc.pid] = (proc, time.time(), _proc_start(proc.pid))
+        self._save_pids()
         return {"pid": proc.pid, "fd": master, "label": label}
 
     def signal(self, pid, name):
@@ -996,6 +1097,7 @@ class Privileged:
         code = rec[0].wait()
         with self._lock:
             self._procs.pop(pid, None)
+        self._save_pids()
         return code
 
     def install(self, pkg, who=""):
@@ -1127,6 +1229,45 @@ class Privileged:
         if restarting:
             threading.Thread(target=_restart_later, daemon=True).start()
         return restarting
+
+    def set_option(self, name, value, who=""):
+        if name != "bind_session_ip" or not isinstance(value, bool):
+            raise PrivError(400, "Unknown setting.")
+        with _CFG_LOCK:
+            cfg = load_config()
+            cfg[name] = value
+            try:
+                save_config(cfg)
+            except OSError as exc:
+                raise PrivError(500, f"Could not save the config: {exc}")
+        audit(f"setup: {name} is now {'on' if value else 'off'} (requested from {who})")
+        return value
+
+    def regen_cert(self, who=""):
+        with _CFG_LOCK:
+            cfg = load_config()
+            if not cfg["https"]:
+                raise PrivError(409, "HTTPS is off, so there is no certificate to replace.")
+            moved = []
+            for path in (TLS_CERT, TLS_KEY):
+                if os.path.exists(path):
+                    os.replace(path, path + ".old")
+                    moved.append(path)
+            if not ensure_tls_cert():
+                for path in moved:
+                    os.replace(path + ".old", path)
+                raise PrivError(500, "Could not create a new certificate. The old one is kept.")
+            for path in moved:
+                try:
+                    os.unlink(path + ".old")
+                except OSError:
+                    pass
+            _chown_tls(cfg["web_user"])
+        audit(f"setup: new HTTPS certificate {_cert_fingerprint()} (requested from {who})")
+        restarting = os.path.exists(SYSTEMD_SERVICE_PATH)
+        if restarting:
+            threading.Thread(target=_restart_later, daemon=True).start()
+        return {"restarting": restarting, "sha256": _cert_fingerprint()}
 
     def account_info(self):
         cfg = load_config()
@@ -1265,6 +1406,10 @@ class HelperServer:
             return p.set_shell_user(args.get("user"), args.get("password"), who), None
         if op == "set_web_user":
             return {"restarting": p.set_web_user(args.get("name"), who)}, None
+        if op == "set_option":
+            return {"value": p.set_option(args.get("name"), args.get("value"), who)}, None
+        if op == "regen_cert":
+            return p.regen_cert(who), None
         if op == "account":
             return {"info": dict(p.account_info(), split=True)}, None
         raise PrivError(400, "Unknown request.")
@@ -1356,6 +1501,13 @@ class RemoteBackend:
 
     def set_web_user(self, name, who=""):
         return self._call("set_web_user", {"name": name, "who": who})["restarting"]
+
+    def set_option(self, name, value, who=""):
+        return self._call("set_option", {"name": name, "value": value, "who": who})["value"]
+
+    def regen_cert(self, who=""):
+        res = self._call("regen_cert", {"who": who})
+        return {"restarting": res["restarting"], "sha256": res["sha256"]}
 
     def account_info(self):
         return self._call("account")["info"]
@@ -2327,7 +2479,7 @@ def _set_cookie(h, token, clear=False):
 
 def _need(h, touch=True):
     tok = _token_of(h)
-    if not _session_valid(tok, touch=touch):
+    if not _session_valid(tok, touch=touch, ip=h._peer()):
         raise HttpErr(401, "Sign in first.")
     return tok
 
@@ -2343,7 +2495,7 @@ def _host_only(h):
 
 def r_page(h, q):
     nonce = secrets.token_urlsafe(18)
-    body = PAGE.replace("__VERSION__", VERSION).replace("__NONCE__", nonce)
+    body = PAGE.replace("__NONCE__", nonce)
     h._send(200, "text/html; charset=utf-8", body.encode("utf-8"), csp=_csp(nonce))
 
 
@@ -2355,11 +2507,11 @@ def r_static(h, name):
 
 
 def r_health(h, q):
-    h._json(200, {"ok": True, "name": APP_NAME, "version": VERSION})
+    h._json(200, {"ok": True})
 
 
 def r_whoami(h, q):
-    h._json(200, {"ok": True, "logged_in": _session_valid(_token_of(h)), "version": VERSION})
+    h._json(200, {"ok": True, "logged_in": _session_valid(_token_of(h), ip=h._peer())})
 
 
 def r_login(h, q):
@@ -2387,7 +2539,7 @@ def r_login(h, q):
         if delay:
             time.sleep(delay)
         raise HttpErr(401, "Incorrect password.")
-    tok = _issue_session()
+    tok = _issue_session(ip)
     audit(f"login: signed in from {ip}")
     h._json(200, {"ok": True}, extra=[_set_cookie(h, tok)])
 
@@ -2413,6 +2565,9 @@ def r_setup(h, q):
         job = _job_view()
     h._json(200, {"ok": True, "installed": installed, "port": cfg["port"],
                   "monitor_last": cfg["monitor_last"], "helper": helper, "account": account,
+                  "cert": {"https": cfg["https"], "sha256": _cert_fingerprint() if cfg["https"] else ""},
+                  "options": {"bind_session_ip": _BIND_IP},
+                  "limits": {"idle_sec": SESSION_TTL_SEC, "max_sec": SESSION_MAX_SEC},
                   "hosts": {"own": sorted(_OWN_NAMES), "extra": sorted(_EXTRA_HOSTS)},
                   "job": job, "version": VERSION})
 
@@ -2494,6 +2649,48 @@ def r_setup_web_user(h, q):
     h._json(200, {"ok": True, "restarting": bool(restarting)})
 
 
+def r_logout_all(h, q):
+    _need(h)
+    with _sess_lock:
+        _sessions.clear()
+    _close_all_sessions()
+    audit(f"session: every sign-in ended (requested from {h._peer()})")
+    h._json(200, {"ok": True}, extra=[_set_cookie(h, "", clear=True)])
+
+
+def r_setup_options(h, q):
+    global _BIND_IP
+    _need(h)
+    body = h._body()
+    if body.get("confirm") is not True:
+        raise HttpErr(400, "Confirmation required.")
+    value = body.get("bind_session_ip")
+    if not isinstance(value, bool):
+        raise HttpErr(400, "Send true or false.")
+    _priv(BACKEND.set_option, "bind_session_ip", value, h._peer())
+    _BIND_IP = value
+    h._json(200, {"ok": True, "bind_session_ip": value})
+
+
+def r_setup_cert(h, q):
+    _need(h)
+    body = h._body()
+    if body.get("confirm") is not True:
+        raise HttpErr(400, "Confirmation required.")
+    res = _priv(BACKEND.regen_cert, h._peer())
+    h._json(200, {"ok": True, "restarting": bool(res["restarting"]), "sha256": res["sha256"]})
+
+
+def r_cert_pem(h, q):
+    _need(h)
+    try:
+        with open(TLS_CERT, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        raise HttpErr(404, "There is no certificate (HTTPS is off).")
+    h._send(200, "application/x-pem-file", data, extra=[("Content-Disposition", 'attachment; filename="termon.pem"')])
+
+
 def r_term_ticket(h, q):
     tok = _need(h)
     h._json(200, {"ok": True, "ticket": _issue_ticket(tok)})
@@ -2557,7 +2754,7 @@ def _stream_loop(h, sess, tok, after):
             h.wfile.write(f"event: exit\ndata: {json.dumps({'code': code})}\n\n".encode("utf-8"))
             h.wfile.flush()
             return
-        if not _session_valid(tok, touch=False):
+        if not _session_valid(tok, touch=False, ip=h._peer()):
             _sweep()
             return
 
@@ -2607,15 +2804,19 @@ GET_ROUTES = {
     "/api/setup": r_setup,
     "/api/term/stream": r_term_stream,
     "/api/term/info": r_term_info,
+    "/api/cert.pem": r_cert_pem,
 }
 POST_ROUTES = {
     "/api/login": r_login,
     "/api/logout": r_logout,
+    "/api/logout_all": r_logout_all,
     "/api/setup/install": r_setup_install,
     "/api/setup/port": r_setup_port,
     "/api/setup/hosts": r_setup_hosts,
     "/api/setup/shell_user": r_setup_shell_user,
     "/api/setup/web_user": r_setup_web_user,
+    "/api/setup/options": r_setup_options,
+    "/api/setup/cert": r_setup_cert,
     "/api/term/ticket": r_term_ticket,
     "/api/term/open": r_term_open,
     "/api/term/input": r_term_input,
@@ -2625,7 +2826,7 @@ POST_ROUTES = {
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "termon"
+    server_version = "http"
     sys_version = ""
     timeout = REQ_TIMEOUT_SEC
 
@@ -2985,6 +3186,16 @@ def ensure_tls_cert():
     return True
 
 
+def _cert_fingerprint():
+    try:
+        with open(TLS_CERT, encoding="ascii") as fh:
+            der = ssl.PEM_cert_to_DER_cert(fh.read())
+    except (OSError, ValueError):
+        return ""
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
 def make_ssl_context():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -3108,7 +3319,8 @@ def _helper_unit_text():
             f"WatchdogSec=60\n"
             f"Restart=on-failure\n"
             f"RestartSec=3\n"
-            f"KillMode=control-group\n\n"
+            f"KillMode=control-group\n"
+            f"TimeoutStopSec=10\n\n"
             f"[Install]\n"
             f"WantedBy=multi-user.target\n")
 
@@ -3130,15 +3342,30 @@ def _report_talker():
               "  termon does not edit rpt.conf. Remove those lines by hand, then reload Asterisk.")
 
 
+def _sha256_file(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
 def install_service():
     _require_root("--install")
     _refuse_inside_termon("--install")
-    _remove_existing()
     src = os.path.realpath(__file__)
+    problem = _install_source_problem(src)
+    if problem:
+        sys.exit(f"Refusing to install {src}: {problem}. This file will run as root; "
+                 "copy it somewhere only you can write and run --install again.")
+    _remove_existing()
     os.makedirs(INSTALL_DIR, exist_ok=True)
+    os.chown(INSTALL_DIR, 0, 0)
+    os.chmod(INSTALL_DIR, 0o755)
     lib = os.path.join(INSTALL_DIR, f"termon-{VERSION}.py")
     if os.path.realpath(lib) != src:
         shutil.copyfile(src, lib)
+        if _sha256_file(lib) != _sha256_file(src):
+            os.unlink(lib)
+            sys.exit("The installed copy does not match the source file; nothing was installed.")
+    os.chown(lib, 0, 0)
     os.chmod(lib, 0o755)
     tmp_link = INSTALL_BIN_PATH + ".new"
     if os.path.lexists(tmp_link):
@@ -3168,6 +3395,7 @@ def install_service():
     print(f"{APP_NAME} v{VERSION} installed and started.\n"
           f"  The web page runs as '{cfg['web_user']}'; the root helper starts the terminals.\n"
           f"  The shell account is {cfg['shell_user'] or 'root'} (change it under Setup).\n"
+          + (f"  Certificate SHA-256: {_cert_fingerprint()}\n" if cfg["https"] else "") +
           f"  Open {'https' if cfg['https'] else 'http'}://<this node's LAN address>:{cfg['port']}/")
 
 
@@ -3231,7 +3459,7 @@ a.lnk{color:var(--accent);word-break:break-all}
 </head>
 <body>
 <header>
-  <h1>Terminal Monitor</h1><span class="ver">v__VERSION__</span>
+  <h1>Terminal Monitor</h1><span class="ver" id="ver" hidden></span>
   <div class="tabs">
     <button class="btn" id="tab-monitor" type="button">Monitor</button>
     <button class="btn" id="tab-terminal" type="button">Terminal</button>
@@ -3282,6 +3510,19 @@ a.lnk{color:var(--accent);word-break:break-all}
         <button class="btn" id="web-apply" type="button">Save user</button>
       </div>
       <div class="muted" id="web-note" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:12px">
+        <span class="muted">Certificate</span>
+        <a class="lnk" id="cert-dl" href="/api/cert.pem" download="termon.pem">Download</a>
+        <button class="btn" id="cert-new" type="button">New certificate</button>
+      </div>
+      <div class="muted" id="cert-note" style="margin-top:6px;word-break:break-all"></div>
+      <div class="row" style="margin-top:12px">
+        <label class="muted"><input type="checkbox" id="bind-ip"> Tie each sign-in to the address it came from</label>
+      </div>
+      <div class="muted" id="session-note" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="logout-all" type="button">Sign out everywhere</button>
+      </div>
       <div class="muted" id="setup-note" style="margin-top:8px"></div>
       </div>
     </div>
@@ -3340,7 +3581,7 @@ a.lnk{color:var(--accent);word-break:break-all}
     return fetch(path, opt).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
         j.status = r.status;
-        if (r.status === 401 && path !== '/api/login') showLogin('Your session ended (2 hours idle). Sign in again.');
+        if (r.status === 401 && path !== '/api/login') showLogin('Your session ended. Sign in again.');
         if (!r.ok && !j.message) j.message = 'HTTP ' + r.status;
         if (j.ok === undefined) j.ok = r.ok;
         return j;
@@ -3691,6 +3932,8 @@ a.lnk{color:var(--accent);word-break:break-all}
     });
     $('setup-note').textContent = s.helper ? '' : 'The root helper is not answering, so installs and settings are disabled.';
     applyAccount(s);
+    applyCert(s);
+    if (s.version) { var vb = $('ver'); vb.textContent = 'v' + s.version; vb.hidden = false; }
     if (s.hosts) {
       var hi = $('hosts');
       if (document.activeElement !== hi) hi.value = s.hosts.extra.join(', ');
@@ -3718,6 +3961,23 @@ a.lnk{color:var(--accent);word-break:break-all}
     $('web-note').textContent = a.split
       ? 'This page runs as ' + a.web_user + ' and asks the root helper for terminals.'
       : 'Single-process mode: this page runs as root (started by hand, not by the service).';
+  }
+
+  function applyCert(s) {
+    if (!s.cert) return;
+    $('cert-dl').hidden = !s.cert.https;
+    $('cert-new').disabled = !s.cert.https || !s.helper;
+    $('cert-note').textContent = s.cert.https
+      ? 'SHA-256 ' + s.cert.sha256 + '. Compare it with the one in your browser\'s certificate view or in the install output.'
+      : 'HTTPS is off (https = false in the config).';
+    var bi = $('bind-ip');
+    if (s.options && document.activeElement !== bi) bi.checked = !!s.options.bind_session_ip;
+    bi.disabled = !s.helper;
+    if (s.limits) {
+      $('session-note').textContent = 'A sign-in ends ' + (s.limits.idle_sec / 3600) + ' hours after the last click or key, and at most ' +
+        (s.limits.max_sec / 3600) + ' hours after it started.' +
+        (s.options && s.options.bind_session_ip ? ' It also ends if it is used from another address.' : '');
+    }
   }
 
   function installPkg(pkg, label) {
@@ -3774,6 +4034,31 @@ a.lnk{color:var(--accent);word-break:break-all}
       if (!j.ok) { $('shell-note').textContent = j.message; return; }
       stopAll();
       showLogin('Shell account is now ' + j.account + '. Sign in with its password.');
+    });
+  };
+
+  $('cert-new').onclick = function () {
+    if (!window.confirm('Make a new certificate? The page restarts and every browser and app that saved the old one must accept the new one.')) return;
+    api('POST', '/api/setup/cert', { confirm: true }).then(function (j) {
+      $('cert-note').textContent = j.ok
+        ? 'New certificate, SHA-256 ' + j.sha256 + (j.restarting ? '. The page restarts in a moment; reload it.' : '. Restart termon to use it.')
+        : j.message;
+    });
+  };
+
+  $('bind-ip').onchange = function () {
+    var box = this;
+    api('POST', '/api/setup/options', { bind_session_ip: box.checked, confirm: true }).then(function (j) {
+      if (!j.ok) { box.checked = !box.checked; $('session-note').textContent = j.message; return; }
+      api('GET', '/api/setup').then(function (s) { if (s.ok) applyCert(s); });
+    });
+  };
+
+  $('logout-all').onclick = function () {
+    if (!window.confirm('End every sign-in, including other browsers, and close every terminal?')) return;
+    api('POST', '/api/logout_all', {}).then(function () {
+      stopAll();
+      showLogin('Signed out everywhere.');
     });
   };
 
@@ -3851,8 +4136,14 @@ def run_helper():
     if not acquire_instance_lock(HELPER_LOCK):
         log(f"another helper is already running (lock {HELPER_LOCK}); not starting")
         return 1
+    problem = _file_problem(__file__)
+    if problem:
+        log(f"refusing to start: this file runs as root and {problem}")
+        return 1
     priv = Privileged()
     priv.split = True
+    priv.pids_path = os.path.join(os.path.dirname(HELPER_SOCK), "pids.json")
+    priv.kill_leftovers()
     server = HelperServer(HELPER_SOCK, priv)
     try:
         server.bind()
@@ -3905,6 +4196,8 @@ def main(argv=None):
             return 1
     else:
         log("WARNING: HTTPS is off; the password and terminal travel in clear text")
+    global _BIND_IP
+    _BIND_IP = cfg["bind_session_ip"]
     BACKEND = Privileged() if os.geteuid() == 0 else RemoteBackend(HELPER_SOCK)
     try:
         server = LimitedServer(("0.0.0.0", port), Handler, ssl_ctx=ctx)
@@ -3917,6 +4210,8 @@ def main(argv=None):
         server.server_close()
         return 1
     log(f"{APP_NAME} v{VERSION} listening on 0.0.0.0:{port} ({'HTTPS' if ctx else 'HTTP'}, LAN only)")
+    if ctx:
+        log(f"certificate SHA-256 {_cert_fingerprint()}")
     if os.geteuid() == 0:
         log("single-process mode: the web side runs as root. --install sets up the split service.")
     elif not BACKEND.ping():
