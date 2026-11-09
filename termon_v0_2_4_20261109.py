@@ -35,7 +35,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.2"
+VERSION = "0.2.4"
 DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -46,6 +46,9 @@ CONFIG_DIR = os.environ.get("TERMON_CONFIG_DIR", "/etc/asl_dvs")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "termon.conf")
 CONFIG_SECTION = "termon"
 DEFAULT_PORT = 7878
+BTOP_DEFAULT_MS = 100
+BTOP_MIN_MS = 100
+BTOP_MAX_MS = 10000
 PYTHON_BIN = "/usr/bin/python3"
 RPT_CONF = os.environ.get("TERMON_RPT_CONF", "/etc/asterisk/rpt.conf")
 TALKER_SERVICES = ("nodetalker.service", "nodelisten.service")
@@ -198,8 +201,9 @@ def load_config():
     if web_user == "root" or not USER_RE.match(web_user):
         web_user = DEFAULT_WEB_USER
     bind_ip = str(sec.get("bind_session_ip", "false")).strip().lower() in ("1", "true", "yes", "on")
+    btop_ms = _clamp(sec.get("btop_update_ms", BTOP_DEFAULT_MS), BTOP_MIN_MS, BTOP_MAX_MS, BTOP_DEFAULT_MS)
     return {"port": port, "monitor_last": last, "https": https, "shell_user": shell_user,
-            "web_user": web_user, "bind_session_ip": bind_ip,
+            "web_user": web_user, "bind_session_ip": bind_ip, "btop_update_ms": btop_ms,
             "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
 
 
@@ -210,6 +214,7 @@ def save_config(cfg):
                           "shell_user": cfg.get("shell_user", ""),
                           "web_user": cfg.get("web_user", DEFAULT_WEB_USER),
                           "bind_session_ip": "true" if cfg.get("bind_session_ip") else "false",
+                          "btop_update_ms": str(cfg.get("btop_update_ms", BTOP_DEFAULT_MS)),
                           "allowed_hosts": ",".join(cfg.get("allowed_hosts", []))}
     buf = io.StringIO()
     cp.write(buf)
@@ -799,6 +804,81 @@ def _run_install(jid, pkg):
     audit(f"install: apt {pkg} {'finished' if ok else 'failed'} (exit {code})")
 
 
+def firewall_backend():
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "none"
+
+
+def _fw_run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def open_firewall_port(port, proto="tcp"):
+    spec = f"{port}/{proto}"
+    backend = firewall_backend()
+    try:
+        if backend == "firewalld":
+            zone = _fw_run(["firewall-cmd", "--get-default-zone"])
+            check = ["firewall-cmd", f"--zone={zone}", f"--query-port={spec}"]
+            if _fw_run(["firewall-cmd", f"--zone={zone}", "--get-target"]) == "ACCEPT" or _fw_run(check) == "yes":
+                return "=", f"{spec} is already open in firewalld zone {zone}"
+            _fw_run(["firewall-cmd", f"--zone={zone}", f"--add-port={spec}"])
+            _fw_run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={spec}"])
+            if _fw_run(check) == "yes":
+                return "+", f"opened {spec} in firewalld zone {zone} (now and after a reboot)"
+            return "!", f"could not open {spec} in firewalld zone {zone}"
+        if backend == "ufw":
+            allow = rf"^{port}/{proto}\s+ALLOW"
+            status = _fw_run(["ufw", "status", "verbose"])
+            if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+                return "=", f"{spec} is already open in ufw"
+            _fw_run(["ufw", "allow", spec])
+            if re.search(allow, _fw_run(["ufw", "status", "verbose"]), re.M):
+                return "+", f"opened {spec} in ufw"
+            return "!", f"could not open {spec} in ufw"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "!", f"could not open {spec} in {backend}: {exc}"
+    return "=", f"no active firewall (ufw or firewalld), so {spec} is not blocked"
+
+
+def close_firewall_port(port, proto="tcp"):
+    spec = f"{port}/{proto}"
+    backend = firewall_backend()
+    try:
+        if backend == "firewalld":
+            zone = _fw_run(["firewall-cmd", "--get-default-zone"])
+            check = ["firewall-cmd", f"--zone={zone}", f"--query-port={spec}"]
+            was_open = _fw_run(check) == "yes"
+            _fw_run(["firewall-cmd", f"--zone={zone}", f"--remove-port={spec}"])
+            _fw_run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--remove-port={spec}"])
+            if _fw_run(check) == "yes":
+                return "!", f"could not close {spec} in firewalld zone {zone}"
+            return ("-", f"closed {spec} in firewalld zone {zone}") if was_open else \
+                ("=", f"{spec} was not open in firewalld zone {zone}")
+        if backend == "ufw":
+            allow = rf"^{port}/{proto}\s+ALLOW"
+            if not re.search(allow, _fw_run(["ufw", "status", "verbose"]), re.M):
+                return "=", f"{spec} was not open in ufw"
+            _fw_run(["ufw", "--force", "delete", "allow", spec])
+            status = _fw_run(["ufw", "status", "verbose"])
+            if re.search(allow, status, re.M):
+                return "!", f"could not close {spec} in ufw"
+            if "Default: allow (incoming)" in status:
+                return "!", f"closed {spec} in ufw, but ufw's default allows incoming traffic, so it stays reachable"
+            return "-", f"closed {spec} in ufw"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "!", f"could not close {spec} in {backend}: {exc}"
+    return "=", f"no active firewall (ufw or firewalld), so {spec} was not blocked"
+
+
 def _port_free(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -890,6 +970,22 @@ def _install_source_problem(path):
     if st.st_uid not in allowed:
         return f"it belongs to uid {st.st_uid}, not root or the user running sudo"
     return ""
+
+
+_btop_flag_cache = {}
+
+
+def _btop_args(exe, ms):
+    ok = _btop_flag_cache.get(exe)
+    if ok is None:
+        try:
+            r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=5,
+                               stdin=subprocess.DEVNULL, env=_clean_env(TERM="dumb"))
+            ok = "--update" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        _btop_flag_cache[exe] = ok
+    return ["--update", str(ms)] if ok else []
 
 
 def _no_login_shell(pw):
@@ -1050,6 +1146,8 @@ class Privileged:
             if not exe:
                 raise PrivError(409, f"{prog} is not installed. Use the Setup card to install it.")
             argv, label = [exe], prog
+            if prog == "btop":
+                argv += _btop_args(exe, cfg["btop_update_ms"])
             _remember_monitor(prog)
         else:
             raise PrivError(400, "Unknown terminal kind.")
@@ -1137,6 +1235,12 @@ class Privileged:
                 except OSError as exc:
                     raise PrivError(500, f"Could not save the config: {exc}")
                 audit(f"port: changed from {cur} to {port} (requested from {who})")
+                for action, number in ((open_firewall_port, port), (close_firewall_port, cur)):
+                    mark, msg = action(number)
+                    if mark == "=":
+                        log(f"firewall: {msg}")
+                    else:
+                        audit(f"firewall: {msg}")
         restarting = port != cur
         if restarting:
             threading.Thread(target=_restart_later, daemon=True).start()
@@ -3392,6 +3496,8 @@ def install_service():
         r = _systemctl("enable", "--now", unit)
         if r.returncode != 0:
             sys.exit((r.stderr or r.stdout).strip() or f"systemctl enable {unit} failed")
+    mark, fw_msg = open_firewall_port(cfg["port"])
+    print(f"  Firewall: {fw_msg}" + ("  (open it by hand, or the page will not answer from the LAN)" if mark == "!" else ""))
     print(f"{APP_NAME} v{VERSION} installed and started.\n"
           f"  The web page runs as '{cfg['web_user']}'; the root helper starts the terminals.\n"
           f"  The shell account is {cfg['shell_user'] or 'root'} (change it under Setup).\n"
@@ -3403,6 +3509,8 @@ def uninstall_service():
     _require_root("--uninstall")
     _refuse_inside_termon("--uninstall")
     _remove_existing()
+    mark, fw_msg = close_firewall_port(load_config()["port"])
+    print(f"Firewall: {fw_msg}")
     print(f"{APP_NAME} removed. Config kept at {CONFIG_PATH}. The '{load_config()['web_user']}' user is kept.")
 
 

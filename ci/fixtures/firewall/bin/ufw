@@ -1,0 +1,27 @@
+#!/bin/sh
+D="${STUB_DIR:?STUB_DIR not set}/ufw"
+mkdir -p "$D"
+R="$D/rules"
+touch "$R"
+DEFAULT=deny
+[ -f "$D/default_allow" ] && DEFAULT=allow
+case "$1" in
+  status)
+    [ -f "$D/inactive" ] && { echo "Status: inactive"; exit 0; }
+    echo "Status: active"
+    echo "Logging: on (low)"
+    echo "Default: $DEFAULT (incoming), allow (outgoing), disabled (routed)"
+    echo
+    echo "To                         Action      From"
+    echo "--                         ------      ----"
+    while read -r r; do [ -n "$r" ] && echo "$r                       ALLOW IN    Anywhere"; done < "$R"
+    ;;
+  allow)
+    [ -f "$D/refuse" ] && exit 1
+    grep -qx "$2" "$R" || echo "$2" >> "$R"
+    ;;
+  --force)
+    if [ "$2" = delete ]; then grep -vx "$4" "$R" > "$R.t"; mv "$R.t" "$R"; fi
+    ;;
+esac
+exit 0

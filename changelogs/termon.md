@@ -1,6 +1,28 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_2_20261109.py`. Newest entries first.
+Current file: `termon_v0_2_4_20261109.py`. Newest entries first.
+
+## 0.2.4 (2026-11-09)
+
+- **btop++ starts at 100 ms instead of 2000 ms.** The Monitor page now starts btop with `--update 100`, so its refresh rate is 100 ms from the first screen (btop's own header shows `100ms`). It is btop's starting rate only: the user's own `btop.conf` is not changed (checked: btop writes `update_ms = 2000` back on exit), and the `-` and `+` keys in btop still change it while it runs.
+- **Setting.** `btop_update_ms` in `/etc/asl_dvs/termon.conf` (default 100, kept between 100 and 10000; anything else falls back to 100). Restart the monitor program to apply a change.
+- **Older btop is safe.** The first time, termon asks the installed btop whether it knows `--update` (`btop --help`). If it does not, or the check fails, btop is started plain, as before. top and htop are not changed.
+- **Cost to know about.** At 100 ms btop sends about ten times more screen data (measured: 618 KB against 63 KB in 4 seconds, about 150 KB/s) and uses more CPU on the node and in the browser than at 2000 ms. On a Pi Zero 2 W raise `btop_update_ms` if the page feels slow.
+- This is a release: Python behaviour changed.
+
+Tests: btop started with `--update 100` by default, a configured rate used, range clamping, an older btop without the option started plain, a failing help check, top unchanged, the support check made once, the real btop 1.3.0 accepted the option when installed (`ci/test_termon.py`).
+
+## 0.2.3 (2026-11-09)
+
+Fix: the page did not answer from the LAN on a node with an active firewall. Node Talker, Node Recorder and Pibrary open their own port when they install; Terminal Monitor did not, so ufw or firewalld refused the connection ("Unable to connect" in the browser) while instmon's Go button, which tests from the node itself, stayed enabled. This is a release: Python behaviour changed.
+
+- **`--install` opens the port.** After the services start it opens the configured port (7878 unless changed) in the active firewall and prints what it did. ufw (rule `PORT/tcp`) and firewalld (the default zone, now and permanently) are supported; firewalld wins if both are there. With no active firewall, or a ufw whose default already allows incoming traffic, it changes nothing. If the firewall refuses, the install still finishes and says to open the port by hand.
+- **`--uninstall` closes it.** Only the termon port rule is removed; other rules are left alone. It says so when the port was not open.
+- **Changing the port in Setup moves the rule.** The new port is opened first, then the old one is closed, so the page is reachable on the new address as soon as it restarts. The same-port case touches nothing.
+- Existing nodes: run `sudo python3 termon_v0_2_3_20261109.py --install` once, or open the port by hand (`sudo ufw allow 7878/tcp`, or `sudo firewall-cmd --permanent --add-port=7878/tcp && sudo firewall-cmd --reload`).
+- Same behaviour and the same functions as Node Talker's firewall code; the rule opens the port to any source, as theirs does. Terminal Monitor itself still refuses anything that is not on the LAN.
+
+Tests: ufw and firewalld stubs that keep real state (`ci/fixtures/firewall/bin`): open once, already open, other rules untouched, default-allow, refusal reported not raised, inactive ufw, firewalld, both installed, no tools, port change and same port (`ci/test_termon.py`); install and uninstall with the ufw stub checking the rule and the printed line (`ci/test_install.py`).
 
 ## 0.2.2 (2026-11-09)
 

@@ -59,11 +59,15 @@ class InstallUninstall(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(getattr(cls, "stub", ""), ignore_errors=True)
 
-    def run_cli(self, file, flag):
-        env = dict(os.environ, STUB_DIR=self.stub, PATH=STUB_BIN + os.pathsep + os.environ.get("PATH", ""))
+    def run_cli(self, file, flag, first_on_path=None):
+        path = STUB_BIN + os.pathsep + os.environ.get("PATH", "")
+        if first_on_path:
+            path = first_on_path + os.pathsep + path
+        env = dict(os.environ, STUB_DIR=self.stub, PATH=path)
         r = subprocess.run([sys.executable, os.path.join(ROOT, file), flag], cwd=self.stub, env=env,
                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
         self.assertEqual(r.returncode, 0, f"{file} {flag} exited {r.returncode}:\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}")
+        return r.stdout
 
     def test_install_then_uninstall_every_tool(self):
         code = launcher_code(os.path.join(ROOT, TOOLS[0][0]))
@@ -105,8 +109,14 @@ class InstallUninstall(unittest.TestCase):
         other = os.path.join(UNIT_DIR, "termonitor.service")
         with open(other, "w") as f:
             f.write("[Service]\nExecStart=/usr/bin/other\n")
+        fw_dir = tempfile.mkdtemp(prefix="asl-fw-")
+        shutil.copy(os.path.join(ROOT, "ci", "fixtures", "firewall", "bin", "ufw"), os.path.join(fw_dir, "ufw"))
+        ufw_rules = os.path.join(self.stub, "ufw", "rules")
         try:
-            self.run_cli(file, "--install")
+            out = self.run_cli(file, "--install", first_on_path=fw_dir)
+            self.assertIn("Firewall: opened 7878/tcp in ufw", out)
+            with open(ufw_rules) as f:
+                self.assertEqual(f.read().split(), ["7878/tcp"])
             with open(web_unit) as f:
                 web = f.read()
             with open(helper_unit) as f:
@@ -125,12 +135,16 @@ class InstallUninstall(unittest.TestCase):
             self.assertEqual(os.stat(key).st_uid, pw.pw_uid)
             self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat("/etc/asl_dvs/termon.conf").st_mode & 0o777, 0o644)
-            self.run_cli(file, "--uninstall")
+            out = self.run_cli(file, "--uninstall", first_on_path=fw_dir)
+            self.assertIn("Firewall: closed 7878/tcp in ufw", out)
+            with open(ufw_rules) as f:
+                self.assertEqual(f.read().split(), [])
             self.assertFalse(os.path.exists(web_unit))
             self.assertFalse(os.path.exists(helper_unit))
             self.assertFalse(os.path.lexists(link))
             self.assertTrue(os.path.exists(other), "an unrelated unit whose name starts with termon must stay")
         finally:
+            shutil.rmtree(fw_dir, ignore_errors=True)
             for path in (other, web_unit, helper_unit, link):
                 if os.path.lexists(path):
                     os.unlink(path)
