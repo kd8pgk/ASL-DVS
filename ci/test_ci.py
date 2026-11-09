@@ -3574,5 +3574,258 @@ class InstmonTermonTests(unittest.TestCase):
         self.assertFalse(m.user_stopped_is("termon"))
 
 
+class InstmonFetchMissingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp0 = tempfile.mkdtemp()
+        cls.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(cls.tmp0, "lib"),
+                              "INSTMON_CONFIG_DIR": os.path.join(cls.tmp0, "cfg")})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp0, True)
+
+    def setUp(self):
+        m = self.m
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.d = d
+        self.lib = {}
+        for cat in ("termon", "pibrary", "wifimon", "sysmon"):
+            self.lib[cat] = os.path.join(d, "lib", cat)
+            os.makedirs(self.lib[cat])
+        self.installed = {}
+        self.net = {}
+        self.events = []
+        patches = [
+            mock.patch.dict(m.LIB_SUBDIRS, self.lib),
+            mock.patch.object(m, "_FETCHED_PATH", os.path.join(d, "fetched.json")),
+            mock.patch.object(m, "_gh_fetch_impl", lambda url, limit: self.net[url]),
+            mock.patch.object(m, "resolve_installed_target", lambda comp: self.installed.get(comp["category"], "/nonexistent/x")),
+            mock.patch.object(m, "recorder_busy", lambda: None),
+            mock.patch.object(m, "channel_get", lambda: self.channel),
+            mock.patch.object(m, "_build_wanted_variant", lambda: self.variant),
+            mock.patch.object(m, "log_event", lambda msg, level="info": self.events.append((level, msg))),
+            mock.patch.object(m, "_gh_event", lambda msg, level: self.events.append((level, msg))),
+            mock.patch.object(m, "FETCH_MISSING_MAX", 8),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.channel = "testing"
+        self.variant = None
+        with m._gh_lock:
+            m._gh_state["busy"].clear()
+            m._gh_state["entries"] = []
+
+    def file(self, name, ver):
+        return (f'#!/usr/bin/env python3\nimport argparse\nVERSION = "{ver}"\n\n'
+                'def install_service():\n    pass\n\n\ndef uninstall_service():\n    pass\n\n\n'
+                'ap = argparse.ArgumentParser()\nap.add_argument("--install", action="store_true")\n'
+                'ap.add_argument("--uninstall", action="store_true")\n').encode()
+
+    def entry(self, name, category, ver, glob=None, status="missing"):
+        data = self.file(name, ver)
+        self.net[name] = data
+        return {"name": name, "category": category, "glob": glob or f"{category}*.py", "blob": self.m._git_blob_id(data),
+                "version": ver, "status": status, "url": name}
+
+    def listed(self, entry):
+        return os.listdir(self.lib[entry["category"]])
+
+    def test_a_missing_tool_is_downloaded_and_nothing_is_installed(self):
+        m = self.m
+        e = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        with mock.patch.object(m.subprocess, "run", side_effect=AssertionError("nothing may be run")), \
+                mock.patch.object(m.subprocess, "Popen", side_effect=AssertionError("nothing may be run")):
+            got = m._gh_fetch_missing([e])
+        self.assertEqual(got, [e["name"]])
+        self.assertEqual(self.listed(e), [e["name"]])
+        rec = m._fetched_read()[e["name"]]
+        self.assertEqual((rec["category"], rec["version"], rec["channel"], rec["build"]), ("termon", "0.2.2", "testing", "full"))
+        self.assertTrue(any("Download only" in msg for _l, msg in self.events))
+
+    def test_an_installed_tool_is_left_to_the_normal_update_path(self):
+        e = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        real = os.path.join(self.d, "termon.py")
+        __import__("pathlib").Path(real).write_bytes(b"x")
+        self.installed["termon"] = real
+        self.assertEqual(self.m._gh_fetch_missing([e]), [])
+        self.assertEqual(self.listed(e), [])
+
+    def test_other_status_values_and_instmon_itself_are_not_fetched(self):
+        e1 = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="up_to_date")
+        e2 = self.entry("termon_v0_2_1_20261109.py", "termon", "0.2.1", status="conflict")
+        self.assertEqual(self.m._gh_fetch_missing([e1, e2]), [])
+        self.assertEqual(self.listed(e1), [])
+
+    def test_the_other_build_is_skipped(self):
+        self.variant = ""
+        e = self.entry("sysmon_pi02w_v6_13_83_20261028.py", "sysmon", "6.13.83-pi02w")
+        self.assertEqual(self.m._gh_fetch_missing([e]), [])
+        self.variant = "pi02w"
+        self.assertEqual(self.m._gh_fetch_missing([e]), [e["name"]])
+        self.assertEqual(self.m._fetched_read()[e["name"]]["build"], "pi02w")
+
+    def test_nothing_is_downloaded_while_a_recording_runs(self):
+        e = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        with mock.patch.object(self.m, "recorder_busy", lambda: {"entry": "x"}):
+            self.assertEqual(self.m._gh_fetch_missing([e]), [])
+        self.assertEqual(self.listed(e), [])
+
+    def test_the_number_of_downloads_per_check_is_capped(self):
+        e1 = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        e2 = self.entry("pibrary_v0_16_1_20261104.py", "pibrary", "0.16.1")
+        with mock.patch.object(self.m, "FETCH_MISSING_MAX", 1):
+            self.assertEqual(len(self.m._gh_fetch_missing([e1, e2])), 1)
+        with mock.patch.object(self.m, "FETCH_MISSING_MAX", 0):
+            self.assertEqual(self.m._gh_fetch_missing([e1, e2]), [])
+
+    def test_a_bad_download_is_refused_and_the_next_one_still_goes(self):
+        m = self.m
+        bad = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        self.net[bad["name"]] = self.net[bad["name"]] + b"# changed on the way\n"
+        good = self.entry("pibrary_v0_16_1_20261104.py", "pibrary", "0.16.1")
+        got = m._gh_fetch_missing([bad, good])
+        self.assertEqual(got, [good["name"]])
+        self.assertEqual(self.listed(bad), [])
+        self.assertTrue(any(lvl == "warn" and "termon_v0_2_2" in msg for lvl, msg in self.events))
+
+    def test_a_newer_download_replaces_only_the_copy_it_fetched_before(self):
+        m = self.m
+        old = self.entry("termon_v0_2_1_20261109.py", "termon", "0.2.1")
+        m._gh_fetch_missing([old])
+        mine = os.path.join(self.lib["termon"], "termon_v0_1_0_20261101.py")
+        __import__("pathlib").Path(mine).write_bytes(self.file("x", "0.1.0"))
+        new = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="update")
+        m._gh_fetch_missing([new])
+        self.assertEqual(sorted(self.listed(new)), ["termon_v0_1_0_20261101.py", "termon_v0_2_2_20261109.py"])
+        self.assertEqual(sorted(m._fetched_read()), ["termon_v0_2_2_20261109.py"])
+
+    def test_a_copy_that_matches_the_installed_file_is_kept(self):
+        m = self.m
+        old = self.entry("termon_v0_2_1_20261109.py", "termon", "0.2.1")
+        m._gh_fetch_missing([old])
+        real = os.path.join(self.d, "termon.py")
+        shutil.copyfile(os.path.join(self.lib["termon"], old["name"]), real)
+        self.installed["termon"] = real
+        os.unlink(real)
+        shutil.copyfile(os.path.join(self.lib["termon"], old["name"]), real)
+        new = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="update")
+        m._fetched_record(new)
+        with open(os.path.join(self.lib["termon"], new["name"]), "wb") as fh:
+            fh.write(self.net[new["name"]])
+        m._fetched_prune(new)
+        self.assertIn(old["name"], self.listed(new))
+
+    def test_a_locked_copy_is_kept(self):
+        m = self.m
+        old = self.entry("termon_v0_2_1_20261109.py", "termon", "0.2.1")
+        m._gh_fetch_missing([old])
+        new = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="update")
+        with mock.patch.object(m, "lib_locked", lambda cat, name: name == old["name"]):
+            m._gh_fetch_missing([new])
+        self.assertIn(old["name"], self.listed(new))
+
+    def test_switching_to_stable_fetches_the_stable_build_and_drops_the_testing_copy(self):
+        m = self.m
+        testing = self.entry("termon_v0_2_3_20261110.py", "termon", "0.2.3")
+        m._gh_fetch_missing([testing])
+        self.channel = "stable"
+        stable = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="newer_local")
+        got = m._gh_fetch_missing([stable])
+        self.assertEqual(got, [stable["name"]])
+        self.assertEqual(self.listed(stable), [stable["name"]])
+        self.assertEqual(m._fetched_read()[stable["name"]]["channel"], "stable")
+
+    def test_a_newer_library_file_you_added_yourself_is_not_replaced_by_an_older_stable_one(self):
+        m = self.m
+        mine = os.path.join(self.lib["termon"], "termon_v0_2_3_20261110.py")
+        __import__("pathlib").Path(mine).write_bytes(self.file("x", "0.2.3"))
+        self.channel = "stable"
+        stable = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2", status="newer_local")
+        self.assertEqual(m._gh_fetch_missing([stable]), [])
+        self.assertEqual(self.listed(stable), ["termon_v0_2_3_20261110.py"])
+
+    def test_a_damaged_record_file_reads_as_empty(self):
+        for text in ("nope", "[]", '{"files": 3}', '{"files": {"a": 1, "b": {"x": 1}}}'):
+            with open(self.m._FETCHED_PATH, "w") as fh:
+                fh.write(text)
+            self.assertEqual(self.m._fetched_read(), {"b": {"x": 1}} if "b" in text else {}, text)
+
+    def test_the_check_downloads_after_it_finishes_and_a_failure_does_not_break_it(self):
+        m = self.m
+        e = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
+        with mock.patch.object(m, "_gh_collect_full", lambda gen=None: ([e], 0, [e])), \
+                mock.patch.object(m, "_docs_refresh_remote", lambda: None), \
+                mock.patch.object(m, "full_update_preview", lambda: None):
+            with m._gh_lock:
+                m._gh_state["phase"] = "checking"
+                gen = m._gh_state["gen"]
+            m._gh_check_bg(gen)
+            self.assertEqual(self.listed(e), [e["name"]])
+            with mock.patch.object(m, "_gh_fetch_missing", side_effect=RuntimeError("boom")):
+                with m._gh_lock:
+                    m._gh_state["phase"] = "checking"
+                m._gh_check_bg(gen)
+            self.assertEqual(m._gh_state["phase"], "done")
+            self.assertTrue(any("failed: boom" in msg for _l, msg in self.events))
+
+    def comp_row(self, category, installed, name="Tool"):
+        return {"name": name, "service": category, "port": 7878, "category": category, "installed": installed,
+                "state": "inactive", "listening": False, "version": "?"}
+
+    def test_the_available_card_lists_only_tools_that_are_not_installed(self):
+        m = self.m
+        rows = [self.comp_row("termon", False, "Terminal Monitor"), self.comp_row("pibrary", True, "Pibrary"),
+                self.comp_row("instmon", False, "instmon")]
+        html = m.render_available_card_html(rows, {"termon": []})
+        self.assertIn("Available, not installed", html)
+        self.assertIn("Terminal Monitor", html)
+        self.assertNotIn("Pibrary", html)
+        self.assertNotIn(">instmon<", html)
+        self.assertEqual(m.render_available_card_html([self.comp_row("pibrary", True)], {}), "")
+
+    def test_a_downloaded_tool_gets_an_install_button_and_others_say_why_not(self):
+        m = self.m
+        lib = {"termon": [{"name": "termon_v0_2_2_20261109.py", "version": "0.2.2", "installed": False}], "pibrary": []}
+        rows = [self.comp_row("termon", False, "Terminal Monitor"), self.comp_row("pibrary", False, "Pibrary")]
+        html = m.render_available_card_html(rows, lib)
+        self.assertIn('data-action="install" data-category="termon" data-name="termon_v0_2_2_20261109.py"', html)
+        self.assertEqual(html.count('data-action="install"'), 1)
+        self.assertIn("Downloaded v0.2.2", html)
+        self.assertIn("Press Check GitHub", html)
+        with m._gh_lock:
+            m._gh_state["checked_at"] = "2026-11-09 08:00"
+        self.channel = "stable"
+        self.assertIn("No stable build on GitHub yet", m.render_available_card_html(rows, lib))
+        self.channel = "testing"
+        self.assertIn("No build on GitHub", m.render_available_card_html(rows, lib))
+        with m._gh_lock:
+            m._gh_state["checked_at"] = None
+
+    def test_the_card_names_the_channel_and_build(self):
+        rows = [self.comp_row("termon", False, "Terminal Monitor")]
+        self.assertIn("Testing channel", self.m.render_available_card_html(rows, {}))
+        self.channel = "stable"
+        self.variant = "pi02w"
+        html = self.m.render_available_card_html(rows, {})
+        self.assertIn("Stable channel", html)
+        self.assertIn("Pi Zero 2 W fork build", html)
+
+    def test_the_other_builds_files_are_not_offered_as_the_install(self):
+        self.variant = ""
+        lib = {"sysmon": [{"name": "sysmon_pi02w_v6_13_83_20261028.py", "version": "6.13.83-pi02w", "installed": False}]}
+        html = self.m.render_available_card_html([self.comp_row("sysmon", False, "SysMon")], lib)
+        self.assertNotIn('data-action="install"', html)
+
+    def test_the_card_is_part_of_the_page_sections(self):
+        m = self.m
+        status = {"components": [self.comp_row("termon", False, "Terminal Monitor")], "library": {}, "app": None, "confgetter": None}
+        with mock.patch.object(m, "render_components_html", return_value="<!--c-->"):
+            html = m.render_components_section(status)
+        self.assertTrue(html.index("available-card") < html.index("<!--c-->"))
+
+
 if __name__ == "__main__":
     unittest.main()

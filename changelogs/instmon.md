@@ -1,5 +1,19 @@
 # instmon changelog
 
+## 2.94.0 (2026-11-09)
+
+Second step of the "available but opt-in" plan. This is a release: Python and page behaviour changed.
+
+- **Tools that are not installed are downloaded, not installed.** When a Check GitHub finishes, instmon downloads the newest file for every tool in the component list that is not installed on this node (Terminal Monitor, Node Talker, Node Recorder, Pibrary and so on), into that tool's library folder. It uses the same download as the per-file Update button: the file must match GitHub's list (blob), be text with the right `#!` line, have a version, support `--install` and pass a syntax check. Nothing is installed, enabled or started, and no service is touched.
+- **By channel and build.** Stable fetches from the stable list; Testing from the chosen branch (`main` unless `INSTMON_GITHUB_BRANCH` is set). On a Pi Zero 2 W only the build you chose (full or fork) is fetched for SysMon and the Dashboard. Each fetched file is recorded in `/etc/asl_dvs/instmon_fetched.json` with its channel, branch, build and version.
+- **Switching channel re-fetches.** Moving from Testing to Stable downloads the stable build even if it is older than the testing copy instmon fetched earlier, and the testing copy is removed.
+- **What is cleaned up, and what never is.** A newer download removes only the older copies instmon itself fetched for the same tool and build. Files you uploaded or edited, locked files, and a copy identical to the installed file are never removed.
+- **Limits.** At most 8 downloads per check (`INSTMON_FETCH_MISSING_MAX`, 0 turns it off), none while a recording runs, installed tools are left to the normal Update button, and instmon itself is not fetched this way. Scripts, configuration, Config getter and Config putter are not included.
+- **New card: "Available, not installed".** It lists each tool that is not installed, with the version downloaded and an Install button (the existing Install, with its confirmation), or why there is nothing yet ("Press Check GitHub", "No stable build on GitHub yet"). It names the channel and build it fetched for.
+- Compatible: an older instmon ignores the new record file, and a node that never presses Check GitHub behaves as before.
+
+Tests: the download for a missing tool (and that nothing is run), installed tools skipped, other-build files skipped, the recording and cap limits, a refused download not stopping the next one, replacing only its own older copies, locked and installed-identical copies kept, the channel switch, your own newer file kept, damaged record file, the check calling the fetch and surviving a failure, and the card (`ci/test_ci.py`).
+
 ## 2.93.0 (2026-11-09)
 
 First step of the "available but opt-in" plan (download-only for missing tools, an install-everything action and safer Full Updates follow in later releases). This is a release: Python and page JavaScript behaviour changed.
@@ -25,7 +39,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_93_0_20261109.py`. Newest entries first.
+Current file: `instmon_v2_94_0_20261109.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
