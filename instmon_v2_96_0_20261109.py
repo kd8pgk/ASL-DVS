@@ -35,11 +35,12 @@ import urllib .parse
 import urllib .request 
 import tempfile 
 import zipfile 
+import zlib
 from collections import deque 
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.95.0"
+VERSION ="2.96.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4373,6 +4374,35 @@ GITHUB_API_LIST_URL =(f"https://api.github.com/repos/{GITHUB_REPO }/contents"
 f"?ref={urllib .parse .quote (GITHUB_BRANCH ,safe ='')}")
 GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","15"))
 GITHUB_RETRIES = max(0, int(os.environ.get("INSTMON_GITHUB_RETRIES", "2")))
+GITHUB_MIN_BPS = max(50, int(os.environ.get("INSTMON_GITHUB_MIN_BPS", "300")))
+GITHUB_MAX_DOWNLOAD_SLOW_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SLOW_SEC", "14400"))
+GITHUB_SLOW_BPS = int(os.environ.get("INSTMON_GITHUB_SLOW_KBPS", "30")) * 1024
+GITHUB_HEAD_BYTES = 16384
+_gh_rate_lock = threading.Lock()
+_gh_rate = {"bps": None}
+
+def _gh_rate_note(nbytes, secs):
+    if nbytes < 8192 or secs <= 0:
+        return
+    bps = nbytes / secs
+    with _gh_rate_lock:
+        old = _gh_rate["bps"]
+        _gh_rate["bps"] = bps if old is None else old * 0.5 + bps * 0.5
+
+def gh_link_slow():
+    forced = os.environ.get("INSTMON_SLOW_LINK", "").strip().lower()
+    if forced in ("1", "on", "yes", "true"):
+        return True
+    if forced in ("0", "off", "no", "false"):
+        return False
+    with _gh_rate_lock:
+        bps = _gh_rate["bps"]
+    return bps is not None and bps < GITHUB_SLOW_BPS
+
+def gh_link_note():
+    with _gh_rate_lock:
+        bps = _gh_rate["bps"]
+    return "" if bps is None else f"{bps / 1024:.1f} KB/s"
 GITHUB_MAX_DOWNLOAD_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SEC", "1800"))
 GITHUB_LIST_MAX_BYTES =1024 *1024 
 GITHUB_FILE_MAX_BYTES =MAX_UPLOAD_BYTES 
@@ -4530,36 +4560,75 @@ def _gh_stable_cands ():
 class _GhRetry(Exception):
     pass
 
-def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total):
+class _GhBadGzip(Exception):
+    pass
+
+def _gh_gunzip(data, max_bytes, shown):
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = d.decompress(data, max_bytes + 1)
+    except zlib.error as exc:
+        raise _GhBadGzip(f"{shown} arrived damaged ({exc})")
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+    if not d.eof:
+        raise _GhBadGzip(f"{shown} arrived incomplete")
+    return out
+
+def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc=None):
+    if enc is None:
+        enc = {}
+    head = enc.get("head")
     req = urllib.request.Request(url, headers=headers)
+    started = time.monotonic()
     with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT_SEC, context=ctx) as resp:
         if not resp.geturl().lower().startswith("https://"):
             raise GhRejected("GitHub redirected the download off HTTPS")
+        coding = (resp.headers.get("Content-Encoding") or "").strip().lower()
+        if coding not in ("", "identity", "gzip"):
+            raise GhRejected(f"GitHub answered {shown} with an unsupported encoding ({coding})")
+        coding = "gzip" if coding == "gzip" else ""
         if total and resp.getcode() != 206:
             chunks.clear()
             total = 0
+        if total and enc.get("coding") != coding:
+            chunks.clear()
+            enc.clear()
+            if head:
+                enc["head"] = head
+            raise _GhRetry(f"GitHub changed how it sends {shown}; starting that file again")
+        enc["coding"] = coding
         length = resp.headers.get("Content-Length")
         expect = int(length) if length and length.isdigit() else None
-        if expect is not None and total + expect > max_bytes:
+        if expect is not None and not head and not coding and total + expect > max_bytes:
             raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+        if expect is not None and not head:
+            deadline = max(deadline, started + min(expect / GITHUB_MIN_BPS, GITHUB_MAX_DOWNLOAD_SLOW_SEC))
         got = 0
         while True:
-            if time.monotonic() > deadline:
-                raise GhRejected(f"download of {shown} took longer than {GITHUB_MAX_DOWNLOAD_SEC // 60} minutes "
+            now = time.monotonic()
+            if now > deadline:
+                raise GhRejected(f"download of {shown} took longer than {max(1, int((deadline - started) // 60))} minutes "
                                  "-- the connection to GitHub is too slow")
-            chunk = resp.read(65536)
+            if got >= 65536 and now - started > 120 and got / (now - started) < GITHUB_MIN_BPS:
+                raise GhRejected(f"download of {shown} is moving at under {GITHUB_MIN_BPS} bytes a second "
+                                 "-- the connection to GitHub is too slow")
+            chunk = resp.read(8192 if head else 65536)
             if not chunk:
                 break
             got += len(chunk)
             total += len(chunk)
-            if total > max_bytes:
+            if not head and total > max_bytes:
                 raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
             chunks.append(chunk)
-        if expect is not None and got < expect:
+            if head and total >= head:
+                break
+        if expect is not None and got < expect and not head:
             raise _GhRetry(f"the connection to GitHub dropped during {shown} ({total // 1024} KB received)")
+    _gh_rate_note(got, time.monotonic() - started)
     return total
 
-def _gh_fetch_https(url, max_bytes):
+def _gh_fetch_https(url, max_bytes, head=None):
     if not url.lower().startswith("https://"):
         raise GhRejected("the GitHub address must start with https://")
     if not _GH_REPO_RE.match(GITHUB_REPO):
@@ -4568,6 +4637,7 @@ def _gh_fetch_https(url, max_bytes):
     ctx = ssl.create_default_context()
     deadline = time.monotonic() + GITHUB_MAX_DOWNLOAD_SEC
     chunks, total, last = [], 0, ""
+    enc = {"head": head} if head else {}
     tries = GITHUB_RETRIES + 1
     for attempt in range(tries):
         if attempt:
@@ -4576,19 +4646,37 @@ def _gh_fetch_https(url, max_bytes):
             "User-Agent": f"instmon/{VERSION}",
             "Accept": "application/vnd.github+json" if "api.github.com" in url else "*/*",
             "Cache-Control": "no-cache",
+            "Accept-Encoding": "identity" if head else "gzip",
         }
-        if total:
+        if head:
+            headers["Range"] = f"bytes={total}-{head - 1}"
+        elif total:
             headers["Range"] = f"bytes={total}-"
+            enc["resumed"] = True
         try:
-            _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total)
-            return b"".join(chunks)
+            _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc)
+            data = b"".join(chunks)
+            if head:
+                return data[:head]
+            if enc.get("coding") == "gzip":
+                data = _gh_gunzip(data, max_bytes, shown)
+            return data
         except GhRejected:
             raise
+        except _GhBadGzip as exc:
+            if not enc.get("resumed"):
+                raise GhRejected(str(exc))
+            chunks.clear()
+            enc.clear()
+            last = f"{exc}; starting that file again"
         except _GhRetry as exc:
             last = str(exc)
         except urllib.error.HTTPError as exc:
             if exc.code == 416 and total:
                 chunks.clear()
+                enc.clear()
+                if head:
+                    enc["head"] = head
                 last = f"GitHub refused to resume {shown}"
             elif exc.code == 404:
                 raise GhRejected(f"{shown} was not found on GitHub (HTTP 404) -- check the repo name and branch")
@@ -4729,7 +4817,7 @@ def _docs_mark_fetched():
     except OSError as exc:
         log_event(f"Manuals: could not write {_DOCS_FETCHED_PATH}: {exc}", "warn")
 
-def _docs_fetch(say=log_event, skip_deleted=False):
+def _docs_fetch(say=log_event, skip_deleted=False, auto=False):
     got, same, failed = [], 0, []
     cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
     _docs_remote[:] = cands
@@ -4744,6 +4832,10 @@ def _docs_fetch(say=log_event, skip_deleted=False):
         if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
             same += 1
             continue
+        if auto and gh_link_slow():
+            say(f"Manuals: the connection is slow ({gh_link_note() or 'forced'}) -- stopped after {len(got)} "
+                "file(s); press Get from GitHub on the Manuals card for the rest", "warn")
+            break
         try:
             data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
             if _git_blob_id(data) != c["blob"]:
@@ -4780,9 +4872,9 @@ def _docs_claim():
         _docs_state.update(phase="fetching", error=None, msg="")
         return True
 
-def _docs_fetch_bg(skip_deleted=False):
+def _docs_fetch_bg(skip_deleted=False, auto=False):
     try:
-        got, same, failed = _docs_fetch(skip_deleted=skip_deleted)
+        got, same, failed = _docs_fetch(skip_deleted=skip_deleted, auto=auto)
     except Exception as exc:
         msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
         with _docs_lock:
@@ -4806,7 +4898,7 @@ def _docs_first_fetch_loop():
         if not _docs_claim():
             continue
         log_event(f"Manuals: first download from {_gh_source_label()}", "info")
-        if _docs_fetch_bg() is not None:
+        if _docs_fetch_bg(auto=True) is not None:
             return
     log_event("Manuals: could not reach GitHub -- press Get from GitHub on the Manuals card, "
               "or run a Full Update, once the node is online", "warn")
@@ -5065,6 +5157,10 @@ def _app_first_fetch_loop():
             return
         if not _app_claim():
             continue
+        if gh_link_slow():
+            log_event("Node Talker Mobile: the connection is slow -- not downloading the app by itself; "
+                      "press Check on its row in Components", "info")
+            return
         log_event(f"Node Talker Mobile: first download from {_gh_source_label()}", "info")
         if _app_fetch_bg() is not None:
             return
@@ -5147,11 +5243,11 @@ def _gh_version_of (cand ,local ):
         if cached is None :
             raise GhRejected ("no version line found in the file")
         return cached 
-    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
-    if _git_blob_id (data )!=cand ["blob"]:
+    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =GITHUB_HEAD_BYTES )
+    if len (data )<GITHUB_HEAD_BYTES and _git_blob_id (data )!=cand ["blob"]:
         raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
     try :
-        text =data .decode ("utf-8")
+        text =data .decode ("utf-8","ignore")if len (data )>=GITHUB_HEAD_BYTES else data .decode ("utf-8")
     except UnicodeDecodeError :
         raise GhRejected ("not UTF-8 text")
     ver ,_si ,_su =_scan_header_text (text )
@@ -5308,6 +5404,7 @@ def _gh_check_bg (gen =None ):
     full_update_preview()
 
 FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_FETCH_MISSING_MAX", "8")))
+SLOW_FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_SLOW_FETCH_MISSING_MAX", "2")))
 _FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_fetched.json")
 _fetched_lock = threading.Lock()
 
@@ -5392,6 +5489,11 @@ def _gh_fetch_missing(entries):
         return []
     comps = {c["category"]: c for c in COMPONENTS if c["category"] != "instmon" and c["category"] not in NO_CARD_CATEGORIES}
     got = []
+    limit = FETCH_MISSING_MAX
+    if gh_link_slow() and limit > SLOW_FETCH_MISSING_MAX:
+        limit = SLOW_FETCH_MISSING_MAX
+        log_event(f"GitHub: the connection is slow ({gh_link_note() or 'forced'}) -- downloading at most "
+                  f"{limit} missing tool(s) this time", "info")
     for entry in entries:
         comp = comps.get(entry["category"])
         if comp is None or os.path.isfile(resolve_installed_target(comp)) or _gh_other_build(entry):
@@ -5400,8 +5502,8 @@ def _gh_fetch_missing(entries):
         allow_older = status == "newer_local" and channel_get() == "stable" and _fetched_other_channel(entry)
         if status not in _GH_UPDATABLE and not allow_older:
             continue
-        if len(got) >= FETCH_MISSING_MAX:
-            log_event(f"GitHub: stopped after {FETCH_MISSING_MAX} downloads; press Check GitHub again for the rest", "info")
+        if len(got) >= limit:
+            log_event(f"GitHub: stopped after {limit} downloads; press Check GitHub again for the rest", "info")
             break
         with _gh_lock:
             if entry["name"] in _gh_state["busy"]:

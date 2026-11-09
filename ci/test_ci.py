@@ -3600,7 +3600,7 @@ class InstmonFetchMissingTests(unittest.TestCase):
         patches = [
             mock.patch.dict(m.LIB_SUBDIRS, self.lib),
             mock.patch.object(m, "_FETCHED_PATH", os.path.join(d, "fetched.json")),
-            mock.patch.object(m, "_gh_fetch_impl", lambda url, limit: self.net[url]),
+            mock.patch.object(m, "_gh_fetch_impl", lambda url, limit, head=None: self.net[url]),
             mock.patch.object(m, "resolve_installed_target", lambda comp: self.installed.get(comp["category"], "/nonexistent/x")),
             mock.patch.object(m, "recorder_busy", lambda: None),
             mock.patch.object(m, "channel_get", lambda: self.channel),

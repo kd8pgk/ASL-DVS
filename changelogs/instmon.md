@@ -1,5 +1,17 @@
 # instmon changelog
 
+## 2.96.0 (2026-11-09)
+
+Downloads from GitHub on dial-up speeds and worse. This is a release: download behaviour changed. Measured against GitHub: `instmon_v2_94_0_20261109.py` is 720,245 bytes; it now crosses the line as 192,962 bytes (73% less) and decodes to the same bytes (same git blob id). Reading a file's version used to download the whole file (up to 1.6 MB); it now reads the first 16 KB.
+
+- **Downloads ask for gzip.** Every GitHub request sends `Accept-Encoding: gzip` and the reply is unpacked on the node. The tool scripts shrink to about a quarter on the wire. This is the "zip" saving without changing what is stored in the repo: GitHub does the packing. The checks are unchanged: the unpacked bytes must still match GitHub's git blob id (tools) or checksum (app), and the unpacked size is held to the same limit as before, so a small download that unpacks to something huge is refused.
+- **Resume still works.** A dropped download continues from the byte it reached (the position is counted in the packed stream). If the server answers a resume in a different encoding, or the pieces do not join into a valid gzip stream, that one file starts over once instead of failing.
+- **Checking for updates reads 16 KB per file, not the whole file.** The version line is at the top of every tool, so Check GitHub, the stable list and Full Update ask for the first 16 KB (`Range`) instead of the full file. If the first 16 KB cannot be read as text or a file is small enough to arrive whole, it is checked against GitHub's blob id as before. The full file is still downloaded, and checked, when it is installed or fetched.
+- **No fixed 30-minute cap for a file that is moving.** The cap for one file now grows with its size (assuming at least 300 bytes a second), up to 4 hours (`INSTMON_GITHUB_MAX_DOWNLOAD_SLOW_SEC`). A download is abandoned when, after 2 minutes, it runs under 300 bytes a second (`INSTMON_GITHUB_MIN_BPS`), and the message says the connection is too slow.
+- **instmon notices a slow line.** It keeps the speed of recent GitHub transfers. Under 30 KB/s (`INSTMON_GITHUB_SLOW_KBPS`) the link counts as slow; `INSTMON_SLOW_LINK=on` or `off` overrides it. On a slow link Check GitHub fetches at most 2 tools that are not installed (`INSTMON_SLOW_FETCH_MISSING_MAX`; was 8), the first automatic download of the manuals stops and leaves the rest for the Get from GitHub button, and the automatic first download of Node Talker Mobile waits for its Check button. Buttons you press still download everything.
+- Tests: `ci/test_instmon_downloads.py` (21 tests: gzip decode, unknown encoding, size limit, damaged and truncated streams, resume, restart after a bad resume, header peek, every tool's version inside the first 16 KB, slow-line rules). `ci/test_ci.py` mock accepts the new `head` argument.
+- Not changed: the page and its API (see 2.95.0). Manuals (PDF) and the app (APK) are already compressed; zipping them saves about 16% and nothing, so they are still downloaded as they are.
+
 ## 2.95.0 (2026-11-09)
 
 Dial-up speeds and worse. This is a release: server and page behaviour changed. Measured on an empty node with Chromium throttled to a 56k modem (7,000 B/s down, 150 ms): the page loads in 11.6 s instead of 36 s, and an idle page uses about 430 B/s (6% of the link) instead of 4,360 B/s (62 to 87% of it). On a 9.6 kbps link with 400 ms latency it uses about 180 B/s.
@@ -55,7 +67,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_95_0_20261109.py`. Newest entries first.
+Current file: `instmon_v2_96_0_20261109.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
