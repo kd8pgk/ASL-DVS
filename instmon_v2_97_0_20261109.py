@@ -40,8 +40,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.96.0"
-DATE_STR ="2026-11-02"
+VERSION ="2.97.0"
+DATE_STR ="2026-11-09"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -4372,12 +4372,15 @@ GITHUB_BRANCH =os .environ .get ("INSTMON_GITHUB_BRANCH","main")
 GITHUB_RAW_BASE =f"https://raw.githubusercontent.com/{GITHUB_REPO }/{GITHUB_BRANCH }"
 GITHUB_API_LIST_URL =(f"https://api.github.com/repos/{GITHUB_REPO }/contents"
 f"?ref={urllib .parse .quote (GITHUB_BRANCH ,safe ='')}")
-GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","15"))
+GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","30"))
 GITHUB_RETRIES = max(0, int(os.environ.get("INSTMON_GITHUB_RETRIES", "2")))
 GITHUB_MIN_BPS = max(50, int(os.environ.get("INSTMON_GITHUB_MIN_BPS", "300")))
 GITHUB_MAX_DOWNLOAD_SLOW_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SLOW_SEC", "14400"))
 GITHUB_SLOW_BPS = int(os.environ.get("INSTMON_GITHUB_SLOW_KBPS", "30")) * 1024
-GITHUB_HEAD_BYTES = 16384
+GITHUB_HEAD_BYTES = 4096
+GITHUB_HEAD_STEPS = (4096, 65536)
+GITHUB_TIMEOUT_MAX_SEC = 120
+GITHUB_MAX_STALLED_FILES = 3
 _gh_rate_lock = threading.Lock()
 _gh_rate = {"bps": None}
 
@@ -4440,9 +4443,11 @@ _gh_state ={
 "event_level":"info",
 "gen":0 ,
 "started_at":None ,
+"progress_at":None ,
 }
 
 GH_CHECK_LIMIT_SEC =int (os .environ .get ("INSTMON_GH_CHECK_LIMIT_SEC","240"))
+GH_CHECK_MAX_SEC =int (os .environ .get ("INSTMON_GH_CHECK_MAX_SEC","3600"))
 
 _gh_version_cache ={}
 _GH_VERSION_CACHE_MAX =200 
@@ -4581,7 +4586,7 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
     head = enc.get("head")
     req = urllib.request.Request(url, headers=headers)
     started = time.monotonic()
-    with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT_SEC, context=ctx) as resp:
+    with urllib.request.urlopen(req, timeout=enc.get("timeout", GITHUB_TIMEOUT_SEC), context=ctx) as resp:
         if not resp.geturl().lower().startswith("https://"):
             raise GhRejected("GitHub redirected the download off HTTPS")
         coding = (resp.headers.get("Content-Encoding") or "").strip().lower()
@@ -4648,6 +4653,7 @@ def _gh_fetch_https(url, max_bytes, head=None):
             "Cache-Control": "no-cache",
             "Accept-Encoding": "identity" if head else "gzip",
         }
+        enc["timeout"] = min(GITHUB_TIMEOUT_SEC * (attempt + 1), max(GITHUB_TIMEOUT_SEC, GITHUB_TIMEOUT_MAX_SEC))
         if head:
             headers["Range"] = f"bytes={total}-{head - 1}"
         elif total:
@@ -4692,11 +4698,11 @@ def _gh_fetch_https(url, max_bytes, head=None):
             if isinstance(reason, ssl.SSLCertVerificationError):
                 raise GhRejected(f"GitHub's certificate could not be verified ({reason})")
             if isinstance(reason, (socket.timeout, TimeoutError)):
-                last = f"GitHub did not answer within {GITHUB_TIMEOUT_SEC}s"
+                last = f"GitHub did not answer within {enc['timeout']}s"
             else:
                 last = f"cannot reach GitHub -- is this node online? ({reason})"
         except (socket.timeout, TimeoutError):
-            last = f"GitHub stopped sending {shown} -- nothing arrived for {GITHUB_TIMEOUT_SEC}s"
+            last = f"GitHub stopped sending {shown} -- nothing arrived for {enc['timeout']}s"
         except (OSError, http.client.HTTPException) as exc:
             last = f"the connection to GitHub dropped during {shown} ({exc})"
         except ValueError as exc:
@@ -5243,14 +5249,22 @@ def _gh_version_of (cand ,local ):
         if cached is None :
             raise GhRejected ("no version line found in the file")
         return cached 
-    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =GITHUB_HEAD_BYTES )
-    if len (data )<GITHUB_HEAD_BYTES and _git_blob_id (data )!=cand ["blob"]:
-        raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
-    try :
-        text =data .decode ("utf-8","ignore")if len (data )>=GITHUB_HEAD_BYTES else data .decode ("utf-8")
-    except UnicodeDecodeError :
-        raise GhRejected ("not UTF-8 text")
-    ver ,_si ,_su =_scan_header_text (text )
+    ver =None 
+    for step in GITHUB_HEAD_STEPS +(None ,):
+        if step is None :
+            data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
+        else :
+            data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =step )
+        whole =step is None or len (data )<step 
+        if whole and _git_blob_id (data )!=cand ["blob"]:
+            raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
+        try :
+            text =data .decode ("utf-8")if whole else data .decode ("utf-8","ignore")
+        except UnicodeDecodeError :
+            raise GhRejected ("not UTF-8 text")
+        ver ,_si ,_su =_scan_header_text (text )
+        if ver or whole :
+            break 
     if len (_gh_version_cache )>=_GH_VERSION_CACHE_MAX :
         _gh_version_cache .clear ()
     _gh_version_cache [cand ["blob"]]=ver or None 
@@ -5325,6 +5339,8 @@ def _gh_collect_full (gen =None ):
         progress (f"GitHub: main lists {len (cands )} file(s)")
     listed =[dict (c )for c in cands ]
     newest ={}
+    stalled =0 
+    _gh_progress ()
     for n ,cand in enumerate (cands ,1 ):
         local =_gh_local_files (cand ["category"],cand ["glob"])
         if gen is not None and not _gh_version_known (cand ,local ):
@@ -5333,16 +5349,31 @@ def _gh_collect_full (gen =None ):
             ver =_gh_version_of (cand ,local )
         except GhRejected as exc :
             if _gh_is_network_error (exc ):
-                raise 
+                if not _gh_is_stall (exc )or stalled +1 >=GITHUB_MAX_STALLED_FILES :
+                    raise 
+                stalled +=1 
+                skipped +=1 
+                log_event (f"GitHub: {cand ['name']} did not arrive ({exc }) -- left for the next check","warn")
+                continue 
             skipped +=1 
             log_event (f"GitHub: skipped {cand ['name']}: {exc }","warn")
             continue 
+        stalled =0 
+        _gh_progress ()
         cand ["version"]=ver 
         kind =(cand ["category"],cand ["glob"],_gh_variant (ver ))
         if kind not in newest or _version_sort_key (ver )>_version_sort_key (newest [kind ]["version"]):
             newest [kind ]=cand 
     entries =[_gh_compare (e )for e in sorted (newest .values (),key =lambda e :(e ["category"],e ["name"]))]
     return entries ,skipped ,listed 
+
+def _gh_progress():
+    with _gh_lock:
+        _gh_state["progress_at"] = time.monotonic()
+
+def _gh_is_stall(exc):
+    text = str(exc)
+    return any(s in text for s in ("did not answer", "stopped sending", "connection to GitHub dropped", "too slow"))
 
 def _gh_is_network_error(exc):
     text = str(exc)
@@ -5534,6 +5565,13 @@ def _gh_check_timeout (gen ):
     with _gh_lock :
         if not _gh_check_current (gen ):
             return 
+        now =time .monotonic ()
+        last =_gh_state .get ("progress_at")or _gh_state .get ("started_at")or now 
+        if now -last <GH_CHECK_LIMIT_SEC and now -(_gh_state .get ("started_at")or now )<GH_CHECK_MAX_SEC :
+            timer =threading .Timer (max (1 ,GH_CHECK_LIMIT_SEC -(now -last )),_gh_check_timeout ,args =(gen ,))
+            timer .daemon =True 
+            timer .start ()
+            return 
         _gh_state ["gen"]+=1 
         msg =(f"GitHub did not finish answering within {GH_CHECK_LIMIT_SEC //60 } min -- "
         "check this node's internet connection, then press Check GitHub again")
@@ -5552,6 +5590,7 @@ def gh_start_check ():
         _gh_state ["phase"]="checking"
         _gh_state ["error"]=None 
         _gh_state ["started_at"]=time .monotonic ()
+        _gh_state ["progress_at"]=None 
     log_event (f"GitHub check started ({_gh_source_label ()})","info")
     timer =threading .Timer (GH_CHECK_LIMIT_SEC ,_gh_check_timeout ,args =(gen ,))
     timer .daemon =True 

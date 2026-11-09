@@ -1,5 +1,16 @@
 # instmon changelog
 
+## 2.97.0 (2026-11-09)
+
+A slow, unsteady line no longer ends the GitHub check. This is a release: download behaviour changed. It follows a log from a real node where Check GitHub read 10 of 16 files in about 3 minutes (a file took anywhere from 1 s to over 60 s) and then failed with "GitHub did not answer within 15s".
+
+- **Longer waits that grow.** The wait for GitHub to answer is 30 s on the first try, 60 s on the second and 90 s on the third (was 15 s each; `INSTMON_GITHUB_TIMEOUT_SEC` sets the first, up to 120 s).
+- **One stuck file does not end the check.** A file that times out on every try is skipped ("left for the next check"), counted in the skipped total, and the check goes on. The versions already read are remembered, so pressing Check GitHub again only asks for what is missing. The check stops when 3 files in a row stall, at once when the node is offline ("cannot reach GitHub"), or when GitHub's hourly limit is hit.
+- **The check's time limit follows progress.** It used to stop 4 minutes after it started whatever happened. Now it stops after 4 minutes with no file finished, and in any case after 1 hour (`INSTMON_GH_CHECK_MAX_SEC`).
+- **Smaller version peek.** The version line is within the first 1 KB of every tool, so the peek asks for 4 KB (was 16 KB). If a file has no version in those 4 KB it asks for 64 KB, then the whole file, so an odd file is still read correctly.
+- The title line date showed `2026-11-02`; it now shows the release date.
+- Tests: `ci/test_instmon_downloads.py` is now 28 tests (timeouts grow, stalled files skipped, three in a row stop, success resets the count, offline stops at once, the time limit waits while files keep arriving, a version far down a file is found).
+
 ## 2.96.0 (2026-11-09)
 
 Downloads from GitHub on dial-up speeds and worse. This is a release: download behaviour changed. Measured against GitHub: `instmon_v2_94_0_20261109.py` is 720,245 bytes; it now crosses the line as 192,962 bytes (73% less) and decodes to the same bytes (same git blob id). Reading a file's version used to download the whole file (up to 1.6 MB); it now reads the first 16 KB.
@@ -67,7 +78,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_96_0_20261109.py`. Newest entries first.
+Current file: `instmon_v2_97_0_20261109.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
