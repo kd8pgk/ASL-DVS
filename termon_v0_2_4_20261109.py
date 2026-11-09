@@ -35,7 +35,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -46,6 +46,9 @@ CONFIG_DIR = os.environ.get("TERMON_CONFIG_DIR", "/etc/asl_dvs")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "termon.conf")
 CONFIG_SECTION = "termon"
 DEFAULT_PORT = 7878
+BTOP_DEFAULT_MS = 100
+BTOP_MIN_MS = 100
+BTOP_MAX_MS = 10000
 PYTHON_BIN = "/usr/bin/python3"
 RPT_CONF = os.environ.get("TERMON_RPT_CONF", "/etc/asterisk/rpt.conf")
 TALKER_SERVICES = ("nodetalker.service", "nodelisten.service")
@@ -198,8 +201,9 @@ def load_config():
     if web_user == "root" or not USER_RE.match(web_user):
         web_user = DEFAULT_WEB_USER
     bind_ip = str(sec.get("bind_session_ip", "false")).strip().lower() in ("1", "true", "yes", "on")
+    btop_ms = _clamp(sec.get("btop_update_ms", BTOP_DEFAULT_MS), BTOP_MIN_MS, BTOP_MAX_MS, BTOP_DEFAULT_MS)
     return {"port": port, "monitor_last": last, "https": https, "shell_user": shell_user,
-            "web_user": web_user, "bind_session_ip": bind_ip,
+            "web_user": web_user, "bind_session_ip": bind_ip, "btop_update_ms": btop_ms,
             "allowed_hosts": _parse_hosts(sec.get("allowed_hosts", ""))}
 
 
@@ -210,6 +214,7 @@ def save_config(cfg):
                           "shell_user": cfg.get("shell_user", ""),
                           "web_user": cfg.get("web_user", DEFAULT_WEB_USER),
                           "bind_session_ip": "true" if cfg.get("bind_session_ip") else "false",
+                          "btop_update_ms": str(cfg.get("btop_update_ms", BTOP_DEFAULT_MS)),
                           "allowed_hosts": ",".join(cfg.get("allowed_hosts", []))}
     buf = io.StringIO()
     cp.write(buf)
@@ -967,6 +972,22 @@ def _install_source_problem(path):
     return ""
 
 
+_btop_flag_cache = {}
+
+
+def _btop_args(exe, ms):
+    ok = _btop_flag_cache.get(exe)
+    if ok is None:
+        try:
+            r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=5,
+                               stdin=subprocess.DEVNULL, env=_clean_env(TERM="dumb"))
+            ok = "--update" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        _btop_flag_cache[exe] = ok
+    return ["--update", str(ms)] if ok else []
+
+
 def _no_login_shell(pw):
     return not pw.pw_shell or os.path.basename(pw.pw_shell) in _NO_LOGIN_SHELLS
 
@@ -1125,6 +1146,8 @@ class Privileged:
             if not exe:
                 raise PrivError(409, f"{prog} is not installed. Use the Setup card to install it.")
             argv, label = [exe], prog
+            if prog == "btop":
+                argv += _btop_args(exe, cfg["btop_update_ms"])
             _remember_monitor(prog)
         else:
             raise PrivError(400, "Unknown terminal kind.")

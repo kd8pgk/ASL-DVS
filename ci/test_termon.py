@@ -1243,6 +1243,103 @@ class FirewallTests(unittest.TestCase):
         self.assertEqual(self.rules("ufw"), [])
 
 
+class MonitorArgsTests(unittest.TestCase):
+    def setUp(self):
+        self.bin = tempfile.mkdtemp(prefix="mon-", dir=WORK)
+        self.write("btop", '#!/bin/sh\ncase "$1" in --help) echo "  -u, --update <ms>  set the program update rate"; exit 0;; esac\nsleep 30\n')
+        self.write("top", "#!/bin/sh\nsleep 30\n")
+        self.env = mock.patch.dict(os.environ, {"PATH": self.bin + os.pathsep + os.environ["PATH"]})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        tm._btop_flag_cache.clear()
+        self.addCleanup(tm._btop_flag_cache.clear)
+        self.priv = tm.Privileged()
+        cfg = tm.load_config()
+        self.addCleanup(lambda: tm.save_config(dict(cfg, btop_update_ms=tm.BTOP_DEFAULT_MS)))
+
+    def write(self, name, text):
+        path = os.path.join(self.bin, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        os.chmod(path, 0o755)
+
+    def set_ms(self, value):
+        cfg = tm.load_config()
+        cfg["btop_update_ms"] = value
+        tm.save_config(cfg)
+
+    def started(self, prog):
+        info = self.priv.spawn("monitor", prog, 24, 80)
+        self.addCleanup(lambda: (self.priv.signal(info["pid"], "KILL"), os.close(info["fd"]), self.priv.wait(info["pid"])))
+        deadline = time.time() + 10
+        argv = []
+        while time.time() < deadline:
+            with open(f"/proc/{info['pid']}/cmdline", "rb") as fh:
+                argv = [a.decode() for a in fh.read().split(b"\0") if a]
+            if argv and "python" not in os.path.basename(argv[0]):
+                break
+            time.sleep(0.1)
+        return argv
+
+    def test_btop_starts_at_100_ms_by_default(self):
+        argv = self.started("btop")
+        self.assertEqual(argv[-2:], ["--update", "100"], argv)
+
+    def test_the_rate_can_be_set_in_the_config_and_is_kept_in_range(self):
+        for text, want in (("250", "250"), ("10", "100"), ("0", "100"), ("-5", "100"), ("999999", "10000"),
+                           ("fast", "100"), ("", "100")):
+            cfg = os.path.join(tm.CONFIG_DIR, "termon.conf")
+            cp = tm.configparser.ConfigParser()
+            cp.read(cfg)
+            if not cp.has_section("termon"):
+                cp.add_section("termon")
+            cp["termon"]["btop_update_ms"] = text
+            with open(cfg, "w") as fh:
+                cp.write(fh)
+            self.assertEqual(str(tm.load_config()["btop_update_ms"]), want, text)
+
+    def test_a_configured_rate_is_used(self):
+        self.set_ms(250)
+        self.assertEqual(self.started("btop")[-2:], ["--update", "250"])
+
+    def test_an_older_btop_without_the_option_is_started_plain(self):
+        self.write("btop", '#!/bin/sh\ncase "$1" in --help) echo "usage: btop [-h] [-v]"; exit 0;; esac\nsleep 30\n')
+        argv = self.started("btop")
+        self.assertNotIn("--update", argv)
+        self.assertEqual(os.path.basename(argv[-1]), "btop")
+
+    def test_a_btop_that_fails_its_help_is_started_plain(self):
+        self.write("btop", "#!/bin/sh\nexit 3\n")
+        self.assertEqual(tm._btop_args(os.path.join(self.bin, "btop"), 100), [])
+
+    def test_other_monitors_get_no_extra_arguments(self):
+        argv = self.started("top")
+        self.assertEqual(os.path.basename(argv[-1]), "top")
+        self.assertNotIn("--update", argv)
+
+    def test_the_support_check_runs_once_per_program(self):
+        exe = os.path.join(self.bin, "btop")
+        calls = []
+        real = tm.subprocess.run
+        with mock.patch.object(tm.subprocess, "run", lambda *a, **k: calls.append(a) or real(*a, **k)):
+            tm._btop_args(exe, 100)
+            tm._btop_args(exe, 200)
+        self.assertEqual(len(calls), 1)
+
+    def test_the_rate_survives_a_save_and_load(self):
+        cfg = tm.load_config()
+        self.assertEqual(cfg["btop_update_ms"], 100)
+        cfg["btop_update_ms"] = 400
+        tm.save_config(cfg)
+        self.assertEqual(tm.load_config()["btop_update_ms"], 400)
+
+    @unittest.skipUnless(shutil.which("btop"), "btop is not installed here")
+    def test_the_real_btop_accepts_the_option(self):
+        with mock.patch.dict(os.environ, {"PATH": os.environ["PATH"].replace(self.bin + os.pathsep, "")}):
+            tm._btop_flag_cache.clear()
+            self.assertEqual(tm._btop_args(shutil.which("btop"), 100), ["--update", "100"])
+
+
 def tearDownModule():
     shutil.rmtree(WORK, ignore_errors=True)
 
