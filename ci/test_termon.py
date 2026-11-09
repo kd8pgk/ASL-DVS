@@ -961,6 +961,160 @@ class CertificateTests(TermonBase):
             self.assertEqual(self.c.json("POST", path, {"confirm": True})[0], 401, path)
 
 
+class QuietBeforeSignInTests(TermonBase):
+    def test_health_and_whoami_say_nothing_but_the_basics(self):
+        st, h, j = self.c.json("GET", "/api/health")
+        self.assertEqual((st, j), (200, {"ok": True}))
+        st, _, j = self.c.json("GET", "/api/whoami")
+        self.assertEqual(j, {"ok": True, "logged_in": False})
+        self.c.login()
+        self.assertEqual(self.c.json("GET", "/api/whoami")[2], {"ok": True, "logged_in": True})
+
+    def test_page_and_headers_do_not_name_the_version(self):
+        st, h, body = self.c.request("GET", "/")
+        text = body.decode("utf-8")
+        self.assertNotIn(tm.VERSION, text)
+        self.assertNotIn("termon", h.get("Server", "").lower())
+        self.assertNotIn("Python", h.get("Server", ""))
+        st, h, _ = self.c.request("GET", "/api/nothing")
+        self.assertNotIn("Python", h.get("Server", ""))
+
+    def test_version_comes_after_sign_in(self):
+        self.c.login()
+        self.assertEqual(self.c.json("GET", "/api/setup")[2]["version"], tm.VERSION)
+
+    def test_error_replies_do_not_name_the_software(self):
+        out = raw_exchange(self.port, b"FOO / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        self.assertNotIn(b"Python", out)
+        self.assertNotIn(b"BaseHTTP", out)
+
+
+class FilePermissionTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="perm-", dir=WORK)
+        self.file = os.path.join(self.dir, "t.py")
+        with open(self.file, "w") as f:
+            f.write("x = 1\n")
+        os.chmod(self.file, 0o644)
+        os.chmod(self.dir, 0o755)
+
+    def test_root_owned_and_closed_to_others_is_fine(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root")
+        self.assertEqual(tm._file_problem(self.file), "")
+
+    def test_a_file_others_can_write_is_refused(self):
+        os.chmod(self.file, 0o666)
+        self.assertIn("can be changed", tm._file_problem(self.file))
+        os.chmod(self.file, 0o664)
+        self.assertIn("can be changed", tm._file_problem(self.file))
+
+    def test_a_folder_others_can_write_is_refused(self):
+        os.chmod(self.dir, 0o777)
+        self.assertIn("can be changed", tm._file_problem(self.file))
+
+    def test_a_symlink_is_judged_by_its_target(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root")
+        link = os.path.join(self.dir, "link.py")
+        os.symlink(self.file, link)
+        os.chmod(self.file, 0o666)
+        self.assertIn("can be changed", tm._file_problem(link))
+
+    def test_a_file_owned_by_someone_else_is_refused(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root")
+        os.chown(self.file, 65534, 65534)
+        self.assertIn("does not belong to root", tm._file_problem(self.file))
+
+    def test_install_source_rules(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root")
+        self.assertEqual(tm._install_source_problem(self.file), "")
+        os.chmod(self.file, 0o666)
+        self.assertIn("changed", tm._install_source_problem(self.file))
+        os.chmod(self.file, 0o644)
+        os.chown(self.file, 12345, 12345)
+        with mock.patch.dict(os.environ, {"SUDO_UID": ""}):
+            self.assertIn("12345", tm._install_source_problem(self.file))
+        with mock.patch.dict(os.environ, {"SUDO_UID": "12345"}):
+            self.assertEqual(tm._install_source_problem(self.file), "")
+        with mock.patch.dict(os.environ, {"SUDO_UID": "999"}):
+            self.assertIn("12345", tm._install_source_problem(self.file))
+
+    def test_install_refuses_a_file_others_can_write_before_touching_anything(self):
+        if os.geteuid() != 0:
+            self.skipTest("needs root")
+        import subprocess
+        copy = os.path.join(self.dir, "termon_copy.py")
+        shutil.copyfile(FILE, copy)
+        os.chmod(copy, 0o666)
+        with mock.patch.dict(os.environ, {"SUDO_UID": ""}):
+            r = subprocess.run([sys.executable, copy, "--install"], capture_output=True, text=True,
+                               env=dict(os.environ, TERMON_CONFIG_DIR=os.path.join(self.dir, "cfg")))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Refusing to install", r.stderr + r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "cfg", "termon.conf")))
+
+    def test_the_helper_unit_gives_the_stop_a_time_limit(self):
+        self.assertIn("TimeoutStopSec=10\n", tm._helper_unit_text())
+
+
+class LeftoverTests(unittest.TestCase):
+    def setUp(self):
+        self.priv = tm.Privileged()
+        self.priv.pids_path = os.path.join(WORK, "pids-%d.json" % time.time_ns())
+
+    def start_sleeper(self):
+        import subprocess
+        p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return p
+
+    def test_spawned_terminals_are_recorded_and_forgotten(self):
+        info = self.priv.spawn("shell", None, 24, 80)
+        try:
+            with open(self.priv.pids_path) as f:
+                table = json.load(f)
+            self.assertIn(str(info["pid"]), table)
+            self.assertEqual(table[str(info["pid"])], tm._proc_start(info["pid"]))
+        finally:
+            self.priv.signal(info["pid"], "KILL")
+            os.close(info["fd"])
+            self.priv.wait(info["pid"])
+        with open(self.priv.pids_path) as f:
+            self.assertEqual(json.load(f), {})
+
+    def test_a_new_helper_ends_what_an_old_one_left(self):
+        p = self.start_sleeper()
+        with open(self.priv.pids_path, "w") as f:
+            json.dump({str(p.pid): tm._proc_start(p.pid)}, f)
+        self.assertEqual(self.priv.kill_leftovers(), 1)
+        p.wait(timeout=5)
+        self.assertIsNotNone(p.returncode)
+
+    def test_a_reused_process_number_is_left_alone(self):
+        p = self.start_sleeper()
+        with open(self.priv.pids_path, "w") as f:
+            json.dump({str(p.pid): "1"}, f)
+        self.assertEqual(self.priv.kill_leftovers(), 0)
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+
+    def test_garbage_in_the_file_is_ignored(self):
+        for text in ("not json", "[1,2]", '{"x": "1", "0": "5", "1": "5"}'):
+            with open(self.priv.pids_path, "w") as f:
+                f.write(text)
+            self.assertEqual(self.priv.kill_leftovers(), 0)
+
+    def test_a_terminal_ends_when_the_web_side_goes_away(self):
+        info = self.priv.spawn("shell", None, 24, 80)
+        os.close(info["fd"])
+        code = self.priv.wait(info["pid"])
+        self.assertIsNotNone(code)
+        self.assertFalse(os.path.exists(f"/proc/{info['pid']}"))
+
+
 def tearDownModule():
     shutil.rmtree(WORK, ignore_errors=True)
 

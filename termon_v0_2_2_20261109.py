@@ -21,6 +21,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import ssl
 import struct
 import syslog
@@ -34,7 +35,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 DATE_STR = "2026-11-09"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -850,6 +851,47 @@ def _priv(fn, *args):
         raise HttpErr(exc.code, exc.msg)
 
 
+def _proc_start(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return ""
+
+
+def _file_problem(path):
+    real = os.path.realpath(path)
+    cur = real
+    while True:
+        try:
+            st = os.stat(cur)
+        except OSError as exc:
+            return f"{cur}: {exc.strerror}"
+        if st.st_uid != 0:
+            return f"{cur} does not belong to root"
+        sticky_dir = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
+        if st.st_mode & 0o022 and not sticky_dir:
+            return f"{cur} can be changed by group or others"
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return ""
+        cur = parent
+
+
+def _install_source_problem(path):
+    st = os.stat(path)
+    if st.st_mode & 0o022:
+        return "it can be changed by group or others"
+    allowed = {0}
+    try:
+        allowed.add(int(os.environ.get("SUDO_UID", "")))
+    except ValueError:
+        pass
+    if st.st_uid not in allowed:
+        return f"it belongs to uid {st.st_uid}, not root or the user running sudo"
+    return ""
+
+
 def _no_login_shell(pw):
     return not pw.pw_shell or os.path.basename(pw.pw_shell) in _NO_LOGIN_SHELLS
 
@@ -919,7 +961,45 @@ class Privileged:
         self._lock = threading.Lock()
         self._fails = deque()
         self.sock_path = None
+        self.pids_path = None
         threading.Thread(target=self._reap_loop, daemon=True).start()
+
+    def _save_pids(self):
+        if not self.pids_path:
+            return
+        with self._lock:
+            table = {str(pid): rec[2] for pid, rec in self._procs.items()}
+        try:
+            atomic_write(self.pids_path, json.dumps(table), mode=0o600)
+        except OSError as exc:
+            log(f"cannot record running terminals: {exc}")
+
+    def kill_leftovers(self):
+        if not self.pids_path:
+            return 0
+        try:
+            with open(self.pids_path, encoding="utf-8") as fh:
+                table = json.load(fh)
+        except (OSError, ValueError):
+            return 0
+        killed = 0
+        for pid_text, started in (table.items() if isinstance(table, dict) else ()):
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid > 1 and started and _proc_start(pid) == started:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                    killed += 1
+                    log(f"helper: ended terminal process {pid} left by an earlier helper")
+                except OSError:
+                    pass
+        try:
+            atomic_write(self.pids_path, "{}", mode=0o600)
+        except OSError:
+            pass
+        return killed
 
     def available(self):
         return True
@@ -943,7 +1023,7 @@ class Privileged:
             time.sleep(30)
             now = time.time()
             with self._lock:
-                for pid, (proc, born) in list(self._procs.items()):
+                for pid, (proc, born, _) in list(self._procs.items()):
                     if proc.poll() is not None and now - born > REAP_AFTER_SEC:
                         del self._procs[pid]
 
@@ -994,7 +1074,8 @@ class Privileged:
         finally:
             os.close(slave)
         with self._lock:
-            self._procs[proc.pid] = (proc, time.time())
+            self._procs[proc.pid] = (proc, time.time(), _proc_start(proc.pid))
+        self._save_pids()
         return {"pid": proc.pid, "fd": master, "label": label}
 
     def signal(self, pid, name):
@@ -1016,6 +1097,7 @@ class Privileged:
         code = rec[0].wait()
         with self._lock:
             self._procs.pop(pid, None)
+        self._save_pids()
         return code
 
     def install(self, pkg, who=""):
@@ -2413,7 +2495,7 @@ def _host_only(h):
 
 def r_page(h, q):
     nonce = secrets.token_urlsafe(18)
-    body = PAGE.replace("__VERSION__", VERSION).replace("__NONCE__", nonce)
+    body = PAGE.replace("__NONCE__", nonce)
     h._send(200, "text/html; charset=utf-8", body.encode("utf-8"), csp=_csp(nonce))
 
 
@@ -2425,11 +2507,11 @@ def r_static(h, name):
 
 
 def r_health(h, q):
-    h._json(200, {"ok": True, "name": APP_NAME, "version": VERSION})
+    h._json(200, {"ok": True})
 
 
 def r_whoami(h, q):
-    h._json(200, {"ok": True, "logged_in": _session_valid(_token_of(h), ip=h._peer()), "version": VERSION})
+    h._json(200, {"ok": True, "logged_in": _session_valid(_token_of(h), ip=h._peer())})
 
 
 def r_login(h, q):
@@ -2744,7 +2826,7 @@ POST_ROUTES = {
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "termon"
+    server_version = "http"
     sys_version = ""
     timeout = REQ_TIMEOUT_SEC
 
@@ -3237,7 +3319,8 @@ def _helper_unit_text():
             f"WatchdogSec=60\n"
             f"Restart=on-failure\n"
             f"RestartSec=3\n"
-            f"KillMode=control-group\n\n"
+            f"KillMode=control-group\n"
+            f"TimeoutStopSec=10\n\n"
             f"[Install]\n"
             f"WantedBy=multi-user.target\n")
 
@@ -3259,15 +3342,30 @@ def _report_talker():
               "  termon does not edit rpt.conf. Remove those lines by hand, then reload Asterisk.")
 
 
+def _sha256_file(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
 def install_service():
     _require_root("--install")
     _refuse_inside_termon("--install")
-    _remove_existing()
     src = os.path.realpath(__file__)
+    problem = _install_source_problem(src)
+    if problem:
+        sys.exit(f"Refusing to install {src}: {problem}. This file will run as root; "
+                 "copy it somewhere only you can write and run --install again.")
+    _remove_existing()
     os.makedirs(INSTALL_DIR, exist_ok=True)
+    os.chown(INSTALL_DIR, 0, 0)
+    os.chmod(INSTALL_DIR, 0o755)
     lib = os.path.join(INSTALL_DIR, f"termon-{VERSION}.py")
     if os.path.realpath(lib) != src:
         shutil.copyfile(src, lib)
+        if _sha256_file(lib) != _sha256_file(src):
+            os.unlink(lib)
+            sys.exit("The installed copy does not match the source file; nothing was installed.")
+    os.chown(lib, 0, 0)
     os.chmod(lib, 0o755)
     tmp_link = INSTALL_BIN_PATH + ".new"
     if os.path.lexists(tmp_link):
@@ -3361,7 +3459,7 @@ a.lnk{color:var(--accent);word-break:break-all}
 </head>
 <body>
 <header>
-  <h1>Terminal Monitor</h1><span class="ver">v__VERSION__</span>
+  <h1>Terminal Monitor</h1><span class="ver" id="ver" hidden></span>
   <div class="tabs">
     <button class="btn" id="tab-monitor" type="button">Monitor</button>
     <button class="btn" id="tab-terminal" type="button">Terminal</button>
@@ -3835,6 +3933,7 @@ a.lnk{color:var(--accent);word-break:break-all}
     $('setup-note').textContent = s.helper ? '' : 'The root helper is not answering, so installs and settings are disabled.';
     applyAccount(s);
     applyCert(s);
+    if (s.version) { var vb = $('ver'); vb.textContent = 'v' + s.version; vb.hidden = false; }
     if (s.hosts) {
       var hi = $('hosts');
       if (document.activeElement !== hi) hi.value = s.hosts.extra.join(', ');
@@ -4037,8 +4136,14 @@ def run_helper():
     if not acquire_instance_lock(HELPER_LOCK):
         log(f"another helper is already running (lock {HELPER_LOCK}); not starting")
         return 1
+    problem = _file_problem(__file__)
+    if problem:
+        log(f"refusing to start: this file runs as root and {problem}")
+        return 1
     priv = Privileged()
     priv.split = True
+    priv.pids_path = os.path.join(os.path.dirname(HELPER_SOCK), "pids.json")
+    priv.kill_leftovers()
     server = HelperServer(HELPER_SOCK, priv)
     try:
         server.bind()
