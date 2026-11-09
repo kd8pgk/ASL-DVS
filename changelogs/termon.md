@@ -1,6 +1,22 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_1_7_20261108.py`. Newest entries first.
+Current file: `termon_v0_2_0_20261109.py`. Newest entries first.
+
+## 0.2.0 (2026-11-09)
+
+Release A of the hardening plan from the audit follow-up: who runs what. Python and page JavaScript behaviour changed, so this is a release.
+
+- **Two processes.** `--install` now sets up two services. `termon-helper.service` runs as root and does only the privileged work: checking the password, starting the terminal, signalling it, apt installs, and saving settings. `termon.service` is the web page, TLS and sessions; it runs as an unprivileged system user (`termon` by default, `User=` in the unit) with `NoNewPrivileges`, an empty capability set, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp` and only IP and Unix sockets. A parsing bug in the HTTP, TLS or JSON code now lands in that user, not in root.
+- **The helper channel.** A Unix socket at `/run/termon-helper/helper.sock` (mode 0600, owned by the web user), checked again with `SO_PEERCRED` on every connection (only root and the web user). One JSON request per connection. The helper never takes a command line from the web side: it picks `bash -l` or one of `top`, `htop`, `btop` itself, signals only processes it started (HUP and KILL), and the terminal's pty comes back to the web process as a passed file descriptor. A wrong password through the helper is slowed down after three failures in a minute. The helper reaps children whose web side vanished after five minutes.
+- **Shell account.** New Setup row "Shell account". Empty means root, as before. Set to a normal user, sign-in checks that user's password (PAM, or the shadow hash if python-pam is missing), the shell and the monitor programs run as that user (own groups, home directory, owned pty, controlling terminal), and root comes from `sudo -i`. Changing it asks for that account's password, signs everyone out and closes every terminal. Refused: root's uid under another name, an account with no login shell, the web service user, an unknown name. A wrong password counts toward the same lockout as sign-in. The Setup card shows what sudo allows that account (password asked, no sudo, or a warning for `NOPASSWD`, which is as strong as root).
+- **Web service user.** New Setup row "Web service user". The helper creates it as a system account with no login shell if it does not exist, refuses root, the shell account and accounts that can log in, gives it the TLS key, rewrites `termon.service`, reloads systemd and restarts the page.
+- **Audit trail.** Audit lines name the account, so with a normal shell account sudo's own log records who ran each privileged command.
+- **Started by hand as root,** `termon.py` still runs in one process with the same behaviour and tests as 0.1.7 (shell account and web user settings still apply to the shell, but not to the web side).
+- **Config file** `/etc/asl_dvs/termon.conf` is now world-readable (0644) because the web user reads it; it holds no secrets. It has two new keys, `shell_user` and `web_user`.
+- `--install` creates the user, the certificate (owned by the web user) and both units. `--uninstall` removes both units and keeps the config and the user.
+- Compatible with 0.1.7 configs. Needs `useradd` (Debian and Raspberry Pi OS have it).
+
+Tests: helper channel, passed descriptors, signal limits, shell account (a real throwaway user: uid, tty, session), web user, unit hardening, install and uninstall with the second unit and the user, all in `ci/test_termon.py` and `ci/test_install.py`. Also run by hand: helper as root and the web side as an unprivileged user, signing in as another user over HTTPS with the shadow-hash check, and a shell as that user in the browser.
 
 ## 0.1.7 (2026-11-08)
 

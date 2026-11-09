@@ -20,7 +20,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 | Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
-| Terminal Monitor (termon) | `termon_v*.py` | 7878 | LAN-only web terminal and process monitor: top, htop or btop, and a root bash shell in the browser (xterm.js). HTTPS with a self-signed certificate, root password login, audit lines in the journal and syslog. Installs its own service with `--install`; not yet managed by instmon or the installer. |
+| Terminal Monitor (termon) | `termon_v*.py` | 7878 | LAN-only web terminal and process monitor: top, htop or btop, and a root bash shell in the browser (xterm.js). HTTPS with a self-signed certificate, audit lines in the journal and syslog. The web page runs as an unprivileged user and asks a small root helper for terminals; the shell can run as a normal user with sudo instead of root (Setup card). Installs its own two services with `--install`; not yet managed by instmon or the installer. |
 
 Scripts:
 
@@ -520,7 +520,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `noderecorder_v0_12_0_20261108.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
-| `termon_v0_1_7_20261108.py` | common (stands alone for now) |
+| `termon_v0_2_0_20261109.py` | common (stands alone for now) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
