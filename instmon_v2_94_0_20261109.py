@@ -38,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.93.0"
+VERSION ="2.94.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -5299,8 +5299,133 @@ def _gh_check_bg (gen =None ):
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
     _gh_event ("GitHub check: "+", ".join (parts )+f". ({time .monotonic ()-started :.0f}s)",level )
+    try:
+        _gh_fetch_missing(entries)
+    except Exception as exc:
+        log_event(f"GitHub: downloading tools that are not installed failed: {exc}", "warn")
     _docs_refresh_remote()
     full_update_preview()
+
+FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_FETCH_MISSING_MAX", "8")))
+_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_fetched.json")
+_fetched_lock = threading.Lock()
+
+def _fetched_read():
+    try:
+        with open(_FETCHED_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    table = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(table, dict):
+        return {}
+    return {k: v for k, v in table.items() if isinstance(k, str) and isinstance(v, dict)}
+
+def _fetched_write(table):
+    ensure_dirs()
+    compare_before_write(_FETCHED_PATH, json.dumps({"files": table}, indent=2, sort_keys=True).encode("utf-8"))
+
+def _fetched_kind(entry):
+    return (entry["category"], entry["glob"], _gh_variant(entry.get("version")))
+
+def _fetched_other_channel(entry):
+    kind = _fetched_kind(entry)
+    for name, rec in _fetched_read().items():
+        if (rec.get("category"), rec.get("glob"), rec.get("variant")) != kind:
+            continue
+        path = safe_join(LIB_SUBDIRS.get(kind[0], ""), name)
+        if path and os.path.isfile(path) and rec.get("channel") != channel_get():
+            return True
+    return False
+
+def _fetched_record(entry):
+    with _fetched_lock:
+        table = _fetched_read()
+        table[entry["name"]] = {
+            "category": entry["category"], "glob": entry["glob"], "variant": _gh_variant(entry.get("version")),
+            "version": entry.get("version"), "blob": entry.get("blob"), "channel": channel_get(),
+            "branch": GITHUB_BRANCH if channel_get() == "testing" else "stable",
+            "build": _build_wanted_variant() or "full", "time": int(time.time()),
+        }
+        try:
+            _fetched_write(table)
+        except OSError as exc:
+            log_event(f"Could not record the downloaded file {entry['name']}: {exc}", "warn")
+
+def _fetched_prune(entry):
+    kind = _fetched_kind(entry)
+    comp = next((c for c in COMPONENTS if c["category"] == kind[0]), None)
+    installed_hash = file_sha256(resolve_installed_target(comp)) if comp else None
+    removed = []
+    with _fetched_lock:
+        table = _fetched_read()
+        for name, rec in list(table.items()):
+            if name == entry["name"] or (rec.get("category"), rec.get("glob"), rec.get("variant")) != kind:
+                continue
+            path = safe_join(LIB_SUBDIRS.get(kind[0], ""), name)
+            if path is None or not os.path.isfile(path):
+                del table[name]
+                continue
+            if lib_locked(kind[0], name) or (installed_hash and file_sha256(path) == installed_hash):
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                continue
+            del table[name]
+            removed.append(name)
+        try:
+            _fetched_write(table)
+        except OSError as exc:
+            log_event(f"Could not update the downloaded-files record: {exc}", "warn")
+    if removed:
+        with _file_meta_cache_lock:
+            _file_meta_cache.clear()
+        log_event(f"Removed older downloaded copies no longer needed: {', '.join(removed)}", "info")
+
+def _gh_fetch_missing(entries):
+    if FETCH_MISSING_MAX <= 0:
+        return []
+    if recorder_busy():
+        log_event("GitHub: not downloading tools that are not installed while a recording runs", "info")
+        return []
+    comps = {c["category"]: c for c in COMPONENTS if c["category"] != "instmon" and c["category"] not in NO_CARD_CATEGORIES}
+    got = []
+    for entry in entries:
+        comp = comps.get(entry["category"])
+        if comp is None or os.path.isfile(resolve_installed_target(comp)) or _gh_other_build(entry):
+            continue
+        status = entry.get("status")
+        allow_older = status == "newer_local" and channel_get() == "stable" and _fetched_other_channel(entry)
+        if status not in _GH_UPDATABLE and not allow_older:
+            continue
+        if len(got) >= FETCH_MISSING_MAX:
+            log_event(f"GitHub: stopped after {FETCH_MISSING_MAX} downloads; press Check GitHub again for the rest", "info")
+            break
+        with _gh_lock:
+            if entry["name"] in _gh_state["busy"]:
+                continue
+            _gh_state["busy"].add(entry["name"])
+        try:
+            _gh_apply(dict(entry, allow_older=bool(allow_older)))
+            dest = safe_join(LIB_SUBDIRS[entry["category"]], entry["name"])
+            if dest and _gh_local_blob_id(dest) == entry["blob"]:
+                _fetched_record(entry)
+                _fetched_prune(entry)
+                got.append(entry["name"])
+        except GhRejected as exc:
+            log_event(f"GitHub: could not download {entry['name']} for {comp['name']}: {exc}", "warn")
+        except Exception as exc:
+            log_event(f"GitHub: download of {entry['name']} failed (unexpected): {exc}", "warn")
+        finally:
+            with _gh_lock:
+                _gh_state["busy"].discard(entry["name"])
+    if got:
+        with _gh_lock:
+            _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
+        _gh_event(f"Downloaded {len(got)} file(s) for tools that are not installed ({', '.join(got)}). "
+                  "Download only: nothing was installed or started.", "ok")
+    return got
 
 def _gh_check_timeout (gen ):
     with _gh_lock :
@@ -8189,6 +8314,60 @@ def render_confgetter_card_html (cg ,library =None ):
     </div>
     {nested }
   </div>"""
+
+def _available_note(category):
+    with _gh_lock:
+        phase = _gh_state["phase"]
+        checked = _gh_state["checked_at"]
+        error = _gh_state["error"]
+    if phase == "checking":
+        return "Checking GitHub..."
+    if phase == "error":
+        return f"The last check failed: {error}"
+    if not checked:
+        return "Not downloaded yet. Press Check GitHub and it is fetched for you (download only)."
+    if any(c.get("category") == category for c in _gh_last_cands):
+        return "Not downloaded (see the log for why)."
+    if channel_get() == "stable":
+        return "No stable build on GitHub yet. Switch to Testing to get it now."
+    return f"No build on GitHub ({GITHUB_BRANCH})."
+
+def render_available_card_html(components, library=None):
+    rows = []
+    for c in components:
+        if c["category"] in NO_CARD_CATEGORIES or c["category"] == "instmon" or c.get("installed"):
+            continue
+        files = [e for e in (library or {}).get(c["category"], [])
+                 if not _build_other(c["category"], e.get("version"), e.get("name", ""))]
+        if files:
+            best = files[0]
+            note = f'Downloaded v{esc(str(best.get("version") or "?"))} ({esc(best["name"])})'
+            btn = (f'<button data-action="install" data-category="{c["category"]}" data-name="{esc(best["name"])}">'
+                   f'Install</button>')
+        else:
+            note = esc(_available_note(c["category"]))
+            btn = ""
+        port = f'port {c["port"]}' if c.get("port") else "no web UI"
+        rows.append(f"""
+    <div class="row comp-row">
+      <b>{esc(c['name'])}</b>
+      <span class="small muted">{port}</span>
+      <span class="small">{note}</span>
+      {btn}
+    </div>""")
+    if not rows:
+        return ""
+    build = " (Pi Zero 2 W fork build)" if _build_wanted_variant() else ""
+    source = "the Stable channel" if channel_get() == "stable" else f"the Testing channel ({esc(GITHUB_BRANCH)})"
+    return f"""
+  <div class="card" id="available-card">
+    <div class="row"><b>Available, not installed</b></div>
+    <div class="small muted" style="margin:.2rem 0 .4rem">Downloaded from {source}{build}. Nothing here is installed or started until you press Install.</div>{"".join(rows)}
+  </div>"""
+
+def render_components_section(status):
+    return (render_available_card_html(status["components"], status["library"])
+            + render_components_html(status["components"], status["library"], status["app"], status["confgetter"]))
 
 def render_components_html (components ,library =None ,app =None ,cg =None ):
     cards =[]
@@ -11624,7 +11803,7 @@ _JS = (
 def render_page ():
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
-    components_html =render_components_html (status ["components"],status ["library"],status ["app"],status ["confgetter"])
+    components_html =render_components_section (status )
     library_html =render_library_html (status ["library"])
     log_html ="-- System ready --\n"+f"instmon v{VERSION } ({DATE_STR }) backend online, {len (status ['components'])} component(s) tracked."
     return HTML_TEMPLATE .format (
@@ -12390,7 +12569,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _route_status (self ):
         status =build_status ()
         self ._send_json (200 ,{
-        "components_html":render_components_html (status ["components"],status ["library"],status ["app"],status ["confgetter"]),
+        "components_html":render_components_section (status ),
         "library_html":render_library_html (status ["library"]),
         **_gh_status_payload (),
         **_fu_status_payload (),
