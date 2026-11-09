@@ -29,13 +29,13 @@
    "version": "7.4.0"
   },
   "instmon": {
-   "blob": "77ffd98f47fb87f0eae19a3070e6b9e5cbb1dcb1",
-   "commit": "3d0e8e1d3d73acd32b34c2ad7708c096bcf13c55",
-   "file": "instmon_v2_87_0_20261102.py",
-   "landed": "2026-11-02T12:15:46Z",
-   "promoted": "2026-11-05T12:33:28Z",
+   "blob": "dfed5396f51f360e22b5d8ba6ddb5ae9381bd6f7",
+   "commit": "6e0cb14f259da7d2bbfa18f08627c68ae9cde4ef",
+   "file": "instmon_v2_91_0_20261105.py",
+   "landed": "2026-11-05T12:33:28Z",
+   "promoted": "2026-11-09T07:53:41Z",
    "reason": "count",
-   "version": "2.87.0"
+   "version": "2.91.0"
   },
   "nodecontrol": {
    "blob": "ca2b9ef67826b089db56d9e0a640701cfdcd78b0",
@@ -65,13 +65,13 @@
    "version": "0.5.12"
   },
   "nodetalker": {
-   "blob": "362e43419b01db61acb6e3fe046c7583f85ab00b",
-   "commit": "e2cbf442dcedb91fdad8a922d6b65ff9b85b28d6",
-   "file": "nodetalker_v0_10_17_20261105.py",
-   "landed": "2026-11-05T19:21:39Z",
-   "promoted": "2026-11-08T19:21:39Z",
+   "blob": "ea6c276b8295259e79dc7dd7f0a99cd2ec4cb9e1",
+   "commit": "396fe55fde754589c30d9c34c9490809b02988a2",
+   "file": "nodetalker_v0_10_18_20261105.py",
+   "landed": "2026-11-06T08:02:40Z",
+   "promoted": "2026-11-09T08:02:40Z",
    "reason": "count",
-   "version": "0.10.17"
+   "version": "0.10.18"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
