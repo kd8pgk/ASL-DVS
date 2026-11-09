@@ -38,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.92.0"
+VERSION ="2.93.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -2826,6 +2826,7 @@ LIB_SUBDIRS ={
 "nodelisten":os .path .join (LIBRARY_DIR ,"nodelisten"),
 "noderecorder":os .path .join (LIBRARY_DIR ,"noderecorder"),
 "pibrary":os .path .join (LIBRARY_DIR ,"pibrary"),
+"termon":os .path .join (LIBRARY_DIR ,"termon"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
 "config":os .path .join (LIBRARY_DIR ,"config"),
@@ -2841,6 +2842,7 @@ ALLOWED_EXT ={
 "nodelisten":(".py",),
 "noderecorder":(".py",),
 "pibrary":(".py",),
+"termon":(".py",),
 "instmon":(".py",),
 "scripts":(".sh",),
 "config":(".conf",),
@@ -2909,6 +2911,15 @@ COMPONENTS =[
 "category":"pibrary",
 },
 {
+"name":"Terminal Monitor",
+"service":"termon",
+"port":7878 ,
+"scheme":"https",
+"install_link":"/usr/local/bin/termon.py",
+"unit_paths":{"termon":("/usr/local/bin/termon.py","/usr/local/lib/asl_dvs/termon")},
+"category":"termon",
+},
+{
 "name":"instmon",
 "service":"instmon",
 "port":PORT ,
@@ -2929,6 +2940,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("nodelisten",["nodetalker*.py","nodelisten*.py"]),
 ("noderecorder",["noderecorder*.py"]),
 ("pibrary",["pibrary*.py"]),
+("termon",["termon*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
@@ -4310,6 +4322,7 @@ def scan_library ():
 
 def build_status ():
     components =[]
+    stopped_by_user =user_stopped_read ()
     for comp in COMPONENTS :
         state =systemctl_is_active (unit_of (comp ))
         listening =port_open (comp ["port"])
@@ -4318,6 +4331,8 @@ def build_status ():
         "name":comp ["name"],
         "service":comp ["service"],
         "port":comp ["port"],
+        "scheme":comp .get ("scheme","http"),
+        "user_stopped":comp ["service"]in stopped_by_user ,
         "category":comp ["category"],
         "state":state ,
         "listening":listening ,
@@ -5564,6 +5579,47 @@ def quiet_restore():
     log_event(f"Quiet System restored: {summary}", "ok" if ok else "err")
     return ok, f"Restored. {summary}", "ok" if ok else "err"
 
+_USER_STOPPED_PATH = os.path.join(CONFIG_DIR, "instmon_user_stopped.json")
+_user_stopped_lock = threading.Lock()
+
+def user_stopped_read():
+    try:
+        with open(_USER_STOPPED_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    table = data.get("services") if isinstance(data, dict) else None
+    if not isinstance(table, dict):
+        return {}
+    return {k: v for k, v in table.items() if isinstance(k, str) and isinstance(v, (int, float))}
+
+def _user_stopped_write(table):
+    ensure_dirs()
+    compare_before_write(_USER_STOPPED_PATH, json.dumps({"services": table}, indent=2, sort_keys=True).encode("utf-8"))
+
+def user_stopped_mark(service):
+    with _user_stopped_lock:
+        table = user_stopped_read()
+        table[service] = int(time.time())
+        try:
+            _user_stopped_write(table)
+        except OSError as exc:
+            log_event(f"Could not record that {service} was stopped by you: {exc}", "warn")
+
+def user_stopped_clear(service):
+    with _user_stopped_lock:
+        table = user_stopped_read()
+        if service not in table:
+            return
+        del table[service]
+        try:
+            _user_stopped_write(table)
+        except OSError as exc:
+            log_event(f"Could not clear the stopped-by-you record for {service}: {exc}", "warn")
+
+def user_stopped_is(service):
+    return service in user_stopped_read()
+
 def quiet_forget(service):
     with _quiesce_lock:
         state = _quiesce_state_read()
@@ -5620,7 +5676,7 @@ def _build_wanted_variant():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-FU_ORDER = ("44helper", "wifimon", "nodelisten", "noderecorder", "pibrary", "dashboard", "sysmon", "instmon")
+FU_ORDER = ("44helper", "wifimon", "nodelisten", "noderecorder", "pibrary", "termon", "dashboard", "sysmon", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
@@ -5633,6 +5689,7 @@ _FU_DEFAULT_STEM = {
     "nodelisten": "nodetalker",
     "noderecorder": "noderecorder",
     "pibrary": "pibrary",
+    "termon": "termon",
     "instmon": "instmon",
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
@@ -5660,7 +5717,7 @@ SUITELOG_PATH = os.environ.get("INSTMON_SUITELOG", "/run/asl_dvs/suitelog.jsonl"
 SUITELOG_FLAG = os.environ.get("INSTMON_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
 SUITELOG_SEG = 10000000
 SL_UNITS = ("nodetalker", "nodelisten", "amp_nodetalker", "amp-server", "amp-hub", "wifimon", "instmon", "nodecontrol",
-            "asl_dvs_dashboard", "sysmon", "44helper", "44helper-netready", "noderecorder", "pibrary", "usrp2m17",
+            "asl_dvs_dashboard", "sysmon", "44helper", "44helper-netready", "noderecorder", "pibrary", "termon", "termon-helper", "usrp2m17",
             "stfu", "svxlink-usrp", "asl-zello-bridge", "mmdvm_bridge", "analog_bridge", "asterisk", "allmon3",
             "asl_dvs_*", "wg-quick@*")
 SL_FILES = ("/var/log/asterisk/full", "/var/log/asterisk/messages", "/var/log/asterisk/messages.log",
@@ -7937,6 +7994,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         if proc .returncode ==0 :
             log_event (f"Install finished OK: {script_name } ({comp ['name']})","ok")
             quiet_forget (comp ["service"])
+            user_stopped_clear (comp ["service"])
             if comp ["category"]!="instmon"and FU_STABLE_SEC >0 :
                 threading .Thread (target =_post_install_watch ,args =(comp ,),daemon =True ).start ()
         else :
@@ -8001,6 +8059,7 @@ def run_self_uninstall_bg (comp ):
         if proc .returncode ==0 :
             log_event (f"Uninstall finished OK: {comp ['name']}","ok")
             quiet_forget (comp ["service"])
+            user_stopped_clear (comp ["service"])
         else :
             log_event (f"Uninstall exited {proc .returncode }: {comp ['name']}","err")
     except subprocess .TimeoutExpired :
@@ -8142,6 +8201,8 @@ def render_components_html (components ,library =None ,app =None ,cg =None ):
             port_note ="no web UI"
         else :
             port_note =f'port {c ["port"]}'if c ["listening"]else f'port {c ["port"]} (not listening)'
+        if c .get ("user_stopped")and c ["state"]!="active":
+            port_note +=" · stopped by you"
 
         is_self =c ["category"]=="instmon"
 
@@ -8159,7 +8220,7 @@ def render_components_html (components ,library =None ,app =None ,cg =None ):
             go_disabled =""if c ["listening"]else " disabled"
             go_cls =" class=\"b-go\""if c ["listening"]else ""
             go_btn =(
-            f'<button data-action="go" data-port="{c ["port"]}"{go_cls}{go_disabled}>Go</button>'
+            f'<button data-action="go" data-port="{c ["port"]}" data-scheme="{c .get ("scheme","http")}"{go_cls}{go_disabled}>Go</button>'
             )
 
         nested_lib_html =""
@@ -8305,6 +8366,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("Node Talker","nodelisten","install"),
     ("Node Recorder","noderecorder","install"),
     ("Pibrary","pibrary","install"),
+    ("Terminal Monitor","termon","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
@@ -10732,7 +10794,7 @@ _JS_ACTIONS = """function wireButtons() {
           if (btn.dataset.path) {
             window.open(`http://${location.hostname}${btn.dataset.path}`, '_blank');
           } else {
-            window.open(`http://${location.hostname}:${btn.dataset.port}`, '_blank');
+            window.open(`${btn.dataset.scheme === 'https' ? 'https' : 'http'}://${location.hostname}:${btn.dataset.port}`, '_blank');
           }
           btn.disabled = false;
         } else if (action === 'install_config') {
@@ -11724,6 +11786,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="nodelisten">Node Talker (.py)</option>
       <option value="noderecorder">Node Recorder (.py)</option>
       <option value="pibrary">Pibrary (.py)</option>
+      <option value="termon">Terminal Monitor (.py)</option>
       <option value="instmon">InstMon (.py)</option>
       <option value="confgetter">Config getter (.sh)</option>
       <option value="confputter">Config putter (.py)</option>
@@ -13712,6 +13775,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return 
         time .sleep (0.5 )
         state =systemctl_is_active (unit_of (comp ))
+        if fail_verb =="stop"and state !="active":
+            user_stopped_mark (comp ["service"])
+        elif fail_verb =="start"and state =="active":
+            user_stopped_clear (comp ["service"])
         log_event (f"{done .capitalize ()} {comp ['name']} (now {state })",levels [0 ]if state =="active"else levels [1 ])
         self ._send_json (200 ,{
         "service":service ,

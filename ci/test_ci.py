@@ -3396,5 +3396,183 @@ class RxHealthWifiTests(unittest.TestCase):
         self.assertEqual(v["state"], "network")
 
 
+class InstmonTermonTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp0 = tempfile.mkdtemp()
+        cls.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(cls.tmp0, "lib"),
+                              "INSTMON_CONFIG_DIR": os.path.join(cls.tmp0, "cfg")})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp0, True)
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.path = os.path.join(d, "stopped.json")
+        for target, value in (("_USER_STOPPED_PATH", self.path),):
+            p = mock.patch.object(self.m, target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        q = mock.patch.object(self.m, "log_event")
+        q.start()
+        self.addCleanup(q.stop)
+
+    def termon(self):
+        return next(c for c in self.m.COMPONENTS if c["category"] == "termon")
+
+    def termon_file(self):
+        import glob
+        return sorted(glob.glob(os.path.join(HERE, "..", "termon_v*.py")))[-1]
+
+    def test_registry_entry_is_complete(self):
+        m, c = self.m, self.termon()
+        self.assertEqual((c["name"], c["service"], c["port"], c["scheme"]), ("Terminal Monitor", "termon", 7878, "https"))
+        self.assertEqual(c["install_link"], "/usr/local/bin/termon.py")
+        for table in (m.LIB_SUBDIRS, m.ALLOWED_EXT, m._FU_DEFAULT_STEM):
+            self.assertIn("termon", table)
+        self.assertIn("termon", m.FU_ORDER)
+        self.assertIn("termon", m.INSTALLABLE_CATEGORIES)
+        self.assertIn("termon", m.GH_CATEGORIES)
+        self.assertIn("termon", [g[1] for g in m._LIBRARY_GROUPS])
+        self.assertLess(m.FU_ORDER.index("termon"), m.FU_ORDER.index("instmon"))
+        self.assertEqual(m.ALLOWED_EXT["termon"], (".py",))
+        for other in m.COMPONENTS:
+            if other is not c:
+                self.assertEqual(other.get("scheme", "http"), "http", other["name"])
+
+    def test_termon_files_are_recognised_by_name_and_by_content(self):
+        m = self.m
+        path = self.termon_file()
+        name = os.path.basename(path)
+        self.assertEqual(m._gh_kind_for_name(name), ("termon", "termon*.py"))
+        self.assertEqual(m._fu_stem_of_name(name), "termon")
+        with open(path, encoding="utf-8") as fh:
+            version, self_install, self_uninstall = m._scan_header_text(fh.read())
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        self.assertTrue(self_install)
+        self.assertTrue(self_uninstall)
+
+    def test_nothing_else_claims_termon_files(self):
+        for name in ("sysmon_v1_0_0_20261101.py", "nodetalker_v0_1_0_20261101.py", "instmon_v2_93_0_20261109.py"):
+            self.assertNotEqual(self.m._gh_kind_for_name(name)[0], "termon")
+
+    def test_markers_are_written_read_and_cleared(self):
+        m = self.m
+        self.assertEqual(m.user_stopped_read(), {})
+        m.user_stopped_mark("wifimon")
+        m.user_stopped_mark("termon")
+        self.assertTrue(m.user_stopped_is("wifimon"))
+        self.assertTrue(m.user_stopped_is("termon"))
+        self.assertFalse(m.user_stopped_is("sysmon"))
+        with open(self.path) as fh:
+            self.assertEqual(sorted(json.load(fh)["services"]), ["termon", "wifimon"])
+        m.user_stopped_clear("wifimon")
+        self.assertEqual(sorted(m.user_stopped_read()), ["termon"])
+        before = os.stat(self.path).st_mtime_ns
+        m.user_stopped_clear("never-marked")
+        self.assertEqual(os.stat(self.path).st_mtime_ns, before)
+
+    def test_a_damaged_marker_file_reads_as_empty(self):
+        for text in ("not json", "[1]", '{"services": 5}', '{"services": {"a": "x", "b": 3, "7": 1}}'):
+            with open(self.path, "w") as fh:
+                fh.write(text)
+            got = self.m.user_stopped_read()
+            self.assertEqual(got, {"b": 3, "7": 1} if "b" in text else {}, text)
+
+    def run_action(self, service, verb, fail_verb, state):
+        m = self.m
+        sent = []
+        fake = mock.Mock()
+        fake._send_json = lambda code, obj: sent.append((code, obj))
+        fake._error_json = lambda code, msg: sent.append((code, {"error": msg}))
+        with mock.patch.object(m.subprocess, "run", return_value=mock.Mock(returncode=0)), \
+                mock.patch.object(m, "systemctl_is_active", return_value=state), \
+                mock.patch.object(m.time, "sleep", lambda s: None):
+            m.InstmonHandler._service_action(fake, {"service": service}, verb, "refuse", fail_verb, "done", ("info", "warn"))
+        return sent
+
+    def test_stop_marks_and_start_clears(self):
+        m = self.m
+        self.run_action("wifimon", "stop", "stop", "inactive")
+        self.assertTrue(m.user_stopped_is("wifimon"))
+        self.run_action("wifimon", "restart", "start", "active")
+        self.assertFalse(m.user_stopped_is("wifimon"))
+
+    def test_a_stop_that_did_not_stop_is_not_recorded_and_a_failed_start_keeps_the_mark(self):
+        m = self.m
+        self.run_action("wifimon", "stop", "stop", "active")
+        self.assertFalse(m.user_stopped_is("wifimon"))
+        m.user_stopped_mark("wifimon")
+        self.run_action("wifimon", "restart", "start", "failed")
+        self.assertTrue(m.user_stopped_is("wifimon"))
+
+    def test_instmon_cannot_be_marked(self):
+        sent = self.run_action("instmon", "stop", "stop", "inactive")
+        self.assertEqual(sent[0][0], 400)
+        self.assertFalse(self.m.user_stopped_is("instmon"))
+
+    def test_termon_can_be_stopped_and_started_from_instmon(self):
+        self.run_action("termon", "stop", "stop", "inactive")
+        self.assertTrue(self.m.user_stopped_is("termon"))
+
+    def test_quiet_system_stops_are_not_user_stops(self):
+        with mock.patch.object(self.m.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")), \
+                mock.patch.object(self.m, "systemctl_is_active", return_value="inactive"):
+            ok, _msg = self.m._quiesce_stop_one("wifimon.service")
+        self.assertTrue(ok)
+        self.assertEqual(self.m.user_stopped_read(), {})
+
+    def card(self, **kw):
+        c = {"name": "Terminal Monitor", "service": "termon", "port": 7878, "scheme": "https", "category": "termon",
+             "state": "inactive", "listening": False, "version": "0.2.2", "installed": True, "user_stopped": True}
+        c.update(kw)
+        with mock.patch.object(self.m, "render_app_card_html", return_value=""), \
+                mock.patch.object(self.m, "render_confgetter_card_html", return_value=""):
+            return self.m.render_components_html([c])
+
+    def test_card_says_stopped_by_you_and_opens_https(self):
+        html = self.card(listening=True, state="active", user_stopped=False)
+        self.assertIn('data-scheme="https"', html)
+        self.assertNotIn("stopped by you", html)
+        html = self.card()
+        self.assertIn("stopped by you", html)
+        html = self.card(state="active", user_stopped=True)
+        self.assertNotIn("stopped by you", html)
+
+    def test_go_button_picks_the_scheme_from_the_card(self):
+        with open(os.path.join(HERE, "..", os.path.basename(self.m.__file__)), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("btn.dataset.scheme === 'https' ? 'https' : 'http'", src)
+
+    def test_install_and_uninstall_success_clear_the_mark(self):
+        m = self.m
+        comp = self.termon()
+        m.user_stopped_mark("termon")
+
+        class Proc:
+            returncode = 0
+            stdout = iter(["ok\n"])
+
+            def wait(self, timeout=None):
+                return 0
+
+        with mock.patch.object(m.subprocess, "Popen", lambda *a, **k: Proc()), \
+                mock.patch.object(m, "installed_link", lambda c: "/usr/local/bin/termon.py"), \
+                mock.patch.object(m, "quiet_forget", lambda s: None), \
+                mock.patch.object(m, "prepare_install", lambda c, p: None), \
+                mock.patch.object(m, "FU_STABLE_SEC", 0):
+            m.run_self_install_bg("/usr/local/bin/termon.py", "termon.py", comp)
+        self.assertFalse(m.user_stopped_is("termon"))
+        m.user_stopped_mark("termon")
+        Proc.stdout = iter(["ok\n"])
+        with mock.patch.object(m.subprocess, "Popen", lambda *a, **k: Proc()), \
+                mock.patch.object(m, "installed_link", lambda c: "/usr/local/bin/termon.py"), \
+                mock.patch.object(m, "quiet_forget", lambda s: None):
+            m.run_self_uninstall_bg(comp)
+        self.assertFalse(m.user_stopped_is("termon"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,15 @@
 # instmon changelog
 
+## 2.93.0 (2026-11-09)
+
+First step of the "available but opt-in" plan (download-only for missing tools, an install-everything action and safer Full Updates follow in later releases). This is a release: Python and page JavaScript behaviour changed.
+
+- **Terminal Monitor (termon) is a component.** It has a card (port 7878, HTTPS), a library group, an upload category, a place in Full Update (updated only when it is already installed, as for every tool) and a Suite Log unit entry (`termon`, `termon-helper`). It installs and uninstalls through its own `--install` and `--uninstall`, which instmon already detects. Go opens it over `https`; the Go button now takes the scheme from the card (`data-scheme`), and every other card stays on `http`.
+- **Stopped by you is remembered.** Stop (and a stop that really took) writes the service to `/etc/asl_dvs/instmon_user_stopped.json`; Start, a finished install and a finished uninstall remove it. A card whose service is stopped and marked says "stopped by you". Quiet System stops are never marked: Quiet keeps its own record and restore. Nothing reads the marker yet; Full Update will in a later release.
+- **Compatible with older tools and files.** The marker file is new and optional; an older instmon ignores it. A node without Terminal Monitor shows the new card as not installed.
+
+Tests: the registry entry and its place in every table, file recognition by name and content, the marker file (damaged files read as empty), Start and Stop writing and clearing it, Quiet stops not marking, install and uninstall clearing it, the card text and the Go scheme (`ci/test_ci.py`).
+
 ## 2.92.0 (2026-11-08)
 
 - **The suite log keeps its version.** The shared suite-log redactor (`suitelog_redact` in `shared/confio.py`) masked any value that looked like an IPv4 address. A four-part version such as `0.10.24.1` looks like one, so the `v` field of each row was written as `ip:xxxx`. The `v` value is now left alone; every other IP address is still masked. Same change as Node Talker 0.10.25.
@@ -15,7 +25,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_92_0_20261108.py`. Newest entries first.
+Current file: `instmon_v2_93_0_20261109.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
