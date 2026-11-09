@@ -1,5 +1,13 @@
 # instmon changelog
 
+## 2.98.0 (2026-11-09)
+
+The Manuals card downloads only manuals. This is a release: what is downloaded changed. It used to fetch every PDF in the `docs` folder (36 files, about 10 MB), including the code summaries, audits and review sheets. Now it fetches only the files named `ASL-DVS_*_Manual.pdf` or `ASL-DVS_*_Guide.pdf`: the User Manual, the 44helper Manual, the Node Talker Manual, the Full Build and Pi02w Install Manuals, and the Phone Dialplan Guide (6 files). `ASL-DVS_Idealized_Node_Configuration.pdf` and the `Node_Controller_*` summaries are no longer downloaded. A new manual that follows the same name pattern is picked up without a new instmon.
+
+- PDFs already on a node stay in the Manuals card and can still be opened or deleted; nothing is removed. Uploading a PDF by hand is unchanged.
+- Applies to the Manuals card, the first automatic download, Full Update and the installer's manuals step.
+- Tests: `ci/test_instmon_downloads.py` is now 31 tests (the listing keeps the six manuals and drops the rest, checked against the real `docs` folder; local files still count).
+
 ## 2.97.0 (2026-11-09)
 
 A slow, unsteady line no longer ends the GitHub check. This is a release: download behaviour changed. It follows a log from a real node where Check GitHub read 10 of 16 files in about 3 minutes (a file took anywhere from 1 s to over 60 s) and then failed with "GitHub did not answer within 15s".
@@ -78,7 +86,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_97_0_20261109.py`. Newest entries first.
+Current file: `instmon_v2_98_0_20261109.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
