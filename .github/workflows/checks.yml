@@ -44,6 +44,10 @@ jobs:
         run: python3 ci/test_recording_popups.py
       - name: Shared rpt.conf number tests (Node Controller, 44helper)
         run: python3 ci/test_rpt_shared.py
+      - name: instmon slow-link tests (compression, revalidation, keep-alive, polling)
+        run: python3 ci/test_instmon_slowlink.py
+      - name: instmon download tests (gzip, resume, header peek, slow-line rules)
+        run: python3 ci/test_instmon_downloads.py
       - name: Node Talker baseline tests
         run: python3 ci/test_talker_baseline.py
       - name: Node Talker stream tests (login, handshake, origin, idle, listeners)

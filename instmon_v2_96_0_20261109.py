@@ -5,6 +5,7 @@ import collections
 import fcntl
 import fnmatch
 import glob
+import gzip
 import hashlib
 import hmac 
 import io
@@ -34,11 +35,12 @@ import urllib .parse
 import urllib .request 
 import tempfile 
 import zipfile 
+import zlib
 from collections import deque 
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.94.0"
+VERSION ="2.96.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4372,6 +4374,35 @@ GITHUB_API_LIST_URL =(f"https://api.github.com/repos/{GITHUB_REPO }/contents"
 f"?ref={urllib .parse .quote (GITHUB_BRANCH ,safe ='')}")
 GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","15"))
 GITHUB_RETRIES = max(0, int(os.environ.get("INSTMON_GITHUB_RETRIES", "2")))
+GITHUB_MIN_BPS = max(50, int(os.environ.get("INSTMON_GITHUB_MIN_BPS", "300")))
+GITHUB_MAX_DOWNLOAD_SLOW_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SLOW_SEC", "14400"))
+GITHUB_SLOW_BPS = int(os.environ.get("INSTMON_GITHUB_SLOW_KBPS", "30")) * 1024
+GITHUB_HEAD_BYTES = 16384
+_gh_rate_lock = threading.Lock()
+_gh_rate = {"bps": None}
+
+def _gh_rate_note(nbytes, secs):
+    if nbytes < 8192 or secs <= 0:
+        return
+    bps = nbytes / secs
+    with _gh_rate_lock:
+        old = _gh_rate["bps"]
+        _gh_rate["bps"] = bps if old is None else old * 0.5 + bps * 0.5
+
+def gh_link_slow():
+    forced = os.environ.get("INSTMON_SLOW_LINK", "").strip().lower()
+    if forced in ("1", "on", "yes", "true"):
+        return True
+    if forced in ("0", "off", "no", "false"):
+        return False
+    with _gh_rate_lock:
+        bps = _gh_rate["bps"]
+    return bps is not None and bps < GITHUB_SLOW_BPS
+
+def gh_link_note():
+    with _gh_rate_lock:
+        bps = _gh_rate["bps"]
+    return "" if bps is None else f"{bps / 1024:.1f} KB/s"
 GITHUB_MAX_DOWNLOAD_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SEC", "1800"))
 GITHUB_LIST_MAX_BYTES =1024 *1024 
 GITHUB_FILE_MAX_BYTES =MAX_UPLOAD_BYTES 
@@ -4529,36 +4560,75 @@ def _gh_stable_cands ():
 class _GhRetry(Exception):
     pass
 
-def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total):
+class _GhBadGzip(Exception):
+    pass
+
+def _gh_gunzip(data, max_bytes, shown):
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = d.decompress(data, max_bytes + 1)
+    except zlib.error as exc:
+        raise _GhBadGzip(f"{shown} arrived damaged ({exc})")
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+    if not d.eof:
+        raise _GhBadGzip(f"{shown} arrived incomplete")
+    return out
+
+def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc=None):
+    if enc is None:
+        enc = {}
+    head = enc.get("head")
     req = urllib.request.Request(url, headers=headers)
+    started = time.monotonic()
     with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT_SEC, context=ctx) as resp:
         if not resp.geturl().lower().startswith("https://"):
             raise GhRejected("GitHub redirected the download off HTTPS")
+        coding = (resp.headers.get("Content-Encoding") or "").strip().lower()
+        if coding not in ("", "identity", "gzip"):
+            raise GhRejected(f"GitHub answered {shown} with an unsupported encoding ({coding})")
+        coding = "gzip" if coding == "gzip" else ""
         if total and resp.getcode() != 206:
             chunks.clear()
             total = 0
+        if total and enc.get("coding") != coding:
+            chunks.clear()
+            enc.clear()
+            if head:
+                enc["head"] = head
+            raise _GhRetry(f"GitHub changed how it sends {shown}; starting that file again")
+        enc["coding"] = coding
         length = resp.headers.get("Content-Length")
         expect = int(length) if length and length.isdigit() else None
-        if expect is not None and total + expect > max_bytes:
+        if expect is not None and not head and not coding and total + expect > max_bytes:
             raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+        if expect is not None and not head:
+            deadline = max(deadline, started + min(expect / GITHUB_MIN_BPS, GITHUB_MAX_DOWNLOAD_SLOW_SEC))
         got = 0
         while True:
-            if time.monotonic() > deadline:
-                raise GhRejected(f"download of {shown} took longer than {GITHUB_MAX_DOWNLOAD_SEC // 60} minutes "
+            now = time.monotonic()
+            if now > deadline:
+                raise GhRejected(f"download of {shown} took longer than {max(1, int((deadline - started) // 60))} minutes "
                                  "-- the connection to GitHub is too slow")
-            chunk = resp.read(65536)
+            if got >= 65536 and now - started > 120 and got / (now - started) < GITHUB_MIN_BPS:
+                raise GhRejected(f"download of {shown} is moving at under {GITHUB_MIN_BPS} bytes a second "
+                                 "-- the connection to GitHub is too slow")
+            chunk = resp.read(8192 if head else 65536)
             if not chunk:
                 break
             got += len(chunk)
             total += len(chunk)
-            if total > max_bytes:
+            if not head and total > max_bytes:
                 raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
             chunks.append(chunk)
-        if expect is not None and got < expect:
+            if head and total >= head:
+                break
+        if expect is not None and got < expect and not head:
             raise _GhRetry(f"the connection to GitHub dropped during {shown} ({total // 1024} KB received)")
+    _gh_rate_note(got, time.monotonic() - started)
     return total
 
-def _gh_fetch_https(url, max_bytes):
+def _gh_fetch_https(url, max_bytes, head=None):
     if not url.lower().startswith("https://"):
         raise GhRejected("the GitHub address must start with https://")
     if not _GH_REPO_RE.match(GITHUB_REPO):
@@ -4567,6 +4637,7 @@ def _gh_fetch_https(url, max_bytes):
     ctx = ssl.create_default_context()
     deadline = time.monotonic() + GITHUB_MAX_DOWNLOAD_SEC
     chunks, total, last = [], 0, ""
+    enc = {"head": head} if head else {}
     tries = GITHUB_RETRIES + 1
     for attempt in range(tries):
         if attempt:
@@ -4575,19 +4646,37 @@ def _gh_fetch_https(url, max_bytes):
             "User-Agent": f"instmon/{VERSION}",
             "Accept": "application/vnd.github+json" if "api.github.com" in url else "*/*",
             "Cache-Control": "no-cache",
+            "Accept-Encoding": "identity" if head else "gzip",
         }
-        if total:
+        if head:
+            headers["Range"] = f"bytes={total}-{head - 1}"
+        elif total:
             headers["Range"] = f"bytes={total}-"
+            enc["resumed"] = True
         try:
-            _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total)
-            return b"".join(chunks)
+            _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc)
+            data = b"".join(chunks)
+            if head:
+                return data[:head]
+            if enc.get("coding") == "gzip":
+                data = _gh_gunzip(data, max_bytes, shown)
+            return data
         except GhRejected:
             raise
+        except _GhBadGzip as exc:
+            if not enc.get("resumed"):
+                raise GhRejected(str(exc))
+            chunks.clear()
+            enc.clear()
+            last = f"{exc}; starting that file again"
         except _GhRetry as exc:
             last = str(exc)
         except urllib.error.HTTPError as exc:
             if exc.code == 416 and total:
                 chunks.clear()
+                enc.clear()
+                if head:
+                    enc["head"] = head
                 last = f"GitHub refused to resume {shown}"
             elif exc.code == 404:
                 raise GhRejected(f"{shown} was not found on GitHub (HTTP 404) -- check the repo name and branch")
@@ -4728,7 +4817,7 @@ def _docs_mark_fetched():
     except OSError as exc:
         log_event(f"Manuals: could not write {_DOCS_FETCHED_PATH}: {exc}", "warn")
 
-def _docs_fetch(say=log_event, skip_deleted=False):
+def _docs_fetch(say=log_event, skip_deleted=False, auto=False):
     got, same, failed = [], 0, []
     cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
     _docs_remote[:] = cands
@@ -4743,6 +4832,10 @@ def _docs_fetch(say=log_event, skip_deleted=False):
         if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
             same += 1
             continue
+        if auto and gh_link_slow():
+            say(f"Manuals: the connection is slow ({gh_link_note() or 'forced'}) -- stopped after {len(got)} "
+                "file(s); press Get from GitHub on the Manuals card for the rest", "warn")
+            break
         try:
             data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
             if _git_blob_id(data) != c["blob"]:
@@ -4779,9 +4872,9 @@ def _docs_claim():
         _docs_state.update(phase="fetching", error=None, msg="")
         return True
 
-def _docs_fetch_bg(skip_deleted=False):
+def _docs_fetch_bg(skip_deleted=False, auto=False):
     try:
-        got, same, failed = _docs_fetch(skip_deleted=skip_deleted)
+        got, same, failed = _docs_fetch(skip_deleted=skip_deleted, auto=auto)
     except Exception as exc:
         msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
         with _docs_lock:
@@ -4805,7 +4898,7 @@ def _docs_first_fetch_loop():
         if not _docs_claim():
             continue
         log_event(f"Manuals: first download from {_gh_source_label()}", "info")
-        if _docs_fetch_bg() is not None:
+        if _docs_fetch_bg(auto=True) is not None:
             return
     log_event("Manuals: could not reach GitHub -- press Get from GitHub on the Manuals card, "
               "or run a Full Update, once the node is online", "warn")
@@ -5064,6 +5157,10 @@ def _app_first_fetch_loop():
             return
         if not _app_claim():
             continue
+        if gh_link_slow():
+            log_event("Node Talker Mobile: the connection is slow -- not downloading the app by itself; "
+                      "press Check on its row in Components", "info")
+            return
         log_event(f"Node Talker Mobile: first download from {_gh_source_label()}", "info")
         if _app_fetch_bg() is not None:
             return
@@ -5146,11 +5243,11 @@ def _gh_version_of (cand ,local ):
         if cached is None :
             raise GhRejected ("no version line found in the file")
         return cached 
-    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
-    if _git_blob_id (data )!=cand ["blob"]:
+    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =GITHUB_HEAD_BYTES )
+    if len (data )<GITHUB_HEAD_BYTES and _git_blob_id (data )!=cand ["blob"]:
         raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
     try :
-        text =data .decode ("utf-8")
+        text =data .decode ("utf-8","ignore")if len (data )>=GITHUB_HEAD_BYTES else data .decode ("utf-8")
     except UnicodeDecodeError :
         raise GhRejected ("not UTF-8 text")
     ver ,_si ,_su =_scan_header_text (text )
@@ -5307,6 +5404,7 @@ def _gh_check_bg (gen =None ):
     full_update_preview()
 
 FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_FETCH_MISSING_MAX", "8")))
+SLOW_FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_SLOW_FETCH_MISSING_MAX", "2")))
 _FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_fetched.json")
 _fetched_lock = threading.Lock()
 
@@ -5391,6 +5489,11 @@ def _gh_fetch_missing(entries):
         return []
     comps = {c["category"]: c for c in COMPONENTS if c["category"] != "instmon" and c["category"] not in NO_CARD_CATEGORIES}
     got = []
+    limit = FETCH_MISSING_MAX
+    if gh_link_slow() and limit > SLOW_FETCH_MISSING_MAX:
+        limit = SLOW_FETCH_MISSING_MAX
+        log_event(f"GitHub: the connection is slow ({gh_link_note() or 'forced'}) -- downloading at most "
+                  f"{limit} missing tool(s) this time", "info")
     for entry in entries:
         comp = comps.get(entry["category"])
         if comp is None or os.path.isfile(resolve_installed_target(comp)) or _gh_other_build(entry):
@@ -5399,8 +5502,8 @@ def _gh_fetch_missing(entries):
         allow_older = status == "newer_local" and channel_get() == "stable" and _fetched_other_channel(entry)
         if status not in _GH_UPDATABLE and not allow_older:
             continue
-        if len(got) >= FETCH_MISSING_MAX:
-            log_event(f"GitHub: stopped after {FETCH_MISSING_MAX} downloads; press Check GitHub again for the rest", "info")
+        if len(got) >= limit:
+            log_event(f"GitHub: stopped after {limit} downloads; press Check GitHub again for the rest", "info")
             break
         with _gh_lock:
             if entry["name"] in _gh_state["busy"]:
@@ -6785,7 +6888,12 @@ details summary{cursor:pointer}
   }
   $('cov-go').onclick = coverage;
   $('cov').addEventListener('toggle', function () { if ($('cov').open) coverage(); });
-  setInterval(function () { if (!document.hidden) { status(); if ($('f-live').checked && !S.moment) load(); } }, 3000);
+  var polling = false;
+  setInterval(function () {
+    if (document.hidden || polling) return;
+    polling = true;
+    Promise.all([status(), $('f-live').checked && !S.moment ? load() : null]).then(function () { polling = false; }, function () { polling = false; });
+  }, 3000);
   status().then(function () { return sources(false); }).then(load);
 })();
 </script></body></html>
@@ -9142,12 +9250,15 @@ function logLine(entry) {
 }
 
 let _pollLogBusy = false;
-async function pollLog() {
+let _logIdle = 0, _logSkip = 0;
+async function pollLog(force) {
   if (_pollLogBusy) return;
+  if (force !== true && _logIdle >= 6 && (_logSkip++ % 3)) return;
   _pollLogBusy = true;
   try {
     const r = await fetch(`/api/log?since=${lastLogId}`);
     const data = await r.json();
+    _logIdle = data.entries.length ? 0 : _logIdle + 1;
     for (const entry of data.entries) {
       if (typeof entry.id === 'number' && entry.id <= lastLogId) continue;
       logLine(entry);
@@ -9393,10 +9504,14 @@ window.fetch = function (url, opts) {
   return _plainFetch(url, opts);
 };
 
+let _statusTag = null;
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
+    const tag = r.headers.get('ETag');
+    if (tag && tag === _statusTag) return;
     const data = await r.json();
+    _statusTag = tag;
     recBusy = data.recording || null;
     document.getElementById('components').innerHTML = data.components_html;
     document.getElementById('library').innerHTML = data.library_html;
@@ -9706,9 +9821,10 @@ function renderDiskimgFormatPrereqs(drives) {
   if (btn) btn.disabled = !allPass;
 }
 
-async function pollDrives() {
+async function pollDrives(force) {
   const el = document.getElementById('diskimg-drives-table');
   if (!el) return;
+  if (force !== true && !_elShown('diskimg-drives-table') && !_elShown('usbimp-drive')) return;
   try {
     const r = await fetch('/api/diskimg/drives');
     const data = await r.json();
@@ -10085,7 +10201,9 @@ let _diskimgLastJobId = null;
 let _diskimgLastJobState = null;
 let _diskimgSeenRunning = false;
 
-async function pollDiskimgJob() {
+let _diskimgIdleSkip = 0;
+async function pollDiskimgJob(force) {
+  if (force !== true && !_diskimgSeenRunning && !_elShown('diskimg-drives-table') && (_diskimgIdleSkip++ % 4)) return;
   try {
     const r = await fetch('/api/diskimg/job');
     const data = await r.json();
@@ -10126,6 +10244,7 @@ async function pollDiskimgJob() {
 // server-side from validated, currently-attached-drive state rather
 // than letting the operator hand-edit a raw dd invocation.
 let _diskimgPreviewTimers = {};
+let _diskimgPreviewLast = {};
 
 async function updateDiskimgPreview(kind) {
   const body = {kind};
@@ -10175,6 +10294,9 @@ async function updateDiskimgPreview(kind) {
   const cmdEl = document.getElementById(cmdElId);
   if (!cmdEl) return;
   const noteEl = noteElId ? document.getElementById(noteElId) : null;
+  const previewKey = JSON.stringify(body);
+  const lastPreview = _diskimgPreviewLast[kind];
+  if (lastPreview && lastPreview.key === previewKey && Date.now() - lastPreview.at < 60000) return;
   try {
     const r = await fetch('/api/diskimg/preview', {
       method: 'POST',
@@ -10198,6 +10320,7 @@ async function updateDiskimgPreview(kind) {
       cmdEl.rows = Math.min(14, (cmdEl.value.match(/\\n/g) || []).length + 1);
     }
     if (noteEl) noteEl.textContent = data.note || '';
+    _diskimgPreviewLast[kind] = {key: previewKey, at: Date.now()};
   } catch (e) { /* leave whatever was last shown */ }
 }
 
@@ -10247,9 +10370,10 @@ function populateDiskimgRestoreSelect(backups) {
   if (backups.some(b => `${b.name}::${b.drive}` === prev)) sel.value = prev;
 }
 
-async function pollDiskimgBackups() {
+async function pollDiskimgBackups(force) {
   const el = document.getElementById('diskimg-backups');
   if (!el) return;
+  if (force !== true && !_elShown('diskimg-backups')) return;
   try {
     const r = await fetch('/api/diskimg/backup/list');
     const data = await r.json();
@@ -11501,23 +11625,23 @@ function _startApp() {
   // travel node where bandwidth/battery can be tight. Catches up
   // immediately with one poll of each as soon as the tab becomes
   // visible again, rather than waiting out the rest of the interval.
-  setInterval(() => { if (!document.hidden) pollLog(); }, 2000);
-  setInterval(() => { if (!document.hidden) refreshStatus(); }, 5000);
+  netPoll(pollLog, 2000);
+  netPoll(refreshStatus, 5000, true);
   setInterval(() => { if (!document.hidden && _fuWaitEnd) _fuProgTick(); }, 1000);
-  setInterval(() => { if (!document.hidden) pollDrives(); }, 5000);
+  netPoll(pollDrives, 5000);
   // Job progress polls faster than everything else -- this is the one
   // panel someone is likely watching live while a multi-GB copy runs.
-  setInterval(() => { if (!document.hidden) pollDiskimgJob(); }, 2000);
-  setInterval(() => { if (!document.hidden) pollDiskimgBackups(); }, 5000);
+  netPoll(pollDiskimgJob, 2000);
+  netPoll(pollDiskimgBackups, 5000);
   slStart();
   // Router button: the server caches its probe for 30s, so 15s is plenty.
-  setInterval(() => { if (!document.hidden) pollGateway(); }, 15000);
+  netPoll(pollGateway, 15000);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) { pollLog(); refreshStatus(); pollDrives(); pollDiskimgJob(); pollDiskimgBackups(); pollGateway(); }
+    if (!document.hidden) { pollLog(true); refreshStatus(); pollDrives(); pollDiskimgJob(); pollDiskimgBackups(); pollGateway(); }
   });
   pollLog();
-  pollDrives();
-  pollDiskimgJob();
+  pollDrives(true);
+  pollDiskimgJob(true);
   pollDiskimgBackups();
   pollGateway();
   usbimportInit();
@@ -11752,9 +11876,10 @@ function docsInit() {
 
 _JS_SUITELOG = """// Suite log (testing): start, stop, download and clear.
 function slFmt(n) { return (n / 1048576).toFixed(1) + ' MB'; }
-async function slPoll() {
+async function slPoll(force) {
   const st = document.getElementById('sl-status');
   if (!st) return;
+  if (force !== true && !_elShown('sl-status')) return;
   try {
     const r = await fetch('/api/suitelog/status', {cache: 'no-store'});
     const d = await r.json();
@@ -11782,13 +11907,67 @@ let _slStarted = false;
 function slStart() {
   if (_slStarted) return;
   _slStarted = true;
-  slPoll();
-  setInterval(() => { if (!document.hidden) slPoll(); }, 3000);
+  slPoll(true);
+  netPoll(slPoll, 3000);
 }
 """
 
+_JS_NET = """const NET = {mult: 1, avg: 0, forced: '', active: Date.now()};
+['pointerdown', 'keydown', 'touchstart'].forEach(function (name) {
+  document.addEventListener(name, function () { NET.active = Date.now(); }, true);
+});
+try { NET.forced = localStorage.getItem('instmon_slowlink') || ''; } catch (e) {}
+NET.show = function () {
+  const el = document.getElementById('net-note');
+  if (el) el.textContent = NET.mult > 1 ? 'polling ' + NET.mult + 'x slower' : '';
+  document.querySelectorAll('[data-net-set]').forEach(function (b) {
+    b.setAttribute('aria-pressed', String((b.getAttribute('data-net-set') === 'auto' ? '' : b.getAttribute('data-net-set')) === NET.forced));
+  });
+};
+NET.sample = function (ms) {
+  NET.avg = NET.avg ? NET.avg * 0.7 + ms * 0.3 : ms;
+  let m = Math.max(1, Math.min(8, Math.ceil(NET.avg / 400)));
+  if (NET.forced === 'on') m = Math.max(m, 6);
+  if (NET.forced === 'off') m = 1;
+  NET.mult = m;
+  NET.show();
+};
+NET.set = function (value) {
+  NET.forced = value === 'auto' ? '' : value;
+  try { localStorage.setItem('instmon_slowlink', NET.forced); } catch (e) {}
+  document.cookie = 'instmon_slow=' + (NET.forced === 'on' ? '1' : '') + '; path=/; max-age=' + (NET.forced === 'on' ? 31536000 : 0) + '; SameSite=Strict';
+  if (NET.forced === 'on') NET.mult = Math.max(NET.mult, 6);
+  if (NET.forced === 'off') { NET.mult = 1; NET.avg = 0; }
+  NET.show();
+};
+function _elShown(id) {
+  const el = document.getElementById(id);
+  return !!(el && el.offsetParent !== null);
+}
+function netPoll(fn, ms, probe) {
+  let busy = false, next = 0;
+  setInterval(function () {
+    if (document.hidden || busy || Date.now() < next) return;
+    busy = true;
+    const t0 = performance.now();
+    Promise.resolve().then(fn).catch(function () {}).then(function () {
+      busy = false;
+      if (probe) NET.sample(performance.now() - t0);
+      const idle = NET.mult > 1 && Date.now() - NET.active > 120000 ? 2 : 1;
+      next = Date.now() + ms * (NET.mult * idle - 1);
+    });
+  }, ms);
+}
+document.addEventListener('click', function (ev) {
+  const b = ev.target && ev.target.closest ? ev.target.closest('[data-net-set]') : null;
+  if (b) NET.set(b.getAttribute('data-net-set'));
+});
+document.addEventListener('DOMContentLoaded', function () { NET.show(); });
+"""
+
 _JS = (
-    _JS_LOG_POLL
+    _JS_NET
+    + _JS_LOG_POLL
     + _JS_STATUS_TOAST
     + _JS_EDITOR
     + _JS_ACTIONS
@@ -11800,7 +11979,10 @@ _JS = (
     + _JS_INIT
 )
 
-def render_page ():
+_FONT_FACE_RE = re.compile(r"@font-face\{[^}]*\}\n?")
+
+
+def render_page (lite =False ):
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
     components_html =render_components_section (status )
@@ -11810,7 +11992,7 @@ def render_page ():
     version =VERSION ,
     date =DATE_STR ,
     port =PORT ,
-    css =_CSS ,
+    css =_FONT_FACE_RE .sub ("",_CSS )if lite else _CSS ,
     theme_head =_THEME_HEAD ,
     theme_row =_THEME_ROW ,
     script =_JS ,
@@ -11838,7 +12020,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </script>
 """
 
-_THEME_ROW =r"""<div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>"""
+_THEME_ROW =r"""<div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>"""
 
 HTML_TEMPLATE ="""<!DOCTYPE html>
 <html lang="en">
@@ -12481,11 +12663,26 @@ _POST_ROUTES ={
 "/api/diskimg/schedule":lambda self :self .handle_diskimg_schedule_set (),
 }
 
+GZIP_MIN_BYTES = 600
+
+
 class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     server_version =f"instmon/{VERSION }"
+    protocol_version = "HTTP/1.1"
     timeout =60 
 
+    def send_header(self, keyword, value):
+        if keyword.lower() in ("content-length", "transfer-encoding"):
+            self._sent_length = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        if not getattr(self, "_sent_length", False) or self.command not in ("GET", "HEAD"):
+            super().send_header("Connection", "close")
+        super().end_headers()
+
     def send_response (self ,code ,message =None ):
+        self._sent_length = False
         super ().send_response (code ,message )
         self .send_header ("X-Content-Type-Options","nosniff")
         self .send_header ("Referrer-Policy","no-referrer")
@@ -12498,24 +12695,64 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
 
-    def _send_json (self ,status ,payload ,extra_headers=None ):
-        body =json .dumps (payload ).encode ("utf-8")
-        self .send_response (status )
-        self .send_header ("Content-Type","application/json; charset=utf-8")
-        self .send_header ("Content-Length",str (len (body )))
-        if extra_headers:
-            for k, v in extra_headers:
+    def _accepts_gzip(self):
+        for part in self.headers.get("Accept-Encoding", "").split(","):
+            token, _, q = part.strip().partition(";")
+            if token.strip().lower() in ("gzip", "x-gzip"):
+                q = q.strip().lower().replace(" ", "")
+                return not (q.startswith("q=") and q[2:] in ("0", "0.0", "0.00", "0.000"))
+        return False
+
+    def _etag_matches(self, etag):
+        raw = self.headers.get("If-None-Match", "")
+        if not raw:
+            return False
+        if raw.strip() == "*":
+            return True
+        bare = etag[2:] if etag.startswith("W/") else etag
+        for item in raw.split(","):
+            item = item.strip()
+            if (item[2:] if item.startswith("W/") else item) == bare:
+                return True
+        return False
+
+    def _send_body(self, status, body, ctype, extra_headers=None):
+        extra = list(extra_headers or [])
+        names = {k.lower() for k, _ in extra}
+        etag = ""
+        if self.command in ("GET", "HEAD") and status == 200 and "etag" not in names:
+            etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+            if "cache-control" not in names:
+                extra.append(("Cache-Control", "private, no-cache"))
+        if etag and self._etag_matches(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            for k, v in extra:
                 self.send_header(k, v)
-        self .end_headers ()
-        self .wfile .write (body )
+            self.end_headers()
+            return
+        data = body
+        if len(body) >= GZIP_MIN_BYTES and self._accepts_gzip():
+            data = gzip.compress(body, 6, mtime=0)
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        if data is not body:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        if etag:
+            self.send_header("ETag", etag)
+        for k, v in extra:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_json (self ,status ,payload ,extra_headers=None ):
+        self._send_body(status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8", extra_headers)
 
     def _send_html (self ,status ,html ):
-        body =html .encode ("utf-8")
-        self .send_response (status )
-        self .send_header ("Content-Type","text/html; charset=utf-8")
-        self .send_header ("Content-Length",str (len (body )))
-        self .end_headers ()
-        self .wfile .write (body )
+        self._send_body(status, html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _error_json (self ,status ,message ):
         log_event (f"HTTP {status }: {message } ({self .command } {self .path })","err")
@@ -12564,7 +12801,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         return None 
 
     def _route_index (self ):
-        self ._send_html (200 ,render_page ())
+        lite = ("instmon_slow=1" in self.headers.get("Cookie", "")
+                or self.headers.get("Save-Data", "").strip().lower() == "on")
+        self ._send_html (200 ,render_page (lite ))
 
     def _route_status (self ):
         status =build_status ()
