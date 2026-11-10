@@ -3827,5 +3827,452 @@ class InstmonFetchMissingTests(unittest.TestCase):
         self.assertTrue(html.index("available-card") < html.index("<!--c-->"))
 
 
+class InstmonSuiteInstallTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp0 = tempfile.mkdtemp()
+        cls.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(cls.tmp0, "lib"),
+                              "INSTMON_CONFIG_DIR": os.path.join(cls.tmp0, "cfg")})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp0, True)
+
+    def setUp(self):
+        m = self.m
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.d = d
+        self.lib = {}
+        for cat in ("wifimon", "termon", "pibrary", "sysmon"):
+            self.lib[cat] = os.path.join(d, "lib", cat)
+            os.makedirs(self.lib[cat])
+        self.installed = {}
+        self.ran = []
+        self.events = []
+        self.calls = []
+        self.active = "active"
+        self.enabled = "enabled"
+        self.quiet_held = False
+        self.health = []
+        self.cli_results = {}
+        self.variant = None
+        self.health_result = (True, "ok")
+        self.real_held = m._held_by_quiet
+        patches = [
+            mock.patch.dict(m.LIB_SUBDIRS, self.lib),
+            mock.patch.object(m, "_USER_STOPPED_PATH", os.path.join(d, "stopped.json")),
+            mock.patch.object(m, "log_event", lambda msg, level="info": self.events.append((level, msg))),
+            mock.patch.object(m, "_gh_event", lambda msg, level: self.events.append((level, msg))),
+            mock.patch.object(m, "resolve_installed_target", lambda comp: self.installed.get(comp["category"], "/nonexistent/x")),
+            mock.patch.object(m, "recorder_busy", lambda: None),
+            mock.patch.object(m, "_diskimg_busy_reason", lambda: None),
+            mock.patch.object(m, "_build_wanted_variant", lambda: self.variant),
+            mock.patch.object(m, "systemctl_is_active", lambda unit: self.active),
+            mock.patch.object(m, "_unit_enabled_state", lambda unit: self.enabled),
+            mock.patch.object(m, "_held_by_quiet", lambda unit: self.quiet_held),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        with m._suite_lock:
+            m._suite_state.update(running=False, total=0, done=[], failed=[], current="", left=[])
+        with m._running_installs_lock:
+            m._running_installs.clear()
+        with m._gh_lock:
+            m._gh_state["checked_at"] = None
+
+    def comp(self, category):
+        return next(c for c in self.m.COMPONENTS if c["category"] == category)
+
+    def file(self, ver, ok_syntax=True, self_install=True):
+        body = f'#!/usr/bin/env python3\nimport argparse\nVERSION = "{ver}"\n\n'
+        if self_install:
+            body += ('def install_service():\n    pass\n\n\ndef uninstall_service():\n    pass\n\n\n'
+                     'ap = argparse.ArgumentParser()\nap.add_argument("--install", action="store_true")\n'
+                     'ap.add_argument("--uninstall", action="store_true")\n')
+        if not ok_syntax:
+            body += "def broken(:\n"
+        return body.encode()
+
+    def put(self, category, name, ver="1.0.0", **kw):
+        path = os.path.join(self.lib[category], name)
+        with open(path, "wb") as fh:
+            fh.write(self.file(ver, **kw))
+        return path
+
+    def test_a_running_service_is_never_stopped_by_you_even_with_an_old_mark(self):
+        m = self.m
+        m.user_stopped_mark("wifimon")
+        self.active = "active"
+        self.assertFalse(m.service_user_stopped(self.comp("wifimon")))
+
+    def test_a_mark_makes_a_stopped_service_stopped_by_you(self):
+        m = self.m
+        self.active = "inactive"
+        self.assertFalse(m.service_user_stopped(self.comp("wifimon")))
+        m.user_stopped_mark("wifimon")
+        self.assertTrue(m.service_user_stopped(self.comp("wifimon")))
+
+    def test_disabled_and_stopped_counts_but_enabled_and_stopped_does_not(self):
+        m = self.m
+        self.active = "inactive"
+        self.enabled = "enabled"
+        self.assertFalse(m.service_user_stopped(self.comp("wifimon")))
+        self.enabled = "disabled"
+        self.assertTrue(m.service_user_stopped(self.comp("wifimon")))
+
+    def test_what_quiet_system_stopped_is_not_stopped_by_you(self):
+        m = self.m
+        self.active = "inactive"
+        self.enabled = "disabled"
+        self.quiet_held = True
+        self.assertFalse(m.service_user_stopped(self.comp("wifimon")))
+
+    def test_quiet_state_is_read_for_both_unit_spellings(self):
+        m = self.m
+        for held in ("wifimon.service", "wifimon"):
+            state = {"stopped": [["service", "wifimon", held]]}
+            with mock.patch.object(m, "_quiesce_state_read", lambda: state):
+                self.assertTrue(self.real_held("wifimon.service"), held)
+                self.assertTrue(self.real_held("wifimon"), held)
+                self.assertFalse(self.real_held("sysmon.service"))
+        with mock.patch.object(m, "_quiesce_state_read", lambda: None):
+            self.assertFalse(self.real_held("wifimon.service"))
+        with mock.patch.object(m, "_quiesce_state_read", lambda: {"stopped": [["service"], "junk", None]}):
+            self.assertFalse(self.real_held("wifimon.service"))
+
+    def update(self, category="wifimon", new_rc=0, old_rc=0):
+        m = self.m
+        comp = self.comp(category)
+        self.installed[category] = "/x/installed.py"
+        runs = []
+
+        def run_cli(path, flag, stoppable=True):
+            runs.append((path, flag))
+            if flag == "--uninstall":
+                return 0
+            return new_rc if path == "/x/new.py" else old_rc
+
+        def fake_run(cmd, **kw):
+            self.calls.append(list(cmd))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        row = {"installed_version": "1.0", "version": "2.0", "status": "update", "note": ""}
+        with mock.patch.object(m, "script_has_self_uninstall", lambda p: True), \
+                mock.patch.object(m, "stage_installed_copy_if_missing", lambda c: (True, "old.py", "n", None)), \
+                mock.patch.object(m, "installed_link", lambda c: "/x/link"), \
+                mock.patch.object(m, "_fu_run_cli", run_cli), \
+                mock.patch.object(m, "quiet_forget", lambda s: None), \
+                mock.patch.object(m, "prepare_install", lambda c, p: None), \
+                mock.patch.object(m, "_fu_wait_healthy", lambda *a, **k: self.health.append(a) or self.health_result), \
+                mock.patch.object(m, "_watch_steady", lambda *a, **k: (True, "ok")), \
+                mock.patch.object(m, "FU_STABLE_SEC", 0), \
+                mock.patch.object(m, "_fu_save", lambda: None), \
+                mock.patch.object(m.subprocess, "run", fake_run):
+            result = m._fu_update_one(comp, row, "/x/new.py")
+        return result, runs
+
+    def systemctl(self, verb):
+        return [c for c in self.calls if c[:2] == ["systemctl", verb]]
+
+    def test_a_running_service_is_updated_and_checked_as_before(self):
+        result, _runs = self.update()
+        self.assertEqual(result, ("updated", "v1.0 -> v2.0"))
+        self.assertEqual(len(self.health), 1)
+        self.assertEqual(self.systemctl("stop"), [])
+
+    def test_a_service_you_stopped_is_updated_but_left_stopped(self):
+        m = self.m
+        self.active = "inactive"
+        m.user_stopped_mark("wifimon")
+        result, _runs = self.update()
+        self.assertEqual(result[0], "updated")
+        self.assertTrue(result[1].endswith("; left stopped, as you had it"), result)
+        self.assertEqual(self.health, [])
+        self.assertEqual(len(self.systemctl("stop")), 1)
+        self.assertEqual(self.systemctl("disable"), [])
+        self.assertTrue(m.user_stopped_is("wifimon"))
+
+    def test_a_disabled_service_is_disabled_again_and_marked(self):
+        m = self.m
+        self.active = "inactive"
+        self.enabled = "disabled"
+        result, _runs = self.update()
+        self.assertEqual(result[0], "updated")
+        self.assertEqual(len(self.systemctl("stop")), 1)
+        self.assertEqual(len(self.systemctl("disable")), 1)
+        self.assertTrue(m.user_stopped_is("wifimon"))
+
+    def test_a_crashed_service_is_not_treated_as_stopped_by_you(self):
+        self.active = "inactive"
+        self.enabled = "enabled"
+        result, _runs = self.update()
+        self.assertEqual(result, ("updated", "v1.0 -> v2.0"))
+        self.assertEqual(len(self.health), 1)
+        self.assertEqual(self.systemctl("stop"), [])
+
+    def test_a_service_quiet_system_paused_is_started_and_checked(self):
+        self.active = "inactive"
+        self.enabled = "disabled"
+        self.quiet_held = True
+        result, _runs = self.update()
+        self.assertEqual(len(self.health), 1)
+        self.assertEqual(self.systemctl("stop"), [])
+        self.assertEqual(result, ("updated", "v1.0 -> v2.0"))
+
+    def test_a_failed_update_of_a_stopped_service_puts_the_old_file_back_and_stops_it_again(self):
+        m = self.m
+        self.active = "inactive"
+        m.user_stopped_mark("wifimon")
+        result, runs = self.update(new_rc=1)
+        self.assertEqual(result[0], "skipped")
+        self.assertIn("rolled back", result[1])
+        self.assertTrue(result[1].endswith("left stopped, as you had it"), result)
+        self.assertEqual([r[1] for r in runs], ["--uninstall", "--install", "--install"])
+        self.assertEqual(len(self.systemctl("stop")), 1)
+        self.assertEqual(self.health, [])
+
+    def test_a_failed_rollback_of_a_running_service_still_needs_attention(self):
+        self.health_result = (False, "never answered")
+        result, _runs = self.update(new_rc=1)
+        self.assertEqual(result[0], "attention")
+
+    def test_the_plan_says_a_tool_that_is_not_installed_is_only_downloaded(self):
+        m = self.m
+        with mock.patch.object(m, "channel_get", lambda: "testing"), \
+                mock.patch.object(m, "read_installed_version", lambda p: "1"):
+            rows = m._fu_plan([])
+        row = next(r for r in rows if r["category"] == "termon")
+        self.assertEqual(row["status"], "not_installed")
+        self.assertIn("only downloaded", row["note"])
+
+    def test_full_update_downloads_missing_tools_even_when_everything_else_is_current(self):
+        m = self.m
+        seen = []
+        entries = [{"name": "x", "category": "termon", "status": "missing"}]
+        with mock.patch.object(m, "_gh_collect", lambda: (entries, 0)), \
+                mock.patch.object(m, "_fu_plan", lambda cands: []), \
+                mock.patch.object(m, "_fu_publish_plan", lambda rows, scripts: None), \
+                mock.patch.object(m, "_gh_fetch_missing", lambda e: seen.append(e) or ["termon_v1.py"]), \
+                mock.patch.object(m, "_fu_wifi_menu_home", lambda e: None), \
+                mock.patch.object(m, "_fu_manuals", lambda s: None), \
+                mock.patch.object(m, "_fu_finish", lambda error="": seen.append("finished")):
+            m._fu_run()
+        self.assertEqual(seen, [entries, "finished"])
+        self.assertTrue(any("only downloaded" in msg for _l, msg in self.events))
+
+    def test_a_failing_download_step_does_not_stop_full_update(self):
+        m = self.m
+        with mock.patch.object(m, "_gh_fetch_missing", side_effect=RuntimeError("boom")):
+            self.assertEqual(m._fu_fetch_missing_step([]), [])
+        self.assertTrue(any(lvl == "warn" and "boom" in msg for lvl, msg in self.events))
+
+    def handler(self, body):
+        m = self.m
+        sent = []
+        fake = mock.Mock()
+        fake._send_json = lambda code, obj: sent.append((code, obj))
+        fake._error_json = lambda code, msg: sent.append((code, {"error": msg}))
+
+        class Sync:
+            def __init__(self, target=None, args=(), daemon=None):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        def install(src, name, comp):
+            self.ran.append(comp["category"])
+            with m._running_installs_lock:
+                m._running_installs.discard(comp["service"])
+            if self.cli_results.get(comp["category"], True):
+                self.installed[comp["category"]] = src
+
+        with mock.patch.object(m, "run_self_install_bg", install), mock.patch.object(m.threading, "Thread", Sync):
+            m.InstmonHandler._action_install_suite(fake, body)
+        return sent
+
+    def items(self, *cats):
+        out = []
+        for cat in cats:
+            name = f"{cat}_v1_0_0_20261110.py"
+            if not os.path.exists(os.path.join(self.lib[cat], name)):
+                self.put(cat, name)
+            out.append({"category": cat, "name": name})
+        return out
+
+    def test_it_needs_confirmation_and_a_sensible_list(self):
+        for body in ({"items": []}, {"confirm": True}, {"confirm": True, "items": "x"}, {"confirm": True, "items": []},
+                     {"confirm": True, "items": [{"category": 1, "name": "a"}]},
+                     {"confirm": True, "items": [{"category": "wifimon"}] * 2},
+                     {"confirm": True, "items": [{"category": "wifimon", "name": "a"}] * 2},
+                     {"confirm": True, "items": [{"category": "nonsense", "name": "a.py"}]},
+                     {"confirm": True, "items": [{"category": "instmon", "name": "a.py"}]},
+                     {"confirm": True, "items": [{"category": "wifimon", "name": "a.py"}] * 17}):
+            sent = self.handler(body)
+            self.assertEqual(sent[0][0], 400, body)
+        self.assertEqual(self.ran, [])
+
+    def test_installs_follow_the_full_update_order(self):
+        sent = self.handler({"confirm": True, "items": self.items("pibrary", "wifimon")})
+        self.assertEqual(sent[0][0], 200, sent)
+        self.assertEqual(self.ran, ["wifimon", "pibrary"])
+        st = self.m.suite_status()
+        self.assertEqual((st["running"], [d["name"] for d in st["done"]], st["failed"]), (False, ["wifimon", "Pibrary"], []))
+        self.assertTrue(any("Install selected finished: 2 installed" in msg for _l, msg in self.events))
+
+    def test_terminal_monitor_needs_its_own_confirmation(self):
+        sent = self.handler({"confirm": True, "items": self.items("termon", "wifimon")})
+        self.assertEqual(sent[0][0], 400)
+        self.assertIn("root shell", sent[0][1]["error"])
+        self.assertEqual(self.ran, [])
+        sent = self.handler({"confirm": True, "root_shell_ok": True, "items": self.items("termon", "wifimon")})
+        self.assertEqual(sent[0][0], 200)
+        self.assertEqual(self.ran, ["wifimon", "termon"])
+        sent = self.handler({"confirm": True, "root_shell_ok": "yes", "items": self.items("termon")})
+        self.assertEqual(sent[0][0], 400)
+
+    def test_a_tool_that_is_already_installed_is_skipped_not_reinstalled(self):
+        real = os.path.join(self.d, "wifimon.py")
+        with open(real, "w") as fh:
+            fh.write("x")
+        self.installed["wifimon"] = real
+        sent = self.handler({"confirm": True, "items": self.items("wifimon", "pibrary")})
+        self.assertEqual(sent[0][1]["skipped"], ["wifimon is already installed"])
+        self.assertEqual(self.ran, ["pibrary"])
+        self.ran.clear()
+        sent = self.handler({"confirm": True, "items": self.items("wifimon")})
+        self.assertEqual((sent[0][0], sent[0][1]["started"]), (200, 0))
+        self.assertEqual(self.ran, [])
+
+    def test_a_bad_file_refuses_the_whole_request_before_anything_runs(self):
+        self.put("pibrary", "pibrary_v1_0_0_20261110.py", self_install=False)
+        sent = self.handler({"confirm": True, "items": self.items("wifimon", "pibrary")})
+        self.assertEqual(sent[0][0], 400)
+        self.assertEqual(self.ran, [])
+        self.put("pibrary", "pibrary_v1_0_0_20261110.py", ok_syntax=False)
+        self.assertEqual(self.handler({"confirm": True, "items": self.items("wifimon", "pibrary")})[0][0], 400)
+        self.assertEqual(self.handler({"confirm": True, "items": [{"category": "wifimon", "name": "../x.py"}]})[0][0], 404)
+        self.assertEqual(self.handler({"confirm": True, "items": [{"category": "wifimon", "name": "nothere.py"}]})[0][0], 404)
+        self.assertEqual(self.ran, [])
+
+    def test_the_other_build_is_refused(self):
+        self.variant = ""
+        self.put("sysmon", "sysmon_pi02w_v6_13_83_20261028.py", ver="6.13.83-pi02w")
+        sent = self.handler({"confirm": True, "items": [{"category": "sysmon", "name": "sysmon_pi02w_v6_13_83_20261028.py"}]})
+        self.assertEqual(sent[0][0], 400)
+        self.assertIn("other build", sent[0][1]["error"])
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        self.cli_results["wifimon"] = False
+        sent = self.handler({"confirm": True, "items": self.items("wifimon", "pibrary")})
+        self.assertEqual(sent[0][0], 200)
+        self.assertEqual(self.ran, ["wifimon", "pibrary"])
+        st = self.m.suite_status()
+        self.assertEqual([d["name"] for d in st["done"]], ["Pibrary"])
+        self.assertEqual([f["name"] for f in st["failed"]], ["wifimon"])
+        self.assertTrue(any(lvl == "warn" and "1 not installed" in msg for lvl, msg in self.events))
+
+    def test_a_crash_in_one_install_is_recorded_and_the_rest_go_on(self):
+        m = self.m
+        calls = []
+
+        def install(src, name, comp):
+            calls.append(comp["category"])
+            with m._running_installs_lock:
+                m._running_installs.discard(comp["service"])
+            if comp["category"] == "wifimon":
+                raise RuntimeError("boom")
+            self.installed[comp["category"]] = src
+
+        plan = [(self.comp(c), self.put(c, f"{c}_v1.py"), f"{c}_v1.py") for c in ("wifimon", "pibrary")]
+        with mock.patch.object(m, "run_self_install_bg", install):
+            m._suite_run(plan)
+        self.assertEqual(calls, ["wifimon", "pibrary"])
+        st = m.suite_status()
+        self.assertEqual((len(st["done"]), len(st["failed"]), st["running"]), (1, 1, False))
+
+    def test_a_recording_that_starts_stops_the_rest(self):
+        m = self.m
+        states = iter([None, {"entry": "x"}])
+        calls = []
+
+        def install(src, name, comp):
+            calls.append(comp["category"])
+            with m._running_installs_lock:
+                m._running_installs.discard(comp["service"])
+            self.installed[comp["category"]] = src
+
+        plan = [(self.comp(c), self.put(c, f"{c}_v1.py"), f"{c}_v1.py") for c in ("wifimon", "pibrary")]
+        with mock.patch.object(m, "run_self_install_bg", install), mock.patch.object(m, "recorder_busy", lambda: next(states)):
+            m._suite_run(plan)
+        self.assertEqual(calls, ["wifimon"])
+        self.assertTrue(any("a recording started" in msg for _l, msg in self.events))
+        self.assertFalse(m.suite_status()["running"])
+
+    def test_it_will_not_start_twice(self):
+        m = self.m
+        with m._suite_lock:
+            m._suite_state["running"] = True
+        sent = self.handler({"confirm": True, "items": self.items("wifimon")})
+        self.assertEqual(sent[0][0], 409)
+        self.assertEqual(self.ran, [])
+
+    def test_a_disk_image_job_blocks_it(self):
+        with mock.patch.object(self.m, "_diskimg_busy_reason", lambda: "a disk-image job is running"):
+            sent = self.handler({"confirm": True, "items": self.items("wifimon")})
+        self.assertEqual(sent[0][0], 409)
+
+    def test_the_action_is_locked_during_recordings_and_full_update(self):
+        m = self.m
+        self.assertIn("install_suite", m._RECORDING_BLOCKED_ACTIONS)
+        self.assertNotIn("install_suite", m._ACTIONS_DURING_FULL_UPDATE)
+        self.assertIn("install_suite", m._ACTION_HANDLERS)
+
+    def row(self, category, name, installed=False):
+        return {"name": name, "service": category, "port": 7878, "category": category, "installed": installed,
+                "state": "inactive", "listening": False, "version": "?"}
+
+    def test_the_card_has_tick_boxes_and_buttons_when_something_is_downloaded(self):
+        m = self.m
+        lib = {"wifimon": [{"name": "wifimon_v1.py", "version": "1.0", "installed": False}],
+               "termon": [{"name": "termon_v1.py", "version": "1.0", "installed": False}], "pibrary": []}
+        rows = [self.row("wifimon", "wifimon"), self.row("termon", "Terminal Monitor"), self.row("pibrary", "Pibrary")]
+        html = m.render_available_card_html(rows, lib)
+        self.assertEqual(html.count('class="suite-cb"'), 2)
+        self.assertEqual(html.count("data-root-shell"), 1)
+        i = html.index('data-category="termon"')
+        self.assertIn("data-root-shell", html[i:i + 160])
+        for action in ("suite_select_all", "suite_clear", "install_suite"):
+            self.assertIn(f'data-action="{action}"', html)
+        self.assertIn("Select all leaves Terminal Monitor", html)
+
+    def test_the_card_has_no_suite_buttons_when_nothing_is_downloaded(self):
+        html = self.m.render_available_card_html([self.row("pibrary", "Pibrary")], {"pibrary": []})
+        self.assertNotIn("suite-cb", html)
+        self.assertNotIn("install_suite", html)
+
+    def test_the_card_shows_progress_while_it_runs(self):
+        m = self.m
+        with m._suite_lock:
+            m._suite_state.update(running=True, total=3, done=[{"name": "a", "note": ""}], failed=[],
+                                  current="Pibrary", left=["Terminal Monitor"])
+        lib = {"pibrary": [{"name": "p.py", "version": "1", "installed": False}]}
+        html = m.render_available_card_html([self.row("pibrary", "Pibrary")], lib)
+        self.assertIn("Installing Pibrary (2 of 3); next: Terminal Monitor", html)
+        self.assertNotIn('data-action="install_suite"', html)
+
+    def test_the_page_keeps_ticks_across_refreshes_and_asks_twice_for_a_root_shell(self):
+        with open(os.path.join(HERE, "..", os.path.basename(self.m.__file__)), encoding="utf-8") as fh:
+            src = fh.read()
+        for needle in ("var SUITE_CHECKED = {};", "cb.checked = !!SUITE_CHECKED[cb.dataset.category];",
+                       "action === 'install_suite'", "root_shell_ok: rootShell",
+                       "cb.checked = action === 'suite_select_all' && !cb.dataset.rootShell;",
+                       "Terminal Monitor gives a root shell to anyone on your LAN"):
+            self.assertIn(needle, src)
+        self.assertIn("'install_suite'", src.split("const REC_API")[1].split("]")[0])
+
+
 if __name__ == "__main__":
     unittest.main()
