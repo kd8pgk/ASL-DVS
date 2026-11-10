@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.33"
+VERSION = "0.10.34"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -8844,11 +8844,16 @@ function appSet(v) {
   try { return !!NodeTalkerApp.setBufferMs(Number(v.bufferMs)); } catch (e) { return false; }
 }
 
+function balGain(cfg, side) {
+  const c = cfg || {}, fav = c[side + '_gain_fav'];
+  if (fav != null) return Number(fav) || 0;
+  return c.tune_enabled ? Number(c[side + '_gain_db']) || 0 : 0;
+}
+
 function chkSuggest(r, cfg) {
   const R = r.rx, T = r.tx, c = cfg || {}, mg = Number(mic.gain) || 0;
   const rxFav = c.rx_gain_fav != null, txFav = c.tx_gain_fav != null;
-  const rxGain = rxFav ? Number(c.rx_gain_fav) || 0 : c.tune_enabled ? Number(c.rx_gain_db) || 0 : 0;
-  const txGain = txFav ? Number(c.tx_gain_fav) || 0 : c.tune_enabled ? Number(c.tx_gain_db) || 0 : 0;
+  const rxGain = balGain(c, 'rx'), txGain = balGain(c, 'tx');
   const items = [];
   const add = (tier, text, change) => items.push({tier: tier, text: text, change: change || null});
   const node = (tier, text, change) => add(tier, text, change && Object.assign({node: true}, change));
@@ -8891,6 +8896,11 @@ function chkSuggest(r, cfg) {
     const d = clampStep(-19 - R.speech);
     gainChange(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): raise RX gain by ' + d + ' dB'
       + (c.rx_agc ? ' (Automatic level is already at its limit)' : '') + '.', {tune_enabled: true, rx_gain_db: Math.min(12, rxGain + d)});
+  }
+  if (rxOk && !clipping && R.speech != null && R.speech > -14 && rxGain > -12) {
+    const d = clampStep(R.speech + 19);
+    gainChange(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): lower RX gain by ' + d + ' dB.',
+      {tune_enabled: true, rx_gain_db: Math.max(-12, rxGain - d)});
   }
   if (R.actSecs > 0 && !rxOk) add(3, 'Only ' + R.actSecs.toFixed(1) + ' s of received speech was measured: too little to judge RX levels.');
   if (R.hum != null && R.hum >= -25 && c.rx_hpf === false) node(2, 'Strong sound below 300 Hz (CTCSS tones or hum): turn on Cut below 300 Hz.', {rx_hpf: true});
@@ -9225,20 +9235,38 @@ function balAlive() {
   return exp ? !exp.stopped : !!(autoRun && !autoRun.stop);
 }
 
+// Each score counts only what its side's settings can change, so a kept or reverted trial reflects the change.
+// RX: received level, clipping, dropouts, resets, squelch tails, station spread (Automatic level) and hum (300 Hz cut).
+// TX: what TX gain and the TX buffer change, read at the Pi: gaps, peaks over -1 dBFS and the level after TX gain.
+const BAL_SPREAD_OK = 8, BAL_HUM_OK = -25, BAL_TX_TARGET = -18;
+
 function balRxScore(r) {
   const R = r.rx;
   let s = R.clipPct * 3 + R.dropsMin * 2 + (R.resets || 0) + (R.tails || 0) * 0.5;
   if (R.actSecs >= CHK_MIN_SPEECH && R.speech != null) s += Math.abs(BAL_LIVE_TARGET - R.speech);
+  if (R.spread != null) s += Math.max(0, R.spread - BAL_SPREAD_OK) * 0.5;
+  if (R.hum != null) s += Math.max(0, R.hum - BAL_HUM_OK) * 0.3;
   return s;
 }
 
-function balTxScore(r) {
+function balTxScore(r, cfg) {
   const T = r.tx;
-  return T.actSecs >= CHK_MIN_SPEECH && T.speech != null ? Math.abs(-18 - T.speech) * 0.5 + T.clipPct * 3 : 0;
+  let s = T.srvN ? 10 * T.gapTx / T.srvN : 0;
+  if (T.srvPeak != null && T.srvPeak > -1) s += (T.srvPeak + 1) * 3;
+  if (T.actSecs >= CHK_MIN_SPEECH && T.speech != null) s += Math.abs(BAL_TX_TARGET - (T.speech + balGain(cfg, 'tx'))) * 0.5;
+  return s;
 }
 
-function balLiveScore(r) {
-  return balRxScore(r) + balTxScore(r);
+function balLiveScore(r, cfg) {
+  return balRxScore(r) + balTxScore(r, cfg);
+}
+
+// A gain change has a known effect on the level, so it is applied without a trial; a one-minute trial would mostly
+// measure which stations talked. Filters, the gate, Automatic level and the buffers are put on trial.
+const BAL_GAIN_KEYS = ['rx_gain_db', 'tx_gain_db', 'tune_enabled', 'node'];
+function balIsGain(change) {
+  const k = Object.keys(change || {});
+  return k.length > 0 && k.every((x) => BAL_GAIN_KEYS.includes(x)) && (k.includes('rx_gain_db') || k.includes('tx_gain_db'));
 }
 
 const AUTO_WINDOW_MIN = 1, AUTO_SETTLE_MS = 300000, AUTO_GAP_MS = 240000, AUTO_CPU_PCT = 70, AUTO_CPU_SEC = 30;
@@ -9327,7 +9355,7 @@ async function autoStep(side, r, cfg) {
   const msg = side + '-auto-msg';
   const act = side === 'rx' ? r.rx.actSecs : r.tx.actSecs;
   if (!(act >= CHK_MIN_SPEECH)) { note(msg, '', 'Not enough ' + (side === 'rx' ? 'received' : 'transmitted') + ' speech this minute to judge.'); return; }
-  const score = side === 'rx' ? balRxScore(r) : balTxScore(r);
+  const score = side === 'rx' ? balRxScore(r) : balTxScore(r, cfg);
   if (autoUndo[side]) {
     if (score > autoPre[side] + AUTO_WORSE) {
       await balRevert(autoUndo[side]);
@@ -9342,6 +9370,7 @@ async function autoStep(side, r, cfg) {
   if (!(await balQuiet())) return;
   const res = await balApply(hit.change);
   if (!res.ok) { note(msg, 'err', res.error || 'Could not save.'); return; }
+  if (balIsGain(hit.change)) { note(msg, 'ok', new Date().toLocaleTimeString() + ': ' + hit.text + ' Applied; a gain change is not put on trial.'); return; }
   autoUndo[side] = res.undo;
   autoPre[side] = score;
   autoSig[side] = autoSigOf(hit.change);
@@ -9579,7 +9608,9 @@ async function expLiveRounds() {
     expStage('Live check ' + (i + 1) + ' of ' + rounds + '. Use the Listen tab as usual.');
     const r = await expLive(exp.mins);
     if (!r || exp.stopped || !exp.balance) return;
-    const score = balLiveScore(r);
+    const cur = await api('/api/config');
+    if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
+    const score = balLiveScore(r, cur.config);
     if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.undo) {
       await balRevert(exp.undo);
       exp.balance = false;
@@ -9588,7 +9619,6 @@ async function expLiveRounds() {
     }
     prev = score;
     if (i === rounds - 1) break;
-    const cur = await api('/api/config');
     const hit = balPick(r, cur.config, null, null);
     if (!hit) { note('exp-msg', 'ok', 'Nothing left to change in range.'); return; }
     expStage('Waiting for a quiet channel before changing a setting.');
@@ -9599,8 +9629,10 @@ async function expLiveRounds() {
     }
     const res = await balApply(hit.change);
     if (!res.ok) return expFail(res.error);
-    exp.undo = res.undo;
-    balNote(hit.change, '', 'Changed live: ' + hit.text);
+    const gain = balIsGain(hit.change);
+    exp.undo = gain ? null : res.undo;
+    if (gain) prev = null;
+    balNote(hit.change, '', 'Changed live: ' + hit.text + (gain ? ' A gain change is not put on trial.' : ''));
   }
 }
 
@@ -12899,7 +12931,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small why hidden" id="why-chk"></p>
 <div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
 <div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test first (keys the node; tone length and tones are set under RX tone test below)</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs. Gain changes follow the measured level; a filter, gate or buffer change is put back if it makes things worse</label></div>
 <p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
 <div id="chk-run" class="chk-run hidden"></div>
 <div id="exp-run" class="chk-run hidden"></div>

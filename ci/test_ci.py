@@ -4315,6 +4315,15 @@ class NodeTalkerBalancerFixTests(unittest.TestCase):
         self.assertFalse([x for x in got if x["change"] and "rx_gain_db" in x["change"]])
         self.assertTrue([x for x in got if "favorite with its own gain" in x["text"]])
 
+    def test_loud_received_speech_lowers_rx_gain(self):
+        got = self.suggest({"speech": -8}, {"tune_enabled": True, "rx_gain_db": 0, "rx_agc": True})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], -11)
+
+    def test_speech_inside_the_target_changes_no_rx_gain(self):
+        got = self.suggest({"speech": -19}, {"tune_enabled": True, "rx_gain_db": 0, "rx_agc": True})
+        self.assertFalse([x for x in got if x["change"] and "rx_gain_db" in x["change"]])
+
     def test_tx_gain_is_lowered_from_the_favorite_gain_in_effect(self):
         got = self.suggest({}, {"tune_enabled": False, "tx_gain_db": 0, "tx_gain_fav": 6}, {"srvPeak": 0})
         self.assertTrue([x for x in got if "favorite with its own gain" in x["text"] and "lower TX gain" in x["text"]])
@@ -4540,6 +4549,102 @@ class NodeTalkerLimiterTests(unittest.TestCase):
         got = self.run_js("let at = -1, best = 0; for (let i = 0; i < 400; i++) { const y = Math.abs(dynProcess(d, i === 100 ? 0.5 : 0)); if (y > best) { best = y; at = i; } } console.log(JSON.stringify([at, LIM_LA]));")
         self.assertEqual(got[0], 100 + got[1])
         self.assertEqual(got[1], 16)
+
+
+class NodeTalkerBalancerScoreTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            cls.text = fh.read()
+
+    def fn(self, name):
+        start = self.text.index("function " + name + "(")
+        if self.text[start - 6:start] == "async ":
+            start -= 6
+        i = self.text.index("{", start)
+        depth = 0
+        for j in range(i, len(self.text)):
+            if self.text[j] == "{":
+                depth += 1
+            elif self.text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return self.text[start:j + 1]
+        raise AssertionError(name)
+
+    def const(self, name):
+        start = self.text.index("const " + name)
+        return self.text[start:self.text.index(";", start) + 1]
+
+    def js(self, body, fns, consts=()):
+        import subprocess
+        prog = "const CHK_MIN_SPEECH = 5, BAL_LIVE_TARGET = -19;\n" + "\n".join(self.const(c) for c in consts) + "\n"
+        prog += "\n".join(self.fn(f) for f in fns) + "\n" + body
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    RX = {"clipPct": 0, "dropsMin": 0, "resets": 0, "tails": 0, "actSecs": 30, "speech": -19, "spread": None, "hum": None}
+    TX = {"srvN": 4, "gapTx": 0, "srvPeak": -6, "actSecs": 30, "speech": -18, "clipPct": 0}
+
+    def score(self, side, rx=None, tx=None, cfg=None):
+        r = {"rx": dict(self.RX, **(rx or {})), "tx": dict(self.TX, **(tx or {}))}
+        call = "balRxScore(r)" if side == "rx" else "balTxScore(r, %s)" % json.dumps(cfg or {})
+        return self.js("const r = %s; console.log(JSON.stringify(%s));" % (json.dumps(r), call),
+                       ["balGain", "balRxScore", "balTxScore"], ["BAL_SPREAD_OK"])
+
+    def test_tx_score_follows_the_tx_gain_in_effect(self):
+        quiet = {"speech": -26}
+        off = self.score("tx", tx=quiet, cfg={"tune_enabled": True, "tx_gain_db": 0})
+        on = self.score("tx", tx=quiet, cfg={"tune_enabled": True, "tx_gain_db": 8})
+        stored_only = self.score("tx", tx=quiet, cfg={"tune_enabled": False, "tx_gain_db": 8})
+        self.assertLess(on, off)
+        self.assertEqual(stored_only, off)
+
+    def test_tx_score_counts_gaps_and_pi_peaks_not_phone_clipping(self):
+        base = self.score("tx")
+        self.assertEqual(self.score("tx", tx={"clipPct": 20}), base)
+        self.assertGreater(self.score("tx", tx={"gapTx": 2}), base)
+        self.assertGreater(self.score("tx", tx={"srvPeak": 0}), base)
+
+    def test_rx_score_counts_station_spread_and_hum(self):
+        base = self.score("rx")
+        self.assertEqual(self.score("rx", rx={"spread": 6, "hum": -40}), base)
+        self.assertGreater(self.score("rx", rx={"spread": 18}), base)
+        self.assertGreater(self.score("rx", rx={"hum": -10}), base)
+
+    def test_only_gain_changes_skip_the_trial(self):
+        got = self.js("console.log(JSON.stringify([{tune_enabled: true, rx_gain_db: 3}, {node: true, tx_gain_db: -3}, {rx_agc: true}, "
+                      "{tune_enabled: true, jitter_ms: 500}, {rx_hpf: false, rx_gain_db: 2}, {}].map(balIsGain)));",
+                      ["balIsGain"], ["BAL_GAIN_KEYS"])
+        self.assertEqual(got, [True, True, False, False, False, False])
+
+    def auto_step(self, change):
+        prelude = (
+            "const autoUndo = {rx: null, tx: null}, autoPre = {rx: null, tx: null}, autoSig = {rx: '', tx: ''}, autoRejected = {rx: {}, tx: {}};\n"
+            "const notes = []; function note(id, kind, text) { notes.push([id, kind, text]); }\n"
+            "function autoKeys() { return ['rx_gain_db', 'rx_agc']; }\n"
+            "function balPick() { return {change: CHANGE, text: 'x.'}; }\n"
+            "async function balQuiet() { return true; }\n"
+            "async function balApply() { return {ok: true, undo: {was: 1}}; }\n"
+            "async function balRevert() {}\n"
+            "function autoSigOf(c) { return JSON.stringify(c); }\n")
+        body = ("const CHANGE = %s;\n" % json.dumps(change) + prelude +
+                "autoStep('rx', {rx: {actSecs: 30, clipPct: 0, dropsMin: 0, speech: -30}, tx: {}}, {}).then(() => "
+                "console.log(JSON.stringify({undo: autoUndo.rx, notes: notes})));")
+        return self.js(body, ["balGain", "balRxScore", "balTxScore", "balIsGain", "autoStep"], ["BAL_SPREAD_OK", "BAL_GAIN_KEYS", "AUTO_WORSE"])
+
+    def test_auto_balancer_applies_a_gain_change_without_a_trial(self):
+        got = self.auto_step({"tune_enabled": True, "rx_gain_db": 6})
+        self.assertIsNone(got["undo"])
+        self.assertIn("not put on trial", got["notes"][-1][2])
+
+    def test_auto_balancer_puts_a_filter_change_on_trial(self):
+        got = self.auto_step({"rx_agc": True})
+        self.assertEqual(got["undo"], {"was": 1})
+        self.assertIn("On trial", got["notes"][-1][2])
 
 
 if __name__ == "__main__":
