@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.26"
+VERSION = "0.10.27"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3401,6 +3401,7 @@ def node_counters():
 
 RECORDER_STATUS_URL = os.environ.get("NODETALKER_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
 _recorder_cache = {"t": -1e9, "v": None, "info": None}
+_recorder_lock = threading.Lock()
 _RECORDING_BLOCKED = frozenset((
     "/api/node/enable", "/api/node/disable", "/api/tx/enable", "/api/tx/disable", "/api/connect",
     "/api/disconnect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/tune/disconnect",
@@ -3412,6 +3413,13 @@ _RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
 
 def recorder_busy():
+    if time.monotonic() - _recorder_cache["t"] < 2.0:
+        return _recorder_cache["v"]
+    with _recorder_lock:
+        return _recorder_probe()
+
+
+def _recorder_probe():
     now = time.monotonic()
     if now - _recorder_cache["t"] < 2.0:
         return _recorder_cache["v"]
@@ -6319,8 +6327,9 @@ class Talker:
         if why:
             self._unkey(why)
         elif frame is not None:
-            if self.first_at is None:
-                self.first_at = now
+            with self.lock:
+                if self.first_at is None:
+                    self.first_at = now
             self._packet(frame, True)
 
 

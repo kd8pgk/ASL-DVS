@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 DATE_STR = "2026-11-09"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4681,10 +4681,14 @@ def encode_file(wav, key, kbps):
         return False, f"{enc['bin']} failed" + (f": {err[:200]}" if err else f" (exit {rc})")
     try:
         os.replace(tmp, out)
-        os.remove(wav)
     except OSError as exc:
         _remove_quiet(tmp)
         return False, f"could not finish {os.path.basename(wav)}: {exc}"
+    try:
+        os.remove(wav)
+    except OSError as exc:
+        log_event(f"Converted {os.path.basename(wav)} but could not delete the WAV: {exc}", "warn")
+        return True, os.path.basename(out) + " (the WAV could not be deleted)"
     return True, os.path.basename(out)
 
 
@@ -4708,6 +4712,11 @@ def _enc_worker():
                     log_event(f"Converted {name} to {msg} (the WAV was deleted)", "ok")
                 else:
                     log_event(f"Could not convert {name}: {msg} (the WAV was kept)", "warn")
+        except Exception as exc:
+            with _enc_lock:
+                _enc["failed"] += 1
+                _enc["last"] = f"{os.path.basename(wav)}: {exc}"
+            log_event(f"Converting {os.path.basename(wav)} failed: {exc} (the WAV was kept)", "err")
         finally:
             with _enc_lock:
                 _enc["pending"].discard(wav)
@@ -4736,7 +4745,12 @@ def enc_sweep(d):
     n = 0
     for name, _size in recordings_list(d):
         p = os.path.join(d, name)
-        if name.endswith(".wav") and p != skip and enc_enqueue(p):
+        if not name.endswith(".wav") or p == skip:
+            continue
+        if any(os.path.exists(p[:-4] + e["ext"]) for e in ENCODERS.values()):
+            _remove_quiet(p)
+            continue
+        if enc_enqueue(p):
             n += 1
     return n
 
@@ -4819,7 +4833,7 @@ class RecordingEngine:
 
     def feed(self, pcm):
         a = self.a
-        if a is None:
+        if a is None or a["error"]:
             return
         try:
             a["q"].put_nowait(pcm)
@@ -4925,6 +4939,7 @@ class RecordingEngine:
             os.fsync(fh.fileno())
         except (OSError, ValueError) as exc:
             a["error"] = f"writing {a['name']} failed: {exc}"
+            a["stop"].set()
             if HUB.recorder is self:
                 HUB.recorder = None
             log_event(a["error"], "err")
