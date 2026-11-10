@@ -24,8 +24,8 @@ By KD8PGK, written with Claude (Anthropic).
 
 Scripts:
 
-- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker when you ask for it. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi.
-- `uninstall_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
+- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker, Node Recorder, Pibrary and Terminal Monitor when you ask for them (`INSTALL_NODETALKER=1`, `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, `INSTALL_TERMON=1` or `--with-termon`; `--suite` asks for all of them except Terminal Monitor, which is a root shell and always needs its own yes). It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi. `--download-only` fetches the files of tools that are not installed into the library and installs nothing. A service you stopped yourself (Stop in instmon, or disabled) is updated but left stopped.
+- `uninstall_all_v*.sh`: removes the Dashboard, SysMon, wifimon, 44helper, Node Talker and Terminal Monitor (and the Config getter and putter links), and leaves instmon and configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
 Pages that ask for a login use the Pi's root password.
@@ -96,7 +96,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_4_0_20261020.sh
+   sudo bash install_all_v7_5_0_20261110.sh
    ```
    - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`), and git is installed first if it is missing. It also installs instmon when it isn't installed.
    - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it, and ask again before installing a download older than the installed version. Use `--offline` (or `--no-download`) to use only the files on the Pi.
@@ -495,7 +495,7 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_all_v1_9_0_20261027.sh
+sudo bash uninstall_all_v1_10_0_20261110.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
@@ -521,8 +521,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
 | `termon_v0_2_4_20261109.py` | common (stands alone for now) |
-| `install_all_v7_4_0_20261020.sh` | common |
-| `uninstall_all_v1_9_0_20261027.sh` | common |
+| `install_all_v7_5_0_20261110.sh` | common |
+| `uninstall_all_v1_10_0_20261110.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

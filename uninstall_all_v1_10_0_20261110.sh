@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_all.sh  v1.9.0  (2026-10-27)
+# uninstall_all.sh  v1.10.0  (2026-11-10)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -9,7 +9,7 @@ warn() { echo "${YEL}  ⚠ ${RST}$*"; }
 
 [[ $EUID -eq 0 ]] || { echo "${RED}Run as root: sudo bash $0${RST}"; exit 1; }
 
-echo "== ASL-DVS Suite — Mass Uninstall (instmon, library, and config are left alone) =="
+echo "== Suite — Mass Uninstall (instmon, library, and config are left alone) =="
 echo
 
 DASH_PATH=/usr/local/bin/nodecontrol.py
@@ -32,6 +32,7 @@ COMPONENTS=(
     "wifimon|/usr/local/bin/wifimon.py|python3"
     "44helper|${HELPER_PATH}|python3"
     "nodetalker|${TALKER_PATH}|python3"
+    "termon|/usr/local/bin/termon.py|python3"
 )
 
 for entry in "${COMPONENTS[@]}"; do
@@ -92,7 +93,8 @@ echo
 
 echo "== Done =="
 echo "Untouched by design: instmon (and /usr/local/lib/asl_dvs/instmon), /etc/asl_dvs/ (config + instmon_library),"
-echo "/etc/sysmon/, /etc/wifimon/ and /etc/44helper/."
+echo "/etc/sysmon/, /etc/wifimon/ and /etc/44helper/. Terminal Monitor's settings, certificate (/etc/asl_dvs/termon_tls)"
+echo "and its 'termon' system user also stay."
 if grep -q -e 'nodelisten' -e 'nodetalker' /etc/asterisk/rpt.conf 2>/dev/null; then
     warn "rpt.conf still has Node Talker lines (nodelisten / nodetalker) — check /etc/asterisk/rpt.conf"
 fi
