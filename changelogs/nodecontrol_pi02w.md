@@ -1,6 +1,23 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_108_20261108.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_109_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.109-pi02w (2026-11-10)
+
+First of three releases from an audit of tuning, disconnecting and the indicator under the title. This one stops the Dashboard recording things that did not happen.
+
+- **A failed tune no longer leaves the old talkgroup showing.** A tune drops the current talkgroup before it sends the new one. When the new tune failed or timed out, the old talkgroup stayed stored and the indicator kept showing it. It is now cleared on a failed tune (DMR, STFU, YSF, FCS, P25, NXDN), a failed D-STAR or XLX connect, and a failed DMR network switch (from the page and from Node Talker).
+- **A failed mode switch is tried again.** Entering a tab stored the new mode even when `dvswitch.sh mode` failed, so the next tune skipped the mode step and went out in the old mode. The mode is now stored only when the command succeeds. A mode switch that fails during a tune stops the tune with a message instead of tuning in the wrong mode.
+- **A gateway that does not start is an error.** Switching to a tab whose gateway service did not start answered "ready". It now answers with the name of the service that did not start, and a tune or connect that had to enter the tab first stops with the same message.
+- **Disconnect reports a failure.** The talkgroup, D-STAR and XLX disconnects checked nothing and always said "Disconnected". They now report a failed or timed-out `dvswitch.sh` command and keep the indicator as it was.
+- **Disconnect All resets M17.** On the M17 tab it restarted Analog_Bridge, MMDVM_Bridge and Asterisk but left USRP2M17 connected to the reflector, so the audio came back when the M17 bridge node was relinked. It now writes the placeholder ini and restarts USRP2M17 as well.
+- **Disconnect All clears the indicator at once.** The stored talkgroup was cleared only after the restarts finished, so the page showed the old one again for several seconds. It is now cleared before the restarts start.
+- **ASL Disconnect drops every link.** The button says "Disconnecting all" but dropped at most two links. It now drops every linked node. Node Talker's transmit node is kept. A disconnect of one node asked for by Node Talker still drops only that node.
+- **ASL and EchoLink connect enter their tab on the server first**, like every other connect. A connect made while the server was on another tab (a second browser, for example) left the old tab's talkgroup tuned and its cleanup undone.
+- **The page waits 130 s for a tune or connect**, up from 95 s. The server can take up to 120 s (a disconnect, a mode and a tune at 40 s each), so the page could show "Request timed out" for a tune that then completed.
+- New test: `ci/test_nodecontrol_links.py` runs these cases on both builds with the radio commands mocked.
+- Same changes as the full build's 9.3.105.
+- This is a release, not a cosmetic build.
 
 ## 9.3.108-pi02w (2026-11-08)
 
