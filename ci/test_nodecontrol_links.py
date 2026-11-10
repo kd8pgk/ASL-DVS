@@ -37,14 +37,17 @@ class _Links:
     def setUp(self):
         m = self.mod
         self.calls = []
-        self.fail = {}
+        self.failing = {}
         self.linked = []
         self.gateway_ok = True
+        self.link_result = "linked"
         self.saved = {}
         fakes = {
             "_dvs": self.fake_dvs,
             "_asterisk": lambda cmd: self.calls.append(("ast", cmd)),
             "_query_linked_nodes": lambda timeout=3: list(self.linked),
+            "_link_wait": lambda node: self.link_result,
+            "_nodelisten_skip_set": lambda: set(),
             "_svc_restart": lambda name: self.calls.append(("restart", name)),
             "_gateway_svc_enter": lambda page: self.gateway_ok,
             "_gateway_svc_leave": lambda prev, nxt: None,
@@ -65,7 +68,9 @@ class _Links:
         m.time.sleep = lambda s: None
         m.set_state(has_asl=True, has_dvs=True, has_m17=True, page="ASL", status="",
                     current_fav=None, current_fav_node=None, echo_fav=None,
-                    linked_node=None, current_dvs_mode="")
+                    linked_node=None, linked_nodes=frozenset(), link_known=True,
+                    current_dvs_mode="")
+        m._fav_gone_polls = 0
 
     def tearDown(self):
         for name, real in self.saved.items():
@@ -76,7 +81,7 @@ class _Links:
         self.calls.append((sub, arg))
         if sub == "mode":
             self.mod._invalidate_dmr_net_tune()
-        hit = self.fail.get((sub, arg), self.fail.get(sub))
+        hit = self.failing.get((sub, arg), self.failing.get(sub))
         if hit == TIMEOUT:
             return False, self.mod._DVS_TIMEOUT
         if hit:
@@ -98,7 +103,7 @@ class _Links:
         self.assertEqual(m._enter_page("YSF"), "")
         self.assertTrue(m.action_tune("YSF", "1.2.3.4:42000", "A")[0])
         self.assertEqual(self.st().current_fav, "1.2.3.4:42000")
-        self.fail[("tune", "5.6.7.8:42000")] = True
+        self.failing[("tune", "5.6.7.8:42000")] = True
         ok, msg = m.action_tune("YSF", "5.6.7.8:42000", "B")
         self.assertFalse(ok)
         self.assertIn("failed", msg)
@@ -109,7 +114,7 @@ class _Links:
         m = self.mod
         m._enter_page("P25")
         m.action_tune("P25", "10200", "NA")
-        self.fail[("tune", "10100")] = TIMEOUT
+        self.failing[("tune", "10100")] = TIMEOUT
         ok, msg = m.action_tune("P25", "10100", "WW")
         self.assertFalse(ok)
         self.assertIn("taking longer", msg)
@@ -117,10 +122,10 @@ class _Links:
 
     def test_failed_mode_on_tab_entry_is_retried_by_the_tune(self):
         m = self.mod
-        self.fail["mode"] = True
+        self.failing["mode"] = True
         self.assertEqual(m._enter_page("P25"), "")
         self.assertEqual(self.st().current_dvs_mode, "")
-        self.fail.clear()
+        self.failing.clear()
         self.calls.clear()
         self.assertTrue(m.action_tune("P25", "10200", "NA")[0])
         self.assertIn(("mode", "P25"), self.calls)
@@ -131,7 +136,7 @@ class _Links:
         m._enter_page("DMR")
         m.action_tune("DMR", "3100", "USA")
         m.set_state(page="YSF", current_dvs_mode="DMR")
-        self.fail["mode"] = True
+        self.failing["mode"] = True
         self.calls.clear()
         ok, msg = m.action_tune("YSF", "1.2.3.4:42000", "A")
         self.assertFalse(ok)
@@ -156,11 +161,11 @@ class _Links:
         m = self.mod
         m._enter_page("NXDN")
         m.action_tune("NXDN", "65000", "WW")
-        self.fail[("tune", m.TG_DISCONNECT)] = True
+        self.failing[("tune", m.TG_DISCONNECT)] = True
         ok, msg = m.action_tune("NXDN", m.TG_DISCONNECT, "")
         self.assertFalse(ok)
         self.assertEqual(self.st().current_fav, "65000")
-        self.fail.clear()
+        self.failing.clear()
         self.assertTrue(m.action_tune("NXDN", m.TG_DISCONNECT, "")[0])
         self.assertIsNone(self.st().current_fav)
 
@@ -169,20 +174,20 @@ class _Links:
         self.assertTrue(m.action_dstar_connect("REF001", "C", "REF001 C")[0])
         fav = self.st().current_fav
         self.assertEqual(self.st().current_dvs_mode, "DSTAR")
-        self.fail[("tune", m.TG_DISCONNECT)] = TIMEOUT
+        self.failing[("tune", m.TG_DISCONNECT)] = TIMEOUT
         ok, msg = m.action_dstar_disconnect()
         self.assertFalse(ok)
         self.assertEqual(self.st().current_fav, fav)
-        self.fail.clear()
-        self.fail[("tune", m._dstar_link_str("REF030", "C"))] = True
+        self.failing.clear()
+        self.failing[("tune", m._dstar_link_str("REF030", "C"))] = True
         self.assertFalse(m.action_dstar_connect("REF030", "C", "REF030 C")[0])
         self.assertIsNone(self.st().current_fav)
-        self.fail.clear()
+        self.failing.clear()
         self.assertTrue(m.action_xlx_connect("XLX307 D", "XLX307", "D")[0])
-        self.fail["mode"] = True
+        self.failing["mode"] = True
         self.assertFalse(m.action_xlx_connect("XLX334 A", "XLX334", "A")[0])
         self.assertIsNone(self.st().current_fav)
-        self.fail.clear()
+        self.failing.clear()
         self.assertTrue(m.action_xlx_connect("XLX307 D", "XLX307", "D")[0])
         self.assertTrue(m.action_xlx_disconnect()[0])
         self.assertIsNone(self.st().current_fav)
@@ -195,7 +200,7 @@ class _Links:
         self.assertTrue(m.action_switch_dmr_server("TGIF")[0])
         m.action_tune("DMR", "3100", "USA")
         self.assertEqual(self.st().current_fav, "3100")
-        self.fail[("tune", "pw@other.example:62031")] = True
+        self.failing[("tune", "pw@other.example:62031")] = True
         self.assertFalse(m.action_switch_dmr_server("Other")[0])
         self.assertIsNone(self.st().current_fav)
         self.assertEqual(self.st().active_dmr_server, "TGIF")
@@ -261,6 +266,164 @@ class _Links:
         self.calls.clear()
         self.assertTrue(m.action_echo_connect("654321", "F")[0])
         self.assertEqual(self.dvs_calls(), [])
+
+    def test_asl_connect_that_does_not_link_is_not_stored(self):
+        m = self.mod
+        self.link_result = "failed"
+        ok, msg = m.action_asl_connect("2000", "X")
+        self.assertFalse(ok)
+        self.assertIn("did not link", msg)
+        self.assertIsNone(self.st().current_fav)
+        self.assertIsNone(m.build_status()["current_fav"])
+
+    def test_asl_connect_that_links_shows_at_once(self):
+        m = self.mod
+        self.assertEqual(m.action_asl_connect("2000", "X"), (True, "Connected X (2000)"))
+        self.assertEqual(m.build_status()["current_fav"], "2000")
+        self.assertEqual(m.action_get_keyed()["linked_node"], "2000")
+
+    def test_asl_connect_still_connecting_is_kept_but_not_shown(self):
+        m = self.mod
+        self.link_result = "connecting"
+        ok, msg = m.action_asl_connect("2000", "X")
+        self.assertFalse(ok)
+        self.assertIn("not answered", msg)
+        self.assertEqual(self.st().current_fav, "2000")
+        self.assertIsNone(m.build_status()["current_fav"])
+
+    def test_connect_with_asterisk_silent_is_sent_unchecked(self):
+        m = self.mod
+        self.link_result = "unknown"
+        ok, msg = m.action_echo_connect("123456", "E")
+        self.assertTrue(ok)
+        self.assertIn("could not be checked", msg)
+        self.assertEqual(self.st().echo_fav, "123456")
+
+    def test_echo_connect_failure_and_success(self):
+        m = self.mod
+        self.link_result = "failed"
+        ok, msg = m.action_echo_connect("123456", "E")
+        self.assertFalse(ok)
+        self.assertIsNone(self.st().echo_fav)
+        self.link_result = "linked"
+        self.assertTrue(m.action_echo_connect("123456", "E")[0])
+        self.assertEqual(m.build_status()["echo_fav"], "123456")
+        self.assertEqual(m.action_get_keyed()["echo_node"], "123456")
+        self.assertTrue(m.action_echo_disconnect()[0])
+        self.assertIsNone(m.build_status()["echo_fav"])
+
+    def test_link_wait_reads_the_link_list(self):
+        m = self.mod
+        wait = self.saved["_link_wait"]
+        real = m._link_states
+
+        def run(seq):
+            it = iter(seq)
+            last = [seq[-1]]
+            m._link_states = lambda: next(it, last[0])
+            try:
+                return wait("2000")
+            finally:
+                m._link_states = real
+
+        self.assertEqual(run([{}, {"2000": "C"}, {"2000": "T"}]), "linked")
+        self.assertEqual(run([{"2000": "R"}]), "linked")
+        self.assertEqual(run([{"2000": "C"}, {}]), "failed")
+        self.assertEqual(run([{"2001": "T"}]), "failed")
+        self.assertEqual(run([{"2000": "C"}]), "connecting")
+        self.assertEqual(run([None]), "unknown")
+        self.assertEqual(run([None, None, {"2000": "T"}]), "linked")
+
+    def test_a_dropped_link_is_cleared_after_two_polls(self):
+        m = self.mod
+        m.action_asl_connect("2000", "X")
+        m._fav_link_check(frozenset({"2000"}))
+        m._fav_link_check(frozenset())
+        self.assertEqual(self.st().current_fav, "2000")
+        m._fav_link_check(frozenset({"2000"}))
+        m._fav_link_check(frozenset())
+        self.assertEqual(self.st().current_fav, "2000")
+        m._fav_link_check(frozenset())
+        self.assertIsNone(self.st().current_fav)
+        self.assertIsNone(self.st().current_fav_node)
+        m.action_echo_connect("123456", "E")
+        m._fav_link_check(frozenset({"3123456"}))
+        self.assertEqual(self.st().echo_fav, "123456")
+        m._fav_link_check(frozenset())
+        m._fav_link_check(frozenset())
+        self.assertIsNone(self.st().echo_fav)
+
+    def test_a_talkgroup_is_not_touched_by_the_link_check(self):
+        m = self.mod
+        m._enter_page("DMR")
+        m.action_tune("DMR", "3100", "USA")
+        for _ in range(4):
+            m._fav_link_check(frozenset())
+        self.assertEqual(self.st().current_fav, "3100")
+
+    def test_the_shown_link_is_the_real_one(self):
+        m = self.mod
+        m.set_state(page="ASL", current_fav="2000", current_fav_node="2000",
+                    linked_node="2001", linked_nodes=frozenset({"2001"}))
+        self.assertEqual(m.build_status()["current_fav"], "2001")
+        m.set_state(linked_nodes=frozenset({"2000", "2001"}))
+        self.assertEqual(m.build_status()["current_fav"], "2000")
+        m.set_state(linked_node=None, linked_nodes=frozenset())
+        self.assertIsNone(m.build_status()["current_fav"])
+        m.set_state(page="ECHO", current_fav=None, echo_fav="123456",
+                    linked_nodes=frozenset({"3000099", "2001"}))
+        self.assertEqual(m.build_status()["echo_fav"], "99")
+        m.set_state(linked_nodes=frozenset({"2001"}))
+        self.assertIsNone(m.build_status()["echo_fav"])
+        m.set_state(page="DMR", current_fav="3100", echo_fav=None)
+        self.assertEqual(m.build_status()["current_fav"], "3100")
+
+    def test_unknown_link_state_is_reported(self):
+        m = self.mod
+        m.set_state(page="ASL", current_fav="2000", current_fav_node="2000",
+                    linked_node=None, linked_nodes=frozenset(), link_known=False)
+        s = m.build_status()
+        self.assertIs(s["link_known"], False)
+        self.assertIsNone(s["current_fav"])
+        self.assertIs(m.action_get_keyed()["link_known"], False)
+        self.assertEqual(self.st().current_fav, "2000")
+
+    def test_poll_reads_connected_and_connecting_links(self):
+        m = self.mod
+        real = m.ami_command
+        out = "RPT_RXKEYED=0\nRPT_ALINKS=3,2000TU,2001CU,1999TU\n"
+        m.ami_command = lambda *a, **k: (out, True)
+        m._cfg.bridge_nodes[0] = "1999"
+        try:
+            keyed, first, bridge, bridges, linked, present = m._poll_asl_state()
+            self.assertEqual(linked, frozenset({"2000"}))
+            self.assertEqual(present, frozenset({"2000", "2001"}))
+            self.assertEqual(bridges, frozenset({"1999"}))
+            m.ami_command = lambda *a, **k: ("", False)
+            self.assertIsNone(m._poll_asl_state())
+        finally:
+            m.ami_command = real
+
+    def test_page_shows_unknown_and_follows_the_echo_link(self):
+        with open(self.mod.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        for needle in ("function indUnknown(mode)", "d.link_known===false", "d.echo_node", "_lastLinkKnown"):
+            self.assertIn(needle, src)
+
+    def test_echo_disconnect_from_the_page_drops_every_link(self):
+        m = self.mod
+        m.action_echo_connect("123456", "E")
+        self.linked = ["3123456", "2001", "3000099"]
+        self.calls.clear()
+        self.assertTrue(m.action_echo_disconnect(drop_all=True)[0])
+        dropped = [c[1].split()[-1] for c in self.calls if c[0] == "ast" and " ilink 1 " in c[1]]
+        self.assertEqual(dropped, ["3123456", "2001", "3000099"])
+        self.assertIsNone(self.st().echo_fav)
+        m.action_echo_connect("123456", "E")
+        self.calls.clear()
+        self.assertTrue(m.action_echo_disconnect()[0])
+        dropped = [c[1].split()[-1] for c in self.calls if c[0] == "ast" and " ilink 1 " in c[1]]
+        self.assertEqual(dropped, ["3123456"])
 
     def test_page_waits_longer_than_the_server(self):
         with open(self.mod.__file__, encoding="utf-8") as fh:

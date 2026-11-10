@@ -1,6 +1,21 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_105_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_106_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.106 (2026-11-10)
+
+Second of three releases from the audit of tuning, disconnecting and the indicator under the title. This one makes the ASL and Echo tabs show the real link.
+
+- **A connect is checked before it is shown.** An ASL or EchoLink connect used to be stored and shown as connected whether or not the node linked. The Dashboard now watches Asterisk's link list for up to 10 seconds after the connect. If the node does not appear, or appears and goes away, the connect fails with "did not link" and nothing is stored. If the node is still connecting after 10 seconds, the message says so and the indicator shows the node only once it links. If Asterisk does not answer at all, the connect is sent unchecked, as before, and the message says it could not be checked.
+- **A link that drops is cleared.** When the node you connected is missing from the link list for two polls in a row, the stored node is cleared and the status line says the link ended.
+- **The indicator shows the real link on ASL and Echo.** The ASL indicator shows the node you connected only while it is in the link list; otherwise it shows another linked node, or nothing. A node that is still connecting is not shown as linked. The Echo indicator and the Echo favorites highlight now come from the link list too (they showed the last node asked for, linked or not).
+- **One missed Asterisk poll no longer blanks the indicator.** A single poll that got no answer was stored as "nothing linked, not keyed". The last good reading is now kept until three polls in a row fail. After that the ASL and Echo indicators show "ASL ?" or "ECHO ?" (link state unknown) instead of looking idle.
+- **Echo Disconnect drops every link**, as ASL Disconnect does since the last release. Node Talker's transmit node is kept, and a disconnect of one node asked for by Node Talker still drops only that node.
+- **Disconnects and tab changes clear the shown link at once**, without waiting for the next poll.
+- `/api/status` and `/api/keyed` carry `link_known`; `/api/keyed` carries `echo_node`.
+- More cases in `ci/test_nodecontrol_links.py`.
+- Same changes as the Pi Zero 2 W build's 9.3.110-pi02w, made here because the full build was named.
+- This is a release, not a cosmetic build.
 
 ## 9.3.105 (2026-11-10)
 

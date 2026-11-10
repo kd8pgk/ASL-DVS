@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.105"
+VERSION      = "9.3.106"
 BUILD_DATE   = "2026-11-10"
 
 ASL_NODE        = "652702"
@@ -343,6 +343,8 @@ class AppState:
     asl_nodes:   List[Tuple[str, str]]      = field(default_factory=list)
     keyed:       bool                       = False
     linked_node: Optional[str]              = None
+    linked_nodes: frozenset                 = field(default_factory=frozenset)
+    link_known:  bool                       = True
     bridge_linked: bool                     = False
     bridge_linked_nodes: frozenset          = field(default_factory=frozenset)
     has_asl:     bool                       = True
@@ -6351,13 +6353,101 @@ def _multi_link_cleanup(keep: Optional[str]) -> None:
     finally:
         _multi_link_run_lock.release()
 
-def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
+def _link_states() -> Optional[Dict[str, str]]:
+    out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=3)
+    if not ok or not out or "RPT_" not in out:
+        return None
+    modes: Dict[str, str] = {}
+    nodes = _parse_rpt_links(out, modes)
+    return {nd: modes.get(nd, "T") for nd in nodes}
+
+_LINK_WAIT_STEP_SEC  = 0.5
+_LINK_WAIT_STEPS     = 20
+_LINK_WAIT_MIN_STEPS = 10
+
+def _link_wait(node: str) -> str:
+    seen = answered = False
+    for i in range(_LINK_WAIT_STEPS):
+        time.sleep(_LINK_WAIT_STEP_SEC)
+        states = _link_states()
+        if states is None:
+            continue
+        answered = True
+        mode = states.get(node)
+        if mode and mode != "C":
+            return "linked"
+        if mode:
+            seen = True
+        elif seen or i + 1 >= _LINK_WAIT_MIN_STEPS:
+            return "failed"
+    return "connecting" if answered else "unknown"
+
+def _shown_asl(st: dict) -> Optional[str]:
+    if not st["link_known"]:
+        return None
+    linked = st["linked_nodes"]
+    fav = st["current_fav"]
+    if fav and fav in linked:
+        return fav
+    node = st["linked_node"]
+    return node if node and node in linked else None
+
+def _shown_echo(st: dict) -> Optional[str]:
+    if not st["link_known"]:
+        return None
+    linked = st["linked_nodes"]
+    fav = (st["echo_fav"] or "").strip()
+    if fav and fav != TG_BLANK_ADDR and _echolink_to_asl(fav) in linked:
+        return fav
+    for nd in sorted(linked):
+        if len(nd) == 7 and nd.startswith("3"):
+            return str(int(nd[1:]))
+    return None
+
+_FAV_GONE_POLLS = 2
+_fav_gone_polls = 0
+
+def _fav_link_check(present: "FrozenSet[str]") -> None:
+    global _fav_gone_polls
+
+    def wanted():
+        st = get_state_fields("page", "current_fav_node", "echo_fav")
+        if st["page"] == "ASL":
+            return "ASL", st["current_fav_node"] or "", st["current_fav_node"] or ""
+        fav = (st["echo_fav"] or "").strip()
+        if st["page"] == "ECHO" and fav and fav != TG_BLANK_ADDR:
+            return "ECHO", _echolink_to_asl(fav), fav
+        return st["page"], "", ""
+
+    page, node, shown = wanted()
+    if not node or node in present or _is_connecting():
+        _fav_gone_polls = 0
+        return
+    _fav_gone_polls += 1
+    if _fav_gone_polls < _FAV_GONE_POLLS:
+        return
+    if not _link_try_enter():
+        return
+    try:
+        _fav_gone_polls = 0
+        if wanted() != (page, node, shown):
+            return
+        log.info("%s link to %s is gone — clearing it", page, shown)
+        if page == "ASL":
+            set_state(current_fav=None, current_fav_node=None,
+                      status=f"ASL | Link to {shown} ended")
+        else:
+            set_state(echo_fav=None, status=f"Echo | Link to {shown} ended")
+    finally:
+        _link_exit()
+
+def _poll_asl_state():
     global _multi_link_count, _poll_ok, _multi_link_left_alone, _link_modes
     out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=2,
                           lock_wait=_POLL_LOCK_WAIT_SEC)
     _poll_ok = bool(ok and out and "RPT_" in out)
     if not _poll_ok:
-        return False, None, False, frozenset()
+        return None
     keyed = bool(_KEYED_RE.search(out))
     linked_node: Optional[str] = None
 
@@ -6406,7 +6496,9 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
                 _multi_link_left_alone = frozenset()
     else:
         _multi_link_count = 0
-    return keyed, linked_node, bridge_linked, frozenset(bridge_linked_nodes)
+    present = frozenset(others)
+    linked = frozenset(nd for nd in others if modes.get(nd) != "C")
+    return keyed, linked_node, bridge_linked, frozenset(bridge_linked_nodes), linked, present
 
 def _dvs_settle() -> None:
     global _dvs_settle_until
@@ -6747,6 +6839,8 @@ def _sd_heartbeat_loop() -> None:
             log.error("heartbeat: %s — letting systemd restart the Dashboard", problem)
         time.sleep(every)
 
+_POLL_FAILS_UNKNOWN = 3
+
 def _link_poll_loop() -> None:
     global _poll_beat
     INTERVAL     = 1.0
@@ -6758,7 +6852,7 @@ def _link_poll_loop() -> None:
         _poll_beat = t0
         try:
             try:
-                keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
+                polled = _poll_asl_state()
             except _AmiBusy:
                 if not busy_noted:
                     log.info("_link_poll_loop: AMI busy for over %.0fs — skipping this poll", _POLL_LOCK_WAIT_SEC)
@@ -6766,11 +6860,23 @@ def _link_poll_loop() -> None:
                 time.sleep(max(0.1, INTERVAL - (time.monotonic() - t0)))
                 continue
             busy_noted = False
-            set_state(keyed=keyed, linked_node=linked_node, bridge_linked=bridge_linked,
-                      bridge_linked_nodes=bridge_linked_nodes,
-                      perm_link_nodes=_read_perm_links())
-            fails = 0 if _poll_ok else fails + 1
-            if _poll_ok:
+            if polled is None:
+                fails += 1
+                if fails >= _POLL_FAILS_UNKNOWN:
+                    set_state(keyed=False, linked_node=None, linked_nodes=frozenset(),
+                              bridge_linked=False, bridge_linked_nodes=frozenset(),
+                              link_known=False)
+            else:
+                keyed, linked_node, bridge_linked, bridge_linked_nodes, linked, present = polled
+                fails = 0
+                set_state(keyed=keyed, linked_node=linked_node, linked_nodes=linked,
+                          link_known=True, bridge_linked=bridge_linked,
+                          bridge_linked_nodes=bridge_linked_nodes,
+                          perm_link_nodes=_read_perm_links())
+                try:
+                    _fav_link_check(present)
+                except Exception as e:
+                    log.warning("_link_poll_loop: link check error: %s", e)
                 try:
                     _pg = get_state_fields("page")["page"]
                     if _pg == "PHONE" and not _phone_on():
@@ -6889,6 +6995,7 @@ def _enter_page(page: str, retune: bool = False) -> str:
             _connect(keep)
 
         set_state(page=page, current_fav=None, current_fav_node=None, echo_fav=None,
+                  linked_node=None, linked_nodes=frozenset(),
                   status=spec["status"],
                   **({"current_dvs_mode": dvs_mode if mode_ok else ""} if dvs_mode else {}))
         try:
@@ -7331,10 +7438,24 @@ def _do_asl_connect(node: str, name: str):
         else:
             _drop_links(keep=None, what="asl-connect")
         _connect(node)
-        time.sleep(1.5)
+        how = _link_wait(node)
         _arm_bridge_reaper()
+        if how == "failed":
+            set_state(page="ASL", current_fav=None, current_fav_node=None, echo_fav=None,
+                      status=f"ASL | {node} did not link")
+            return False, (f"Node {node} did not link — it may be offline, busy or "
+                           f"not reachable.")
         set_state(page="ASL", current_fav=node, current_fav_node=node, echo_fav=None,
-                  status=f"ASL | {name} | {node}")
+                  status=f"ASL | {name} | {node}",
+                  **({"linked_node": node, "link_known": True,
+                      "linked_nodes": get_state().linked_nodes | {node}}
+                     if how == "linked" else {}))
+        if how == "connecting":
+            return False, (f"Node {node} has not answered yet. The node is still trying; "
+                           f"the indicator will show {node} if it links.")
+        if how == "unknown":
+            return True, (f"Connect sent to {name} ({node}) — Asterisk is not answering, "
+                          f"so the link could not be checked")
     finally:
         _link_exit()
     return True, f"Connected {name} ({node})"
@@ -7354,14 +7475,15 @@ def action_asl_disconnect_current(drop_all: bool = False) -> Tuple[bool, str]:
     if drop_all and st.page == "ASL":
         _drop_links(keep=None, what="asl-disconnect")
         set_state(current_fav=None, current_fav_node=None, linked_node=None,
-                  status="ASL | Ready")
+                  linked_nodes=frozenset(), status="ASL | Ready")
         return True, "ASL disconnected"
     if st.current_fav and st.current_fav not in _bridge_set():
         if _drop_one_link(st.current_fav):
             log.info("ASL disconnect: %s is a permanent link — dropped with ilink 11",
                      st.current_fav)
     _clear_foreign_link()
-    set_state(current_fav=None, current_fav_node=None, status="ASL | Ready")
+    set_state(current_fav=None, current_fav_node=None, linked_node=None,
+              linked_nodes=frozenset(), status="ASL | Ready")
     return True, "ASL disconnected"
 
 @_link_locked
@@ -7394,9 +7516,22 @@ def _do_echo_connect(node: str, name: str):
         else:
             _drop_links(keep=None, what="echo-connect")
         _connect(asl_node)
-        time.sleep(1.5)
+        how = _link_wait(asl_node)
         _arm_bridge_reaper()
-        set_state(page="ECHO", echo_fav=node, status=f"Echo | {name} | {node}")
+        if how == "failed":
+            set_state(page="ECHO", echo_fav=None, status=f"Echo | {node} did not link")
+            return False, (f"EchoLink node {node} did not link — it may be offline, busy "
+                           f"or not reachable.")
+        set_state(page="ECHO", echo_fav=node, status=f"Echo | {name} | {node}",
+                  **({"linked_node": asl_node, "link_known": True,
+                      "linked_nodes": get_state().linked_nodes | {asl_node}}
+                     if how == "linked" else {}))
+        if how == "connecting":
+            return False, (f"EchoLink node {node} has not answered yet. The node is still "
+                           f"trying; the indicator will show {node} if it links.")
+        if how == "unknown":
+            return True, (f"Echo connect sent to {name} ({node}) — Asterisk is not "
+                          f"answering, so the link could not be checked")
     finally:
         _link_exit()
     return True, f"Echo connected {name} ({node})"
@@ -7413,12 +7548,18 @@ def action_echo_connect_by_number(node: str) -> Tuple[bool, str]:
     return _do_echo_connect(node, f"Node {node}")
 
 @_link_locked
-def action_echo_disconnect() -> Tuple[bool, str]:
+def action_echo_disconnect(drop_all: bool = False) -> Tuple[bool, str]:
     st = get_state()
+    if drop_all and st.page == "ECHO":
+        _drop_links(keep=None, what="echo-disconnect")
+        set_state(echo_fav=None, linked_node=None, linked_nodes=frozenset(),
+                  status="Echo | Ready")
+        return True, "Echo disconnected"
     if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR:
         _drop_one_link(_echolink_to_asl(st.echo_fav))
     _clear_foreign_link()
-    set_state(echo_fav=None, status="Echo | Ready")
+    set_state(echo_fav=None, linked_node=None, linked_nodes=frozenset(),
+              status="Echo | Ready")
     return True, "Echo disconnected"
 
 def _svc_restart(name: str) -> None:
@@ -7661,7 +7802,7 @@ def action_disconnect_all() -> Tuple[bool, str]:
                 log.warning("disconnect-all: M17 ini write failed: %s", err)
         _hard_restart_stack(st)
         set_state(current_fav=None, current_fav_node=None, echo_fav=None, linked_node=None,
-                  status=f"{st.page} | RESET")
+                  linked_nodes=frozenset(), status=f"{st.page} | RESET")
     return True, "Emergency disconnect — services restarted"
 
 def _seed_dmr_tgs() -> None:
@@ -7852,9 +7993,12 @@ def _write_event_script() -> None:
 def action_handle_event() -> None:
     global _status_etag
     try:
-        keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
-        set_state(keyed=keyed, linked_node=linked_node, bridge_linked=bridge_linked,
-                  bridge_linked_nodes=bridge_linked_nodes)
+        polled = _poll_asl_state()
+        if polled is not None:
+            keyed, linked_node, bridge_linked, bridge_linked_nodes, linked, _present = polled
+            set_state(keyed=keyed, linked_node=linked_node, linked_nodes=linked,
+                      link_known=True, bridge_linked=bridge_linked,
+                      bridge_linked_nodes=bridge_linked_nodes)
     except Exception as e:
         log.warning("action_handle_event poll failed: %s", e)
     with _lock:
@@ -7889,9 +8033,14 @@ def action_get_keyed() -> dict:
             _settled = False
     on_perm  = raw_on_perm and _settled
     is_known = bool(on_perm and st.linked_node in st.perm_link_nodes)
+    view = {"link_known": st.link_known, "linked_nodes": st.linked_nodes,
+            "linked_node": st.linked_node, "current_fav": st.current_fav,
+            "echo_fav": st.echo_fav}
     return {
         "keyed":          st.keyed,
-        "linked_node":    st.linked_node,
+        "linked_node":    _shown_asl(view) if st.page == "ASL" else st.linked_node,
+        "echo_node":      _shown_echo(view) if st.page == "ECHO" else None,
+        "link_known":     st.link_known,
         "on_perm_link":   on_perm,
         "perm_link_node": st.linked_node if on_perm else None,
         "is_known_perm":  is_known,
@@ -7918,7 +8067,8 @@ def _dmr_servers_public(servers: list) -> list:
 def build_status() -> dict:
     st = get_state_fields(
         "page", "status", "current_fav", "has_asl", "has_dvs", "has_stfu",
-        "has_echo", "echo_fav", "linked_node", "asl_nodes", "echo_nodes",
+        "has_echo", "echo_fav", "linked_node", "linked_nodes", "link_known",
+        "asl_nodes", "echo_nodes",
         "callsign", "stfu_server", "dmr_servers", "active_dmr_server",
         "conf_warnings", "has_m17",
     )
@@ -7929,13 +8079,14 @@ def build_status() -> dict:
         "asl_reg":           _asl_reg_public(),
         "svc":               _svc_public(),
         "svc_at":            round(_svc_checked_at, 1),
-        "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
+        "current_fav":       _shown_asl(st) if st["page"] == "ASL" else st["current_fav"],
+        "link_known":        st["link_known"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],
         "has_stfu":          st["has_stfu"],
         "has_echo":          st["has_echo"],
         "has_m17":           st["has_m17"],
-        "echo_fav":          st["echo_fav"],
+        "echo_fav":          _shown_echo(st) if st["page"] == "ECHO" else st["echo_fav"],
         "asl_node":          _cfg.asl_node,
         "enabled_tabs":      _cfg.enabled_tabs_sorted,
         "asl":               [{"name": n, "node": nd} for n, nd, *_ in st["asl_nodes"]],
@@ -10370,6 +10521,15 @@ function applyEdCollapsed(){
 // If showPage() incorrectly called clickTab() or reTuneTab(), it would trigger retune and
 // show network selector unexpectedly.  Maintain this distinction to prevent regression.
 function showPage(page){if(!PAGES.includes(page))return;inEdit=false;curPage=page;syncPageDisplay();_saveTabState()}
+function indUnknown(mode){
+  const el=byId('tg-indicator');
+  const valEl=byId('tg-value');
+  if(!el)return;
+  if(valEl)valEl.textContent=mode+' ?';
+  ['tg-dot-l','tg-dot-r'].forEach(id=>{const d=byId(id);if(d)d.className='dot dot-off';});
+  el.className='ind-idle';
+  el.title='Asterisk is not answering. The link state is unknown.';
+}
 function setIndicator(value,mode,keyed,name,state){
   const el    =byId('tg-indicator');
   const valEl =byId('tg-value');
@@ -12235,6 +12395,7 @@ function applyServerState(d){
   }else{
     setIndicator(d.current_fav,d.page,_lastKeyed);
   }
+  if(d.link_known===false&&(d.page==='ASL'||d.page==='ECHO'))indUnknown(d.page);
   applyPhoneState(d.phone);   // v9.1.0
 }
 function applyGridState(d,changed){
@@ -13578,6 +13739,7 @@ function schedulePoll(){
   _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
 }
 let _keyedTimer=null;
+let _lastLinkKnown=true;
 async function pollKeyed(){
   try{
     const ctrl=new AbortController();
@@ -13593,8 +13755,12 @@ async function pollKeyed(){
     const mode       =(curPage||'').toUpperCase();
     const isDigital  =!!(mode&&MODE_CAPS[mode]&&MODE_CAPS[mode].isDigital);
 
+    const linkKnown  =d.link_known!==false;
+    const echoNode   =d.echo_node===undefined?_lastEchoFav:(d.echo_node||null);
     const keyedChanged=keyed!==_lastKeyed;
     const linkChanged =linkedNode!==_lastLinkedNode;
+    const echoChanged =mode==='ECHO'&&linkKnown&&echoNode!==_lastEchoFav;
+    const knownChanged=linkKnown!==_lastLinkKnown;
 
     // ── Permanent-link banner ─────────────────────────────────────────────
     document.body.classList.toggle('perm-linked',onPermLink);
@@ -13630,16 +13796,23 @@ async function pollKeyed(){
     }
 
     // ── Indicator / linked-node update ────────────────────────────────────
-    if(keyedChanged||linkChanged){
+    if(keyedChanged||linkChanged||echoChanged||knownChanged){
       _lastLinkedNode=linkedNode;
+      _lastLinkKnown=linkKnown;
       if(mode==='ASL'){
         if(linkChanged){
           curTg=linkedNode?{mode:'ASL',tg:linkedNode}:null;
           renderASLGrid(_lastAslNodes,linkedNode);  // A5 writer 3/7 — see applyGridState comment
         }
-        setIndicator(linkedNode||null,'ASL',linkedNode?keyed:false);
+        if(linkKnown)setIndicator(linkedNode||null,'ASL',linkedNode?keyed:false);
+        else indUnknown('ASL');
       }else if(mode==='ECHO'){
-        setIndicator(_lastEchoFav||null,'ECHO',_lastEchoFav?_lastKeyed:false);
+        if(echoChanged){
+          _lastEchoFav=echoNode;
+          renderEchoGrid(_lastEchoNodes,_lastEchoFav);
+        }
+        if(linkKnown)setIndicator(_lastEchoFav||null,'ECHO',_lastEchoFav?_lastKeyed:false);
+        else indUnknown('ECHO');
       }else{
         setIndicator(curTg?curTg.tg:null,mode,_lastKeyed);
       }
@@ -14853,7 +15026,7 @@ _POST_ACTIONS: dict = {
     "connect-by-number": lambda h, d: action_connect_by_number(_arg(d, "node")),
     "echo-connect":      lambda h, d: action_echo_connect(_arg(d, "node"), _clip_label(_arg(d, "name"))),
     "echo-connect-by-number": lambda h, d: action_echo_connect_by_number(_arg(d, "node")),
-    "echo-disc":         lambda h, d: action_echo_disconnect(),
+    "echo-disc":         lambda h, d: action_echo_disconnect(drop_all=True),
     "dstar-connect":     lambda h, d: action_dstar_connect(
         _arg_s(d, "base"), _arg_s(d, "module"),
         _clip_label(_arg_s(d, "name") or f"DSTAR {_arg_s(d, 'base')}{_arg_s(d, 'module')}")),
