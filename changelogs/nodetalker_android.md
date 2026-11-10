@@ -8,6 +8,7 @@ Current version: `0.10.28`. The app is in `android/`; its version is `appVersion
 - **No new permission.** Everything comes from Android's audio service, so the app's permissions are unchanged. Details that need the Bluetooth permission (adapter state, connected profiles, codec) are left for a later version.
 - Needs Node Talker 0.10.28 on the node to show it; an older page never calls it.
 - Tests: the JSON the call returns (`BluetoothJsonTest`).
+- **Gradle wrapper added** (`gradlew`, `gradlew.bat`, `gradle/wrapper/`), pinned to Gradle 8.14.3, the version the workflow uses, so a local build matches CI. The workflow still uses its own Gradle install.
 
 ## 0.10.27 (2026-11-09)
 
