@@ -1,6 +1,20 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_4_0_20261020.sh`. Newest entries first.
+Current file: `install_all_v7_5_0_20261110.sh`. Newest entries first.
+
+## 7.5.0 (2026-11-10)
+
+Last step of the "available but opt-in" plan. This is a release: the installer's behaviour changed.
+
+- **Terminal Monitor, Node Recorder and Pibrary are optional items,** like Node Talker. A tool that is not installed is skipped unless you ask for it: `INSTALL_TERMON=1` (or `--with-termon`), `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, or a yes at the prompt (the default is no). The Terminal Monitor prompt says it gives a root shell to anyone on the LAN who knows the password. Each is found, downloaded if missing, syntax-checked, port-checked (new installs), installed with its own `--install`, checked and listed with its address (Terminal Monitor and Node Recorder show `https://`). An installed one is updated like wifimon or 44helper.
+- **`--suite`** asks for Node Talker, Node Recorder and Pibrary without prompting. It never asks for Terminal Monitor: that always needs its own yes (`--with-termon`, `INSTALL_TERMON=1` or the prompt).
+- **`--download-only`** fetches the files of every tool that is not installed (Dashboard and SysMon in the build for this Pi, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Terminal Monitor) into the instmon library for the chosen channel (`ASL_DVS_CHANNEL`, Stable by default) and installs, enables and starts nothing. Installed tools, and tools that already have a file in the library, are not touched. On Stable a tool that is not on the stable list yet is not downloaded ("has no stable build yet"), where the normal run still falls back to the newest file on main for the core tools; the new optional tools are strict on Stable in every mode. It fails if GitHub cannot be reached and refuses to run with `--offline`. The same checks as before apply: the stable list's commit and blob, a syntax check, and the Pi Zero 2 W or full build.
+- **A service you stopped stays stopped.** In an update or reinstall of a tool that was already installed, the installer asks first: is the service not running, and either marked stopped by you in instmon (Stop) or disabled? Quiet System's own pauses do not count, and a service that is running (even with an old mark) or that merely crashed is updated and started as before. A stopped one is installed and then stopped again (and disabled again if it was disabled); the check at the end says "stopped, as you had it" instead of warning that it did not start. Applies to every tool the installer installs. A tool's own `--install` still starts its service for a moment before it is stopped again.
+- `ASL_DVS_GIT_URL` points the download at another git address (a mirror, or a local copy for tests). The default is unchanged.
+- The addresses printed at the end no longer start with "ASL-DVS" in the Dashboard and System Monitor lines.
+- Compatible: with no new flag or variable the run is as before, apart from the three new optional items being skipped when they are not installed.
+
+Tests: `ci/test_installers.py` (26 tests, run as root on a clean machine with stubbed services and a local git repo standing in for GitHub): the optional tools skipped unless asked for, the variable and the flag, the suite with and without Terminal Monitor, an installed tool updated, nothing found; stopped-by-you in every case (running, marked, disabled, crashed, Quiet-paused, old mark, damaged mark file, optional tools); download-only on Stable and Testing, an installed tool left alone, a file already in the library, a list entry that does not match, no network, `--offline`.
 
 ## 7.4.0 (2026-10-20)
 

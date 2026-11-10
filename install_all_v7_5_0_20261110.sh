@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.4.0  (2026-10-20)
+# install_all.sh  v7.5.0  (2026-11-10)
 
 set -euo pipefail
 
@@ -19,10 +19,16 @@ sep()  { echo "  ${CYN}───────────────────
 
 NONINTERACTIVE=false
 DOWNLOAD=true
+SUITE=false
+DOWNLOAD_ONLY=false
+STRICT_STABLE=false
 for _arg in "$@"; do
     case "${_arg}" in
         --non-interactive|--auto|-y) NONINTERACTIVE=true ;;
         --offline|--no-download) DOWNLOAD=false ;;
+        --suite) SUITE=true ;;
+        --with-termon) INSTALL_TERMON=1 ;;
+        --download-only) DOWNLOAD_ONLY=true ;;
     esac
 done
 if [[ ! -t 0 ]]; then
@@ -306,7 +312,7 @@ open_repo() {
     FETCH_REPO="${FETCH_DIR}/repo"
     info "Connecting to github.com/${GH_REPO} (${GH_CHANNEL} channel)…"
     if ! GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --filter=blob:none --no-checkout \
-            "https://github.com/${GH_REPO}.git" "${FETCH_REPO}" 2>/dev/null; then
+            "${ASL_DVS_GIT_URL:-https://github.com/${GH_REPO}.git}" "${FETCH_REPO}" 2>/dev/null; then
         warn "Could not reach github.com/${GH_REPO} — no files downloaded"
         return 1
     fi
@@ -348,6 +354,9 @@ fetch_tool() {
             fi
             rev="${commit}"
             src="stable"
+        elif [[ "${STRICT_STABLE}" == "true" ]]; then
+            warn "${label} has no stable build yet — not downloaded (ASL_DVS_CHANNEL=testing fetches the newest)"
+            return 1
         else
             info "${label} has no stable build yet — using the newest file on main"
         fi
@@ -610,6 +619,169 @@ write_sysmon_seed() {
     ok "Seed config written: ${_smc}"
 }
 
+USER_STOPPED_FILE="${ASL_DVS_USER_STOPPED:-/etc/asl_dvs/instmon_user_stopped.json}"
+QUIET_STATE_FILE="${ASL_DVS_QUIET_STATE:-/etc/asl_dvs/instmon_quiesce_state.json}"
+declare -A HELD=()
+
+svc_active() {
+    [[ "$(systemctl is-active "$1" 2>/dev/null || true)" == "active" ]]
+}
+
+json_has_service() {
+    if [[ ! -f "$1" ]]; then
+        return 1
+    fi
+    python3 -I -c 'import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+svc = sys.argv[2]
+table = data.get("services") if isinstance(data, dict) else None
+if isinstance(table, dict):
+    sys.exit(0 if svc in table else 1)
+rows = data.get("stopped") if isinstance(data, dict) else None
+if isinstance(rows, list):
+    for row in rows:
+        if isinstance(row, (list, tuple)) and len(row) > 2 and row[2] in (svc, svc + ".service"):
+            sys.exit(0)
+sys.exit(1)' "$1" "$2"
+}
+
+user_stopped() {
+    local svc="$1"
+    if svc_active "${svc}"; then
+        return 1
+    fi
+    if json_has_service "${USER_STOPPED_FILE}" "${svc}"; then
+        return 0
+    fi
+    if json_has_service "${QUIET_STATE_FILE}" "${svc}"; then
+        return 1
+    fi
+    [[ "$(systemctl is-enabled "${svc}" 2>/dev/null || true)" == "disabled" ]]
+}
+
+hold_begin() {
+    local svc="$1" exists="$2"
+    if [[ "${exists}" != "true" ]]; then
+        return 0
+    fi
+    if user_stopped "${svc}"; then
+        HELD["${svc}"]="enabled"
+        if [[ "$(systemctl is-enabled "${svc}" 2>/dev/null || true)" == "disabled" ]]; then
+            HELD["${svc}"]="disabled"
+        fi
+        info "${svc} was stopped by you — it will be left stopped after the install"
+    fi
+    return 0
+}
+
+hold_end() {
+    local svc="$1" label="$2" other="${3:-}" s
+    if [[ -z "${HELD[${svc}]+x}" ]]; then
+        return 0
+    fi
+    for s in "${svc}" "${other}"; do
+        if [[ -z "${s}" ]]; then
+            continue
+        fi
+        systemctl stop "${s}" 2>/dev/null || true
+        if [[ "${HELD[${svc}]}" == "disabled" ]]; then
+            systemctl disable "${s}" 2>/dev/null || true
+        fi
+    done
+    ok "${label} installed and left stopped, as you had it"
+    return 0
+}
+
+OPT_KEYS=(noderecorder pibrary termon)
+declare -A OPT_LABEL=([noderecorder]="Node Recorder" [pibrary]="Pibrary" [termon]="Terminal Monitor")
+declare -A OPT_BIN=([noderecorder]="/usr/local/bin/noderecorder.py" [pibrary]="/usr/local/bin/pibrary.py" [termon]="/usr/local/bin/termon.py")
+declare -A OPT_SERVICE=([noderecorder]="noderecorder" [pibrary]="pibrary" [termon]="termon")
+declare -A OPT_PORT=([noderecorder]=8995 [pibrary]=9000 [termon]=7878)
+declare -A OPT_SCHEME=([noderecorder]="https" [pibrary]="http" [termon]="https")
+declare -A OPT_PATTERN=([noderecorder]="noderecorder*.py" [pibrary]="pibrary*.py" [termon]="termon*.py")
+declare -A OPT_LIB=([noderecorder]="${INSTMON_LIBRARY_DIR}/noderecorder" [pibrary]="${INSTMON_LIBRARY_DIR}/pibrary" [termon]="${INSTMON_LIBRARY_DIR}/termon")
+declare -A OPT_ASK=(
+    [noderecorder]="Node Recorder is optional: it records this node's audio on a schedule (port 8995)."
+    [pibrary]="Pibrary is optional: a media library for a USB or SD drive (port 9000)."
+    [termon]="Terminal Monitor is optional: top, htop or btop and a shell in the browser (port 7878). It gives a root shell to anyone on your LAN who knows the password."
+)
+declare -A OPT_EXISTS=() OPT_CHOSEN=()
+
+opt_is_installed() {
+    local key="$1"
+    if [[ -f "${OPT_BIN[${key}]}" ]]; then
+        return 0
+    fi
+    svc_active "${OPT_SERVICE[${key}]}"
+}
+
+opt_wanted() {
+    local key="$1" var="INSTALL_${1^^}"
+    if [[ "${!var:-}" =~ ^([1yY]|yes|YES|true|TRUE)$ ]]; then
+        return 0
+    fi
+    if [[ "${SUITE}" == "true" && "${key}" != "termon" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+opt_any_chosen() {
+    local k
+    for k in "${OPT_KEYS[@]}"; do
+        if [[ -n "${OPT_CHOSEN[${k}]:-}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+discover_optional() {
+    local key="$1" label exists=false want=true ans
+    label="${OPT_LABEL[${key}]}"
+    if opt_is_installed "${key}"; then
+        exists=true
+    fi
+    OPT_EXISTS["${key}"]="${exists}"
+    hdr "${label} — file discovery"
+    CHOSEN=""
+    if [[ "${exists}" != "true" ]]; then
+        if opt_wanted "${key}"; then
+            info "${label} was asked for (INSTALL_${key^^}=1, --suite or --with-termon)"
+        elif [[ "${DOWNLOAD}" != "true" ]] && ! any_file "${OPT_PATTERN[${key}]}" "${OPT_LIB[${key}]}"; then
+            want=false
+            info "No ${OPT_PATTERN[${key}]} file found — ${label} (optional) skipped"
+        elif [[ "${NONINTERACTIVE}" == "true" ]]; then
+            want=false
+            info "${label} is optional and not installed — skipped (set INSTALL_${key^^}=1 to install it)"
+        else
+            echo "  ${OPT_ASK[${key}]}"
+            read -r -p "  Install ${label}? [y/N]: " ans </dev/tty
+            case "${ans,,}" in
+                y|yes) ;;
+                *) want=false; info "Skipping ${label}" ;;
+            esac
+        fi
+    fi
+    if [[ "${want}" == "true" ]]; then
+        STRICT_STABLE=true
+        fetch_if_missing "${key}" "${label}" "${exists}" "${OPT_PATTERN[${key}]}" "" "${OPT_LIB[${key}]}" "" "${OPT_BIN[${key}]}"
+        STRICT_STABLE=false
+        stage_and_select "${OPT_PATTERN[${key}]}" "${label}" "${OPT_LIB[${key}]}" || true
+    fi
+    OPT_CHOSEN["${key}"]="${CHOSEN}"
+    if [[ -n "${CHOSEN}" ]]; then
+        info "Checking syntax…"
+        python3 -m py_compile "${CHOSEN}" \
+            || die "Syntax error in $(basename "${CHOSEN}") — install aborted"
+        ok "Syntax OK"
+    fi
+    return 0
+}
+
 hdr "Preflight"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -626,6 +798,61 @@ if ! command -v systemctl &>/dev/null; then
     die "systemctl not found — this installer requires systemd"
 fi
 ok "systemd available"
+
+if [[ "${DOWNLOAD_ONLY}" == "true" ]]; then
+    hdr "Download only"
+    if [[ "${DOWNLOAD}" != "true" ]]; then
+        die "--download-only needs the network; do not use it with --offline"
+    fi
+    info "Channel: ${GH_CHANNEL}. Files for tools that are not installed are fetched into the library."
+    info "Nothing is installed, enabled or started, and installed tools are left alone."
+    STRICT_STABLE=true
+    download_row() {
+        local key="$1" label="$2" bin="$3" svc="$4" pattern="$5" exclude="$6" libdir="$7" build="$8"
+        if [[ -f "${bin}" ]] || svc_active "${svc}"; then
+            info "${label} is installed — not downloaded (update it with this installer or instmon)"
+        elif any_file "${pattern}" "${libdir}" "${exclude}" true; then
+            info "${label}: a file is already in the library — not downloaded again"
+        else
+            fetch_tool "${key}" "${label}" "${pattern}" "${exclude}" "${libdir}" "${build}" || true
+        fi
+        return 0
+    }
+    pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
+    if [[ "${PICKED_BUILD}" == "pi02w" ]]; then
+        info "Dashboard build: Pi Zero 2 W, from ${PICKED_WHY}"
+        download_row "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${DASH_BIN}" "${DASH_SERVICE}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w
+    else
+        info "Dashboard build: full, from ${PICKED_WHY}"
+        download_row "nodecontrol" "Dashboard" "${DASH_BIN}" "${DASH_SERVICE}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full
+    fi
+    pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
+    if [[ "${PICKED_BUILD}" == "pi02w" ]]; then
+        info "SysMon build: Pi Zero 2 W, from ${PICKED_WHY}"
+        download_row "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${SYSMON_BIN}" "${SYSMON_SERVICE}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w
+    else
+        info "SysMon build: full, from ${PICKED_WHY}"
+        download_row "sysmon" "SysMon" "${SYSMON_BIN}" "${SYSMON_SERVICE}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full
+    fi
+    download_row "wifimon" "wifimon" "${WIFIMON_BIN}" "${WIFIMON_SERVICE}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}" ""
+    download_row "44helper" "44helper" "${HELPER_BIN}" "${HELPER_SERVICE}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}" ""
+    download_row "nodetalker" "Node Talker" "${NODELISTEN_BIN}" "${NODELISTEN_SERVICE}" "${NODELISTEN_PATTERN}" "" "${NODELISTEN_LIB_DIR}" ""
+    for _k in "${OPT_KEYS[@]}"; do
+        download_row "${_k}" "${OPT_LABEL[${_k}]}" "${OPT_BIN[${_k}]}" "${OPT_SERVICE[${_k}]}" "${OPT_PATTERN[${_k}]}" "" "${OPT_LIB[${_k}]}" ""
+    done
+    echo
+    if [[ ${#DOWNLOADED[@]} -gt 0 ]]; then
+        hdr "Downloaded from GitHub"
+        for _d in "${DOWNLOADED[@]}"; do ok "${_d}"; done
+    else
+        info "Nothing needed downloading."
+    fi
+    if [[ "${FETCH_STATE}" == "failed" ]]; then
+        die "Could not reach GitHub — nothing was downloaded."
+    fi
+    ok "Download only: nothing was installed or started. Install from the Available card in instmon, or run this installer without --download-only."
+    exit 0
+fi
 
 hdr "Operation"
 
@@ -810,9 +1037,12 @@ if [[ "${_nodelisten_exists}" != "true" ]]; then
     if [[ "${DOWNLOAD}" != "true" ]] && ! any_file "${NODELISTEN_PATTERN}" "${NODELISTEN_LIB_DIR}"; then
         _nl_want=false
         info "No nodetalker*.py file found — Node Talker (optional) skipped"
-    elif [[ "${NONINTERACTIVE}" == "true" ]]; then
+    elif [[ "${NONINTERACTIVE}" == "true" || "${SUITE}" == "true" ]]; then
+        if [[ "${SUITE}" == "true" ]]; then
+            INSTALL_NODELISTEN=1
+        fi
         if [[ "${INSTALL_NODELISTEN:-}" =~ ^([1yY]|yes|YES|true|TRUE)$ ]]; then
-            info "Non-interactive: INSTALL_NODETALKER is set — installing Node Talker"
+            info "INSTALL_NODETALKER or --suite is set — installing Node Talker"
         else
             _nl_want=false
             info "Node Talker is optional and not installed — skipped (set INSTALL_NODETALKER=1 to install it)"
@@ -840,19 +1070,23 @@ if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
+for _k in "${OPT_KEYS[@]}"; do
+    discover_optional "${_k}"
+done
+
 if [[ ${#DOWNLOADED[@]} -gt 0 ]]; then
     hdr "Downloaded from GitHub"
     for _d in "${DOWNLOADED[@]}"; do ok "${_d}"; done
 fi
 
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]] && ! opt_any_chosen; then
     if [[ "${DOWNLOAD}" != "true" ]]; then
-        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Talker files found (offline: nothing downloaded)."
+        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary or Terminal Monitor files found (offline: nothing downloaded)."
     elif [[ "${FETCH_STATE}" == "failed" ]]; then
         die "Nothing to install — no files found here, and the download from GitHub failed."
     fi
-    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Talker files found."
+    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary or Terminal Monitor files found."
 fi
 
 hdr "Up-to-date check"
@@ -872,8 +1106,15 @@ uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 uptodate_check "Node Talker" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
 
+for _k in "${OPT_KEYS[@]}"; do
+    uptodate_check "${OPT_LABEL[${_k}]}" "${OPT_CHOSEN[${_k}]:-}" "${OPT_BIN[${_k}]}"
+    if [[ "${UP_TO_DATE_SKIP}" == "true" ]]; then
+        OPT_CHOSEN["${_k}"]=""
+    fi
+done
+
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]] && ! opt_any_chosen; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
 fi
@@ -888,6 +1129,13 @@ if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
     NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
     info "Node Talker port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
 fi
+
+for _k in "${OPT_KEYS[@]}"; do
+    if [[ -n "${OPT_CHOSEN[${_k}]:-}" && "${OPT_EXISTS[${_k}]:-false}" != "true" ]]; then
+        info "${OPT_LABEL[${_k}]} port ${OPT_PORT[${_k}]}:"
+        check_port "${OPT_PORT[${_k}]}"
+    fi
+done
 
 if [[ -n "${INSTMON_CHOSEN}" ]]; then
     hdr "Installing instmon"
@@ -939,10 +1187,13 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
         systemctl daemon-reload
     fi
 
+    _dash_svc0="${DASH_SERVICE}"
+    hold_begin "${_dash_svc0}" "${_dash_exists}"
     info "Delegating to: python3 $(basename "${DASH_CHOSEN}") --install"
     python3 "${DASH_CHOSEN}" --install \
         || die "Dashboard --install failed — see output above"
     DASH_SERVICE="$(dash_service)"
+    hold_end "${_dash_svc0}" "Dashboard" "${DASH_SERVICE}"
     ok "Dashboard installed, enabled, and restarted (${DASH_SERVICE}.service)"
 fi
 
@@ -962,26 +1213,32 @@ if [[ -n "${SYSMON_CHOSEN}" ]]; then
         info "SysMon config unchanged"
     fi
 
+    hold_begin "${SYSMON_SERVICE}" "${_sysmon_exists}"
     info "Delegating to: python3 $(basename "${SYSMON_CHOSEN}") --install"
     python3 "${SYSMON_CHOSEN}" --install \
         || die "SysMon --install failed — see output above"
     ok "SysMon installed, enabled, and restarted"
+    hold_end "${SYSMON_SERVICE}" "SysMon"
 fi
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     hdr "Installing wifimon"
+    hold_begin "${WIFIMON_SERVICE}" "${_wifimon_exists}"
     info "Delegating to: python3 $(basename "${WIFIMON_CHOSEN}") --install"
     python3 "${WIFIMON_CHOSEN}" --install \
         || die "wifimon --install failed — see output above"
     ok "wifimon installed, enabled, and restarted"
+    hold_end "${WIFIMON_SERVICE}" "wifimon"
 fi
 
 if [[ -n "${HELPER_CHOSEN}" ]]; then
     hdr "Installing 44helper"
+    hold_begin "${HELPER_SERVICE}" "${_helper_exists}"
     info "Delegating to: python3 $(basename "${HELPER_CHOSEN}") --install"
     python3 "${HELPER_CHOSEN}" --install \
         || die "44helper --install failed — see output above"
     ok "44helper installed, enabled, and restarted"
+    hold_end "${HELPER_SERVICE}" "44helper"
 fi
 
 if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
@@ -994,16 +1251,37 @@ if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
                 || die "Node Talker --uninstall failed — see output above"
         fi
     fi
+    _nl_svc0="${NODELISTEN_SERVICE}"
+    hold_begin "${_nl_svc0}" "${_nodelisten_exists}"
     info "Delegating to: python3 $(basename "${NODELISTEN_CHOSEN}") --install"
     python3 "${NODELISTEN_CHOSEN}" --install \
         || die "Node Talker --install failed — see output above"
     ok "Node Talker installed, enabled, and restarted"
+    hold_end "${_nl_svc0}" "Node Talker" "${NODELISTEN_SERVICE}"
     for _nl_c in /etc/asl_dvs/nodetalker.conf /etc/asl_dvs/nodelisten.conf; do
         [[ -e "${_nl_c}" ]] && { NODELISTEN_CONF="${_nl_c}"; break; }
     done
     _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
     NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
 fi
+
+for _k in "${OPT_KEYS[@]}"; do
+    if [[ -z "${OPT_CHOSEN[${_k}]:-}" ]]; then
+        continue
+    fi
+    _label="${OPT_LABEL[${_k}]}"
+    hdr "Installing ${_label}"
+    hold_begin "${OPT_SERVICE[${_k}]}" "${OPT_EXISTS[${_k}]:-false}"
+    info "Delegating to: python3 $(basename "${OPT_CHOSEN[${_k}]}") --install"
+    python3 "${OPT_CHOSEN[${_k}]}" --install \
+        || die "${_label} --install failed — see output above"
+    ok "${_label} installed, enabled, and restarted"
+    hold_end "${OPT_SERVICE[${_k}]}" "${_label}"
+    if [[ "${_k}" == "termon" ]]; then
+        _tm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' /etc/asl_dvs/termon.conf 2>/dev/null | head -1 || true)"
+        OPT_PORT["termon"]="${_tm_port:-${OPT_PORT[termon]}}"
+    fi
+done
 
 hdr "Startup verification"
 info "Waiting for services to stabilise…"
@@ -1022,6 +1300,11 @@ for svc_entry in \
     port="${rest##*:}"
     [[ -z "${chosen}" ]] && continue
 
+    if [[ -n "${HELD[${svc}]+x}" ]]; then
+        ok "${svc} is stopped, as you had it"
+        continue
+    fi
+
     if systemctl is-active --quiet "${svc}"; then
         ok "${svc} is RUNNING"
     else
@@ -1030,6 +1313,30 @@ for svc_entry in \
     fi
 
     [[ -z "${port}" ]] && continue
+    if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
+        ok "Listening on port ${port}"
+    else
+        warn "Not yet listening on port ${port} — may still be initialising"
+        warn "Re-check:  ss -tlnp | grep ${port}"
+    fi
+done
+
+for _k in "${OPT_KEYS[@]}"; do
+    if [[ -z "${OPT_CHOSEN[${_k}]:-}" ]]; then
+        continue
+    fi
+    svc="${OPT_SERVICE[${_k}]}"
+    port="${OPT_PORT[${_k}]}"
+    if [[ -n "${HELD[${svc}]+x}" ]]; then
+        ok "${svc} is stopped, as you had it"
+        continue
+    fi
+    if svc_active "${svc}"; then
+        ok "${svc} is RUNNING"
+    else
+        warn "${svc} did not start cleanly"
+        systemctl status "${svc}" --no-pager -l || true
+    fi
     if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
         ok "Listening on port ${port}"
     else
@@ -1050,31 +1357,34 @@ mapfile -t IP_ADDRS < <(
 )
 
 print_urls() {
-    local name="$1" port="$2" chosen="$3"
+    local name="$1" port="$2" chosen="$3" scheme="${4:-http}"
     [[ -z "${chosen}" ]] && return
     echo
     echo "  ${BLD}${name}${RST}  ($(basename "${chosen}"))"
     sep
-    echo "  Hostname  :  http://${HOSTNAME_SHORT}.local:${port}"
+    echo "  Hostname  :  ${scheme}://${HOSTNAME_SHORT}.local:${port}"
     [[ -n "${HOSTNAME_FQDN}" && "${HOSTNAME_FQDN}" != "${HOSTNAME_SHORT}" ]] && \
-        echo "  FQDN      :  http://${HOSTNAME_FQDN}:${port}"
+        echo "  FQDN      :  ${scheme}://${HOSTNAME_FQDN}:${port}"
     if [[ "${#IP_ADDRS[@]}" -gt 0 ]]; then
         for ip in "${IP_ADDRS[@]}"; do
-            echo "  Network   :  ${BLD}${GRN}http://${ip}:${port}${RST}"
+            echo "  Network   :  ${BLD}${GRN}${scheme}://${ip}:${port}${RST}"
         done
     else
         warn "Could not determine IP — check: hostname -I"
     fi
-    echo "  Localhost :  http://localhost:${port}"
+    echo "  Localhost :  ${scheme}://localhost:${port}"
     sep
 }
 
 print_urls "instmon"                             "${INSTMON_PORT}" "${INSTMON_CHOSEN}"
-print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSEN}"
-print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
+print_urls "Node Control Dashboard"           "${DASH_PORT}"    "${DASH_CHOSEN}"
+print_urls "System Monitor"                   "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
 print_urls "wifimon"                             "${WIFIMON_PORT}" "${WIFIMON_CHOSEN}"
 print_urls "Node Talker"                         "${NODELISTEN_PORT}" "${NODELISTEN_CHOSEN}"
+for _k in "${OPT_KEYS[@]}"; do
+    print_urls "${OPT_LABEL[${_k}]}" "${OPT_PORT[${_k}]}" "${OPT_CHOSEN[${_k}]:-}" "${OPT_SCHEME[${_k}]}"
+done
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     info "To add/import WiFi networks: sudo python3 ${WIFIMON_BIN} --setup-wifi"
@@ -1088,5 +1398,8 @@ echo "  ${BLD}Service commands:${RST}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"
 [[ -n "${NODELISTEN_CHOSEN}" ]] && echo "    Node Talker    :  systemctl {status|restart|stop} ${NODELISTEN_SERVICE}"
+for _k in "${OPT_KEYS[@]}"; do
+    [[ -n "${OPT_CHOSEN[${_k}]:-}" ]] && echo "    ${OPT_LABEL[${_k}]}  :  systemctl {status|restart|stop} ${OPT_SERVICE[${_k}]}"
+done
 echo "    Logs      :  journalctl -u <service> -f"
 echo

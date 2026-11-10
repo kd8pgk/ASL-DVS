@@ -1,6 +1,15 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_9_0_20261027.sh`. Newest entries first.
+Current file: `uninstall_all_v1_10_0_20261110.sh`. Newest entries first.
+
+## 1.10.0 (2026-11-10)
+
+- **Terminal Monitor is removed too.** If `/usr/local/bin/termon.py` is there, its own `--uninstall` runs: both services, the install folder and the link are removed and its firewall port is closed. Its settings (`/etc/asl_dvs/termon.conf`), its certificate (`/etc/asl_dvs/termon_tls`) and the `termon` system user stay, and the closing message says so.
+- Not changed: Node Recorder and Pibrary are still not removed by this script (they were not before); use instmon's Uninstall button.
+- The banner no longer starts with "ASL-DVS".
+- This is a release: the script now removes one more tool.
+
+Tests: `ci/test_installers.py` (it runs a stand-in Terminal Monitor through the script, and the "not installed" and banner cases) and `ci/test_install.py` (the real Terminal Monitor installed, then removed by the script, with its firewall rule closed and its certificate kept).
 
 ## 1.9.0 (2026-10-27)
 

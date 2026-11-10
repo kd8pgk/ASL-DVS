@@ -155,6 +155,51 @@ class InstallUninstall(unittest.TestCase):
             if not had_user:
                 subprocess.run(["userdel", "termon"], capture_output=True)
 
+    def test_the_mass_uninstaller_removes_termon_and_closes_its_port(self):
+        import glob
+        file = ts.SERVERS["termon"]["file"]
+        web_unit = os.path.join(UNIT_DIR, "termon.service")
+        helper_unit = os.path.join(UNIT_DIR, "termon-helper.service")
+        link = "/usr/local/bin/termon.py"
+        if os.path.exists(web_unit) or os.path.exists(helper_unit) or os.path.lexists(link):
+            self.skipTest("termon is already installed here; run on a clean machine")
+        had_user = True
+        try:
+            import pwd
+            pwd.getpwnam("termon")
+        except KeyError:
+            had_user = False
+        fw_dir = tempfile.mkdtemp(prefix="asl-fw-")
+        shutil.copy(os.path.join(ROOT, "ci", "fixtures", "firewall", "bin", "ufw"), os.path.join(fw_dir, "ufw"))
+        ufw_rules = os.path.join(self.stub, "ufw", "rules")
+        script = sorted(glob.glob(os.path.join(ROOT, "uninstall_all_v*.sh")))[-1]
+        try:
+            self.run_cli(file, "--install", first_on_path=fw_dir)
+            with open(ufw_rules) as f:
+                self.assertEqual(f.read().split(), ["7878/tcp"])
+            env = dict(os.environ, STUB_DIR=self.stub, PATH=fw_dir + os.pathsep + STUB_BIN + os.pathsep + os.environ.get("PATH", ""))
+            r = subprocess.run(["bash", script], cwd=self.stub, env=env, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=300)
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-1500:])
+            self.assertIn("termon uninstalled", r.stdout)
+            self.assertFalse(os.path.exists(web_unit))
+            self.assertFalse(os.path.exists(helper_unit))
+            self.assertFalse(os.path.lexists(link))
+            with open(ufw_rules) as f:
+                self.assertEqual(f.read().split(), [])
+            self.assertTrue(os.path.isdir("/etc/asl_dvs/termon_tls"), "the certificate stays, as the message says")
+        finally:
+            shutil.rmtree(fw_dir, ignore_errors=True)
+            for path in (web_unit, helper_unit, link):
+                if os.path.lexists(path):
+                    os.unlink(path)
+            shutil.rmtree("/usr/local/lib/asl_dvs/termon", ignore_errors=True)
+            shutil.rmtree("/etc/asl_dvs/termon_tls", ignore_errors=True)
+            if os.path.exists("/etc/asl_dvs/termon.conf"):
+                os.unlink("/etc/asl_dvs/termon.conf")
+            if not had_user:
+                subprocess.run(["userdel", "termon"], capture_output=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
