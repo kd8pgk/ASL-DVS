@@ -19,6 +19,15 @@
    "reason": "count",
    "version": "0.3.2"
   },
+  "confgetter": {
+   "blob": "642d7d1bbe5b35a3232542760d2511364c63d3dc",
+   "commit": "9a072e68b31244b0597aea801080fc5a7f7c6ae8",
+   "file": "confgetter_v1_0_2_20261027.sh",
+   "landed": "2026-10-27T16:05:51Z",
+   "promoted": "2026-11-10T16:05:51Z",
+   "reason": "age",
+   "version": "1.0.2"
+  },
   "install_all": {
    "blob": "d06aba5da2f77dc824a226ec241b9802456f40fe",
    "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
