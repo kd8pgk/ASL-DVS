@@ -14,7 +14,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-11-10</div>
   </div>
   <div class="body">
     <h1>Install Manual<br><span>Pi Zero 2 W</span></h1>
@@ -23,16 +23,22 @@
     <div class="chips">
       <span class="chip c1">DASHBOARD</span><span class="chip c2">SYSMON</span><span class="chip c3">INSTMON</span>
       <span class="chip c4">WIFIMON</span><span class="chip c5">44HELPER</span>
+      <span class="chip c1">NODE TALKER</span><span class="chip c2">NODE RECORDER</span><span class="chip c3">PIBRARY</span><span class="chip c4">TERMINAL MONITOR</span>
     </div>
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_54_0_20261018.py</td><td>2.54.0</td></tr>
-      <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_77_20261018.py</td><td>9.3.77-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_72_20261018.py</td><td>6.13.72-pi02w</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_213_20261018.py</td><td>0.0.213</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_99_0_20261110.py</td><td>2.99.0</td></tr>
+      <tr><td>Installer</td><td class="mono">install_all_v7_5_0_20261110.sh</td><td>7.5.0</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_108_20261108.py</td><td>9.3.108-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_83_20261028.py</td><td>6.13.83-pi02w</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_49_0_20261107.py</td><td>5.49.0</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_1_19_20261108.py</td><td>0.1.19</td></tr>
+      <tr><td>Node Talker (optional)</td><td class="mono">nodetalker_v0_10_27_20261110.py</td><td>0.10.27</td></tr>
+      <tr><td>Node Recorder (optional)</td><td class="mono">noderecorder_v0_15_0_20261110.py</td><td>0.15.0</td></tr>
+      <tr><td>Pibrary (optional)</td><td class="mono">pibrary_v0_16_1_20261104.py</td><td>0.16.1</td></tr>
+      <tr><td>Terminal Monitor (optional)</td><td class="mono">termon_v0_2_4_20261109.py</td><td>0.2.4</td></tr>
+      <tr><td>Uninstaller</td><td class="mono">uninstall_all_v1_10_0_20261110.sh</td><td>1.10.0</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -70,14 +76,18 @@ sudo systemctl status sysmon</pre>
 <section class="chapter">
   <div class="kicker">1 · Overview</div>
   <h1 class="ch">What gets installed</h1>
-  <p>Each tool is a single file. Each one runs as its own systemd service and serves its own page in the browser.</p>
+  <p>Each tool is a single file. Each one runs as its own systemd service and serves its own page in the browser. instmon, the Dashboard, SysMon and wifimon are the core. 44helper, Node Talker, Node Recorder, Pibrary and Terminal Monitor are optional: a tool that is not installed is skipped unless you ask for it.</p>
   <table>
     <tr><th>Tool</th><th>Service</th><th>Port</th><th>What it does</th></tr>
     <tr><td>Dashboard</td><td class="mono">nodecontrol</td><td class="port">8989</td><td>Node control. Connect ASL and EchoLink nodes; tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17; favorites; Phone.</td></tr>
     <tr><td>SysMon</td><td class="mono">sysmon</td><td class="port">9999</td><td>System monitor and health checks for the node, DVSwitch and its config files.</td></tr>
-    <tr><td>instmon</td><td class="mono">instmon</td><td class="port">8990</td><td>Installer and manager. Install, update, start and stop the other tools; GitHub updates; Quiet System.</td></tr>
-    <tr><td>wifimon</td><td class="mono">wifimon</td><td class="port">8991</td><td>WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network.</td></tr>
+    <tr><td>instmon</td><td class="mono">instmon</td><td class="port">8990</td><td>Installer and manager. Install, update, start and stop the other tools; GitHub updates; Quiet System; disk images; the manuals.</td></tr>
+    <tr><td>wifimon</td><td class="mono">wifimon</td><td class="port">8991</td><td>WiFi and supply-voltage watchdog. Powers the Pi off cleanly on sustained low voltage; reboots it (or powers it off) on a lost network.</td></tr>
     <tr><td>44helper</td><td class="mono">44helper</td><td class="port">9997</td><td>Optional. 44Net Connect, firewall, router and SvxLink helper.</td></tr>
+    <tr><td>Node Talker</td><td class="mono">nodetalker</td><td class="port">8993</td><td>Optional. Listen to the node's audio in the browser and talk with push-to-talk; also the server for the Node Talker Mobile app.</td></tr>
+    <tr><td>Node Recorder</td><td class="mono">noderecorder</td><td class="port">8995</td><td>Optional. Records the node's audio on a schedule to WAV, MP3, Opus or FLAC. HTTPS.</td></tr>
+    <tr><td>Pibrary</td><td class="mono">pibrary</td><td class="port">9000</td><td>Optional. Media library for a USB or SD drive: movies, audio and PDFs in the browser.</td></tr>
+    <tr><td>Terminal Monitor</td><td class="mono">termon</td><td class="port">7878</td><td>Optional, and never installed unless you ask. top, htop or btop and a root shell in the browser. HTTPS. Anyone on the LAN who knows the root password gets a root shell.</td></tr>
   </table>
   <h2>The Pi Zero 2 W build</h2>
   <p>SysMon and the Dashboard come in two builds. The Pi02w fork is the lighter one for the 512 MB Pi Zero 2 W. Its
@@ -137,19 +147,23 @@ sudo systemctl status sysmon</pre>
 <pre><span class="c"># files from the main branch on GitHub</span>
 cd ~
 B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
-wget $B/instmon_v2_54_0_20261018.py
-wget $B/install_all_v7_1_20261012.sh
-wget $B/nodecontrol_pi02w_v9_3_77_20261018.py
-wget $B/sysmon_pi02w_v6_13_72_20261018.py
-wget $B/wifimon_v5_38_0_20261018.py
+wget $B/instmon_v2_99_0_20261110.py
+wget $B/install_all_v7_5_0_20261110.sh
+wget $B/nodecontrol_pi02w_v9_3_108_20261108.py
+wget $B/sysmon_pi02w_v6_13_83_20261028.py
+wget $B/wifimon_v5_49_0_20261107.py
 <span class="c"># optional</span>
-wget $B/44helper_v0_0_213_20261018.py</pre>
+wget $B/44helper_v0_1_19_20261108.py
+wget $B/nodetalker_v0_10_27_20261110.py
+wget $B/noderecorder_v0_15_0_20261110.py
+wget $B/pibrary_v0_16_1_20261104.py
+wget $B/termon_v0_2_4_20261109.py</pre>
   <div class="call tip"><span class="t">TIP</span>Newer files may be on GitHub by the time you read this. Check the
     repo's file list and use the newest <code>_pi02w_</code> SysMon and Dashboard files.</div>
   <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
     updates itself.</p>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
-<pre>sudo python3 instmon_v2_54_0_20261018.py --install</pre>
+<pre>sudo python3 instmon_v2_99_0_20261110.py --install</pre>
     <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
   <h2>What --install does</h2>
   <ul>
@@ -161,22 +175,34 @@ wget $B/44helper_v0_0_213_20261018.py</pre>
   <p>Instead of running the installer by hand (Step 2), you can upload the files on instmon's page, or let
     <b>Check GitHub</b> download them into instmon's library, and press <b>Install</b> there. The installer also finds
     files staged in instmon's library.</p>
+  <p>Check GitHub also downloads, but never installs, the newest file of each tool that is not installed. They show on
+    the <b>Available, not installed</b> card: press <b>Install</b>, or tick several and press <b>Install selected</b>.
+    Select all never ticks Terminal Monitor.</p>
 </section>
 
 <section class="chapter">
   <div class="kicker">4 · Step 2</div>
   <h1 class="ch">Install the rest with the installer</h1>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 2 · installer</h4>
-<pre>sudo bash install_all_v7_1_20261012.sh</pre></div>
+<pre>sudo bash install_all_v7_5_0_20261110.sh</pre></div>
   <h2>What it asks</h2>
   <ol class="steps">
     <li><b>Operation.</b> If tools are already installed: <code>i</code> install / reinstall, <code>u</code> update binaries only, or <code>q</code> quit. Config is kept either way.</li>
     <li><b>Version.</b> If more than one version of a tool is found, pick one (Enter takes the newest).</li>
+    <li><b>Optional tools.</b> Node Talker, Node Recorder, Pibrary and Terminal Monitor are asked about only when they are not installed (the default is <code>n</code>). The Terminal Monitor question warns that it gives a root shell to anyone on the LAN who knows the password. A tool that is already installed is found, version-picked and updated like the others.</li>
     <li><b>First-run identity.</b> On a fresh node: your callsign, ASL node number and a display label. They go into <code>/etc/asl_dvs/asl_dvs.conf</code>.</li>
   </ol>
   <h2>Where it looks for files</h2>
   <p>The installer's own folder, the current folder, <code>/root</code>, <code>/home/pi</code>, your home folder,
-    <code>/tmp</code> and instmon's library. Any subset of the tools can be installed: it installs what it finds.</p>
+    <code>/tmp</code> and instmon's library. Any subset of the tools can be installed: it installs what it finds.
+    A tool with no file in those places is downloaded from <code>github.com/kd8pgk/ASL-DVS</code> into its folder in
+    instmon's library. The download is the stable build by default (the file and commit listed in
+    <code>channels/stable.json</code>, checked against its blob); a tool with no stable build yet is skipped with a
+    warning. <code>ASL_DVS_CHANNEL=testing</code> takes every file from <code>main</code>, and
+    <code>--offline</code> (or <code>--no-download</code>) turns downloads off. git is installed only if a download
+    needs it.</p>
+  <p>If the download of an installed tool is older than the installed version, the installer says so and asks
+    <code>Install the older version? [y/N]</code>. Answering no leaves the tool as it is.</p>
   <h2>Which build it picks</h2>
   <p>For SysMon and the Dashboard the build is chosen first, then only that build's files are offered:</p>
   <ol class="steps">
@@ -185,15 +211,29 @@ wget $B/44helper_v0_0_213_20261018.py</pre>
     <li>otherwise <code>pi02w</code> on a Pi Zero 2 W, <code>full</code> on any other Pi.</li>
   </ol>
 <pre><span class="c"># force the Pi02w build (sudo needs the variables on its own line)</span>
-sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</pre>
+sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_5_0_20261110.sh</pre>
   <div class="call care"><span class="t">CAREFUL</span>If no file of the chosen build is found, that tool is skipped
     with a warning. The other build is never used in its place.</div>
   <h2>Without questions</h2>
   <p>Add <code>--non-interactive</code> (or <code>-y</code>). It picks the newest files, updates an existing install,
     and takes the identity from environment variables on a fresh node:</p>
 <pre>sudo AUTO_CALLSIGN=KD8PGK AUTO_NODE=652701 AUTO_LABEL="Travel Node" \
-     bash install_all_v7_1_20261012.sh --non-interactive</pre>
+     bash install_all_v7_5_0_20261110.sh --non-interactive</pre>
   <p>When it finishes, the installer checks that each service is running and listening on its port.</p>
+  <h2>Optional tools and other flags</h2>
+  <table>
+    <tr><th>Flag or variable</th><th>What it does</th></tr>
+    <tr><td class="mono">INSTALL_NODETALKER=1</td><td>Installs Node Talker without asking. <code>INSTALL_NODERECORDER=1</code> and <code>INSTALL_PIBRARY=1</code> do the same for Node Recorder and Pibrary.</td></tr>
+    <tr><td class="mono">--with-termon</td><td>Installs Terminal Monitor (also <code>INSTALL_TERMON=1</code>, or a yes at the prompt). This is the only way a non-interactive run gets it.</td></tr>
+    <tr><td class="mono">--suite</td><td>Asks for Node Talker, Node Recorder and Pibrary without prompting. It never asks for Terminal Monitor.</td></tr>
+    <tr><td class="mono">--download-only</td><td>Fetches the files of every tool that is not installed into instmon's library for the chosen channel, and installs, enables and starts nothing. Install them later from the Available, not installed card.</td></tr>
+    <tr><td class="mono">--offline</td><td>No downloads: use only the files already on the Pi.</td></tr>
+    <tr><td class="mono">ASL_DVS_CHANNEL=testing</td><td>Take files from <code>main</code> instead of the stable list.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>A service you stopped stays stopped. When a tool is already installed,
+    its service is not running, and you stopped it in instmon (Stop) or it is disabled, the installer updates the file
+    and then stops it again (and disables it again if it was disabled). The check at the end says
+    "stopped, as you had it". A service that crashed, or one paused by Quiet System, is updated and started as before.</div>
 </section>
 
 <section class="chapter">
@@ -206,8 +246,13 @@ sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</
     <tr><td>instmon</td><td class="mono">http://&lt;pi-address&gt;:8990</td></tr>
     <tr><td>wifimon</td><td class="mono">http://&lt;pi-address&gt;:8991</td></tr>
     <tr><td>44helper</td><td class="mono">http://&lt;pi-address&gt;:9997</td></tr>
+    <tr><td>Node Talker (if installed)</td><td class="mono">http://&lt;pi-address&gt;:8993</td></tr>
+    <tr><td>Node Recorder (if installed)</td><td class="mono">https://&lt;pi-address&gt;:8995</td></tr>
+    <tr><td>Pibrary (if installed)</td><td class="mono">http://&lt;pi-address&gt;:9000</td></tr>
+    <tr><td>Terminal Monitor (if installed)</td><td class="mono">https://&lt;pi-address&gt;:7878</td></tr>
   </table>
-  <p>Log in as root with the root password from section 2. The pages use plain HTTP, so only open them on your own
+  <p>Log in as root with the root password from section 2. Node Recorder and Terminal Monitor use HTTPS with a
+    self-signed certificate, so the browser warns once. The other pages use plain HTTP, so only open them on your own
     network or over a VPN.</p>
   <div class="call tip"><span class="t">TIP</span>On the first visit to the Dashboard, check that the callsign and
     node number in the header are right.</div>
@@ -218,13 +263,13 @@ sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</
     reconnect or shut the node down. When you log in to its page (port 8991) it asks "Turn the watchdogs on?". Add
     your WiFi networks first, then turn them on there or in the Watchdog card:</p>
   <ul>
-    <li><b>WiFi watchdog:</b> reconnects to saved networks, and shuts the node down after 3 minutes with no connection. It waits, with no timer, until at least one network is saved.</li>
+    <li><b>WiFi watchdog:</b> reconnects to saved networks. After 3 minutes with no connection it <b>reboots</b> the node (the default; at most 3 times in 6 hours, then it stays up and keeps trying) or powers it off, as you choose in the Watchdog card. It does not act in the first 10 minutes after boot, and it waits, with no timer, until at least one network is saved.</li>
     <li><b>Voltage watchdog:</b> shuts the node down after 30 seconds of low voltage.</li>
   </ul>
   <p>Updates and reinstalls keep the watchdogs as they were. Add the networks it may reconnect to:</p>
 <pre>sudo python3 /usr/local/bin/wifimon.py --setup-wifi</pre>
   <p>You can also manage networks and each WiFi adapter on wifimon's page (port 8991).</p>
-  <div class="call care"><span class="t">CAREFUL</span>wifimon shuts the Pi down cleanly on sustained low voltage or a
+  <div class="call care"><span class="t">CAREFUL</span>wifimon powers the Pi off cleanly on sustained low voltage, and reboots it (or powers it off) on a
     sustained loss of network. Use a good power supply and cable: the Pi Zero 2 W is sensitive to voltage drop.</div>
 </section>
 
@@ -241,18 +286,29 @@ sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</
       <b>Install</b>.</p></div>
   <div class="box" style="margin-top:.6em"><h4 style="color:var(--blu)">Full Update</h4>
     <ol class="steps">
-      <li>Downloads and checks every new file before anything changes.</li>
+      <li>Downloads and checks every new file before anything changes, and refreshes the downloads of tools that are not installed (it only downloads those).</li>
       <li>Pauses the web tools.</li>
       <li>One tool at a time: saves a copy of the installed file, uninstalls it, installs the new one. If the new one fails, it puts the old one back and moves on.</li>
       <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
       <li>Ends with a summary.</li>
-    </ol></div>
+    </ol>
+    <p>A tool you stopped (with Stop, or disabled) is updated and then stopped again. Nothing is changed while Node
+      Recorder is recording: the buttons grey out and a popup says what is recording and until when.</p></div>
+  <div class="box" style="margin-top:.6em"><h4 style="color:var(--blu)">On a slow line</h4>
+    <p>Check GitHub and the downloads wait longer (30, 60 then 90 seconds), skip a file that keeps stalling instead of
+      ending the whole check, ask GitHub for gzip, and read only the top of each file to learn its version. The page
+      itself is compressed, and polls less often when the line is slow (<b>Slow link: On</b> also drops the embedded
+      fonts).</p></div>
+  <div class="box" style="margin-top:.6em"><h4 style="color:var(--blu)">Manuals</h4>
+    <p>The Manuals card downloads only the manuals and guides (<code>ASL-DVS_*_Manual.pdf</code> and
+      <code>ASL-DVS_*_Guide.pdf</code>), not the other PDFs in <code>docs/</code>.</p></div>
   <h2>The Pi Zero 2 W build choice</h2>
   <p>On a Pi Zero 2 W the GitHub Updates card shows a <b>Pi Zero 2 W build</b> choice: <b>Pi02w fork (default)</b> or
     <b>Full build (override)</b>. Full Update installs the chosen build, and switches an installed tool that doesn't
     match (listed as <b>SWITCH</b>).</p>
   <h2>Quiet System</h2>
-  <p><b>Quiet System / Restore</b> pauses SysMon, the Dashboard and 44helper before a big upload or install. Asterisk,
+  <p><b>Quiet System / Restore</b> pauses every web tool except instmon and wifimon (SysMon, the Dashboard, 44helper,
+    Node Talker, Node Recorder, Pibrary and Terminal Monitor) before a big upload or install. Asterisk,
     the bridges, Allmon3, SSH and wifimon keep running. Everything comes back by itself after 30 minutes.</p>
 </section>
 
@@ -260,7 +316,7 @@ sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</
   <div class="kicker">8 · Memory</div>
   <h1 class="ch">Memory on a 512 MB Pi</h1>
   <h2>The launcher</h2>
-  <p>The Pi02w SysMon and Dashboard, instmon, wifimon and 44helper all start through
+  <p>The SysMon and Dashboard, instmon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary all start through
     <code>/usr/local/bin/asl_dvs_launch.py</code>:</p>
 <pre>ExecStart=/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/sysmon.py</pre>
   <p>Started directly, Python compiles the whole file on every start and keeps that memory. The launcher loads the
@@ -328,7 +384,10 @@ ss -tlnp | grep 9999</pre>
   <p>Remove one tool with its own uninstall:</p>
 <pre>sudo python3 /usr/local/bin/sysmon.py --uninstall</pre>
   <p>Remove every tool except instmon:</p>
-<pre>sudo bash uninstall_all_v1_5.sh</pre>
+<pre>sudo bash uninstall_all_v1_10_0_20261110.sh</pre>
+  <p>The script also removes Terminal Monitor when it is installed (its settings, certificate and <code>termon</code> user stay).
+    It does not remove Node Recorder or Pibrary: use their Uninstall button in instmon, or their own
+    <code>--uninstall</code>.</p>
   <p>This leaves <code>/etc/asl_dvs/</code>, instmon's library and <code>/etc/wifimon/wifimon.conf</code> in place.
     Remove instmon last with its own <code>--uninstall</code>. The launcher is removed once no service uses it.</p>
 
@@ -336,15 +395,15 @@ ss -tlnp | grep 9999</pre>
   <h1 class="ch">Quick reference</h1>
   <table>
     <tr><th>Task</th><th>Command</th></tr>
-    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_54_0_20261018.py --install</td></tr>
-    <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_1_20261012.sh</td></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_99_0_20261110.py --install</td></tr>
+    <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_5_0_20261110.sh</td></tr>
     <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
     <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>
     <tr><td>Restart the web tools</td><td class="mono">sudo systemctl restart sysmon nodecontrol instmon wifimon</td></tr>
     <tr><td>A tool's log</td><td class="mono">journalctl -u &lt;service&gt; -n 30 --no-pager</td></tr>
     <tr><td>Memory overview</td><td class="mono">free -m · zramctl</td></tr>
     <tr><td>Saver off switch</td><td class="mono">sudo touch /etc/asl_dvs/launch_no_&lt;optimize|arena_cap|trim&gt;</td></tr>
-    <tr><td>Remove all but instmon</td><td class="mono">sudo bash uninstall_all_v1_5.sh</td></tr>
+    <tr><td>Remove all but instmon</td><td class="mono">sudo bash uninstall_all_v1_10_0_20261110.sh</td></tr>
   </table>
   <table>
     <tr><th>Service</th><th>Port</th><th>Config</th></tr>
@@ -353,6 +412,8 @@ ss -tlnp | grep 9999</pre>
     <tr><td>instmon</td><td class="port">8990</td><td class="mono">/etc/asl_dvs/ · library in /etc/asl_dvs/instmon_library</td></tr>
     <tr><td>wifimon</td><td class="port">8991</td><td class="mono">/etc/wifimon/wifimon.conf</td></tr>
     <tr><td>44helper</td><td class="port">9997</td><td class="mono">/etc/44helper/44helper.conf</td></tr>
+    <tr><td>nodetalker, noderecorder</td><td class="port">8993, 8995</td><td class="mono">/etc/asl_dvs/nodetalker.conf, /etc/asl_dvs/noderecorder/</td></tr>
+    <tr><td>pibrary, termon</td><td class="port">9000, 7878</td><td class="mono">/etc/pibrary/pibrary.conf, /etc/asl_dvs/termon.conf</td></tr>
   </table>
 </section>
 

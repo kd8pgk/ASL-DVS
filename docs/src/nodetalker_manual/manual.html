@@ -25,7 +25,7 @@ td .sc{margin-left:.3em}
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Node Talker 0.10.14</b><br>Node Talker Mobile 0.10.14<br>Edition 2026-11-05</div>
+    <div class="ed"><b>Node Talker 0.10.27</b><br>Node Talker Mobile 0.10.27<br>Edition 2026-11-10</div>
   </div>
   <div class="body">
     <h1>Node Talker Manual<br><span>Receive and transmit audio, setting by setting</span></h1>
@@ -41,9 +41,9 @@ td .sc{margin-left:.3em}
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_9_22_20261025.py</td><td>0.9.22</td></tr>
-      <tr><td>Node Talker Mobile</td><td class="mono">NodeTalker-0.3.1-debug.apk</td><td>0.3.1 (Android 8.0 and later; Node Talker 0.6.11 or later for app audio; sections 7.9 and 11.1 list what 0.9.22 adds that the app does not yet use)</td></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_94 / nodecontrol_v9_3_89</td><td>9.3.94-pi02w for DVSwitch through the Dashboard; 9.3.89 or later (both builds) for ASL, EchoLink and M17</td></tr>
+      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_10_27_20261110.py</td><td>0.10.27</td></tr>
+      <tr><td>Node Talker Mobile</td><td class="mono">NodeTalker-0.10.27.apk</td><td>0.10.27 (Android 8.0 and later; Node Talker 0.6.11 or later for app audio; a signed release build)</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_108 / nodecontrol_v9_3_104</td><td>9.3.94-pi02w for DVSwitch through the Dashboard; 9.3.89 or later (both builds) for ASL, EchoLink and M17; 9.3.104-pi02w or 9.3.99 for the phone patch tones (section 7.2)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">Node Talker is a common tool: the same file runs on the Pi Zero 2 W and the
       full build. The rest of the suite is covered in the user manual, <code>docs/ASL-DVS_User_Manual.pdf</code>.</p>
@@ -144,6 +144,13 @@ td .sc{margin-left:.3em}
     <li>On Android you can use Node Talker Mobile instead of the browser: install it, add the Pi's address and log in
       on the page it shows (chapter 11).</li>
   </ol>
+  <div class="call tip"><span class="t">TIP</span>The first time the page is opened after an install, a <b>Set up Node Talker</b>
+    popup lists what is missing: the transmit node 1921 in <code>rpt.conf</code> and the receive feed (one
+    <code>outstreamcmd</code> line). Nothing is written until you press <b>OK, install</b>; <b>Not now</b> brings the popup
+    back next time. It backs up <code>rpt.conf</code> first, shows the backup path, and restarts Asterisk, so the node's
+    links drop and come back. If both are already in place, no popup appears. A foreign <code>outstreamcmd</code> (such as a
+    Broadcastify feed), or a node 1921 that Node Talker did not add, blocks it with the reason. Sections 2.2 and 2.3 do the
+    same two steps by hand, and the RX card's Remove and the TX card's Remove undo them.</div>
   <h2><span class="n">2.2</span>Receive: send the node's audio here</h2>
   <ol class="steps">
     <li>Setup tab, open the <b>RX</b> card (Node receive). The table lists each node in <code>rpt.conf</code> and its
@@ -163,6 +170,12 @@ td .sc{margin-left:.3em}
     <li>Press <b>Restart Asterisk</b>. Within 20 seconds the card's summary reads <i>Set up and linked</i>: Node Talker
       links 1921 to your node and relinks it whenever it drops.</li>
   </ol>
+  <div class="call note"><span class="t">NOTE</span>Adding or removing node 1921 also adds or removes it in
+    <code>/etc/allmon3/allmon3.ini</code> (copying the host, port, user and password from your public node's section).
+    Allmon3 is not restarted: the result tells you to restart it. Node Recorder uses the same node 1921: when it is on the
+    node and Node Talker is not, it creates the node; Node Talker accepts that node as its own, and Setup offers
+    <b>Take over node 1921 from Node Recorder</b>, which changes only the note line above the stanza. Removing the node
+    from Node Talker hands it back to Node Recorder when that is installed.</div>
   <h2><span class="n">2.4</span>First test transmission</h2>
   <ol class="steps">
     <li>Setup tab, <b>TX: node 1921</b> card, Microphone: press <b>Test mic</b>, talk for 4 seconds, and read the report (section 9.2).
@@ -202,6 +215,7 @@ td .sc{margin-left:.3em}
     <tr><td>Level bar</td><td>The node's level, or your mic level (red <b>TX</b>) while you hold push-to-talk.</td></tr>
     <tr><td>Message line</td><td><i>Listening.</i>, <i>Tap anywhere to start listening</i>, or why the stream stopped.</td></tr>
     <tr><td>Push-to-talk</td><td>Hold to talk, or tap to talk and tap to stop (chapter 6; Push-to-talk on this phone, TX card, picks which). Red <b>TALKING</b> with the time, or the guard countdown in tap mode; amber <b>Busy: who 0:12</b> when someone else transmits; a 3-2-1 count in the spectrum's corner while <b>Quick Key Guard</b> holds it.</td></tr>
+    <tr><td>PPT lock</td><td>A slider under the push-to-talk button: hold it, then slide right to lock push-to-talk or left to unlock it. While it is locked nobody can transmit, from any page or from Node Talker Mobile; a transmission in progress is stopped, and the line under the button reads <i>PPT is Locked</i>. The lock belongs to the node, not to one phone, and is cleared when Node Talker restarts. The Log records each lock and unlock.</td></tr>
     <tr><td>Link line</td><td>Under the push-to-talk button: what the node is linked to right now, with a mode tag and a name (for example <span class="k">ASL</span> and the net's name, or the talkgroup or reflector of a tuned DVSwitch or M17 bridge). It reads the node's own links, not your Connect or Tune choice, so a link made from the Dashboard or another phone shows too. Other states: <i>No ASL node linked</i>, <i>Bridge linked, nothing tuned</i>, <i>Not connected</i> and <i>Node unreachable</i>. Node 1921 and the bridge nodes are never shown as the link itself; a tuned DVSwitch or M17 bridge follows an ASL name as a tag. Names come from your favorites, then the AllStar list (<code>astdb.txt</code>).</td></tr>
   </table>
   <h2><span class="n">3.3</span>Setup tab</h2>
@@ -221,8 +235,9 @@ td .sc{margin-left:.3em}
     <figure><img class="shot" src="img/connect.jpg" style="width:2.3in" alt="The Connect tab">
       <figcaption><b>Figure 3.3 · Screenshot (test node).</b> The Connect card with a linked favorite, and the Tune card searching AllStar nodes.</figcaption></figure>
     <div>
-      <p><b>Connect</b>: pick one of your favorites and press <b>Connect</b>; the button turns into <b>Disconnect</b>
-        while it is on.</p>
+      <p><b>Connect</b>: pick one of your favorites and press <b>Connect</b>. Connect and Disconnect are two buttons side
+        by side; Connect is off while that favorite is already linked. <b>Disconnect</b> drops every link the node has.
+        The mode tag, the big number and the Listen badge take the colour of the mode.</p>
       <p><b>Tune</b>: anything that isn't a favorite. Pick the mode (ASL, EchoLink, DMR, STFU, YSF, P25, NXDN, D-STAR,
         M17), search or type, then <b>LH</b> (Last Heard), <b>Save</b> as a favorite or <b>Connect</b>, which
         turns into <b>Disconnect</b> while what you picked is linked. Chapter 10 has both.</p>
@@ -331,7 +346,7 @@ td .sc{margin-left:.3em}
     nobody outside can connect to them: they exist only on your Pi, linked locally. That makes them the right tool for
     feeding audio into a node from software. Node Talker uses 1921 and writes this when you press <b>Add node
     1921</b> on the TX card, Transmit node (here for a node 41234 that uses ASL3's usual <code>node-main</code> template):</p>
-  <pre>; nodelisten: transmit node for the Node Listen page (remove it from that page)
+  <pre>; nodetalker: transmit node for Node Talker (remove it from the TX card)
 [1921](node-main)
 rxchannel = USRP/127.0.0.1:34018:32018
 duplex = 0
@@ -590,6 +605,22 @@ T41234</pre>
     <code>ptt_rx_gap</code>); a phone with nothing saved starts from that copy, and <b>Restore from the Pi</b> puts it
     back. The guard timer never runs past the node's TX time-out.</p>
 
+  <h3>Phone patch</h3>
+  <p>On a Node Controller phone call (a SIP or IAX2 phone network, see the Phone tab), each time you talk Node Talker
+    first sends the open tones to the far end, waits, then sends your voice, and sends the close tones when you stop. It
+    works with tap to talk, hold to talk and a headset button. The Talk button reads <b>· PHONE</b> while a call is active,
+    and the Audio settings show the phone's state (no call, dialing, ringing, or in a call on the network).</p>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does</th></tr>
+    <tr><td>Send keypad tones when I talk on a phone call</td><td>on</td><td>on / off</td><td>The switch. Nothing is sent when no phone call is active.</td></tr>
+    <tr><td>Open tones</td><td><code>*99</code></td><td>1 to 8 of 0-9, <code>*</code>, <code>#</code></td><td>Sent before your voice.</td></tr>
+    <tr><td>Close tones</td><td><code>#</code></td><td>1 to 8 of 0-9, <code>*</code>, <code>#</code></td><td>Sent when you stop.</td></tr>
+    <tr><td>Wait after open</td><td>500 ms</td><td>0 to 3000</td><td>The pause between the open tones and your voice. A talk is never held longer than 5 s by it.</td></tr>
+  </table>
+  <p>The phone's state comes from Node Controller (<code>phone-status</code>, cached for 5 s) and the tones go out
+    through <code>phone-tones</code>, so this needs Node Controller 9.3.104-pi02w or 9.3.99 or later; with an older one the
+    page says so and the patch does nothing. If the open tones cannot be sent, Node Talker says so on the page and
+    transmits anyway.</p>
   <h2><span class="n">7.3</span>Setup card <span class="sc n">NODE</span></h2>
   <table>
     <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does, and when to change it</th></tr>
@@ -682,7 +713,17 @@ T41234</pre>
   </table>
   <h2><span class="n">7.8</span>Log card</h2>
   <p>What Node Talker has done: listeners, logins, transmissions (with length, gaps and why they ended), connects and
-    every <code>rpt.conf</code> edit. Fetched only while the card is open.</p>
+    every <code>rpt.conf</code> edit. Fetched only while the card is open. <b>Copy log</b> copies the lines shown (the last
+    400, one per line with their time) and says how many; in Node Talker Mobile 0.10.20 or later the app puts them on the
+    phone's clipboard itself.</p>
+  <p>It also records when each link connects, is connecting, disconnects or never connected
+    (<i>Link connected: Allstar Hub (node 45192)</i>; the node's links are looked at every 5 seconds, and a link must be
+    gone for two looks before it counts as disconnected), every message that appears under the talk button
+    (<i>Talk button: …</i>; a message clears itself after 30 seconds), and each Listen connect and disconnect with who did it
+    (<code>user</code>, or <code>system</code> with the reason, for example <i>process killed</i>). A browser page
+    that comes back and has had no audio for 5 seconds or more restarts its stream once and logs
+    <code>resumed_dead</code>. After you press Disconnect, <i>Start listening when the page opens</i> no longer reconnects
+    on reload.</p>
   <h2><span class="n">7.9</span>Phone card <span class="sc b">BROWSER</span></h2>
   <p>Read-only: nothing here changes a setting. It lists what this phone's browser can tell the page about audio, so you
     can see why a setting has no effect. <b>Refresh</b> rereads it; the Data download (section 7.11) includes it, for when
@@ -729,8 +770,21 @@ T41234</pre>
     rows, the app details in Node Talker Mobile, the Pi's load and the recent log. Nothing is shown on the page and
     nothing goes through the clipboard, so nothing is cut short. It never holds audio or passwords. The Tests card's
     <b>Compare with a saved Data file</b> reads the check back out of it (older saved check reports work too).</p>
-  <div class="call note"><span class="t">NOTE</span>Inside Node Talker Mobile 0.10.14 the download does not save yet: the app
-    can't save a file the page makes in memory, in App audio or Page audio. Download it from a browser on the phone or a computer.</div>
+  <div class="call note"><span class="t">NOTE</span>Inside Node Talker Mobile 0.10.15 or later the page hands the file to the
+    app, which opens Android's Save dialog. In 0.10.14 and earlier it did not save: download it from a browser.</div>
+  <h2><span class="n">7.12</span>While Node Recorder is recording <span class="k">0.10.26</span></h2>
+  <p>Node Talker asks Node Recorder (on this Pi only, <code>127.0.0.1:8995</code>) what is recording. Nothing changes when
+    Node Recorder is not installed or does not answer.</p>
+  <table>
+    <tr><th>What you do</th><th>What happens while a recording runs</th></tr>
+    <tr><td>Connect, Disconnect, Tune, Send its audio here, Remove, Add node 1921, Set up, the Digital settings, the tone tests, saving the web port, UDP port, HTTPS or node</td><td>Refused while Node Recorder reports the <b>main node</b> busy (Record now, or a scheduled recording on the main node). The buttons turn grey with a tooltip, and pressing one opens <i>Recording in progress</i> with the recording's name, how long it has run and when it ends. A recording on a private node does not lock these.</td></tr>
+    <tr><td>Tune DMR, D-STAR, YSF, P25, NXDN or STFU; or M17</td><td>A box names the recording that holds that bridge and when it ends, with <b>Cancel</b> and <b>Tune anyway</b>. Tune anyway stops that recording; what was recorded is kept. A tune disconnect asks the same while any recording holds a bridge.</td></tr>
+    <tr><td>Restart Asterisk, Reboot, Shutdown, Setup apply</td><td>A box says the recording will be cut short and saved as a partial file, with <b>Cancel</b> and <b>Go ahead</b>.</td></tr>
+    <tr><td>Listening, talking, reading</td><td>Always open.</td></tr>
+  </table>
+  <p>A note under the header says what is recording and, up to 30 minutes before a digital recording starts, when it starts,
+    so a tune just before it can be avoided. Node Talker also sends Node Recorder a copy of the audio of node 1921
+    (UDP <code>127.0.0.1:9995</code>); with nothing listening there the copy is dropped.</p>
 </section>
 
 <section class="chapter" id="ch8">
@@ -961,7 +1015,7 @@ T41234</pre>
     <b>Favorites file</b>, on the Favorites card, downloads or uploads <code>nodetalker_favorites.conf</code>; an upload with a bad line is
     refused whole.</p>
   <h2><span class="n">10.3</span>Connecting</h2>
-  <p>Connect tab: pick a favorite and press <b>Connect</b>; it turns into <b>Disconnect</b> while that favorite is on.
+  <p>Connect tab: pick a favorite and press <b>Connect</b>. <b>Connect</b> and <b>Disconnect</b> are separate buttons side by side; Connect is off while that favorite is already linked.
     The page switches to the Listen tab and says <i>Connecting to …</i> or <i>Tuning …</i> under the push-to-talk
     button; if it fails, it goes back to the Connect tab with the reason. Links are always made from Node Talker's main
     node, <b>one at a time</b>: connecting an ASL or EchoLink favorite drops the node's other public links first, and
@@ -1016,7 +1070,9 @@ T41234</pre>
   </ul>
   <h2><span class="n">10.5</span>Links and Disconnect</h2>
   <p>The <b>Links</b> card at the top of the Setup tab lists the node's links, one per line, with the favorite's name.
-    Node 1921 is marked (TX). On the Connect card, <b>Disconnect</b> drops that favorite only; other links stay.</p>
+    Node 1921 is marked (TX). <b>Disconnect</b>, on the favorite card and on the Tune card, drops every link the node
+    lists, private nodes and the digital and M17 bridge links included, but not node 1921, which is the local transmit
+    feed. Disconnect All, on the Setup tab, is unchanged.</p>
 </section>
 
 <section class="chapter" id="ch11">
@@ -1042,11 +1098,12 @@ T41234</pre>
   <ol class="steps">
     <li>On the phone, open the repository's Releases page
       (<code>github.com/kd8pgk/ASL-DVS/releases</code>), take the newest <code>android-v…</code> release and download
-      <code>NodeTalker-…-debug.apk</code>.</li>
+      <code>NodeTalker-X.Y.Z.apk</code> (for example <code>NodeTalker-0.10.27.apk</code>), a signed release build.</li>
     <li>Open the file. Android asks once to allow installs from the browser; Play Protect may warn about an unknown
       app: <b>More details → Install anyway</b>.</li>
-    <li>Updates install over the old app and keep your nodes and settings. Going to 0.3.1 from an older build needs one
-      uninstall first (the older builds each had their own signing key).</li>
+    <li>Updates install over the old app and keep your nodes and settings. Going to 0.10.27 from 0.10.26 or older needs one
+      uninstall first, because the app is now signed with a private release key (note your nodes first: they are kept inside
+      the app). After that, updates install over each other.</li>
   </ol>
   <div class="call note"><span class="t">NOTE</span>App audio needs Node Talker 0.6.10 or later for receive and 0.6.11
     or later for transmit on the node. With an older Node Talker the app still opens the page and uses page audio.</div>
@@ -1161,6 +1218,8 @@ T41234</pre>
     <tr><td>Someone else is transmitting</td><td>Wait; the button shows Busy with who and how long.</td></tr>
     <tr><td>Node 1921 is not set up / not linked yet</td><td>TX card, Transmit node: Add node 1921, Restart Asterisk, wait 20 s.</td></tr>
     <tr><td>Tone test: the channel is busy / a callsign is needed / the test would last too long</td><td>The test waits for 3 s without audio above the activity level on the node, so wait for quiet (a constant noise above that level keeps it refusing). It identifies itself on the air, so set your callsign on the Digital card. It is also limited to 60 s and to the TX time-out less 5 s: use fewer tones or shorter ones.</td></tr>
+    <tr><td>PPT is Locked</td><td>The PPT lock slider under the push-to-talk button is on. Slide it left to unlock. It is also cleared when Node Talker restarts.</td></tr>
+    <tr><td>Recording in progress</td><td>Node Recorder is recording on the main node (section 7.12). Wait for its end time.</td></tr>
     <tr><td>Push-to-talk needs the https:// page</td><td>Turn HTTPS on and open the <code>https://</code> address, or use Node Talker Mobile with app audio (chapter 11).</td></tr>
     <tr><td>Microphone: Permission denied</td><td>Allow the microphone for the page in the browser's site settings.</td></tr>
   </table>
@@ -1209,6 +1268,7 @@ T41234</pre>
     <tr><td class="mono">/etc/asl_dvs/nodetalker_tls/</td><td>The HTTPS certificate and key, made on first start</td></tr>
     <tr><td class="mono">/etc/asl_dvs/nodetalker_backups/</td><td><code>rpt.conf</code> before each edit, newest 10</td></tr>
     <tr><td class="mono">/etc/asl_dvs/nodelisten*</td><td>Links to the files above, for older tools</td></tr>
+    <tr><td class="mono">/run/asl_dvs/suitelog.jsonl</td><td>Receive-health rows, Listen events and kerchunk bursts while instmon's Suite Log is collecting (RAM; nothing is written to the SD card otherwise)</td></tr>
     <tr><td class="mono">/etc/asl_dvs/local_api.key</td><td>Key for calling the Dashboard</td></tr>
   </table>
   <h2><span class="n">14.2</span>Ports and service</h2>
@@ -1216,6 +1276,7 @@ T41234</pre>
     <tr><th>Port</th><th>What</th></tr>
     <tr><td class="port">8993/tcp</td><td>The page (HTTPS; a plain-HTTP request is redirected)</td></tr>
     <tr><td class="port">6200/udp</td><td>Node audio in, 127.0.0.1 only</td></tr>
+    <tr><td class="port">9995/udp</td><td>A copy of node 1921's transmit audio for Node Recorder, 127.0.0.1 only</td></tr>
     <tr><td class="port">32018 / 34018 udp</td><td>USRP to and from node 1921, 127.0.0.1 only</td></tr>
   </table>
   <p>Service <code>nodetalker</code> (also answers to <code>nodelisten</code>), through the shared launcher, with <code>Restart=always</code> and
@@ -1223,12 +1284,13 @@ T41234</pre>
     systemd restarts it. <code>--uninstall</code> removes the <code>outstreamcmd</code> line and node 1921 and keeps the
     settings; an install within 30 minutes (an update) puts them back.</p>
   <h2><span class="n">14.3</span>Lines Node Talker writes in rpt.conf</h2>
-  <p>They keep the Node Listen names: older tools find the lines by this text, and <code>nodelisten.py</code> links to
+  <p>New lines carry <code>; nodetalker:</code> comments. Lines an older version wrote with
+    <code>; nodelisten:</code> comments are still found and handled, and <code>nodelisten.py</code> links to
     Node Talker.</p>
-  <pre>; nodelisten: sends this node's audio to the Node Listen page (remove it from that page)
+  <pre>; nodetalker: sends this node's audio to Node Talker (remove it from the RX card)
 outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200
 
-; nodelisten: transmit node for the Node Listen page (remove it from that page)
+; nodetalker: transmit node for Node Talker (remove it from the TX card)
 [1921](&lt;your node's template&gt;)
 rxchannel = USRP/127.0.0.1:34018:32018
 duplex = 0
@@ -1263,6 +1325,10 @@ idrecording = |t(0,0,10,0)
     <tr><td class="mono">ptt_mode</td><td>hold</td><td>hold, tap</td><td>TX card: the copy of Push-to-talk on this phone</td></tr>
     <tr><td class="mono">ptt_guard_sec</td><td>60</td><td>30, 60, 90, 120, 180</td><td>TX card: Guard timer (copy)</td></tr>
     <tr><td class="mono">ptt_rx_gap</td><td>false</td><td>bool</td><td>TX card: Quick Key Guard (copy)</td></tr>
+    <tr><td class="mono">kerchunk_delay_ms</td><td>0 (off)</td><td>0, or 100–1000</td><td>Kerchunks (Setup tab)</td></tr>
+    <tr><td class="mono">phone_tones</td><td>true</td><td>bool</td><td>Audio settings: Send keypad tones when I talk on a phone call</td></tr>
+    <tr><td class="mono">phone_open / phone_close</td><td>*99 / #</td><td>1–8 of 0-9 * #</td><td>Audio settings: Phone patch</td></tr>
+    <tr><td class="mono">phone_lead_ms</td><td>500</td><td>0–3000</td><td>Audio settings: Phone patch, wait after open</td></tr>
     <tr><td class="mono">allow_wan</td><td>false</td><td>bool</td><td>none (chapter 13)</td></tr>
   </table>
   <h2><span class="n">14.5</span>API</h2>
@@ -1277,7 +1343,10 @@ idrecording = |t(0,0,10,0)
     <tr><td class="mono">GET /api/node/counters</td><td>The node's key-up count and transmit time from <code>rpt stats</code> (login); used by the Audio check's node cross-check</td></tr>
     <tr><td class="mono">GET /api/tonetest/status</td><td>Progress and the last report of the tone test (login)</td></tr>
     <tr><td class="mono">GET /api/tune-list?mode= · /api/tune-search?mode=&amp;q=</td><td>The Tune card's lists and the ASL and EchoLink search (login)</td></tr>
+    <tr><td class="mono">GET /api/rxhealth[?all=1] · /api/load · /api/balance · /api/kerchunks · /api/setup · /api/disconnect-all/status</td><td>Receive health, Pi load, the balancer, the kerchunk table, what first-open setup lacks, and the Disconnect All state (login)</td></tr>
     <tr><td class="mono">POST /api/login · /api/logout</td><td>Session</td></tr>
+    <tr><td class="mono">POST /api/ptt/lock · /api/ptt/log · /api/listen/event · /api/rxhealth/client</td><td>The PPT lock, the talk-button log line, Listen events and the page's receive numbers (login)</td></tr>
+    <tr><td class="mono">POST /api/disconnect-links · /api/disconnect-all · /api/setup/apply · /api/tonetest/link · /api/balance/… · /api/kerchunks/…</td><td>Disconnect every link, Disconnect All, first-open setup, the tone test's link, the balancer and the kerchunk tests (login)</td></tr>
     <tr><td class="mono">POST /api/config · /api/node/enable · /api/node/disable · /api/tx/enable · /api/tx/disable · /api/favorites · /api/connect · /api/disconnect · /api/tune · /api/tune/save · /api/tune/disconnect · /api/digital · /api/dmr-networks · /api/dmr-networks/import · /api/tonetest/start · /api/tonetest/stop · /api/favorites-file · /api/asterisk/restart · /api/system/reboot · /api/system/shutdown</td><td>Changes (login; header <code>X-Requested-With: XMLHttpRequest</code>)</td></tr>
   </table>
   <h2><span class="n">14.6</span>Version history (highlights)</h2>
@@ -1311,10 +1380,19 @@ idrecording = |t(0,0,10,0)
     <tr><td>0.9.20</td><td>RX cleanup: gate tells hiss from tones, keeps 40 ms before opening and fades in; TX fades at a gap; Phone mic filter</td></tr>
     <tr><td>0.9.21</td><td>Settings that can't be used are grayed out; the Phone card shows the app</td></tr>
     <tr><td>0.9.22</td><td>The first build in the repository: <code>ptt_rx_gap</code> off by default; Pi health only with a login; the tone test is local-only for Stop too and limited by the TX time-out; node 1921 gets a silent ID</td></tr>
-    <tr><td>0.9.23–0.10.11</td><td>Not summarized here; see the changelog (balancing, receive health, the TX tone test, kerchunks, the suite log and more)</td></tr>
+    <tr><td>0.9.23–0.9.52</td><td>Not summarized here; see the changelog (the Audio check, the tone tests, kerchunks and more)</td></tr>
+    <tr><td>0.9.53–0.9.56</td><td>Automatic balancing for RX and TX; first-open setup popup; the TX card keeps Allmon3 in step</td></tr>
+    <tr><td>0.9.57</td><td>Phone patch: keypad tones when you talk on a phone call</td></tr>
+    <tr><td>0.9.58–0.9.64</td><td>The Node Controller look (Readex Pro); separate Connect and Disconnect buttons; Disconnect drops every link; mode colours</td></tr>
+    <tr><td>0.10.0–0.10.7</td><td>Receive health (where the loss starts, including the Pi's own Wi-Fi); audio copy for Node Recorder and the shared node 1921; links locked while Node Recorder records</td></tr>
+    <tr><td>0.10.8–0.10.11</td><td>Listen connect and disconnect records; auto-open respects your last choice; reconnect on return; spectrum in app audio; one suite-log file in RAM</td></tr>
     <tr><td>0.10.12</td><td>CTCSS notch in RX cleanup</td></tr>
     <tr><td>0.10.13</td><td>The Mic settings, the Audio check and balancing work in Node Talker Mobile's app audio; the Phone card shows the app's settings</td></tr>
     <tr><td>0.10.14</td><td>Tests card with test switches; Data card (one download, no Copy buttons); grays follow the mode; receive-buffer advice goes to the app</td></tr>
+    <tr><td>0.10.15–0.10.21</td><td>The Data file saves inside the app; talk-channel failures shown at once and logged on the node; Copy log; link changes logged; the phone times its last report and logs network changes</td></tr>
+    <tr><td>0.10.24–0.10.25</td><td>PPT lock slider; the lock line reads <i>PPT is Locked</i></td></tr>
+    <tr><td>0.10.26</td><td>Questions instead of locks for tunes and restarts while Node Recorder records; private-node recordings do not lock radio use</td></tr>
+    <tr><td>0.10.27</td><td>One status probe of Node Recorder at a time</td></tr>
   </table>
   <table>
     <tr><th>Node Talker Mobile</th><th>What arrived</th></tr>
@@ -1325,6 +1403,9 @@ idrecording = |t(0,0,10,0)
     <tr><td>0.10.12</td><td>Clean-up filters for received and sent audio; the microphone is filtered before it is reduced to 8 kHz</td></tr>
     <tr><td>0.10.13</td><td>Applies the page's Mic settings; sends its audio numbers to the Audio check; the phone gate follows the speech level</td></tr>
     <tr><td>0.10.14</td><td>80 ms Android player buffer (about 120 ms less delay); the page can set the receive buffer</td></tr>
+    <tr><td>0.10.15</td><td>Saves the Data file with Android's Save dialog</td></tr>
+    <tr><td>0.10.19–0.10.21</td><td>Reports talk-channel failures at once, with exact reasons; tries every address a node name gives; Copy log through the app; times its last report and logs network changes</td></tr>
+    <tr><td>0.10.27</td><td>Builds are signed with a private release key (one uninstall needed when coming from 0.10.26 or older)</td></tr>
   </table>
   <p>The full lists are in <code>changelogs/nodetalker.md</code> and <code>changelogs/nodetalker_android.md</code>.</p>
 </section>
