@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.28"
+VERSION = "0.10.29"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -9729,6 +9729,38 @@ function btRows() {
   return rows;
 }
 
+function btDetail() {
+  try {
+    if (window.NodeTalkerApp && typeof NodeTalkerApp.bluetoothDetail === 'function') {
+      const d = JSON.parse(NodeTalkerApp.bluetoothDetail() || 'null');
+      return d && typeof d === 'object' ? d : null;
+    }
+  } catch (e) {}
+  return null;
+}
+
+const BT_FEAT = {supported: 'yes', not_supported: 'no', unknown: 'unknown', not_reported: 'not reported by this Android version'};
+const BT_PROF = {headset: 'Call headset (HFP)', a2dp: 'Music (A2DP)', hearing_aid: 'Hearing aid', le_audio: 'LE Audio'};
+const BT_CLASS = {audio_video: 'audio', phone: 'phone', computer: 'computer', wearable: 'wearable', health: 'health', peripheral: 'peripheral', networking: 'networking', other: 'other'};
+const BT_LINK = {classic: 'classic', le: 'low energy', dual: 'classic and low energy', unknown: 'unknown'};
+
+function btDetailRows(d) {
+  const rows = [];
+  const a = d.adapter || {};
+  rows.push(['Bluetooth is', a.on ? 'on' : (a.state === 'none' ? 'not present' : 'off (' + String(a.state || '').replace(/_/g, ' ') + ')')]);
+  if (a.name) rows.push(['Phone\'s Bluetooth name', a.name]);
+  rows.push(['LE Audio supported', BT_FEAT[a.le_audio] || String(a.le_audio || '')]);
+  rows.push(['LE Audio broadcast supported', BT_FEAT[a.le_broadcast] || String(a.le_broadcast || '')]);
+  (Array.isArray(d.profiles) ? d.profiles : []).forEach((p) => {
+    const label = (BT_PROF[p.name] || String(p.name)) + ' connected to';
+    rows.push([label, p.devices === null ? 'not readable' : (p.devices && p.devices.length ? p.devices.map((x) => x || 'a device').join(', ') : 'nothing')]);
+  });
+  const b = Array.isArray(d.bonded) ? d.bonded : [];
+  rows.push(['Paired devices', b.length ? String(b.length) : 'none']);
+  b.forEach((v, i) => rows.push(['Paired ' + (i + 1) + (v.name ? ': ' + v.name : ''), (BT_CLASS[v.class] || String(v.class)) + ', ' + (BT_LINK[v.link] || String(v.link))]));
+  return rows;
+}
+
 function phoneTable(rows) {
   const t = document.createElement('table'); t.className = 'chk-t';
   rows.forEach(([k, v, star]) => {
@@ -9772,7 +9804,7 @@ async function phoneRows() {
   if (!(ai && ai.volume != null)) add('Phone media volume', 'not readable from a web page', true);
   const ar = [];
   if (window.NodeTalkerApp) appRows((k, v, star) => ar.push([k, v, !!star]));
-  return {rows: rows, app: ar, bt: btRows() || []};
+  return {rows: rows, app: ar, bt: btRows() || [], btd: btDetail()};
 }
 
 async function phoneRefresh() {
@@ -9789,8 +9821,23 @@ async function phoneRefresh() {
     const h = document.createElement('h3'); h.style.margin = '12px 0 4px'; h.textContent = 'Bluetooth';
     body.appendChild(h);
     body.appendChild(phoneTable(p.bt));
+    if (p.btd && p.btd.granted) {
+      const h2 = document.createElement('h3'); h2.style.margin = '12px 0 4px'; h2.textContent = 'Bluetooth detail';
+      body.appendChild(h2);
+      body.appendChild(phoneTable(btDetailRows(p.btd)));
+    } else if (p.btd && typeof NodeTalkerApp.bluetoothDetailAsk === 'function') {
+      const row = document.createElement('div'); row.className = 'row';
+      const btn = document.createElement('button'); btn.className = 'btn'; btn.type = 'button';
+      btn.textContent = 'Show more Bluetooth detail';
+      btn.addEventListener('click', () => { try { NodeTalkerApp.bluetoothDetailAsk(); } catch (e) {} });
+      row.appendChild(btn);
+      body.appendChild(row);
+      const note = document.createElement('p'); note.className = 'muted small';
+      note.textContent = 'Asks Android for the Bluetooth permission (nearby devices) to read the adapter, the connected profiles and the paired devices. Read-only: nothing is changed or connected.';
+      body.appendChild(note);
+    }
   }
-  sum('phone', (p.rows.length + p.app.length + p.bt.length) + ' items');
+  sum('phone', (p.rows.length + p.app.length + p.bt.length + (p.btd && p.btd.granted ? btDetailRows(p.btd).length : 0)) + ' items');
 }
 
 // The Data card: one file with every number, built here and downloaded. Nothing is shown on the page and
@@ -12185,6 +12232,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (k === 'kc' && foldOpen('kc')) kcRefresh();
   }));
   $('phone-refresh').addEventListener('click', phoneRefresh);
+  window.ntAppBt = () => { if (foldOpen('phone')) phoneRefresh(); };
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', () => { if (foldOpen('phone')) phoneRefresh(); });
   }

@@ -254,6 +254,21 @@ class TalkerActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun bluetoothDetail(): String = try {
+            Bluetooth.detailJson(Bluetooth.detail(this@TalkerActivity))
+        } catch (e: RuntimeException) {
+            "null"
+        }
+
+        @JavascriptInterface
+        fun bluetoothDetailAsk(): Boolean {
+            val c = this@TalkerActivity
+            if (Bluetooth.granted(c)) return true
+            runOnUiThread { requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_BT) }
+            return true
+        }
+
+        @JavascriptInterface
         fun earpiece(): Boolean = NodeStore.audio(this@TalkerActivity).earpiece
 
         @JavascriptInterface
@@ -484,6 +499,11 @@ class TalkerActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BT) {
+            val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            web.evaluateJavascript("window.ntAppBt && window.ntAppBt($ok)", null)
+            return
+        }
         if (requestCode == REQ_TALK_MIC) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 web.evaluateJavascript("window.ntAppTalk && window.ntAppTalk({ev:'retry'})", null)
@@ -572,6 +592,7 @@ class TalkerActivity : Activity() {
         private const val REQ_NOTIFY = 4
         private const val REQ_TALK_MIC = 5
         private const val REQ_SAVE_TEXT = 6
+        private const val REQ_BT = 7
         private const val MAX_COPY = 500000
     }
 }
