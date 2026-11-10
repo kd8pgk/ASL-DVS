@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.29"
+VERSION = "0.10.34"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -256,6 +256,7 @@ DEFAULT_CONFIG = {
     "rx_agc": True,
     "rx_gate": 1,
     "rx_notch_hz": 0.0,
+    "rx_notch_auto": False,
     "tests_off": "",
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
@@ -397,6 +398,7 @@ _NORMALIZERS = {
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
     "rx_notch_hz": _norm_notch,
+    "rx_notch_auto": _parse_bool,
     "tests_off": _norm_tests_off,
 }
 
@@ -969,6 +971,8 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 
 
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
+HP_GAIN = HP_SECTIONS[0][0] * HP_SECTIONS[1][0]
+HP_GAIN2 = HP_GAIN * HP_GAIN
 NOTCH_Q = 25.0
 NOTCH_FS = 8000.0
 _notch_cache = {}
@@ -984,9 +988,11 @@ def _notch_section(hz, q=NOTCH_Q, fs=NOTCH_FS):
 def _dot(a, b):
     if hasattr(math, "sumprod"):
         return math.sumprod(a, b)
-    return math.fsum(map(operator.mul, a, b))
+    return sum(map(operator.mul, a, b))
 AGC_TARGET_DB = -20.0
 AGC_MIN_DB = -6.0
+AGC_CAP_DB = -12.0
+AGC_FAST_IDLE = 30
 AGC_MAX_DB = 18.0
 AGC_ACTIVE_DB = -45.0
 GATE_DELAY = 4
@@ -995,6 +1001,20 @@ GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "r1": 0.3, "noise_db": -24.0, "
               2: {"close_db": -48.0, "hold": 12, "r1": 0.45, "noise_db": -30.0, "frames": 3}}
 SPEECH_R1 = 0.55
 GATE_PREROLL = 2
+CTCSS_TONES = (67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9,
+               114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, 162.2, 165.5, 167.9,
+               171.3, 173.8, 177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1,
+               225.7, 229.1, 233.6, 241.8, 250.3, 254.1)
+DET_DECIM = 8
+DET_RATE = 8000.0 / DET_DECIM
+DET_COEFF = tuple(2.0 * math.cos(2.0 * math.pi * hz / DET_RATE) for hz in CTCSS_TONES)
+DET_FRAMES = 100
+DET_SAMPLES = DET_FRAMES * 160 // DET_DECIM
+DET_LINE = 30.0
+DET_NEIGHBOUR = 10.0
+DET_MIN_DB = -60.0
+DET_CONFIRM = 2
+DET_LOST = 5
 
 
 class RxClean:
@@ -1005,7 +1025,7 @@ class RxClean:
         self._load_t = time.monotonic()
 
     def reset(self):
-        self.z = (0.0,) * 8
+        self.z = (0.0,) * 4
         self.nz = (0.0,) * 4
         self.gain_db = 0.0
         self.level_s = None
@@ -1020,30 +1040,86 @@ class RxClean:
         self.prev_g = 1.0
         self.r2 = 1.0
         self.out_keep = False
+        self.auto_hz = None
+        self._det_clear()
+
+    def _det_clear(self):
+        self.det_s1 = [0.0] * len(CTCSS_TONES)
+        self.det_s2 = [0.0] * len(CTCSS_TONES)
+        self.det_n = 0
+        self.det_cand = None
+        self.det_seen = 0
+        self.det_miss = 0
+
+    def _detect(self, a):
+        s1, s2 = self.det_s1, self.det_s2
+        coeff = DET_COEFF
+        k = range(len(coeff))
+        for i in range(0, len(a) - DET_DECIM + 1, DET_DECIM):
+            x = sum(a[i:i + DET_DECIM]) / DET_DECIM
+            for j in k:
+                s0 = x + coeff[j] * s1[j] - s2[j]
+                s2[j] = s1[j]
+                s1[j] = s0
+        self.det_n += 1
+        if self.det_n >= DET_FRAMES:
+            self._det_window()
+
+    def _det_window(self):
+        pw = [x * x + y * y - c * x * y for x, y, c in zip(self.det_s1, self.det_s2, DET_COEFF)]
+        self.det_s1 = [0.0] * len(pw)
+        self.det_s2 = [0.0] * len(pw)
+        self.det_n = 0
+        best = max(range(len(pw)), key=pw.__getitem__)
+        top = pw[best]
+        amp = 2.0 * math.sqrt(max(top, 0.0)) / DET_SAMPLES
+        near = max(pw[max(best - 1, 0)] if best else 0.0, pw[best + 1] if best + 1 < len(pw) else 0.0)
+        found = (top > DET_LINE * max(sorted(pw)[len(pw) // 2], 1e-9) and top > DET_NEIGHBOUR * max(near, 1e-9)
+                 and amp >= 32768.0 * 10.0 ** (DET_MIN_DB / 20.0))
+        if not found:
+            self.det_cand = None
+            self.det_seen = 0
+            self.det_miss += 1
+            if self.det_miss >= DET_LOST and self.auto_hz is not None:
+                self.auto_hz = None
+                self.nz = (0.0,) * 4
+            return
+        self.det_miss = 0
+        if best == self.det_cand:
+            self.det_seen += 1
+        else:
+            self.det_cand, self.det_seen = best, 1
+        if self.det_seen >= DET_CONFIRM and CTCSS_TONES[best] != self.auto_hz:
+            self.auto_hz = CTCSS_TONES[best]
+            self.nz = (0.0,) * 4
 
     def _filter(self, a, hpf):
+        sc = HP_GAIN if hpf else 1.0
         if not hpf:
             ys = [float(v) for v in a]
         else:
-            (b0, b1, b2, a1, a2), (c0, c1, c2, d1, d2) = HP_SECTIONS
-            x1, x2, w1, w2, p1, p2, y1, y2 = self.z
+            a1, a2, d1, d2 = HP_SECTIONS[0][3], HP_SECTIONS[0][4], HP_SECTIONS[1][3], HP_SECTIONS[1][4]
+            s1, s2, t1, t2 = self.z
             ys = []
+            put = ys.append
             for v in a:
-                w = b0 * v + b1 * x1 + b2 * x2 - a1 * w1 - a2 * w2
-                x2, x1, w2, w1 = x1, v, w1, w
-                y = c0 * w + c1 * p1 + c2 * p2 - d1 * y1 - d2 * y2
-                p2, p1, y2, y1 = p1, w, y1, y
-                ys.append(y)
-            self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
-        hz = _cfg_get("rx_notch_hz")
+                w = v + s1
+                s1 = s2 - 2.0 * v - a1 * w
+                s2 = v - a2 * w
+                y = w + t1
+                t1 = t2 - 2.0 * w - d1 * y
+                t2 = w - d2 * y
+                put(y)
+            self.z = (s1, s2, t1, t2)
+        hz = _cfg_get("rx_notch_hz") or (self.auto_hz if _cfg_get("rx_notch_auto") else None)
         if hz:
             ys = self._notch(ys, hz)
         n = len(ys)
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
-        db = 10.0 * math.log10(max(ss / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
-        return ys, db, r1
+        db = 10.0 * math.log10(max(ss * sc * sc / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
+        return ys, db, r1, sc
 
     def _notch(self, ys, hz):
         sec = _notch_cache.get(hz)
@@ -1065,7 +1141,7 @@ class RxClean:
         if not speechy:
             self.idle += 1
             return
-        if self.idle > 50:
+        if self.idle > AGC_FAST_IDLE:
             self.fast = 25
         self.idle = 0
         p = 10.0 ** (db / 10.0)
@@ -1122,17 +1198,23 @@ class RxClean:
         return pcm if keep else PCM_SILENCE
 
     def process(self, frame, user_db, raw_db=0.0):
-        t0 = time.perf_counter()
+        t0 = time.thread_time()
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
         notch = _cfg_get("rx_notch_hz")
-        if not (hpf or agc or gate or notch):
+        auto = bool(_cfg_get("rx_notch_auto")) and not notch
+        if agc and TONE.recording:
+            agc = False
+        if not auto and (self.auto_hz is not None or self.det_n):
+            self.auto_hz = None
+            self._det_clear()
+        if not (hpf or agc or gate or notch or auto):
             if self.delay or any(self.z) or any(self.nz) or self.gain_db:
                 self.reset()
             out = apply_gain(frame, user_db)
             self._account(t0)
             return out
         if raw_db < RX_QUIET_DB:
-            self.z = (0.0,) * 8
+            self.z = (0.0,) * 4
             self.nz = (0.0,) * 4
             self.idle += 1
             if not gate:
@@ -1141,25 +1223,38 @@ class RxClean:
                 return PCM_SILENCE
             self._gate(-120.0, 1.0, gate)
             return self._out(PCM_SILENCE, False, t0)
-        ys, db, r1 = self._filter(_samples(frame), hpf)
+        a = _samples(frame)
+        if auto:
+            self._detect(a)
+        ys, db, r1, sc = self._filter(a, hpf)
         speechy = db > AGC_ACTIVE_DB and r1 > 0.3
         if agc:
             self._agc(db, speechy)
         elif self.gain_db:
             self.gain_db = 0.0
+        pk = max(map(abs, ys), default=0.0) * sc
+        cut = False
+        if agc and pk > 0:
+            room = max(AGC_CAP_DB, 20.0 * math.log10(GAIN_KNEE / pk) - (user_db or 0))
+            if self.gain_db > room:
+                self.gain_db = room
+                cut = True
         g1 = 10.0 ** ((self.gain_db + (user_db or 0)) / 20.0)
         g0, self.prev_g = self.prev_g, g1
+        if cut and g1 < g0:
+            g0 = g1
         n = len(ys)
-        if max(map(abs, ys), default=0.0) * max(g0, g1) <= GAIN_KNEE:
-            if abs(g1 - g0) < 1e-6:
-                out = array.array("h", map(round, map(g1.__mul__, ys)))
+        e0, e1 = g0 * sc, g1 * sc
+        if pk * max(g0, g1) <= GAIN_KNEE:
+            if abs(e1 - e0) < 1e-6:
+                out = array.array("h", map(round, map(e1.__mul__, ys)))
             else:
-                step = (g1 - g0) / n
-                out = array.array("h", [round(y * (g0 + step * i)) for i, y in enumerate(ys)])
+                step = (e1 - e0) / n
+                out = array.array("h", [round(y * (e0 + step * i)) for i, y in enumerate(ys)])
         else:
             out = array.array("h", bytes(2 * n))
             for i, y in enumerate(ys):
-                v = y * (g0 + (g1 - g0) * i / n)
+                v = y * (e0 + (e1 - e0) * i / n)
                 if v > GAIN_KNEE:
                     v = GAIN_KNEE + GAIN_SPAN * math.tanh((v - GAIN_KNEE) / GAIN_SPAN)
                 elif v < -GAIN_KNEE:
@@ -1190,8 +1285,8 @@ class RxClean:
             self.out_keep = False
 
     def _account(self, t0):
-        now = time.perf_counter()
-        self.busy_sec += now - t0
+        self.busy_sec += time.thread_time() - t0
+        now = time.monotonic()
         if now - self._load_t >= 5.0:
             self.load_pct = round(100.0 * self.busy_sec / (now - self._load_t), 1)
             self.busy_sec = 0.0
@@ -2870,6 +2965,7 @@ class Hub:
             "udp_port": _cfg_get("udp_port"),
             "udp_error": self.udp_error,
             "rx_load_pct": RXC.load_pct,
+            "rx_notch_auto_hz": RXC.auto_hz,
         }
 
 
@@ -3547,6 +3643,7 @@ def build_status(full):
         st.pop("listener_list", None)
         st.pop("udp_error", None)
         st.pop("rx_load_pct", None)
+        st.pop("rx_notch_auto_hz", None)
     return st
 
 
@@ -6613,6 +6710,7 @@ def _tone_analyse(raw, proc, plan, meta):
         "tone_sec": meta["tone_sec"],
         "tones": meta["tones"],
         "started": meta["started"],
+        "agc_bypassed": bool(meta.get("rx_agc")) and meta["mode"] == "rx",
     }
 
 
@@ -6868,7 +6966,7 @@ class ToneTest:
             return {"ok": False, "error": msg}
         meta = {"node": TX_NODE, "callsign": call, "tx_gain_db": tune_value("tx_gain_db"),
                 "rx_gain_db": tune_value("rx_gain_db"), "level_db": TONE_LEVEL_DB, "rx_gate": _cfg_get("rx_gate"),
-                "tone_sec": sec, "tones": hz, "mode": mode, "started": time.time()}
+                "rx_agc": bool(_cfg_get("rx_agc")), "tone_sec": sec, "tones": hz, "mode": mode, "started": time.time()}
         threading.Thread(target=self._run, args=(owner, frames, plan, meta), daemon=True,
                          name="tone-test").start()
         log_event(f"{mode.upper()} tone test started: {len(hz)} tones, {sec} s each, {total:.1f} s", "ok")
@@ -7669,8 +7767,9 @@ function bq(f, x) {
 
 function makeDyn() {
   return {hp: biquad('hp', 300, 0.707, 0), pk: biquad('pk', 2500, 1.0, 4), env: 0, gg: 1, hold: 0, open: false,
-    rms: 0, cg: 1, lg: 1};
+    rms: 0, cg: 1, lg: 1, la: new Float32Array(LIM_LA), lp: 0};
 }
+const LIM_LA = 16;
 
 const GATE = [null, {open: -45, floor: 0.18}, {open: -35, floor: 0.03}];
 
@@ -7694,10 +7793,14 @@ function dynProcess(d, v) {
     const want = Math.pow(10, ((over > 0 ? -over * (2 / 3) : 0) + 9) / 20);
     d.cg += (want - d.cg) * (want < d.cg ? 0.0125 : 0.000625);
     v *= d.cg;
-    const b = v < 0 ? -v : v, ceil = 0.89;
-    if (b * d.lg > ceil) d.lg = ceil / b;
-    else d.lg += (1 - d.lg) * 0.0025;
-    v *= d.lg;
+    const ceil = 0.89, old = d.la[d.lp];
+    d.la[d.lp] = v; d.lp = (d.lp + 1) % LIM_LA;
+    let m = old < 0 ? -old : old;
+    for (let i = 0; i < LIM_LA; i++) { const q = d.la[i], w = q < 0 ? -q : q; if (w > m) m = w; }
+    const tg = m > ceil ? ceil / m : 1;
+    if (tg < d.lg) d.lg += (tg - d.lg) * 0.4;
+    else d.lg = Math.min(tg, d.lg + (1 - d.lg) * 0.0025);
+    v = old * d.lg;
   }
   return v;
 }
@@ -8191,6 +8294,7 @@ async function pollStatus() {
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
   $('tune-rxpk').textContent = fmtDb(d.peak_db);
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
+  if (authed) $('rx-notch-auto-v').textContent = d.rx_notch_auto_hz != null ? 'Tone found: ' + d.rx_notch_auto_hz.toFixed(1) + ' Hz.' : 'No tone found yet.';
   rxhShow(d.rxh);
   const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
   $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
@@ -8740,18 +8844,30 @@ function appSet(v) {
   try { return !!NodeTalkerApp.setBufferMs(Number(v.bufferMs)); } catch (e) { return false; }
 }
 
+function balGain(cfg, side) {
+  const c = cfg || {}, fav = c[side + '_gain_fav'];
+  if (fav != null) return Number(fav) || 0;
+  return c.tune_enabled ? Number(c[side + '_gain_db']) || 0 : 0;
+}
+
 function chkSuggest(r, cfg) {
   const R = r.rx, T = r.tx, c = cfg || {}, mg = Number(mic.gain) || 0;
-  const rxGain = Number(c.rx_gain_db) || 0, txGain = Number(c.tx_gain_db) || 0;
+  const rxFav = c.rx_gain_fav != null, txFav = c.tx_gain_fav != null;
+  const rxGain = balGain(c, 'rx'), txGain = balGain(c, 'tx');
   const items = [];
   const add = (tier, text, change) => items.push({tier: tier, text: text, change: change || null});
   const node = (tier, text, change) => add(tier, text, change && Object.assign({node: true}, change));
+  const gainChange = (tier, text, change) => {
+    const fav = change.rx_gain_db !== undefined ? rxFav : txFav;
+    if (fav) add(tier, 'A favorite with its own gain is connected, so the gain in Setup has no effect; make this change in that favorite instead. ' + text);
+    else node(tier, text, change);
+  };
   const rxOk = (R.actSecs || 0) >= CHK_MIN_SPEECH, txOk = (T.actSecs || 0) >= CHK_MIN_SPEECH;
   const clipping = R.clipPct > 1;
   const agcSuggest = R.spread != null && R.spread >= 10 && c.rx_agc === false;
 
   // Tier 0: audio that is lost, cut or distorted.
-  if (clipping) node(0, 'Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB'
+  if (clipping) gainChange(0, 'Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB'
     + (c.rx_agc ? '' : ' or turn on Automatic level') + '.', {tune_enabled: true, rx_gain_db: Math.max(-12, rxGain - 3)});
   const ab = appBuf();
   if (R.dropsMin >= 0.5) {
@@ -8778,8 +8894,13 @@ function chkSuggest(r, cfg) {
   if (agcSuggest) node(1, 'Stations differed by ' + Math.round(R.spread) + ' dB (target under 8 dB): turn on Automatic level.', {rx_agc: true});
   if (rxOk && !clipping && !agcSuggest && R.speech != null && R.speech < -24) {
     const d = clampStep(-19 - R.speech);
-    node(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): raise RX gain by ' + d + ' dB'
+    gainChange(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): raise RX gain by ' + d + ' dB'
       + (c.rx_agc ? ' (Automatic level is already at its limit)' : '') + '.', {tune_enabled: true, rx_gain_db: Math.min(12, rxGain + d)});
+  }
+  if (rxOk && !clipping && R.speech != null && R.speech > -14 && rxGain > -12) {
+    const d = clampStep(R.speech + 19);
+    gainChange(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): lower RX gain by ' + d + ' dB.',
+      {tune_enabled: true, rx_gain_db: Math.max(-12, rxGain - d)});
   }
   if (R.actSecs > 0 && !rxOk) add(3, 'Only ' + R.actSecs.toFixed(1) + ' s of received speech was measured: too little to judge RX levels.');
   if (R.hum != null && R.hum >= -25 && c.rx_hpf === false) node(2, 'Strong sound below 300 Hz (CTCSS tones or hum): turn on Cut below 300 Hz.', {rx_hpf: true});
@@ -8805,7 +8926,7 @@ function chkSuggest(r, cfg) {
       else if (!Number(mic.gate)) add(2, 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: set the Noise gate to Light.', {mic: {gate: 1}});
     }
     if (T.gatePct >= 10 && Number(mic.gate)) add(2, 'The noise gate closed ' + Math.round(T.gatePct) + ' % of the time while you talked: set it ' + (Number(mic.gate) === 2 ? 'to Light.' : 'Off.'), {mic: {gate: Number(mic.gate) - 1}});
-    if (T.srvPeak != null && T.srvPeak > -1 && c.tune_enabled && txGain > 0) node(0, 'Your audio reached ' + db0(T.srvPeak) + ' at the Pi: lower TX gain by 3 dB.', {tx_gain_db: txGain - 3});
+    if (T.srvPeak != null && T.srvPeak > -1 && txGain > 0) gainChange(0, 'Your audio reached ' + db0(T.srvPeak) + ' at the Pi: lower TX gain by 3 dB.', {tx_gain_db: txGain - 3});
     if (T.srvN && T.gapTx / T.srvN >= 0.25) {
       const b = nextStep(TXB_STEPS, c.tune_enabled ? c.tx_buffer_ms : 120);
       if (b) node(0, T.gapTx + ' of ' + T.srvN + ' transmissions had gaps: raise the TX buffer to ' + b + ' ms.', {tune_enabled: true, tx_buffer_ms: b});
@@ -8836,13 +8957,13 @@ async function chkApply(i, s2, btn, undo) {
     try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
     loadMicUi(); micSummary();
   } else {
-    const keys = Object.keys(ch).filter((k) => k !== 'node');
     let body = {};
     if (undo) body = chkUndo[i].cfg;
     else {
       const d = await api('/api/config');
       chkUndo[i] = {cfg: {}};
-      keys.forEach((k) => { chkUndo[i].cfg[k] = d.config ? d.config[k] : undefined; body[k] = ch[k]; });
+      body = d.config ? balBody(ch, d.config) : keys.reduce((o, k) => { o[k] = ch[k]; return o; }, {});
+      Object.keys(body).forEach((k) => { chkUndo[i].cfg[k] = d.config ? d.config[k] : undefined; });
     }
     const res = await post('/api/config', body);
     if (!res.ok) { note('chk-msg', 'err', res.error || 'Could not save.'); return; }
@@ -8992,6 +9113,7 @@ function toneShow(r) {
     'node ' + r.node + ', ID ' + r.callsign,
     'TX gain ' + fmtGain(r.tx_gain_db) + ', RX gain ' + fmtGain(r.rx_gain_db),
     r.rx_detected ? 'raw noise floor ' + r.noise_raw_db + ' dBFS' : null,
+    r.agc_bypassed ? 'Automatic level was paused for the test' : null,
     r.load && r.load.cpu_pct != null ? 'CPU peak ' + Math.round(r.load.cpu_pct) + ' %' : null,
     r.load && r.load.mem_avail_mb != null ? 'lowest free memory ' + r.load.mem_avail_mb + ' MB' : null,
   ].filter(Boolean);
@@ -9113,20 +9235,38 @@ function balAlive() {
   return exp ? !exp.stopped : !!(autoRun && !autoRun.stop);
 }
 
+// Each score counts only what its side's settings can change, so a kept or reverted trial reflects the change.
+// RX: received level, clipping, dropouts, resets, squelch tails, station spread (Automatic level) and hum (300 Hz cut).
+// TX: what TX gain and the TX buffer change, read at the Pi: gaps, peaks over -1 dBFS and the level after TX gain.
+const BAL_SPREAD_OK = 8, BAL_HUM_OK = -25, BAL_TX_TARGET = -18;
+
 function balRxScore(r) {
   const R = r.rx;
   let s = R.clipPct * 3 + R.dropsMin * 2 + (R.resets || 0) + (R.tails || 0) * 0.5;
   if (R.actSecs >= CHK_MIN_SPEECH && R.speech != null) s += Math.abs(BAL_LIVE_TARGET - R.speech);
+  if (R.spread != null) s += Math.max(0, R.spread - BAL_SPREAD_OK) * 0.5;
+  if (R.hum != null) s += Math.max(0, R.hum - BAL_HUM_OK) * 0.3;
   return s;
 }
 
-function balTxScore(r) {
+function balTxScore(r, cfg) {
   const T = r.tx;
-  return T.actSecs >= CHK_MIN_SPEECH && T.speech != null ? Math.abs(-18 - T.speech) * 0.5 + T.clipPct * 3 : 0;
+  let s = T.srvN ? 10 * T.gapTx / T.srvN : 0;
+  if (T.srvPeak != null && T.srvPeak > -1) s += (T.srvPeak + 1) * 3;
+  if (T.actSecs >= CHK_MIN_SPEECH && T.speech != null) s += Math.abs(BAL_TX_TARGET - (T.speech + balGain(cfg, 'tx'))) * 0.5;
+  return s;
 }
 
-function balLiveScore(r) {
-  return balRxScore(r) + balTxScore(r);
+function balLiveScore(r, cfg) {
+  return balRxScore(r) + balTxScore(r, cfg);
+}
+
+// A gain change has a known effect on the level, so it is applied without a trial; a one-minute trial would mostly
+// measure which stations talked. Filters, the gate, Automatic level and the buffers are put on trial.
+const BAL_GAIN_KEYS = ['rx_gain_db', 'tx_gain_db', 'tune_enabled', 'node'];
+function balIsGain(change) {
+  const k = Object.keys(change || {});
+  return k.length > 0 && k.every((x) => BAL_GAIN_KEYS.includes(x)) && (k.includes('rx_gain_db') || k.includes('tx_gain_db'));
 }
 
 const AUTO_WINDOW_MIN = 1, AUTO_SETTLE_MS = 300000, AUTO_GAP_MS = 240000, AUTO_CPU_PCT = 70, AUTO_CPU_SEC = 30;
@@ -9215,7 +9355,7 @@ async function autoStep(side, r, cfg) {
   const msg = side + '-auto-msg';
   const act = side === 'rx' ? r.rx.actSecs : r.tx.actSecs;
   if (!(act >= CHK_MIN_SPEECH)) { note(msg, '', 'Not enough ' + (side === 'rx' ? 'received' : 'transmitted') + ' speech this minute to judge.'); return; }
-  const score = side === 'rx' ? balRxScore(r) : balTxScore(r);
+  const score = side === 'rx' ? balRxScore(r) : balTxScore(r, cfg);
   if (autoUndo[side]) {
     if (score > autoPre[side] + AUTO_WORSE) {
       await balRevert(autoUndo[side]);
@@ -9230,6 +9370,7 @@ async function autoStep(side, r, cfg) {
   if (!(await balQuiet())) return;
   const res = await balApply(hit.change);
   if (!res.ok) { note(msg, 'err', res.error || 'Could not save.'); return; }
+  if (balIsGain(hit.change)) { note(msg, 'ok', new Date().toLocaleTimeString() + ': ' + hit.text + ' Applied; a gain change is not put on trial.'); return; }
   autoUndo[side] = res.undo;
   autoPre[side] = score;
   autoSig[side] = autoSigOf(hit.change);
@@ -9264,7 +9405,7 @@ function autoStart() {
   autoStatus('Starting...');
   (async () => {
     const s = await api('/api/balance');
-    if (autoRun === run && !(s.ok && s.snapshot)) await post('/api/balance/snapshot', {});
+    if (autoRun === run && !(s.ok && s.snapshot)) { const sn = await post('/api/balance/snapshot', {}); if (sn.ok) balAppSave(); }
   })();
   autoLoop(run);
 }
@@ -9375,6 +9516,22 @@ function expUi(running) {
   if (!running) expStage('');
 }
 
+const BAL_APP_KEY = 'nlBalApp';
+function balAppSave() {
+  const ab = appBuf();
+  if (!ab || !ab.ok) return;
+  try { if (localStorage.getItem(BAL_APP_KEY) == null) localStorage.setItem(BAL_APP_KEY, String(ab.ms)); } catch (e) {}
+}
+function balAppForget() {
+  try { localStorage.removeItem(BAL_APP_KEY); } catch (e) {}
+}
+function balAppRestore() {
+  let ms = null;
+  try { ms = Number(localStorage.getItem(BAL_APP_KEY)); } catch (e) {}
+  balAppForget();
+  const ab = appBuf();
+  if (ms && ab && ab.ok && ab.ms !== ms) appSet({bufferMs: ms});
+}
 const BAL_RX_KEYS = ['rx_gain_db', 'rx_hpf', 'rx_agc', 'rx_gate', 'jitter_ms', 'app'], BAL_TX_KEYS = ['tx_gain_db', 'tx_buffer_ms'];
 
 function balNote(change, kind, text) {
@@ -9451,7 +9608,9 @@ async function expLiveRounds() {
     expStage('Live check ' + (i + 1) + ' of ' + rounds + '. Use the Listen tab as usual.');
     const r = await expLive(exp.mins);
     if (!r || exp.stopped || !exp.balance) return;
-    const score = balLiveScore(r);
+    const cur = await api('/api/config');
+    if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
+    const score = balLiveScore(r, cur.config);
     if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.undo) {
       await balRevert(exp.undo);
       exp.balance = false;
@@ -9460,7 +9619,6 @@ async function expLiveRounds() {
     }
     prev = score;
     if (i === rounds - 1) break;
-    const cur = await api('/api/config');
     const hit = balPick(r, cur.config, null, null);
     if (!hit) { note('exp-msg', 'ok', 'Nothing left to change in range.'); return; }
     expStage('Waiting for a quiet channel before changing a setting.');
@@ -9471,8 +9629,10 @@ async function expLiveRounds() {
     }
     const res = await balApply(hit.change);
     if (!res.ok) return expFail(res.error);
-    exp.undo = res.undo;
-    balNote(hit.change, '', 'Changed live: ' + hit.text);
+    const gain = balIsGain(hit.change);
+    exp.undo = gain ? null : res.undo;
+    if (gain) prev = null;
+    balNote(hit.change, '', 'Changed live: ' + hit.text + (gain ? ' A gain change is not put on trial.' : ''));
   }
 }
 
@@ -9504,6 +9664,7 @@ async function expEnd() {
   const e = exp || {};
   if (e.aborted && e.snap) {
     const r = await post('/api/balance/restore', {});
+    if (r.ok) balAppRestore();
     loadConfig();
     note('exp-msg', 'err', e.aborted + ' ' + (r.ok ? 'Original settings put back.' : (r.error || 'Could not put the settings back: use Restore.')));
   }
@@ -9519,6 +9680,7 @@ async function expRun(o) {
   if (exp.balance) {
     const s = await post('/api/balance/snapshot', {});
     if (!s.ok) { expFail(s.error || 'Could not save the settings.'); return expEnd(); }
+    balAppSave();
     exp.snap = true;
   }
   expWatch = setInterval(expLoadCheck, BAL_WATCH_MS);
@@ -9564,12 +9726,14 @@ function expInit() {
   $('cd-chk').querySelector('.fold-btn').addEventListener('click', expRefreshSnap);
   $('exp-restore').addEventListener('click', async () => {
     const d = await post('/api/balance/restore', {});
+    if (d.ok) balAppRestore();
     loadConfig();
     note('exp-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Put back.') : (d.error || 'Could not restore.'));
     expRefreshSnap();
   });
   $('exp-keep').addEventListener('click', async () => {
     await post('/api/balance/keep', {});
+    balAppForget();
     note('exp-msg', 'ok', 'Changes kept.');
     expRefreshSnap();
   });
@@ -12046,6 +12210,7 @@ async function loadConfig() {
   $('rx-agc').checked = !!d.config.rx_agc;
   $('rx-gate').value = String(d.config.rx_gate);
   $('rx-notch').value = String(d.config.rx_notch_hz || 0);
+  $('rx-notch-auto').checked = !!d.config.rx_notch_auto;
   testsOff = String(d.config.tests_off || '').split(',').filter(Boolean);
   testsUi();
   tuneUi();
@@ -12061,6 +12226,7 @@ function tuneUi() {
   if ($('rx-agc').checked) clean.push('auto level');
   if ($('rx-gate').value !== '0') clean.push('gate ' + ($('rx-gate').value === '2' ? 'strong' : 'light'));
   if (Number($('rx-notch').value) > 0) clean.push('CTCSS notch ' + Number($('rx-notch').value).toFixed(1) + ' Hz');
+  else if ($('rx-notch-auto').checked) clean.push('CTCSS notch automatic');
   sum('lvl', [on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : '']
     .concat(clean).filter((x) => x).join(' · ') || 'Off (audio unchanged)');
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
@@ -12073,7 +12239,7 @@ function tuneUi() {
 async function saveTune(msgId = 'tune-msg') {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
-    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value};
+    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value, rx_notch_auto: $('rx-notch-auto').checked};
   AUDIO_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
   AUDIO_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   AUDIO_TXT.forEach((k) => { body[k] = $('cfg-' + k).value.trim(); });
@@ -12196,7 +12362,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('setup-save').addEventListener('click', setupSave);
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
-  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch', 'rx-notch-auto'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-on-rx').addEventListener('input', () => { $('tune-on').checked = $('tune-on-rx').checked; tuneUi(); });
   $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
@@ -12625,6 +12791,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong (can clip hissy speech)</option></select></div>
 <div class="row"><label for="rx-notch" style="min-width:130px">CTCSS notch (Hz)</label>
 <input type="number" id="rx-notch" min="0" max="300" step="0.1" style="width:90px"> <span class="small muted">0 = off. Enter the tone your radio sends, for example 100.0. Only that tone is removed; voice is kept.</span></div>
+<div class="row"><label><input type="checkbox" id="rx-notch-auto"> Find the CTCSS tone automatically (listens to the received audio and notches the steady tone it finds; needs about 4 s of a signal with the tone, and is ignored while a tone is typed above)</label> <span class="small muted" id="rx-notch-auto-v"></span></div>
 <table><tr><th>Processing load</th><td id="rx-load" class="mono">-</td></tr></table>
 <h3 style="margin:14px 0 4px">Receive health: the network, this Pi or the phone?</h3>
 <p class="muted small">Looks at the last few minutes of received audio and says where any loss starts: outside the LAN, on the Pi, or between the Pi and the listener. It only measures; it changes no setting.</p>
@@ -12764,7 +12931,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small why hidden" id="why-chk"></p>
 <div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
 <div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test first (keys the node; tone length and tones are set under RX tone test below)</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs. Gain changes follow the measured level; a filter, gate or buffer change is put back if it makes things worse</label></div>
 <p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
 <div id="chk-run" class="chk-run hidden"></div>
 <div id="exp-run" class="chk-run hidden"></div>
@@ -13154,6 +13321,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/config":
                 with _config_lock:
                     cfg = dict(_config)
+                cfg["rx_gain_fav"] = _active_gain.get("rx_gain_db")
+                cfg["tx_gain_fav"] = _active_gain.get("tx_gain_db")
                 self._json(200, {"ok": True, "config": cfg})
             elif path == "/api/log":
                 try:

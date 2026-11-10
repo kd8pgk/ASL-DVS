@@ -1,5 +1,38 @@
 # Node Talker changelog
 
+## 0.10.34 (2026-11-10)
+
+- **The balancer judges each side by what its settings change.** The TX score now counts only what TX gain and the TX buffer can change, read at the Pi: transmissions with gaps, peaks over -1 dBFS at the Pi, and the level after TX gain (target -18 dBFS). Before, it scored the level and clipping measured on the phone, before TX gain, so a TX change was kept or put back by how you happened to talk that minute. The RX score adds station spread above 8 dB and sound below 300 Hz above -25 dB, which are what the Automatic level and Cut below 300 Hz trials are for.
+- **RX gain can go down as well as up.** When received speech averages above -14 dBFS (and nothing is clipping), the check and the balancer suggest lowering RX gain to bring it to about -19 dBFS. Before, RX gain was lowered only once audio clipped. The 10 dB band between the raise and lower rules keeps it from hunting.
+- **Gain changes are applied without a trial.** A gain change has a known effect on the level, and a one-minute trial mostly measured which stations talked, so a good gain change could be put back. Automatic balancing and the balance run in the Tests card now apply RX and TX gain changes directly and judge the next change against the new level. Automatic level, the 300 Hz cut, the gate and the buffers are still put on trial and put back if the audio gets worse. The node tone balancing is unchanged.
+- Page JavaScript logic changed, so this is a release.
+
+## 0.10.33 (2026-11-10)
+
+- **Automatic CTCSS notch (new, off by default).** The RX card has **Find the CTCSS tone automatically**. When it is on and no tone is typed in CTCSS notch, the RX cleanup listens to the received audio (about 1 kHz after averaging, 50 standard tones from 67.0 to 254.1 Hz, a 2 s window), and when the same tone shows up as a clean steady line in two windows in a row (at least 30 times the median, 10 times each neighbour, and louder than -60 dBFS) it notches it (the tone must be within about 0.3 Hz of the standard one). The tone found is shown under the checkbox and in `/api/status` (`rx_notch_auto_hz`, logged-in only). The notch is dropped after 10 s with no tone. It costs about 1 to 2 % of a core while it is on and nothing while it is off. A typed tone always wins. It is the way to keep the voice below 300 Hz with Cut below 300 Hz off.
+- **The mic limiter looks ahead (page).** The Leveler's limiter holds the audio back 16 samples (2 ms) and watches the 16 samples ahead, so the gain is already down when a sudden peak arrives. Peaks stay at or below 0.9 of full scale (the ceiling is still about -1 dBFS). It adds 2 ms to the mic path with the Leveler on. Node Talker Mobile 0.10.33 has the same change for app audio.
+- New setting `rx_notch_auto` (default off). Page JavaScript logic changed, so this is a release.
+
+## 0.10.32 (2026-11-10)
+
+- **Automatic level no longer clips a loud station that follows a quiet one.** After a quiet station the gain sits at its highest (+18 dB), and it came down only 1.5 dB per 20 ms frame, so the first 8 frames of a loud station hit the soft clipper at full scale. The gain is now cut at once to the level the frame's peak allows (peak at most -1 dBFS, with the RX gain taken into account; never below -12 dB), with no ramp on that cut. In a test the first loud frame peaked at -1.1 dBFS instead of 0.0 dBFS.
+- **Fast recovery after a pause arms after 0.6 s of quiet, not 1 s.** The faster rise of the gain (3.2 s to bring a quiet station within 3 dB of the target, instead of 5.8 s) now applies after any pause of 0.6 s or more between stations.
+- Audio output changed on purpose, so this is a release.
+
+## 0.10.31 (2026-11-10)
+
+- **Lighter RX cleanup.** The 300 Hz cut runs in a transposed form with half the state and the filter gain is folded into the level and output scale, and the dot products use plain `sum` where `math.sumprod` is not available (Python before 3.12). The output is the same as before to within rounding. A frame takes about 30 % less time on Python 3.11 (65 instead of 94 microseconds in a test run) and about 6 % on 3.13.
+- **"Pi load" counts CPU time.** The RX cleanup load shown in the RX card and used by the Audio check is now the CPU time the cleanup used, not the wall time it was running, so waiting on other threads no longer counts. The reading can be lower than before for the same audio.
+- Behaviour changed, so this is a release.
+
+## 0.10.30 (2026-11-10)
+
+- **The balancer starts from the gain that is really in effect.** With Adjust audio levels off, the stored RX and TX gains do nothing, but the suggestions added to them. A stored +6 plus a suggested +5 became +11 instead of +5. The suggestions and the Apply button now start from 0 in that case, and Apply pins the other levels the way the balancer already did.
+- **A favorite's own gain is respected.** While a favorite with its own RX or TX gain is connected, the Setup gain is not used. The balancer no longer offers a Setup gain change then; it says to change the gain in the favorite. `/api/config` carries `rx_gain_fav` and `tx_gain_fav` (null when none) for this; they are ignored on save.
+- **Automatic level is paused during the RX tone test.** It treated the tone as speech and evened it out, so the tone balancer chased its own output. The tone report says when it was paused (`agc_bypassed`).
+- **Restore also puts back the app's receive buffer.** A balance run that changed the Node Talker Mobile buffer now saves it with the settings; Restore sets it back and Keep forgets it.
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.29 (2026-11-10)
 
 - **More Bluetooth detail in the Phone card (stage 2).** In Node Talker Mobile 0.10.29 the Bluetooth part of the Phone card has a **Show more Bluetooth detail** button. It asks Android for the Bluetooth permission (nearby devices); once allowed the card shows whether Bluetooth is on, the phone's Bluetooth name, whether LE Audio and LE Audio broadcast are supported, what is connected on each profile (call headset, music, hearing aid, LE Audio) and the paired devices with their class and link type. Read-only: nothing is connected or changed. The Data file holds it once allowed.
@@ -82,7 +115,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_29_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_34_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

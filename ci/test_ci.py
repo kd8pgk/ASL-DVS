@@ -1271,7 +1271,7 @@ class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
-                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
                   "hs-mic", "hs-btn", "mic-gain", "mic-test", "tx-add", "tune-save"],
         "cd-chk": ["test-on-check", "test-on-balance", "test-on-tone_rx", "test-on-tone_tx", "test-on-mic", "test-on-node",
@@ -4272,6 +4272,379 @@ class InstmonSuiteInstallTests(unittest.TestCase):
                        "Terminal Monitor gives a root shell to anyone on your LAN"):
             self.assertIn(needle, src)
         self.assertIn("'install_suite'", src.split("const REC_API")[1].split("]")[0])
+
+
+class NodeTalkerBalancerFixTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        cls.nt = load_nodetalker()
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        a, b = text.index("const JIT_STEPS ="), text.index("async function chkApply")
+        cls.js = text[a:b]
+
+    def suggest(self, rx, cfg, tx=None):
+        import subprocess
+        base = {"actSecs": 10, "speech": -30, "clipPct": 0, "spread": None, "drops": 0, "dropsMin": 0, "hum": None,
+                "tails": 0, "loadMax": None, "peak": -6}
+        base.update(rx)
+        t = {"actSecs": 10, "speech": -18, "limPct": 0, "peak": -6, "nTx": 1, "denied": 0, "deadman": 0, "gatePct": 0,
+             "srvN": 0, "gapTx": 0, "snr": 40, "srvPeak": None}
+        t.update(tx or {})
+        prog = ("const mic = {gain: 0, ns: true, gate: 0};\nconst appAudio = () => false, appInfo = () => ({});\n"
+                "const NodeTalkerApp = {};\nfunction clampStep(x) { return Math.max(1, Math.min(12, Math.round(x))); }\nconst db0 = (x) => Math.round(x) + \x27 dBFS\x27;\n" + self.js +
+                "\nconsole.log(JSON.stringify(chkSuggest(%s, %s)));" % (json.dumps({"rx": base, "tx": t, "node": None, "pi": None}), json.dumps(cfg)))
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_raise_starts_from_zero_when_adjust_levels_is_off(self):
+        got = self.suggest({"speech": -26}, {"tune_enabled": False, "rx_gain_db": 3, "rx_agc": False})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], 7)
+
+    def test_raise_starts_from_stored_gain_when_adjust_levels_is_on(self):
+        got = self.suggest({"speech": -26}, {"tune_enabled": True, "rx_gain_db": 3, "rx_agc": False})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], 10)
+
+    def test_favorite_gain_blocks_a_gain_change(self):
+        got = self.suggest({"speech": -30}, {"tune_enabled": True, "rx_gain_db": 0, "rx_gain_fav": 3, "rx_agc": False})
+        self.assertFalse([x for x in got if x["change"] and "rx_gain_db" in x["change"]])
+        self.assertTrue([x for x in got if "favorite with its own gain" in x["text"]])
+
+    def test_loud_received_speech_lowers_rx_gain(self):
+        got = self.suggest({"speech": -8}, {"tune_enabled": True, "rx_gain_db": 0, "rx_agc": True})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], -11)
+
+    def test_speech_inside_the_target_changes_no_rx_gain(self):
+        got = self.suggest({"speech": -19}, {"tune_enabled": True, "rx_gain_db": 0, "rx_agc": True})
+        self.assertFalse([x for x in got if x["change"] and "rx_gain_db" in x["change"]])
+
+    def test_tx_gain_is_lowered_from_the_favorite_gain_in_effect(self):
+        got = self.suggest({}, {"tune_enabled": False, "tx_gain_db": 0, "tx_gain_fav": 6}, {"srvPeak": 0})
+        self.assertTrue([x for x in got if "favorite with its own gain" in x["text"] and "lower TX gain" in x["text"]])
+
+    def test_automatic_level_is_paused_for_the_rx_tone_test(self):
+        import array
+        import math
+        nt = self.nt
+        amp = 32768 * 10 ** (-30 / 20) * math.sqrt(2)
+
+        def settle(recording):
+            old = dict(nt._config)
+            nt._config.update(rx_hpf=False, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+            nt.TONE.recording = recording
+            try:
+                c = nt.RxClean()
+                for k in range(100):
+                    fr = array.array("h", [int(amp * math.sin(2 * math.pi * 1000 * (k * 160 + i) / 8000)) for i in range(160)]).tobytes()
+                    out = c.process(fr, 0, nt.frame_db(fr))
+                return nt.frame_db(out)
+            finally:
+                nt.TONE.recording = False
+                nt._config.clear()
+                nt._config.update(old)
+
+        self.assertAlmostEqual(settle(True), -30.0, delta=0.5)
+        self.assertGreater(settle(False), -24.0)
+
+
+class NodeTalkerRxFilterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def reference(self, frames):
+        nt = self.nt
+        (b0, b1, b2, a1, a2), (c0, c1, c2, d1, d2) = nt.HP_SECTIONS
+        x1 = x2 = w1 = w2 = p1 = p2 = y1 = y2 = 0.0
+        out = []
+        for a in frames:
+            ys = []
+            for v in a:
+                w = b0 * v + b1 * x1 + b2 * x2 - a1 * w1 - a2 * w2
+                x2, x1, w2, w1 = x1, v, w1, w
+                y = c0 * w + c1 * p1 + c2 * p2 - d1 * y1 - d2 * y2
+                p2, p1, y2, y1 = p1, w, y1, y
+                ys.append(y)
+            out.append(ys)
+        return out
+
+    def test_high_pass_matches_the_direct_form_filter(self):
+        import array
+        import math
+        import random
+        nt = self.nt
+        rng = random.Random(7)
+        frames = []
+        for k in range(60):
+            frames.append([int(6000 * math.sin(2 * math.pi * 1000 * (k * 160 + i) / 8000) + 3000 * math.sin(2 * math.pi * 120 * (k * 160 + i) / 8000) + rng.gauss(0, 300)) for i in range(160)])
+        want = self.reference(frames)
+        old = dict(nt._config)
+        nt._config.update(rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            for a, ref in zip(frames, want):
+                ys, db, r1, sc = c._filter(array.array("h", a), True)
+                self.assertEqual(sc, nt.HP_GAIN)
+                for y, r in zip(ys, ref):
+                    self.assertAlmostEqual(y * sc, r, delta=1e-6)
+                ss = sum(r * r for r in ref)
+                self.assertAlmostEqual(db, 10 * math.log10(ss / 160 / 1073741824.0), delta=1e-6)
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_load_uses_cpu_time(self):
+        import time
+        nt = self.nt
+        c = nt.RxClean()
+        t0 = time.thread_time()
+        time.sleep(0.05)
+        c._account(t0)
+        self.assertLess(c.busy_sec, 0.02)
+
+
+class NodeTalkerAgcTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def frames(self, db, secs, hz=700.0, start=0):
+        import array
+        import math
+        amp = 32768 * 10 ** (db / 20) * math.sqrt(2)
+        n = int(secs * 50)
+        return [array.array("h", [int(amp * math.sin(2 * math.pi * hz * ((start + k) * 160 + i) / 8000)) for i in range(160)]).tobytes()
+                for k in range(n)]
+
+    def run_chain(self, frames):
+        import array
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=True, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            out = []
+            for f in frames:
+                p = c.process(f, 0, nt.frame_db(f))
+                out.append(max(abs(x) for x in array.array("h", p)))
+            return out
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_loud_station_after_a_quiet_one_does_not_hit_full_scale(self):
+        frames = self.frames(-40, 3.0) + self.frames(-9, 0.8, start=150)
+        peaks = self.run_chain(frames)[150:]
+        self.assertLess(max(peaks), self.nt.GAIN_KNEE + 1)
+        self.assertLess(max(peaks), 32767 * 0.9)
+
+    def test_quiet_station_comes_up_fast_after_a_short_pause(self):
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=True, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            for f in self.frames(-9, 2.0):
+                c.process(f, 0, nt.frame_db(f))
+            for _ in range(35):
+                c.process(bytes(320), 0, -120.0)
+            reached = None
+            for i, f in enumerate(self.frames(-34, 8.0)):
+                out = c.process(f, 0, nt.frame_db(f))
+                if reached is None and nt.frame_db(out) > -23.0:
+                    reached = i * 0.02
+            self.assertIsNotNone(reached)
+            self.assertLess(reached, 4.5)
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+
+class NodeTalkerAutoNotchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def feed(self, tone_hz, tone_db, secs, noise=1500, **cfg):
+        import array
+        import math
+        import random
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=False, rx_agc=False, rx_gate=0, rx_notch_hz=0.0, rx_notch_auto=True)
+        nt._config.update(cfg)
+        rng = random.Random(5)
+        amp = 32768 * 10 ** (tone_db / 20) * math.sqrt(2)
+        try:
+            c = nt.RxClean()
+            outs = []
+            for k in range(int(secs * 50)):
+                fr = array.array("h", [int(max(-32768, min(32767, (amp * math.sin(2 * math.pi * tone_hz * (k * 160 + i) / 8000) if tone_hz else 0) + rng.gauss(0, noise)))) for i in range(160)]).tobytes()
+                outs.append(c.process(fr, 0, nt.frame_db(fr)))
+            return c, outs
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_finds_standard_tones_in_noise(self):
+        for hz in (67.0, 100.0, 162.2, 203.5, 254.1):
+            c, _ = self.feed(hz, -35, 5.0)
+            self.assertEqual(c.auto_hz, hz, hz)
+
+    def test_off_by_a_little_still_finds_the_nearest_tone(self):
+        c, _ = self.feed(100.2, -35, 5.0)
+        self.assertEqual(c.auto_hz, 100.0)
+
+    def test_noise_alone_finds_nothing(self):
+        c, _ = self.feed(0, -120, 12.0, noise=3000)
+        self.assertIsNone(c.auto_hz)
+
+    def test_a_typed_tone_wins_and_nothing_is_detected(self):
+        c, _ = self.feed(100.0, -35, 5.0, rx_notch_hz=100.0)
+        self.assertIsNone(c.auto_hz)
+
+    def test_off_does_no_detection(self):
+        c, _ = self.feed(100.0, -35, 5.0, rx_notch_auto=False)
+        self.assertIsNone(c.auto_hz)
+        self.assertEqual(c.det_n, 0)
+
+    def test_the_found_tone_is_removed(self):
+        c, outs = self.feed(100.0, -30, 8.0, noise=300)
+        import array
+        tail = array.array("h", b"".join(outs[-100:]))
+        power = sum(x * x for x in tail) / len(tail)
+        tone_power = (32768 * 10 ** (-30 / 20)) ** 2
+        self.assertLess(power, tone_power / 8)
+
+
+class NodeTalkerLimiterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        a, b = text.index("function biquad"), text.index("function makeUpsampler")
+        cls.js = text[a:b]
+
+    def run_js(self, body):
+        import subprocess
+        prog = ("let mic = {eq: false, gate: 0, lev: true};\n" + self.js +
+                "\nconst d = makeDyn();\n" + body)
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_a_sudden_peak_stays_under_the_ceiling(self):
+        got = self.run_js("let pk = 0; for (let i = 0; i < 4000; i++) { const v = i >= 2000 && i < 2400 ? 2.5 * Math.sin(i * 0.3) : 0.05 * Math.sin(i * 0.3); pk = Math.max(pk, Math.abs(dynProcess(d, v))); } console.log(JSON.stringify(pk));")
+        self.assertLessEqual(got, 0.9)
+
+    def test_audio_is_delayed_by_the_lookahead(self):
+        got = self.run_js("let at = -1, best = 0; for (let i = 0; i < 400; i++) { const y = Math.abs(dynProcess(d, i === 100 ? 0.5 : 0)); if (y > best) { best = y; at = i; } } console.log(JSON.stringify([at, LIM_LA]));")
+        self.assertEqual(got[0], 100 + got[1])
+        self.assertEqual(got[1], 16)
+
+
+class NodeTalkerBalancerScoreTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            cls.text = fh.read()
+
+    def fn(self, name):
+        start = self.text.index("function " + name + "(")
+        if self.text[start - 6:start] == "async ":
+            start -= 6
+        i = self.text.index("{", start)
+        depth = 0
+        for j in range(i, len(self.text)):
+            if self.text[j] == "{":
+                depth += 1
+            elif self.text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return self.text[start:j + 1]
+        raise AssertionError(name)
+
+    def const(self, name):
+        start = self.text.index("const " + name)
+        return self.text[start:self.text.index(";", start) + 1]
+
+    def js(self, body, fns, consts=()):
+        import subprocess
+        prog = "const CHK_MIN_SPEECH = 5, BAL_LIVE_TARGET = -19;\n" + "\n".join(self.const(c) for c in consts) + "\n"
+        prog += "\n".join(self.fn(f) for f in fns) + "\n" + body
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    RX = {"clipPct": 0, "dropsMin": 0, "resets": 0, "tails": 0, "actSecs": 30, "speech": -19, "spread": None, "hum": None}
+    TX = {"srvN": 4, "gapTx": 0, "srvPeak": -6, "actSecs": 30, "speech": -18, "clipPct": 0}
+
+    def score(self, side, rx=None, tx=None, cfg=None):
+        r = {"rx": dict(self.RX, **(rx or {})), "tx": dict(self.TX, **(tx or {}))}
+        call = "balRxScore(r)" if side == "rx" else "balTxScore(r, %s)" % json.dumps(cfg or {})
+        return self.js("const r = %s; console.log(JSON.stringify(%s));" % (json.dumps(r), call),
+                       ["balGain", "balRxScore", "balTxScore"], ["BAL_SPREAD_OK"])
+
+    def test_tx_score_follows_the_tx_gain_in_effect(self):
+        quiet = {"speech": -26}
+        off = self.score("tx", tx=quiet, cfg={"tune_enabled": True, "tx_gain_db": 0})
+        on = self.score("tx", tx=quiet, cfg={"tune_enabled": True, "tx_gain_db": 8})
+        stored_only = self.score("tx", tx=quiet, cfg={"tune_enabled": False, "tx_gain_db": 8})
+        self.assertLess(on, off)
+        self.assertEqual(stored_only, off)
+
+    def test_tx_score_counts_gaps_and_pi_peaks_not_phone_clipping(self):
+        base = self.score("tx")
+        self.assertEqual(self.score("tx", tx={"clipPct": 20}), base)
+        self.assertGreater(self.score("tx", tx={"gapTx": 2}), base)
+        self.assertGreater(self.score("tx", tx={"srvPeak": 0}), base)
+
+    def test_rx_score_counts_station_spread_and_hum(self):
+        base = self.score("rx")
+        self.assertEqual(self.score("rx", rx={"spread": 6, "hum": -40}), base)
+        self.assertGreater(self.score("rx", rx={"spread": 18}), base)
+        self.assertGreater(self.score("rx", rx={"hum": -10}), base)
+
+    def test_only_gain_changes_skip_the_trial(self):
+        got = self.js("console.log(JSON.stringify([{tune_enabled: true, rx_gain_db: 3}, {node: true, tx_gain_db: -3}, {rx_agc: true}, "
+                      "{tune_enabled: true, jitter_ms: 500}, {rx_hpf: false, rx_gain_db: 2}, {}].map(balIsGain)));",
+                      ["balIsGain"], ["BAL_GAIN_KEYS"])
+        self.assertEqual(got, [True, True, False, False, False, False])
+
+    def auto_step(self, change):
+        prelude = (
+            "const autoUndo = {rx: null, tx: null}, autoPre = {rx: null, tx: null}, autoSig = {rx: '', tx: ''}, autoRejected = {rx: {}, tx: {}};\n"
+            "const notes = []; function note(id, kind, text) { notes.push([id, kind, text]); }\n"
+            "function autoKeys() { return ['rx_gain_db', 'rx_agc']; }\n"
+            "function balPick() { return {change: CHANGE, text: 'x.'}; }\n"
+            "async function balQuiet() { return true; }\n"
+            "async function balApply() { return {ok: true, undo: {was: 1}}; }\n"
+            "async function balRevert() {}\n"
+            "function autoSigOf(c) { return JSON.stringify(c); }\n")
+        body = ("const CHANGE = %s;\n" % json.dumps(change) + prelude +
+                "autoStep('rx', {rx: {actSecs: 30, clipPct: 0, dropsMin: 0, speech: -30}, tx: {}}, {}).then(() => "
+                "console.log(JSON.stringify({undo: autoUndo.rx, notes: notes})));")
+        return self.js(body, ["balGain", "balRxScore", "balTxScore", "balIsGain", "autoStep"], ["BAL_SPREAD_OK", "BAL_GAIN_KEYS", "AUTO_WORSE"])
+
+    def test_auto_balancer_applies_a_gain_change_without_a_trial(self):
+        got = self.auto_step({"tune_enabled": True, "rx_gain_db": 6})
+        self.assertIsNone(got["undo"])
+        self.assertIn("not put on trial", got["notes"][-1][2])
+
+    def test_auto_balancer_puts_a_filter_change_on_trial(self):
+        got = self.auto_step({"rx_agc": True})
+        self.assertEqual(got["undo"], {"was": 1})
+        self.assertIn("On trial", got["notes"][-1][2])
 
 
 if __name__ == "__main__":

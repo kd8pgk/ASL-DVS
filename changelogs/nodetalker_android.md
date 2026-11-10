@@ -1,6 +1,12 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.29`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.33`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.33 (2026-11-10)
+
+- **The mic limiter looks ahead.** The limiter in Node Talker Mobile's mic path (the Leveler) now holds the audio back 16 samples (2 ms at 8 kHz) and watches the 16 samples ahead, so it has turned the gain down by the time a sudden peak reaches the output, instead of clamping the peak after it arrived. The ceiling is still about -1 dBFS (peaks stay at or below 0.9 of full scale). It adds 2 ms to the mic path and only when the Leveler is on. The same change is in the Node Talker page's mic path (0.10.33).
+- No new permission, no new call, no change to signing or the release workflow.
+- Tests: `DspTest` has two new cases (the 16-sample delay, and the gain already down for the first samples of a sudden peak) and the ceiling check allows 0.9.
 
 ## 0.10.29 (2026-11-10)
 
