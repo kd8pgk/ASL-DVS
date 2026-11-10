@@ -247,6 +247,13 @@ class TalkerActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun bluetoothInfo(): String = try {
+            Bluetooth.json(Bluetooth.snapshot(this@TalkerActivity))
+        } catch (e: RuntimeException) {
+            "null"
+        }
+
+        @JavascriptInterface
         fun earpiece(): Boolean = NodeStore.audio(this@TalkerActivity).earpiece
 
         @JavascriptInterface

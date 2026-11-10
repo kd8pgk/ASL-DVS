@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.27"
+VERSION = "0.10.28"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -9686,6 +9686,49 @@ function appRows(add) {
   });
 }
 
+function btInfo() {
+  try {
+    if (window.NodeTalkerApp && typeof NodeTalkerApp.bluetoothInfo === 'function') {
+      const d = JSON.parse(NodeTalkerApp.bluetoothInfo() || 'null');
+      return d && typeof d === 'object' ? d : null;
+    }
+  } catch (e) {}
+  return null;
+}
+
+const BT_KINDS = {a2dp: 'music (A2DP)', sco: 'call headset (SCO)', hearing_aid: 'hearing aid', ble_headset: 'LE Audio headset',
+  ble_speaker: 'LE Audio speaker', ble_broadcast: 'LE Audio broadcast', other: 'other Bluetooth audio'};
+const BT_COMM = {a2dp: 'music (A2DP)', sco: 'call headset (SCO)', ble_headset: 'LE Audio headset', ble_speaker: 'LE Audio speaker', hearing_aid: 'hearing aid'};
+
+function btRows() {
+  if (!window.NodeTalkerApp) return null;
+  const d = btInfo();
+  if (!d) return [['Bluetooth', 'not reported by this app version (it needs bluetoothInfo)']];
+  const rows = [];
+  const yn = (b) => (b ? 'yes' : 'no');
+  rows.push(['Bluetooth hardware', d.bluetooth ? (d.ble ? 'classic and low energy' : 'classic only') : 'none']);
+  const devs = Array.isArray(d.devices) ? d.devices : [];
+  rows.push(['Bluetooth audio devices', devs.length ? String(devs.length) : 'none connected']);
+  devs.forEach((v, i) => {
+    const dir = v.out && v.in ? 'output and microphone' : v.in ? 'microphone' : 'output';
+    const parts = [BT_KINDS[v.kind] || String(v.kind), dir];
+    if (Array.isArray(v.rates) && v.rates.length) parts.push(v.rates.join('/') + ' Hz');
+    if (Array.isArray(v.channels) && v.channels.length) parts.push(v.channels.join('/') + ' ch');
+    if (Array.isArray(v.encodings) && v.encodings.length) parts.push(v.encodings.join('/'));
+    rows.push(['Device ' + (i + 1) + (v.name ? ': ' + v.name : ''), parts.join(', ')]);
+  });
+  if (d.comm !== undefined) rows.push(['Call audio goes to', d.comm ? (BT_COMM[d.comm] || String(d.comm)) : 'not Bluetooth (or not reported)']);
+  rows.push(['Bluetooth call audio (SCO) on', yn(d.sco_on)]);
+  rows.push(['Bluetooth music audio (A2DP) on', yn(d.a2dp_on)]);
+  rows.push(['Call audio over Bluetooth allowed when idle', yn(d.sco_available)]);
+  rows.push(['Phone audio mode', String(d.mode || '')]);
+  if (d.media) rows.push(['Media volume', d.media.now + ' of ' + d.media.max]);
+  if (d.call) rows.push(['Call volume', d.call.now + ' of ' + d.call.max]);
+  if (d.last) rows.push(['Last change since the app opened', (d.last.name || 'a device') + (d.last.connected ? ' connected' : ' disconnected') + ' at ' + new Date(d.last.at).toLocaleTimeString()]);
+  else rows.push(['Last change since the app opened', 'none']);
+  return rows;
+}
+
 function phoneTable(rows) {
   const t = document.createElement('table'); t.className = 'chk-t';
   rows.forEach(([k, v, star]) => {
@@ -9729,7 +9772,7 @@ async function phoneRows() {
   if (!(ai && ai.volume != null)) add('Phone media volume', 'not readable from a web page', true);
   const ar = [];
   if (window.NodeTalkerApp) appRows((k, v, star) => ar.push([k, v, !!star]));
-  return {rows: rows, app: ar};
+  return {rows: rows, app: ar, bt: btRows() || []};
 }
 
 async function phoneRefresh() {
@@ -9742,7 +9785,12 @@ async function phoneRefresh() {
     body.appendChild(h);
     body.appendChild(phoneTable(p.app));
   }
-  sum('phone', (p.rows.length + p.app.length) + ' items');
+  if (p.bt.length) {
+    const h = document.createElement('h3'); h.style.margin = '12px 0 4px'; h.textContent = 'Bluetooth';
+    body.appendChild(h);
+    body.appendChild(phoneTable(p.bt));
+  }
+  sum('phone', (p.rows.length + p.app.length + p.bt.length) + ' items');
 }
 
 // The Data card: one file with every number, built here and downloaded. Nothing is shown on the page and
@@ -12757,7 +12805,7 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="card fold" id="cd-phone">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-phone"><span class="fold-t">Phone</span><span class="fold-sum" id="sum-phone"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-phone">
-<p class="muted small">Audio this phone's browser (and Node Talker Mobile, when the page runs in it) can read. Read-only: nothing here changes a setting.</p>
+<p class="muted small">Audio and Bluetooth details this phone's browser (and Node Talker Mobile, when the page runs in it) can read. Read-only: nothing here changes a setting.</p>
 <div id="phone-body"></div>
 <div class="row"><button id="phone-refresh" class="btn" type="button">Refresh</button></div>
 <p class="muted small">* You can change this on the phone.</p>

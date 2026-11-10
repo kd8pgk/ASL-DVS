@@ -1,6 +1,14 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.27`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.28`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.28 (2026-11-10)
+
+- **The page can read the phone's Bluetooth details.** A new `bluetoothInfo()` call gives Node Talker's Phone card a Bluetooth section: whether the phone has Bluetooth and low energy, each connected Bluetooth audio device (kind, name, output or microphone, sample rates, channel counts, encodings), where call audio goes, whether Bluetooth call (SCO) and music (A2DP) audio are on, the audio mode, the media and call volumes and the last connect or disconnect.
+- **No new permission.** Everything comes from Android's audio service, so the app's permissions are unchanged. Details that need the Bluetooth permission (adapter state, connected profiles, codec) are left for a later version.
+- Needs Node Talker 0.10.28 on the node to show it; an older page never calls it.
+- Tests: the JSON the call returns (`BluetoothJsonTest`).
+- **Gradle wrapper added** (`gradlew`, `gradlew.bat`, `gradle/wrapper/`), pinned to Gradle 8.14.3, the version the workflow uses, so a local build matches CI. The workflow still uses its own Gradle install.
 
 ## 0.10.27 (2026-11-09)
 
