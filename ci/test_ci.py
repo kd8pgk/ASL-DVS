@@ -4400,5 +4400,62 @@ class NodeTalkerRxFilterTests(unittest.TestCase):
         self.assertLess(c.busy_sec, 0.02)
 
 
+class NodeTalkerAgcTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def frames(self, db, secs, hz=700.0, start=0):
+        import array
+        import math
+        amp = 32768 * 10 ** (db / 20) * math.sqrt(2)
+        n = int(secs * 50)
+        return [array.array("h", [int(amp * math.sin(2 * math.pi * hz * ((start + k) * 160 + i) / 8000)) for i in range(160)]).tobytes()
+                for k in range(n)]
+
+    def run_chain(self, frames):
+        import array
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=True, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            out = []
+            for f in frames:
+                p = c.process(f, 0, nt.frame_db(f))
+                out.append(max(abs(x) for x in array.array("h", p)))
+            return out
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_loud_station_after_a_quiet_one_does_not_hit_full_scale(self):
+        frames = self.frames(-40, 3.0) + self.frames(-9, 0.8, start=150)
+        peaks = self.run_chain(frames)[150:]
+        self.assertLess(max(peaks), self.nt.GAIN_KNEE + 1)
+        self.assertLess(max(peaks), 32767 * 0.9)
+
+    def test_quiet_station_comes_up_fast_after_a_short_pause(self):
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=True, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            for f in self.frames(-9, 2.0):
+                c.process(f, 0, nt.frame_db(f))
+            for _ in range(35):
+                c.process(bytes(320), 0, -120.0)
+            reached = None
+            for i, f in enumerate(self.frames(-34, 8.0)):
+                out = c.process(f, 0, nt.frame_db(f))
+                if reached is None and nt.frame_db(out) > -23.0:
+                    reached = i * 0.02
+            self.assertIsNotNone(reached)
+            self.assertLess(reached, 4.5)
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.31"
+VERSION = "0.10.32"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -989,6 +989,8 @@ def _dot(a, b):
     return sum(map(operator.mul, a, b))
 AGC_TARGET_DB = -20.0
 AGC_MIN_DB = -6.0
+AGC_CAP_DB = -12.0
+AGC_FAST_IDLE = 30
 AGC_MAX_DB = 18.0
 AGC_ACTIVE_DB = -45.0
 GATE_DELAY = 4
@@ -1071,7 +1073,7 @@ class RxClean:
         if not speechy:
             self.idle += 1
             return
-        if self.idle > 50:
+        if self.idle > AGC_FAST_IDLE:
             self.fast = 25
         self.idle = 0
         p = 10.0 ** (db / 10.0)
@@ -1155,11 +1157,20 @@ class RxClean:
             self._agc(db, speechy)
         elif self.gain_db:
             self.gain_db = 0.0
+        pk = max(map(abs, ys), default=0.0) * sc
+        cut = False
+        if agc and pk > 0:
+            room = max(AGC_CAP_DB, 20.0 * math.log10(GAIN_KNEE / pk) - (user_db or 0))
+            if self.gain_db > room:
+                self.gain_db = room
+                cut = True
         g1 = 10.0 ** ((self.gain_db + (user_db or 0)) / 20.0)
         g0, self.prev_g = self.prev_g, g1
+        if cut and g1 < g0:
+            g0 = g1
         n = len(ys)
         e0, e1 = g0 * sc, g1 * sc
-        if max(map(abs, ys), default=0.0) * max(e0, e1) <= GAIN_KNEE:
+        if pk * max(g0, g1) <= GAIN_KNEE:
             if abs(e1 - e0) < 1e-6:
                 out = array.array("h", map(round, map(e1.__mul__, ys)))
             else:
