@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.33 (2026-11-10)
+
+- **Automatic CTCSS notch (new, off by default).** The RX card has **Find the CTCSS tone automatically**. When it is on and no tone is typed in CTCSS notch, the RX cleanup listens to the received audio (about 1 kHz after averaging, 50 standard tones from 67.0 to 254.1 Hz, a 2 s window), and when the same tone shows up as a clean steady line in two windows in a row (at least 30 times the median, 10 times each neighbour, and louder than -60 dBFS) it notches it (the tone must be within about 0.3 Hz of the standard one). The tone found is shown under the checkbox and in `/api/status` (`rx_notch_auto_hz`, logged-in only). The notch is dropped after 10 s with no tone. It costs about 1 to 2 % of a core while it is on and nothing while it is off. A typed tone always wins. It is the way to keep the voice below 300 Hz with Cut below 300 Hz off.
+- **The mic limiter looks ahead (page).** The Leveler's limiter holds the audio back 16 samples (2 ms) and watches the 16 samples ahead, so the gain is already down when a sudden peak arrives. Peaks stay at or below 0.9 of full scale (the ceiling is still about -1 dBFS). It adds 2 ms to the mic path with the Leveler on. Node Talker Mobile 0.10.33 has the same change for app audio.
+- New setting `rx_notch_auto` (default off). Page JavaScript logic changed, so this is a release.
+
 ## 0.10.32 (2026-11-10)
 
 - **Automatic level no longer clips a loud station that follows a quiet one.** After a quiet station the gain sits at its highest (+18 dB), and it came down only 1.5 dB per 20 ms frame, so the first 8 frames of a loud station hit the soft clipper at full scale. The gain is now cut at once to the level the frame's peak allows (peak at most -1 dBFS, with the RX gain taken into account; never below -12 dB), with no ramp on that cut. In a test the first loud frame peaked at -1.1 dBFS instead of 0.0 dBFS.
@@ -102,7 +108,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_32_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_33_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

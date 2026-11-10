@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.32"
+VERSION = "0.10.33"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -256,6 +256,7 @@ DEFAULT_CONFIG = {
     "rx_agc": True,
     "rx_gate": 1,
     "rx_notch_hz": 0.0,
+    "rx_notch_auto": False,
     "tests_off": "",
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
@@ -397,6 +398,7 @@ _NORMALIZERS = {
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
     "rx_notch_hz": _norm_notch,
+    "rx_notch_auto": _parse_bool,
     "tests_off": _norm_tests_off,
 }
 
@@ -999,6 +1001,20 @@ GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "r1": 0.3, "noise_db": -24.0, "
               2: {"close_db": -48.0, "hold": 12, "r1": 0.45, "noise_db": -30.0, "frames": 3}}
 SPEECH_R1 = 0.55
 GATE_PREROLL = 2
+CTCSS_TONES = (67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9,
+               114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, 162.2, 165.5, 167.9,
+               171.3, 173.8, 177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1,
+               225.7, 229.1, 233.6, 241.8, 250.3, 254.1)
+DET_DECIM = 8
+DET_RATE = 8000.0 / DET_DECIM
+DET_COEFF = tuple(2.0 * math.cos(2.0 * math.pi * hz / DET_RATE) for hz in CTCSS_TONES)
+DET_FRAMES = 100
+DET_SAMPLES = DET_FRAMES * 160 // DET_DECIM
+DET_LINE = 30.0
+DET_NEIGHBOUR = 10.0
+DET_MIN_DB = -60.0
+DET_CONFIRM = 2
+DET_LOST = 5
 
 
 class RxClean:
@@ -1024,6 +1040,58 @@ class RxClean:
         self.prev_g = 1.0
         self.r2 = 1.0
         self.out_keep = False
+        self.auto_hz = None
+        self._det_clear()
+
+    def _det_clear(self):
+        self.det_s1 = [0.0] * len(CTCSS_TONES)
+        self.det_s2 = [0.0] * len(CTCSS_TONES)
+        self.det_n = 0
+        self.det_cand = None
+        self.det_seen = 0
+        self.det_miss = 0
+
+    def _detect(self, a):
+        s1, s2 = self.det_s1, self.det_s2
+        coeff = DET_COEFF
+        k = range(len(coeff))
+        for i in range(0, len(a) - DET_DECIM + 1, DET_DECIM):
+            x = sum(a[i:i + DET_DECIM]) / DET_DECIM
+            for j in k:
+                s0 = x + coeff[j] * s1[j] - s2[j]
+                s2[j] = s1[j]
+                s1[j] = s0
+        self.det_n += 1
+        if self.det_n >= DET_FRAMES:
+            self._det_window()
+
+    def _det_window(self):
+        pw = [x * x + y * y - c * x * y for x, y, c in zip(self.det_s1, self.det_s2, DET_COEFF)]
+        self.det_s1 = [0.0] * len(pw)
+        self.det_s2 = [0.0] * len(pw)
+        self.det_n = 0
+        best = max(range(len(pw)), key=pw.__getitem__)
+        top = pw[best]
+        amp = 2.0 * math.sqrt(max(top, 0.0)) / DET_SAMPLES
+        near = max(pw[max(best - 1, 0)] if best else 0.0, pw[best + 1] if best + 1 < len(pw) else 0.0)
+        found = (top > DET_LINE * max(sorted(pw)[len(pw) // 2], 1e-9) and top > DET_NEIGHBOUR * max(near, 1e-9)
+                 and amp >= 32768.0 * 10.0 ** (DET_MIN_DB / 20.0))
+        if not found:
+            self.det_cand = None
+            self.det_seen = 0
+            self.det_miss += 1
+            if self.det_miss >= DET_LOST and self.auto_hz is not None:
+                self.auto_hz = None
+                self.nz = (0.0,) * 4
+            return
+        self.det_miss = 0
+        if best == self.det_cand:
+            self.det_seen += 1
+        else:
+            self.det_cand, self.det_seen = best, 1
+        if self.det_seen >= DET_CONFIRM and CTCSS_TONES[best] != self.auto_hz:
+            self.auto_hz = CTCSS_TONES[best]
+            self.nz = (0.0,) * 4
 
     def _filter(self, a, hpf):
         sc = HP_GAIN if hpf else 1.0
@@ -1043,7 +1111,7 @@ class RxClean:
                 t2 = w - d2 * y
                 put(y)
             self.z = (s1, s2, t1, t2)
-        hz = _cfg_get("rx_notch_hz")
+        hz = _cfg_get("rx_notch_hz") or (self.auto_hz if _cfg_get("rx_notch_auto") else None)
         if hz:
             ys = self._notch(ys, hz)
         n = len(ys)
@@ -1133,9 +1201,13 @@ class RxClean:
         t0 = time.thread_time()
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
         notch = _cfg_get("rx_notch_hz")
+        auto = bool(_cfg_get("rx_notch_auto")) and not notch
         if agc and TONE.recording:
             agc = False
-        if not (hpf or agc or gate or notch):
+        if not auto and (self.auto_hz is not None or self.det_n):
+            self.auto_hz = None
+            self._det_clear()
+        if not (hpf or agc or gate or notch or auto):
             if self.delay or any(self.z) or any(self.nz) or self.gain_db:
                 self.reset()
             out = apply_gain(frame, user_db)
@@ -1151,7 +1223,10 @@ class RxClean:
                 return PCM_SILENCE
             self._gate(-120.0, 1.0, gate)
             return self._out(PCM_SILENCE, False, t0)
-        ys, db, r1, sc = self._filter(_samples(frame), hpf)
+        a = _samples(frame)
+        if auto:
+            self._detect(a)
+        ys, db, r1, sc = self._filter(a, hpf)
         speechy = db > AGC_ACTIVE_DB and r1 > 0.3
         if agc:
             self._agc(db, speechy)
@@ -2890,6 +2965,7 @@ class Hub:
             "udp_port": _cfg_get("udp_port"),
             "udp_error": self.udp_error,
             "rx_load_pct": RXC.load_pct,
+            "rx_notch_auto_hz": RXC.auto_hz,
         }
 
 
@@ -3567,6 +3643,7 @@ def build_status(full):
         st.pop("listener_list", None)
         st.pop("udp_error", None)
         st.pop("rx_load_pct", None)
+        st.pop("rx_notch_auto_hz", None)
     return st
 
 
@@ -7690,8 +7767,9 @@ function bq(f, x) {
 
 function makeDyn() {
   return {hp: biquad('hp', 300, 0.707, 0), pk: biquad('pk', 2500, 1.0, 4), env: 0, gg: 1, hold: 0, open: false,
-    rms: 0, cg: 1, lg: 1};
+    rms: 0, cg: 1, lg: 1, la: new Float32Array(LIM_LA), lp: 0};
 }
+const LIM_LA = 16;
 
 const GATE = [null, {open: -45, floor: 0.18}, {open: -35, floor: 0.03}];
 
@@ -7715,10 +7793,14 @@ function dynProcess(d, v) {
     const want = Math.pow(10, ((over > 0 ? -over * (2 / 3) : 0) + 9) / 20);
     d.cg += (want - d.cg) * (want < d.cg ? 0.0125 : 0.000625);
     v *= d.cg;
-    const b = v < 0 ? -v : v, ceil = 0.89;
-    if (b * d.lg > ceil) d.lg = ceil / b;
-    else d.lg += (1 - d.lg) * 0.0025;
-    v *= d.lg;
+    const ceil = 0.89, old = d.la[d.lp];
+    d.la[d.lp] = v; d.lp = (d.lp + 1) % LIM_LA;
+    let m = old < 0 ? -old : old;
+    for (let i = 0; i < LIM_LA; i++) { const q = d.la[i], w = q < 0 ? -q : q; if (w > m) m = w; }
+    const tg = m > ceil ? ceil / m : 1;
+    if (tg < d.lg) d.lg += (tg - d.lg) * 0.4;
+    else d.lg = Math.min(tg, d.lg + (1 - d.lg) * 0.0025);
+    v = old * d.lg;
   }
   return v;
 }
@@ -8212,6 +8294,7 @@ async function pollStatus() {
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
   $('tune-rxpk').textContent = fmtDb(d.peak_db);
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
+  if (authed) $('rx-notch-auto-v').textContent = d.rx_notch_auto_hz != null ? 'Tone found: ' + d.rx_notch_auto_hz.toFixed(1) + ' Hz.' : 'No tone found yet.';
   rxhShow(d.rxh);
   const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
   $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
@@ -12095,6 +12178,7 @@ async function loadConfig() {
   $('rx-agc').checked = !!d.config.rx_agc;
   $('rx-gate').value = String(d.config.rx_gate);
   $('rx-notch').value = String(d.config.rx_notch_hz || 0);
+  $('rx-notch-auto').checked = !!d.config.rx_notch_auto;
   testsOff = String(d.config.tests_off || '').split(',').filter(Boolean);
   testsUi();
   tuneUi();
@@ -12110,6 +12194,7 @@ function tuneUi() {
   if ($('rx-agc').checked) clean.push('auto level');
   if ($('rx-gate').value !== '0') clean.push('gate ' + ($('rx-gate').value === '2' ? 'strong' : 'light'));
   if (Number($('rx-notch').value) > 0) clean.push('CTCSS notch ' + Number($('rx-notch').value).toFixed(1) + ' Hz');
+  else if ($('rx-notch-auto').checked) clean.push('CTCSS notch automatic');
   sum('lvl', [on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : '']
     .concat(clean).filter((x) => x).join(' · ') || 'Off (audio unchanged)');
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
@@ -12122,7 +12207,7 @@ function tuneUi() {
 async function saveTune(msgId = 'tune-msg') {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
-    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value};
+    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value, rx_notch_auto: $('rx-notch-auto').checked};
   AUDIO_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
   AUDIO_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   AUDIO_TXT.forEach((k) => { body[k] = $('cfg-' + k).value.trim(); });
@@ -12245,7 +12330,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('setup-save').addEventListener('click', setupSave);
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
-  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch', 'rx-notch-auto'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-on-rx').addEventListener('input', () => { $('tune-on').checked = $('tune-on-rx').checked; tuneUi(); });
   $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
@@ -12674,6 +12759,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong (can clip hissy speech)</option></select></div>
 <div class="row"><label for="rx-notch" style="min-width:130px">CTCSS notch (Hz)</label>
 <input type="number" id="rx-notch" min="0" max="300" step="0.1" style="width:90px"> <span class="small muted">0 = off. Enter the tone your radio sends, for example 100.0. Only that tone is removed; voice is kept.</span></div>
+<div class="row"><label><input type="checkbox" id="rx-notch-auto"> Find the CTCSS tone automatically (listens to the received audio and notches the steady tone it finds; needs about 4 s of a signal with the tone, and is ignored while a tone is typed above)</label> <span class="small muted" id="rx-notch-auto-v"></span></div>
 <table><tr><th>Processing load</th><td id="rx-load" class="mono">-</td></tr></table>
 <h3 style="margin:14px 0 4px">Receive health: the network, this Pi or the phone?</h3>
 <p class="muted small">Looks at the last few minutes of received audio and says where any loss starts: outside the LAN, on the Pi, or between the Pi and the listener. It only measures; it changes no setting.</p>

@@ -1271,7 +1271,7 @@ class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
-                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
                   "hs-mic", "hs-btn", "mic-gain", "mic-test", "tx-add", "tune-save"],
         "cd-chk": ["test-on-check", "test-on-balance", "test-on-tone_rx", "test-on-tone_tx", "test-on-mic", "test-on-node",
@@ -4455,6 +4455,91 @@ class NodeTalkerAgcTests(unittest.TestCase):
         finally:
             nt._config.clear()
             nt._config.update(old)
+
+
+class NodeTalkerAutoNotchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def feed(self, tone_hz, tone_db, secs, noise=1500, **cfg):
+        import array
+        import math
+        import random
+        nt = self.nt
+        old = dict(nt._config)
+        nt._config.update(rx_hpf=False, rx_agc=False, rx_gate=0, rx_notch_hz=0.0, rx_notch_auto=True)
+        nt._config.update(cfg)
+        rng = random.Random(5)
+        amp = 32768 * 10 ** (tone_db / 20) * math.sqrt(2)
+        try:
+            c = nt.RxClean()
+            outs = []
+            for k in range(int(secs * 50)):
+                fr = array.array("h", [int(max(-32768, min(32767, (amp * math.sin(2 * math.pi * tone_hz * (k * 160 + i) / 8000) if tone_hz else 0) + rng.gauss(0, noise)))) for i in range(160)]).tobytes()
+                outs.append(c.process(fr, 0, nt.frame_db(fr)))
+            return c, outs
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_finds_standard_tones_in_noise(self):
+        for hz in (67.0, 100.0, 162.2, 203.5, 254.1):
+            c, _ = self.feed(hz, -35, 5.0)
+            self.assertEqual(c.auto_hz, hz, hz)
+
+    def test_off_by_a_little_still_finds_the_nearest_tone(self):
+        c, _ = self.feed(100.2, -35, 5.0)
+        self.assertEqual(c.auto_hz, 100.0)
+
+    def test_noise_alone_finds_nothing(self):
+        c, _ = self.feed(0, -120, 12.0, noise=3000)
+        self.assertIsNone(c.auto_hz)
+
+    def test_a_typed_tone_wins_and_nothing_is_detected(self):
+        c, _ = self.feed(100.0, -35, 5.0, rx_notch_hz=100.0)
+        self.assertIsNone(c.auto_hz)
+
+    def test_off_does_no_detection(self):
+        c, _ = self.feed(100.0, -35, 5.0, rx_notch_auto=False)
+        self.assertIsNone(c.auto_hz)
+        self.assertEqual(c.det_n, 0)
+
+    def test_the_found_tone_is_removed(self):
+        c, outs = self.feed(100.0, -30, 8.0, noise=300)
+        import array
+        tail = array.array("h", b"".join(outs[-100:]))
+        power = sum(x * x for x in tail) / len(tail)
+        tone_power = (32768 * 10 ** (-30 / 20)) ** 2
+        self.assertLess(power, tone_power / 8)
+
+
+class NodeTalkerLimiterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        a, b = text.index("function biquad"), text.index("function makeUpsampler")
+        cls.js = text[a:b]
+
+    def run_js(self, body):
+        import subprocess
+        prog = ("let mic = {eq: false, gate: 0, lev: true};\n" + self.js +
+                "\nconst d = makeDyn();\n" + body)
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_a_sudden_peak_stays_under_the_ceiling(self):
+        got = self.run_js("let pk = 0; for (let i = 0; i < 4000; i++) { const v = i >= 2000 && i < 2400 ? 2.5 * Math.sin(i * 0.3) : 0.05 * Math.sin(i * 0.3); pk = Math.max(pk, Math.abs(dynProcess(d, v))); } console.log(JSON.stringify(pk));")
+        self.assertLessEqual(got, 0.9)
+
+    def test_audio_is_delayed_by_the_lookahead(self):
+        got = self.run_js("let at = -1, best = 0; for (let i = 0; i < 400; i++) { const y = Math.abs(dynProcess(d, i === 100 ? 0.5 : 0)); if (y > best) { best = y; at = i; } } console.log(JSON.stringify([at, LIM_LA]));")
+        self.assertEqual(got[0], 100 + got[1])
+        self.assertEqual(got[1], 16)
 
 
 if __name__ == "__main__":

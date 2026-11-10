@@ -129,8 +129,36 @@ class DspTest {
         val loud = tone(8000, 800.0, 800, 0.95)
         var peak = 0.0
         loud.forEach { peak = maxOf(peak, kotlin.math.abs(d.run(it))) }
-        assertTrue(peak <= 0.895)
+        assertTrue(peak <= 0.9)
         assertTrue(d.minLimiter < 0.95)
+    }
+
+    @Test
+    fun mic_limiter_delays_the_audio_by_its_lookahead() {
+        val d = MicDyn(false, false, 0, true)
+        var at = -1
+        var best = 0.0
+        for (i in 0 until 400) {
+            val y = kotlin.math.abs(d.run(if (i == 100) 0.5 else 0.0))
+            if (y > best) {
+                best = y
+                at = i
+            }
+        }
+        assertEquals(100 + LIMITER_LOOKAHEAD, at)
+    }
+
+    @Test
+    fun mic_limiter_has_turned_down_before_a_sudden_peak_arrives() {
+        val d = MicDyn(false, false, 0, true)
+        tone(8000, 800.0, 8000, 0.01).forEach { d.run(it) }
+        var first = 0.0
+        val burst = tone(8000, 800.0, 400, 3.0)
+        for (i in burst.indices) {
+            val y = kotlin.math.abs(d.run(burst[i]))
+            if (i < 4) first = maxOf(first, y)
+        }
+        assertTrue(first < 0.2)
     }
 
     @Test

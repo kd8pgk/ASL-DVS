@@ -145,6 +145,8 @@ class VoiceChain(rate: Int) {
 }
 
 
+const val LIMITER_LOOKAHEAD = 16
+
 class MicDyn(private val hp: Boolean, private val eq: Boolean, private val gateLevel: Int, private val lev: Boolean, rate: Int = 8000) {
     private val hp250 = Biquad.highPass(rate, 250.0, 0.707)
     private val hp300 = Biquad.highPass(rate, 300.0, 0.707)
@@ -158,6 +160,8 @@ class MicDyn(private val hp: Boolean, private val eq: Boolean, private val gateL
     private var rms = 0.0
     private var cg = 1.0
     private var lg = 1.0
+    private val look = DoubleArray(LIMITER_LOOKAHEAD)
+    private var lookPos = 0
     var minLimiter = 1.0
         private set
     var minGate = 1.0
@@ -188,9 +192,17 @@ class MicDyn(private val hp: Boolean, private val eq: Boolean, private val gateL
             val want = 10.0.pow(((if (over > 0) -over * (2.0 / 3.0) else 0.0) + 9) / 20)
             cg += (want - cg) * (if (want < cg) 0.0125 else 0.000625)
             v *= cg
-            val b = abs(v)
-            if (b * lg > 0.89) lg = 0.89 / b else lg += (1 - lg) * 0.0025
-            v *= lg
+            val old = look[lookPos]
+            look[lookPos] = v
+            lookPos = (lookPos + 1) % LIMITER_LOOKAHEAD
+            var m = abs(old)
+            for (q in look) {
+                val w = abs(q)
+                if (w > m) m = w
+            }
+            val tg = if (m > 0.89) 0.89 / m else 1.0
+            lg = if (tg < lg) lg + (tg - lg) * 0.4 else minOf(tg, lg + (1 - lg) * 0.0025)
+            v = old * lg
         }
         if (lg < minLimiter) minLimiter = lg
         if (gg < minGate) minGate = gg
