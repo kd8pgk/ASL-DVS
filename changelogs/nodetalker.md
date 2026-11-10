@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.27 (2026-11-10)
+
+- **One status probe of Node Recorder at a time.** When several status requests arrive together and the cached answer is older than 2 seconds, only one of them asks Node Recorder; the others use its answer.
+- **TX first-audio time is set under the lock.** `first_at` is now written under the Talker lock.
+- This is a release, not a cosmetic build.
+
 ## 0.10.26 (2026-11-08)
 
 - **Questions instead of locks for tunes and restarts.** Node Recorder 0.9.0 and later tell Node Talker what is recording, which bridge a recording holds and when the next digital window starts. Node Talker now asks before it does something that would cut a recording short:
@@ -64,7 +70,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_26_20261108.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_27_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

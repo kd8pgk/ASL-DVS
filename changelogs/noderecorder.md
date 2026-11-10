@@ -1,6 +1,13 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_14_0_20261109.py`. Newest entries first.
+Current file: `noderecorder_v0_15_0_20261110.py`. Newest entries first.
+
+## 0.15.0 (2026-11-10)
+
+- **A converted file is kept even if the WAV cannot be deleted.** After the MP3, Opus or FLAC is in place, a failure to delete the WAV no longer counts as a failed conversion. It is logged as a warning, and the next sweep no longer converts it again into a second copy (`name-2.mp3`): a WAV that already has a converted file beside it is deleted instead.
+- **The converter thread logs unexpected errors.** An unexpected error while converting is logged, counted as failed (the WAV is kept), and the thread carries on with the next file.
+- **A failed recording writer stops taking audio.** After a write error (for example a full drive) frames are no longer queued and counted as dropped every 20 ms; the error is shown as before.
+- This is a release, not a cosmetic build.
 
 ## 0.14.0 (2026-11-09)
 
