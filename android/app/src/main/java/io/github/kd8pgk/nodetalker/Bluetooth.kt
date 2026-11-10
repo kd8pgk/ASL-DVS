@@ -146,7 +146,7 @@ object Bluetooth {
     fun snapshot(c: Context): Snap {
         val am = c.getSystemService(AudioManager::class.java)
         val pm = c.packageManager
-        val devices = am.getDevices(AudioManager.GET_DEVICES_ALL)
+        val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS or AudioManager.GET_DEVICES_INPUTS)
             .filter { isBluetooth(it.type) }
             .map {
                 Dev(
