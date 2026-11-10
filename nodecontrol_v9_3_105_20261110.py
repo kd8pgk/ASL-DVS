@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.104"
-BUILD_DATE   = "2026-10-28"
+VERSION      = "9.3.105"
+BUILD_DATE   = "2026-11-10"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -6847,11 +6847,11 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
         log.warning("_leave_page: %s -> %s teardown error: %s", prev_page, next_page, e)
     _gateway_svc_leave(prev_page, next_page)
 
-def _enter_page(page: str, retune: bool = False) -> None:
+def _enter_page(page: str, retune: bool = False) -> str:
     spec = _PAGE_ENTER.get(page)
     if spec is None:
         log.warning("_enter_page: unknown page %r — ignored", page)
-        return
+        return f"Unknown page '{page}'"
     dvs_mode = spec["dvs_mode"]
     _link_enter()
     try:
@@ -6872,25 +6872,30 @@ def _enter_page(page: str, retune: bool = False) -> None:
 
         if not _gateway_svc_enter(page):
             set_state(page=page, current_fav=None, current_fav_node=None, echo_fav=None,
-                      status=f"{page} | Gateway service failed to start — check systemctl",
-                      **({"current_dvs_mode": dvs_mode} if dvs_mode else {}))
-            return
+                      status=f"{page} | Gateway service failed to start — check systemctl")
+            return (f"{page}: {_GATEWAY_SERVICE_MAP.get(page, 'gateway service')} did not "
+                    f"start — check it with systemctl")
 
         _dvs("tune", TG_DISCONNECT)
+        mode_ok = True
         if dvs_mode:
             _dvs_settle()
-            _dvs("mode", dvs_mode)
+            mode_ok = _dvs("mode", dvs_mode)[0]
+            if not mode_ok:
+                log.warning("_enter_page: mode switch to %s failed — the next tune will "
+                            "try it again", dvs_mode)
 
         if keep and st.has_asl and (page != "M17" or st.has_m17):
             _connect(keep)
 
         set_state(page=page, current_fav=None, current_fav_node=None, echo_fav=None,
                   status=spec["status"],
-                  **({"current_dvs_mode": dvs_mode} if dvs_mode else {}))
+                  **({"current_dvs_mode": dvs_mode if mode_ok else ""} if dvs_mode else {}))
         try:
             _cpuweight_apply_for_page(page)
         except Exception:
             log.warning("_cpuweight_apply_for_page failed for %s", page, exc_info=True)
+        return ""
     finally:
         _link_exit()
 
@@ -6926,12 +6931,23 @@ def _fcs_to_tune(room_id: str) -> str:
             f"FCS room ID too long (max 5 digits or 9xxxxx format), got: {room_id!r}")
     return "9" + s.zfill(5)
 
-def _ensure_page(page: str) -> None:
+def _ensure_page(page: str) -> str:
     cur = get_state().page
     if cur != page:
         log.info("%s connect asked for while the server page is %s — entering %s first",
                  page, cur, page)
-        _enter_page(page)
+        return _enter_page(page)
+    return ""
+
+def _dvs_fail_msg(what: str, out) -> str:
+    if _dvs_timed_out(out):
+        return (f"{what} is taking longer than {_DVS_TUNE_TIMEOUT_SEC}s (a 44net tunnel "
+                f"can slow the system) — it may still be completing. Check the tab "
+                f"before retrying.")
+    return f"{what} failed: {out}"
+
+def _tune_dropped(page: str) -> None:
+    set_state(current_fav=None, current_fav_node=None, status=f"{page} | Not connected")
 
 @_link_locked
 def action_switch_tab(page: str) -> Tuple[bool, str]:
@@ -6939,7 +6955,9 @@ def action_switch_tab(page: str) -> Tuple[bool, str]:
     spec = _PAGE_ENTER.get(page)
     if spec is None:
         return False, f"Unknown page '{page}'"
-    _enter_page(page)
+    err = _enter_page(page)
+    if err:
+        return False, err
     if page == "STFU":
         threading.Thread(
             target=lambda: set_state(stfu_server=detect_stfu_server()),
@@ -6973,7 +6991,9 @@ def action_retune_tab(page: str, server_name: str = "") -> Tuple[bool, str]:
         _svc_restart("stfu.service")
         _svc_restart("mmdvm_bridge")
 
-    _enter_page(page, retune=True)
+    err = _enter_page(page, retune=True)
+    if err:
+        return False, err
 
     if page == "STFU":
         threading.Thread(
@@ -7009,8 +7029,10 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
     if tg == TG_DISCONNECT or tg == "*88":
         if mode == "DSTAR":
             _dvs("tune", DSTAR_UNLINK)
-        _dvs("tune", TG_DISCONNECT)
+        ok_disc, out = _dvs("tune", TG_DISCONNECT)
         _dvs_settle()
+        if not ok_disc:
+            return False, _dvs_fail_msg(f"{mode} disconnect", out)
         if st.page != mode:
             return True, f"{mode} | Disconnected"
         if st.has_asl:
@@ -7025,7 +7047,9 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
     except ValueError as exc:
         return False, str(exc)
 
-    _ensure_page(mode)
+    err = _ensure_page(mode)
+    if err:
+        return False, err
     st = get_state()
     _clear_foreign_link()
 
@@ -7042,9 +7066,12 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
 
     mode_changed = (dvs_mode != st.current_dvs_mode)
     if mode_changed:
-        ok_mode, _ = _dvs("mode", dvs_mode)
+        ok_mode, out = _dvs("mode", dvs_mode)
         if not ok_mode:
             log.warning("action_tune: mode switch to %s failed", dvs_mode)
+            set_state(current_dvs_mode="")
+            _tune_dropped(mode)
+            return False, _dvs_fail_msg(f"Mode switch to {dvs_mode}", out)
 
     remaining = _dvs_settle_until - time.monotonic()
     if remaining > 0:
@@ -7052,12 +7079,10 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
 
     ok_tune, out = _dvs("tune", tune_str)
     if not ok_tune:
-        if _dvs_timed_out(out):
-            return False, (f"Tune to {tune_str} is taking longer than "
-                           f"{_DVS_TUNE_TIMEOUT_SEC}s (a 44net tunnel can slow the "
-                           f"system) — it may still be completing. Check the tab "
-                           f"before retrying.")
-        return False, f"Tune failed ({tune_str}): {out}"
+        if mode_changed:
+            set_state(current_dvs_mode=dvs_mode)
+        _tune_dropped(mode)
+        return False, _dvs_fail_msg(f"Tune to {tune_str}", out)
 
     bridge_lbl = " | BRIDGE LINKED" if st.has_asl else ""
     label = f"{mode} | {name} | {tg}{bridge_lbl}"
@@ -7101,7 +7126,9 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
                        f"digits) or a gateway callsign (3-6 letters/digits)")
     tune_str = _dstar_link_str(base, module)
     use_rc   = kind == "gateway" and _ircddb_rc_settings() is not None
-    _ensure_page(page)
+    err = _ensure_page(page)
+    if err:
+        return False, err
     st = get_state()
     _clear_foreign_link()
     _dvs("tune", DSTAR_UNLINK)
@@ -7110,7 +7137,13 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     bridge = _cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL]
     if st.has_asl and bridge and bridge not in st.bridge_linked_nodes:
         _connect(bridge)
-    _dvs("mode", "DSTAR")
+    ok_mode, out = _dvs("mode", "DSTAR")
+    if not ok_mode:
+        log.warning("%s connect: mode switch to DSTAR failed", page)
+        set_state(current_dvs_mode="")
+        _tune_dropped(page)
+        return False, _dvs_fail_msg("Mode switch to DSTAR", out)
+    set_state(current_dvs_mode="DSTAR")
     remaining = _dvs_settle_until - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
@@ -7125,12 +7158,8 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
         ok, out = _dvs("tune", tune_str)
     if not ok:
         fail_label = "XLX" if is_xlx else "D-STAR"
-        if _dvs_timed_out(out):
-            return False, (f"{fail_label} tune to {tune_str} is taking longer than "
-                           f"{_DVS_TUNE_TIMEOUT_SEC}s (a 44net tunnel can slow the "
-                           f"system) — it may still be completing. Check the tab "
-                           f"before retrying.")
-        return False, f"{fail_label} tune failed ({tune_str}): {out}"
+        _tune_dropped(page)
+        return False, _dvs_fail_msg(f"{fail_label} tune to {tune_str}", out)
     bridge_lbl = " | BRIDGE LINKED" if st.has_asl else ""
     label = f"{page} | {name} | {tune_str}{bridge_lbl}"
     set_state(page=page, status=label, current_fav=tune_str, current_fav_node=None)
@@ -7153,17 +7182,25 @@ def action_dstar_disconnect() -> Tuple[bool, str]:
         ok, why = _ircddb_rc_link("")
         if not ok:
             log.warning("D-STAR: remote-control unlink failed (%s)", why)
-    _dvs("tune", DSTAR_UNLINK)
-    _dvs("tune", TG_DISCONNECT)
+    ok_u, out_u = _dvs("tune", DSTAR_UNLINK)
+    ok_d, out_d = _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
+    if not ok_d or _dvs_timed_out(out_u):
+        return False, _dvs_fail_msg("D-STAR disconnect", out_d if not ok_d else out_u)
+    if not ok_u:
+        log.warning("D-STAR disconnect: unlink command failed: %s", out_u)
     set_state(current_fav=None, current_fav_node=None, status="DSTAR | Ready")
     return True, "D-STAR disconnected"
 
 @_link_locked
 def action_xlx_disconnect() -> Tuple[bool, str]:
-    _dvs("tune", DSTAR_UNLINK)
-    _dvs("tune", TG_DISCONNECT)
+    ok_u, out_u = _dvs("tune", DSTAR_UNLINK)
+    ok_d, out_d = _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
+    if not ok_d or _dvs_timed_out(out_u):
+        return False, _dvs_fail_msg("XLX disconnect", out_d if not ok_d else out_u)
+    if not ok_u:
+        log.warning("XLX disconnect: unlink command failed: %s", out_u)
     set_state(current_fav=None, current_fav_node=None, status="XLX | Ready")
     return True, "XLX disconnected"
 
@@ -7230,7 +7267,9 @@ def action_m17_connect(name: str, base: str, ip: str, module: str) -> Tuple[bool
     st = get_state()
     if not st.has_m17:
         return False, "USRP2M17 bridge not detected on this host"
-    _ensure_page("M17")
+    err = _ensure_page("M17")
+    if err:
+        return False, err
     st = get_state()
 
     _clear_foreign_link()
@@ -7285,7 +7324,12 @@ def _do_asl_connect(node: str, name: str):
     _link_enter()
     _reset_perm_link_settle()
     try:
-        _drop_links(keep=None, what="asl-connect")
+        if get_state().page != "ASL":
+            err = _ensure_page("ASL")
+            if err:
+                return False, err
+        else:
+            _drop_links(keep=None, what="asl-connect")
         _connect(node)
         time.sleep(1.5)
         _arm_bridge_reaper()
@@ -7305,8 +7349,13 @@ def action_asl_connect(node: str, name: str) -> Tuple[bool, str]:
     return _do_asl_connect(str(node).strip(), name)
 
 @_link_locked
-def action_asl_disconnect_current() -> Tuple[bool, str]:
+def action_asl_disconnect_current(drop_all: bool = False) -> Tuple[bool, str]:
     st = get_state()
+    if drop_all and st.page == "ASL":
+        _drop_links(keep=None, what="asl-disconnect")
+        set_state(current_fav=None, current_fav_node=None, linked_node=None,
+                  status="ASL | Ready")
+        return True, "ASL disconnected"
     if st.current_fav and st.current_fav not in _bridge_set():
         if _drop_one_link(st.current_fav):
             log.info("ASL disconnect: %s is a permanent link — dropped with ilink 11",
@@ -7338,7 +7387,12 @@ def _do_echo_connect(node: str, name: str):
     _reset_perm_link_settle()
     try:
         asl_node = _echolink_to_asl(node)
-        _drop_links(keep=None, what="echo-connect")
+        if get_state().page != "ECHO":
+            err = _ensure_page("ECHO")
+            if err:
+                return False, err
+        else:
+            _drop_links(keep=None, what="echo-connect")
         _connect(asl_node)
         time.sleep(1.5)
         _arm_bridge_reaper()
@@ -7596,7 +7650,15 @@ def _hard_restart_stack(st) -> None:
 def action_disconnect_all() -> Tuple[bool, str]:
     with _link_guard():
         st = get_state()
+        set_state(current_fav=None, current_fav_node=None, echo_fav=None,
+                  status=f"{st.page} | RESETTING")
         _graceful_notify(st)
+        if st.page == "M17" and st.has_m17:
+            ok, err = _write_m17_ini(_m17_ini_placeholder(_effective_callsign(st)))
+            if ok:
+                _svc_restart(M17_SERVICE)
+            else:
+                log.warning("disconnect-all: M17 ini write failed: %s", err)
         _hard_restart_stack(st)
         set_state(current_fav=None, current_fav_node=None, echo_fav=None, linked_node=None,
                   status=f"{st.page} | RESET")
@@ -7656,6 +7718,7 @@ def action_switch_dmr_server(server_name: str) -> Tuple[bool, str]:
     ok, out = _dvs("tune", tune_str)
     if not ok:
         _invalidate_dmr_net_tune()
+        set_state(current_fav=None, current_fav_node=None)
         if _dvs_timed_out(out):
             return False, (f"{server_name}: the network tune is taking longer than "
                            f"{_DVS_TUNE_TIMEOUT_SEC}s (a 44net tunnel can slow the "
@@ -10044,9 +10107,10 @@ function hideWorking(){
 // the real result. These are ceilings, not waits — a fast tune returns at once.
 //   DVS_TUNE_MS       one mode-or-tune per request (DMR network switch, quick-tune)
 //   DVS_MODE_TUNE_MS  a mode switch AND a tune in one request (cross-mode tune,
-//                     D-STAR/XLX/M17 connect) — up to 40+40s server-side
+//                     D-STAR/XLX/M17 connect) — a disconnect, a mode and a
+//                     tune, up to 40s each server-side
 const DVS_TUNE_MS      = 55000;
-const DVS_MODE_TUNE_MS = 95000;
+const DVS_MODE_TUNE_MS = 130000;
 const LINK_SWITCH_MS   = 130000;
 async function api(body,ms=25000,_again=false){
   if(!_again&&recBusy&&!recBusy.override&&REC_API.indexOf(body.action)>=0){
@@ -14708,6 +14772,7 @@ def _dmr_tune_once(net: dict) -> Tuple[bool, str]:
     ok, out = _dvs("tune", tune_str)
     if not ok:
         _invalidate_dmr_net_tune()
+        set_state(current_fav=None, current_fav_node=None)
         if _dvs_timed_out(out):
             return False, (f"{net['name']}: the network tune is taking longer than "
                            f"{_DVS_TUNE_TIMEOUT_SEC}s — it may still be completing.")
@@ -14783,7 +14848,7 @@ _POST_ACTIONS: dict = {
                                                            _clip_label(_arg(d, "name")))),
     "quick-tune":        _act_mode(lambda mode, d: action_quick_tune(mode, _arg_s(d, "tg"))),
     "asl-connect":       lambda h, d: action_asl_connect(_arg(d, "node"), _clip_label(_arg(d, "name"))),
-    "asl-disc-current":  lambda h, d: action_asl_disconnect_current(),
+    "asl-disc-current":  lambda h, d: action_asl_disconnect_current(drop_all=True),
     "disc-perm-link":    lambda h, d: action_disc_perm_link(),
     "connect-by-number": lambda h, d: action_connect_by_number(_arg(d, "node")),
     "echo-connect":      lambda h, d: action_echo_connect(_arg(d, "node"), _clip_label(_arg(d, "name"))),
