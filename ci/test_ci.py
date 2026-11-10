@@ -4344,5 +4344,61 @@ class NodeTalkerBalancerFixTests(unittest.TestCase):
         self.assertGreater(settle(False), -24.0)
 
 
+class NodeTalkerRxFilterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def reference(self, frames):
+        nt = self.nt
+        (b0, b1, b2, a1, a2), (c0, c1, c2, d1, d2) = nt.HP_SECTIONS
+        x1 = x2 = w1 = w2 = p1 = p2 = y1 = y2 = 0.0
+        out = []
+        for a in frames:
+            ys = []
+            for v in a:
+                w = b0 * v + b1 * x1 + b2 * x2 - a1 * w1 - a2 * w2
+                x2, x1, w2, w1 = x1, v, w1, w
+                y = c0 * w + c1 * p1 + c2 * p2 - d1 * y1 - d2 * y2
+                p2, p1, y2, y1 = p1, w, y1, y
+                ys.append(y)
+            out.append(ys)
+        return out
+
+    def test_high_pass_matches_the_direct_form_filter(self):
+        import array
+        import math
+        import random
+        nt = self.nt
+        rng = random.Random(7)
+        frames = []
+        for k in range(60):
+            frames.append([int(6000 * math.sin(2 * math.pi * 1000 * (k * 160 + i) / 8000) + 3000 * math.sin(2 * math.pi * 120 * (k * 160 + i) / 8000) + rng.gauss(0, 300)) for i in range(160)])
+        want = self.reference(frames)
+        old = dict(nt._config)
+        nt._config.update(rx_notch_hz=0.0)
+        try:
+            c = nt.RxClean()
+            for a, ref in zip(frames, want):
+                ys, db, r1, sc = c._filter(array.array("h", a), True)
+                self.assertEqual(sc, nt.HP_GAIN)
+                for y, r in zip(ys, ref):
+                    self.assertAlmostEqual(y * sc, r, delta=1e-6)
+                ss = sum(r * r for r in ref)
+                self.assertAlmostEqual(db, 10 * math.log10(ss / 160 / 1073741824.0), delta=1e-6)
+        finally:
+            nt._config.clear()
+            nt._config.update(old)
+
+    def test_load_uses_cpu_time(self):
+        import time
+        nt = self.nt
+        c = nt.RxClean()
+        t0 = time.thread_time()
+        time.sleep(0.05)
+        c._account(t0)
+        self.assertLess(c.busy_sec, 0.02)
+
+
 if __name__ == "__main__":
     unittest.main()

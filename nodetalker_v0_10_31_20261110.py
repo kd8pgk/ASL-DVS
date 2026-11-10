@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.30"
+VERSION = "0.10.31"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -969,6 +969,8 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 
 
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
+HP_GAIN = HP_SECTIONS[0][0] * HP_SECTIONS[1][0]
+HP_GAIN2 = HP_GAIN * HP_GAIN
 NOTCH_Q = 25.0
 NOTCH_FS = 8000.0
 _notch_cache = {}
@@ -984,7 +986,7 @@ def _notch_section(hz, q=NOTCH_Q, fs=NOTCH_FS):
 def _dot(a, b):
     if hasattr(math, "sumprod"):
         return math.sumprod(a, b)
-    return math.fsum(map(operator.mul, a, b))
+    return sum(map(operator.mul, a, b))
 AGC_TARGET_DB = -20.0
 AGC_MIN_DB = -6.0
 AGC_MAX_DB = 18.0
@@ -1005,7 +1007,7 @@ class RxClean:
         self._load_t = time.monotonic()
 
     def reset(self):
-        self.z = (0.0,) * 8
+        self.z = (0.0,) * 4
         self.nz = (0.0,) * 4
         self.gain_db = 0.0
         self.level_s = None
@@ -1022,19 +1024,23 @@ class RxClean:
         self.out_keep = False
 
     def _filter(self, a, hpf):
+        sc = HP_GAIN if hpf else 1.0
         if not hpf:
             ys = [float(v) for v in a]
         else:
-            (b0, b1, b2, a1, a2), (c0, c1, c2, d1, d2) = HP_SECTIONS
-            x1, x2, w1, w2, p1, p2, y1, y2 = self.z
+            a1, a2, d1, d2 = HP_SECTIONS[0][3], HP_SECTIONS[0][4], HP_SECTIONS[1][3], HP_SECTIONS[1][4]
+            s1, s2, t1, t2 = self.z
             ys = []
+            put = ys.append
             for v in a:
-                w = b0 * v + b1 * x1 + b2 * x2 - a1 * w1 - a2 * w2
-                x2, x1, w2, w1 = x1, v, w1, w
-                y = c0 * w + c1 * p1 + c2 * p2 - d1 * y1 - d2 * y2
-                p2, p1, y2, y1 = p1, w, y1, y
-                ys.append(y)
-            self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
+                w = v + s1
+                s1 = s2 - 2.0 * v - a1 * w
+                s2 = v - a2 * w
+                y = w + t1
+                t1 = t2 - 2.0 * w - d1 * y
+                t2 = w - d2 * y
+                put(y)
+            self.z = (s1, s2, t1, t2)
         hz = _cfg_get("rx_notch_hz")
         if hz:
             ys = self._notch(ys, hz)
@@ -1042,8 +1048,8 @@ class RxClean:
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
-        db = 10.0 * math.log10(max(ss / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
-        return ys, db, r1
+        db = 10.0 * math.log10(max(ss * sc * sc / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
+        return ys, db, r1, sc
 
     def _notch(self, ys, hz):
         sec = _notch_cache.get(hz)
@@ -1122,7 +1128,7 @@ class RxClean:
         return pcm if keep else PCM_SILENCE
 
     def process(self, frame, user_db, raw_db=0.0):
-        t0 = time.perf_counter()
+        t0 = time.thread_time()
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
         notch = _cfg_get("rx_notch_hz")
         if agc and TONE.recording:
@@ -1134,7 +1140,7 @@ class RxClean:
             self._account(t0)
             return out
         if raw_db < RX_QUIET_DB:
-            self.z = (0.0,) * 8
+            self.z = (0.0,) * 4
             self.nz = (0.0,) * 4
             self.idle += 1
             if not gate:
@@ -1143,7 +1149,7 @@ class RxClean:
                 return PCM_SILENCE
             self._gate(-120.0, 1.0, gate)
             return self._out(PCM_SILENCE, False, t0)
-        ys, db, r1 = self._filter(_samples(frame), hpf)
+        ys, db, r1, sc = self._filter(_samples(frame), hpf)
         speechy = db > AGC_ACTIVE_DB and r1 > 0.3
         if agc:
             self._agc(db, speechy)
@@ -1152,16 +1158,17 @@ class RxClean:
         g1 = 10.0 ** ((self.gain_db + (user_db or 0)) / 20.0)
         g0, self.prev_g = self.prev_g, g1
         n = len(ys)
-        if max(map(abs, ys), default=0.0) * max(g0, g1) <= GAIN_KNEE:
-            if abs(g1 - g0) < 1e-6:
-                out = array.array("h", map(round, map(g1.__mul__, ys)))
+        e0, e1 = g0 * sc, g1 * sc
+        if max(map(abs, ys), default=0.0) * max(e0, e1) <= GAIN_KNEE:
+            if abs(e1 - e0) < 1e-6:
+                out = array.array("h", map(round, map(e1.__mul__, ys)))
             else:
-                step = (g1 - g0) / n
-                out = array.array("h", [round(y * (g0 + step * i)) for i, y in enumerate(ys)])
+                step = (e1 - e0) / n
+                out = array.array("h", [round(y * (e0 + step * i)) for i, y in enumerate(ys)])
         else:
             out = array.array("h", bytes(2 * n))
             for i, y in enumerate(ys):
-                v = y * (g0 + (g1 - g0) * i / n)
+                v = y * (e0 + (e1 - e0) * i / n)
                 if v > GAIN_KNEE:
                     v = GAIN_KNEE + GAIN_SPAN * math.tanh((v - GAIN_KNEE) / GAIN_SPAN)
                 elif v < -GAIN_KNEE:
@@ -1192,8 +1199,8 @@ class RxClean:
             self.out_keep = False
 
     def _account(self, t0):
-        now = time.perf_counter()
-        self.busy_sec += now - t0
+        self.busy_sec += time.thread_time() - t0
+        now = time.monotonic()
         if now - self._load_t >= 5.0:
             self.load_pct = round(100.0 * self.busy_sec / (now - self._load_t), 1)
             self.busy_sec = 0.0

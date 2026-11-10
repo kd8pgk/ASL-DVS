@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.31 (2026-11-10)
+
+- **Lighter RX cleanup.** The 300 Hz cut runs in a transposed form with half the state and the filter gain is folded into the level and output scale, and the dot products use plain `sum` where `math.sumprod` is not available (Python before 3.12). The output is the same as before to within rounding. A frame takes about 30 % less time on Python 3.11 (65 instead of 94 microseconds in a test run) and about 6 % on 3.13.
+- **"Pi load" counts CPU time.** The RX cleanup load shown in the RX card and used by the Audio check is now the CPU time the cleanup used, not the wall time it was running, so waiting on other threads no longer counts. The reading can be lower than before for the same audio.
+- Behaviour changed, so this is a release.
+
 ## 0.10.30 (2026-11-10)
 
 - **The balancer starts from the gain that is really in effect.** With Adjust audio levels off, the stored RX and TX gains do nothing, but the suggestions added to them. A stored +6 plus a suggested +5 became +11 instead of +5. The suggestions and the Apply button now start from 0 in that case, and Apply pins the other levels the way the balancer already did.
@@ -90,7 +96,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_30_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_31_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
