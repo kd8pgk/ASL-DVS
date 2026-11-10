@@ -41,6 +41,8 @@ class _Links:
         self.linked = []
         self.gateway_ok = True
         self.link_result = "linked"
+        self.ab = None
+        self.svc = {}
         self.saved = {}
         fakes = {
             "_dvs": self.fake_dvs,
@@ -48,6 +50,8 @@ class _Links:
             "_query_linked_nodes": lambda timeout=3: list(self.linked),
             "_link_wait": lambda node: self.link_result,
             "_nodelisten_skip_set": lambda: set(),
+            "_read_abinfo": lambda: self.ab,
+            "_svc_public": lambda: dict(self.svc),
             "_svc_restart": lambda name: self.calls.append(("restart", name)),
             "_gateway_svc_enter": lambda page: self.gateway_ok,
             "_gateway_svc_leave": lambda prev, nxt: None,
@@ -71,6 +75,8 @@ class _Links:
                     linked_node=None, linked_nodes=frozenset(), link_known=True,
                     current_dvs_mode="")
         m._fav_gone_polls = 0
+        m._tune_seen = ("", "", 0.0)
+        m.set_state(tune_state="", tune_expect=("", ""))
 
     def tearDown(self):
         for name, real in self.saved.items():
@@ -424,6 +430,149 @@ class _Links:
         self.assertTrue(m.action_echo_disconnect()[0])
         dropped = [c[1].split()[-1] for c in self.calls if c[0] == "ast" and " ilink 1 " in c[1]]
         self.assertEqual(dropped, ["3123456"])
+
+    def late(self):
+        page, fav, since = self.mod._tune_seen
+        self.mod._tune_seen = (page, fav, since - self.mod._TUNE_GRACE_SEC - 1)
+
+    def test_tune_is_pending_then_confirmed_by_the_bridge(self):
+        m = self.mod
+        m._enter_page("P25")
+        self.assertEqual(m._tune_check(), "")
+        m.action_tune("P25", "10200", "NA")
+        self.assertEqual(m._tune_check(), "pending")
+        self.assertEqual(m.build_status()["tune_state"], "pending")
+        self.ab = {"last_tune": "10200"}
+        self.assertEqual(m._tune_check(), "confirmed")
+        self.assertEqual(m.build_status()["tune_state"], "confirmed")
+        self.assertEqual(m.action_get_abinfo()["tune_state"], "confirmed")
+
+    def test_tune_that_never_confirms_becomes_unconfirmed(self):
+        m = self.mod
+        m._enter_page("NXDN")
+        m.action_tune("NXDN", "65000", "WW")
+        self.ab = {"last_tune": "disconnect"}
+        self.assertEqual(m._tune_check(), "pending")
+        self.late()
+        self.assertEqual(m._tune_check(), "unconfirmed")
+        self.assertEqual(self.st().current_fav, "65000")
+        self.ab = {"last_tune": "65000"}
+        self.assertEqual(m._tune_check(), "confirmed")
+
+    def test_a_change_made_elsewhere_is_noticed(self):
+        m = self.mod
+        m._enter_page("DMR")
+        m.action_tune("DMR", "3100", "USA")
+        self.ab = {"last_tune": "3100"}
+        self.assertEqual(m._tune_check(), "confirmed")
+        self.late()
+        self.ab = {"last_tune": "91"}
+        self.assertEqual(m._tune_check(), "unconfirmed")
+        self.assertEqual(m.build_status()["current_fav"], "3100")
+        self.assertEqual(m.build_status()["tune_state"], "unconfirmed")
+
+    def test_stopped_bridge_or_missing_file_is_not_confirmed(self):
+        m = self.mod
+        m._enter_page("YSF")
+        m.action_tune("YSF", "1.2.3.4:42000", "A")
+        self.ab = {"last_tune": "1.2.3.4:42000"}
+        self.svc = {"ab": "inactive"}
+        self.assertEqual(m._tune_check(), "pending")
+        self.late()
+        self.assertEqual(m._tune_check(), "unconfirmed")
+        self.svc = {"ab": "active"}
+        self.assertEqual(m._tune_check(), "confirmed")
+        self.ab = None
+        self.assertEqual(m._tune_check(), "unconfirmed")
+
+    def test_fcs_compares_the_tune_string(self):
+        m = self.mod
+        m._enter_page("FCS")
+        self.assertTrue(m.action_tune("FCS", "FCS00102", "Room")[0])
+        self.ab = {"last_tune": "900102"}
+        self.assertEqual(m._tune_check(), "confirmed")
+
+    def test_nothing_changes_while_a_link_action_runs(self):
+        m = self.mod
+        m._enter_page("P25")
+        m.action_tune("P25", "10200", "NA")
+        self.ab = {"last_tune": "10200"}
+        self.assertEqual(m._tune_check(), "confirmed")
+        self.late()
+        self.ab = {"last_tune": "disconnect"}
+        m._link_enter()
+        try:
+            self.assertEqual(m._tune_check(), "confirmed")
+        finally:
+            m._link_exit()
+        self.assertEqual(m._tune_check(), "unconfirmed")
+
+    def test_dstar_and_xlx_never_show_unconfirmed(self):
+        m = self.mod
+        m.action_dstar_connect("REF001", "C", "REF001 C")
+        self.ab = {"last_tune": "something else"}
+        self.late()
+        self.assertEqual(m._tune_check(), "pending")
+        self.late()
+        self.assertEqual(m._tune_check(), "sent")
+        self.ab = {"last_tune": "REF001CL"}
+        self.assertEqual(m._tune_check(), "confirmed")
+        m.action_xlx_connect("XLX307 D", "XLX307", "D")
+        self.ab = None
+        m._tune_check()
+        self.late()
+        self.assertEqual(m._tune_check(), "sent")
+
+    def test_dstar_gateway_link_expects_cqcqcq(self):
+        m = self.mod
+        real = (m._ircddb_rc_settings, m._ircddb_rc_link)
+        m._ircddb_rc_settings = lambda: {"port": 1}
+        m._ircddb_rc_link = lambda target: (True, "")
+        try:
+            self.assertTrue(m.action_dstar_connect("W1ABC", "B", "W1ABC B")[0])
+        finally:
+            m._ircddb_rc_settings, m._ircddb_rc_link = real
+        self.assertEqual(self.st().tune_expect[1], "CQCQCQ")
+        self.ab = {"last_tune": "CQCQCQ"}
+        self.assertEqual(m._tune_check(), "confirmed")
+
+    def test_m17_is_checked_against_its_ini_and_service(self):
+        m = self.mod
+        real = m.M17_INI_PATH
+        m.M17_INI_PATH = os.path.join(WORK, "USRP2M17.ini")
+        try:
+            m._enter_page("M17")
+            m.action_m17_connect("R", "M17-USA", "1.2.3.4", "A")
+            with open(m.M17_INI_PATH, "w", encoding="utf-8") as fh:
+                fh.write(m._m17_ini_content("N0CALL", "M17-USA", "1.2.3.4", "A"))
+            self.assertEqual(m._tune_check(), "confirmed")
+            self.svc = {"m17": "inactive"}
+            self.late()
+            self.assertEqual(m._tune_check(), "unconfirmed")
+            self.svc = {}
+            with open(m.M17_INI_PATH, "w", encoding="utf-8") as fh:
+                fh.write(m._m17_ini_placeholder("N0CALL"))
+            self.assertEqual(m._tune_check(), "unconfirmed")
+        finally:
+            m.M17_INI_PATH = real
+
+    def test_asl_and_idle_tabs_have_no_tune_state(self):
+        m = self.mod
+        m.action_asl_connect("2000", "X")
+        self.assertEqual(m._tune_check(), "")
+        self.assertEqual(m.build_status()["tune_state"], "")
+        m._enter_page("DMR")
+        m.set_state(tune_state="confirmed")
+        self.assertEqual(m.build_status()["tune_state"], "")
+        self.assertEqual(m._tune_check(), "")
+        self.assertEqual(self.st().tune_state, "")
+
+    def test_page_uses_the_server_verdict(self):
+        with open(self.mod.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        for needle in ("function tunePendingDone(state,name)", "d.tune_state", "ind-unconfirmed", "_tuneState!=='unconfirmed'"):
+            self.assertIn(needle, src)
+        self.assertNotIn("age>10000", src)
 
     def test_page_waits_longer_than_the_server(self):
         with open(self.mod.__file__, encoding="utf-8") as fh:
