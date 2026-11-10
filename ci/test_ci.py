@@ -4274,5 +4274,75 @@ class InstmonSuiteInstallTests(unittest.TestCase):
         self.assertIn("'install_suite'", src.split("const REC_API")[1].split("]")[0])
 
 
+class NodeTalkerBalancerFixTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        cls.nt = load_nodetalker()
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        a, b = text.index("const JIT_STEPS ="), text.index("async function chkApply")
+        cls.js = text[a:b]
+
+    def suggest(self, rx, cfg, tx=None):
+        import subprocess
+        base = {"actSecs": 10, "speech": -30, "clipPct": 0, "spread": None, "drops": 0, "dropsMin": 0, "hum": None,
+                "tails": 0, "loadMax": None, "peak": -6}
+        base.update(rx)
+        t = {"actSecs": 10, "speech": -18, "limPct": 0, "peak": -6, "nTx": 1, "denied": 0, "deadman": 0, "gatePct": 0,
+             "srvN": 0, "gapTx": 0, "snr": 40, "srvPeak": None}
+        t.update(tx or {})
+        prog = ("const mic = {gain: 0, ns: true, gate: 0};\nconst appAudio = () => false, appInfo = () => ({});\n"
+                "const NodeTalkerApp = {};\nfunction clampStep(x) { return Math.max(1, Math.min(12, Math.round(x))); }\nconst db0 = (x) => Math.round(x) + \x27 dBFS\x27;\n" + self.js +
+                "\nconsole.log(JSON.stringify(chkSuggest(%s, %s)));" % (json.dumps({"rx": base, "tx": t, "node": None, "pi": None}), json.dumps(cfg)))
+        out = subprocess.run(["node", "-e", prog], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_raise_starts_from_zero_when_adjust_levels_is_off(self):
+        got = self.suggest({"speech": -26}, {"tune_enabled": False, "rx_gain_db": 3, "rx_agc": False})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], 7)
+
+    def test_raise_starts_from_stored_gain_when_adjust_levels_is_on(self):
+        got = self.suggest({"speech": -26}, {"tune_enabled": True, "rx_gain_db": 3, "rx_agc": False})
+        change = [x["change"] for x in got if x["change"] and "rx_gain_db" in x["change"]][0]
+        self.assertEqual(change["rx_gain_db"], 10)
+
+    def test_favorite_gain_blocks_a_gain_change(self):
+        got = self.suggest({"speech": -30}, {"tune_enabled": True, "rx_gain_db": 0, "rx_gain_fav": 3, "rx_agc": False})
+        self.assertFalse([x for x in got if x["change"] and "rx_gain_db" in x["change"]])
+        self.assertTrue([x for x in got if "favorite with its own gain" in x["text"]])
+
+    def test_tx_gain_is_lowered_from_the_favorite_gain_in_effect(self):
+        got = self.suggest({}, {"tune_enabled": False, "tx_gain_db": 0, "tx_gain_fav": 6}, {"srvPeak": 0})
+        self.assertTrue([x for x in got if "favorite with its own gain" in x["text"] and "lower TX gain" in x["text"]])
+
+    def test_automatic_level_is_paused_for_the_rx_tone_test(self):
+        import array
+        import math
+        nt = self.nt
+        amp = 32768 * 10 ** (-30 / 20) * math.sqrt(2)
+
+        def settle(recording):
+            old = dict(nt._config)
+            nt._config.update(rx_hpf=False, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
+            nt.TONE.recording = recording
+            try:
+                c = nt.RxClean()
+                for k in range(100):
+                    fr = array.array("h", [int(amp * math.sin(2 * math.pi * 1000 * (k * 160 + i) / 8000)) for i in range(160)]).tobytes()
+                    out = c.process(fr, 0, nt.frame_db(fr))
+                return nt.frame_db(out)
+            finally:
+                nt.TONE.recording = False
+                nt._config.clear()
+                nt._config.update(old)
+
+        self.assertAlmostEqual(settle(True), -30.0, delta=0.5)
+        self.assertGreater(settle(False), -24.0)
+
+
 if __name__ == "__main__":
     unittest.main()

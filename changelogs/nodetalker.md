@@ -1,5 +1,13 @@
 # Node Talker changelog
 
+## 0.10.30 (2026-11-10)
+
+- **The balancer starts from the gain that is really in effect.** With Adjust audio levels off, the stored RX and TX gains do nothing, but the suggestions added to them. A stored +6 plus a suggested +5 became +11 instead of +5. The suggestions and the Apply button now start from 0 in that case, and Apply pins the other levels the way the balancer already did.
+- **A favorite's own gain is respected.** While a favorite with its own RX or TX gain is connected, the Setup gain is not used. The balancer no longer offers a Setup gain change then; it says to change the gain in the favorite. `/api/config` carries `rx_gain_fav` and `tx_gain_fav` (null when none) for this; they are ignored on save.
+- **Automatic level is paused during the RX tone test.** It treated the tone as speech and evened it out, so the tone balancer chased its own output. The tone report says when it was paused (`agc_bypassed`).
+- **Restore also puts back the app's receive buffer.** A balance run that changed the Node Talker Mobile buffer now saves it with the settings; Restore sets it back and Keep forgets it.
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.29 (2026-11-10)
 
 - **More Bluetooth detail in the Phone card (stage 2).** In Node Talker Mobile 0.10.29 the Bluetooth part of the Phone card has a **Show more Bluetooth detail** button. It asks Android for the Bluetooth permission (nearby devices); once allowed the card shows whether Bluetooth is on, the phone's Bluetooth name, whether LE Audio and LE Audio broadcast are supported, what is connected on each profile (call headset, music, hearing aid, LE Audio) and the paired devices with their class and link type. Read-only: nothing is connected or changed. The Data file holds it once allowed.
@@ -82,7 +90,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_29_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_30_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
