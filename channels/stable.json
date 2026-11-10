@@ -101,13 +101,13 @@
    "version": "6.13.79-pi02w"
   },
   "uninstall_all": {
-   "blob": "f75b2bfc0e96192a2574b68730ef8cbf2d634a5e",
-   "commit": "bf629f9da5426861732b45f18cb0e59673ecbb52",
-   "file": "uninstall_all_v1_5.sh",
-   "landed": "2026-10-12T08:54:11Z",
-   "promoted": "2026-10-27T20:43:56Z",
+   "blob": "16cd391501762ad0b7b851dd02c1cff26ea7adf3",
+   "commit": "1183f65f7d9c74484bc9b112968d316471498997",
+   "file": "uninstall_all_v1_6_0_20261018.sh",
+   "landed": "2026-10-18T23:52:00Z",
+   "promoted": "2026-11-10T04:45:22Z",
    "reason": "count",
-   "version": "1.5"
+   "version": "1.6.0"
   },
   "wifi_menu": {
    "blob": "2db1975c837b94b80fa52dd7016b52c3ea943ad3",
