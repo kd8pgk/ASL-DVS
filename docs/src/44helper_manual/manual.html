@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.213</b><br>Edition 2026-10-18</div>
+    <div class="ed"><b>44helper 0.0.213</b><br>Edition 2026-11-10</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,8 +27,8 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_213_20261018.py</td><td>0.0.213</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_1_19_20261108.py</td><td>0.1.19</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_95_20261028.py</td><td>6.13.95 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
       the full build. The other tools are covered in the user manual, <code>docs/ASL-DVS_User_Manual.pdf</code>.</p>
@@ -98,14 +98,14 @@
     <tr><th>Area</th><th>Tabs</th><th>Chapter</th></tr>
     <tr><td>Status</td><td>Overview, Boot, Services, Ports, Actions Log; the firewall cards sit on the tunnel tabs</td><td>3–5</td></tr>
     <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>6–9</td></tr>
-    <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>10–11</td></tr>
+    <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand, Claude Remote</td><td>10–11</td></tr>
     <tr><td>Maintenance</td><td>Update, System Optimization</td><td>12</td></tr>
     <tr><td>Configuration</td><td>Config</td><td>13</td></tr>
   </table>
   <h2><span class="n">1.2</span>Installing it</h2>
   <p>44helper is optional. Install it like the other tools: from instmon's page (Components, or GitHub Updates), with
     the installer, or by itself:</p>
-<pre>sudo python3 44helper_v0_0_195_20261013.py --install
+<pre>sudo python3 44helper_v0_1_19_20261108.py --install
 <span class="c"># and to remove it</span>
 sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <p><code>--install</code> copies the file into <code>/usr/local/lib/asl_dvs/44helper/</code>, links it as
@@ -126,19 +126,21 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.213 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.1.19 · Terminal · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
-        <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
+        <span class="tab">Cloudflare</span><span class="tab">Claude Remote</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
         <span class="tab">Boot</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 1.1 · Illustration.</b> The header shows the callsign, node and version. Row one is 44Net
       remote access; row two is the installers, maintenance, Config and the status tabs.</figcaption>
   </figure>
-  <p>While quiet mode is on (Update tab, Chapter 12), an amber banner across the top of every tab says so.</p>
+  <p>While quiet mode is on (Update tab, Chapter 12), an amber banner across the top of every tab says so. The
+    <b>Terminal</b> link in the header opens a root shell on the node in the page (section 2.4). A Dark / Light switch is at
+    the bottom of the Config tab, at the right.</p>
 </section>
 
 <section class="chapter" id="ch2">
@@ -159,7 +161,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <table>
     <tr><th>Part</th><th>Meaning</th></tr>
     <tr><td>Status pill</td><td><b>Not run</b>, <b>Running…</b> with the elapsed time, <b>OK</b> or <b>Failed</b>. <b>Manual</b> means you run it yourself over SSH (Copy only). <b>Config</b> means it saves a Restore point.</td></tr>
-    <tr><td>Command box</td><td>The exact command. You can edit it before pressing Run, for example to change a version or a date. Manual steps are read-only.</td></tr>
+    <tr><td>Command box</td><td>The exact command, read-only. The server builds each step's command from its own step table and refuses one that was changed on the page; to run a changed command, use the <b>Custom</b> choice. Typed values (callsign, DMR ID, password, user name, port, branch) are checked before they go into a command, so a quote or a <code>;</code> cannot change it.</td></tr>
     <tr><td>Fields</td><td>Some steps ask for values (a callsign, a DMR ID, a password, a port). The command is built from them; the field values never appear in the command box.</td></tr>
     <tr><td>Run</td><td>Runs the command on the Pi as root and streams the output below it.</td></tr>
     <tr><td>Copy</td><td>Copies the command, and the output if there is any, to run over SSH or send to someone.</td></tr>
@@ -171,7 +173,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <li><b>Purge previous install</b> shows the removal steps. After a double confirmation they run one after another and stop at the first failure. Steps marked <i>Optional</i> are left out of that pass and only run if you press their own Run button.</li>
     <li>Results last only while the page is open. A reload starts the cards fresh; a job that is still running carries on, and its card picks it up again.</li>
   </ul>
-  <div class="call care"><span class="t">CAREFUL</span>Whatever is in the command box runs as root, edits included.</div>
+  <div class="call care"><span class="t">CAREFUL</span>Whatever runs, runs as root. A Custom command runs exactly as typed. On a Debian machine with no <code>sudo</code>, 44helper puts a small stand-in at the end of PATH so the steps still work.</div>
 
   <h2><span class="n">2.2</span>Checks before a step runs</h2>
   <table>
@@ -187,21 +189,21 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
 
   <h2><span class="n">2.3</span>How long a step may run</h2>
   <ul>
-    <li><b>Package and install-script commands</b> (apt, dpkg, <code>| bash</code>, <code>install*.sh</code>, builds) have <b>no time limit</b>. They run as their own systemd job, so they carry on if 44helper restarts, and the page re-attaches to them.</li>
+    <li><b>Package and install-script commands</b> (apt, dpkg, <code>| bash</code>, <code>install*.sh</code>, builds) stop after <b>60 minutes</b> (<code>RuntimeMaxSec=3600</code>); builds from source have no limit. They run as their own systemd job, so they carry on if 44helper restarts, and the page re-attaches to them. When the cap is reached the log ends with the safety message used for stopped apt steps (wait for apt, run the reconfigure step, re-run the step, reboot only after that) and the job is reported as failed.</li>
     <li>Anything else stops after <b>15 minutes</b> unless the step sets its own limit.</li>
     <li>Pi tunnel step 6 waits up to <b>90 seconds</b> for the tunnel to start (Chapter 7).</li>
   </ul>
 
   <h2><span class="n">2.4</span>The built-in terminal</h2>
-  <p>A few steps need you to answer questions on screen: <code>asl-menu</code>, the USRP2M17 installer and Ampersand's
-    first run. Their cards can open a real terminal in the page, but only:</p>
+  <p>A few steps need you to answer questions on screen: <code>asl-menu</code>, the USRP2M17 installer, Ampersand's
+    first run and its hub settings, Cloudflare's connector token and quick test tunnel, and Claude Code's sign-in. Their cards can open a real terminal in the page, but only:</p>
   <ul>
     <li>after it has been <b>switched on</b>, from the page with the root password, or by creating <code>/etc/44helper/terminal.enable</code> over SSH (owned by root, not writable by others);</li>
     <li>from your local network, never through a tunnel or Cloudflare;</li>
     <li>with the root password entered again each time you open it;</li>
     <li>for the one command printed on that card, nothing else.</li>
   </ul>
-  <p>One terminal at a time. It closes after 10 minutes with no typing, or when you log out.</p>
+  <p>The <b>Terminal</b> link in the page header opens a <b>root shell</b> on the node under the same rules (switched on, local network only, root password each time). One terminal at a time. It closes after 10 minutes with no typing, or when you log out.</p>
 </section>
 
 <section class="part">
@@ -222,7 +224,8 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><th>Card</th><th>Shows</th></tr>
     <tr><td>Installed software</td><td>ASL3, DVSwitch, USRP2M17, SVXLink and Ampersand. Each is <b>installed</b> (version and running services), <b>broken</b> (half-installed packages, or a package without its program files), <b>leftovers</b> (removed, but settings, folders or unit files remain) or <b>absent</b>. Click a name to open its tab.</td></tr>
     <tr><td>Tunnel / wg0</td><td>Whether <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
-    <tr><td>AllStar registration</td><td>From 0.0.212. Each node from <code>rpt show registrations</code>, green when registered and red when not, with the server it registers with and the address and port the AllStarLink server sees it at (the Perceived column): <b>Registered as 44.x.x.x:4569 · through the 44Net tunnel</b>, <b>your public internet address (not the tunnel)</b>, or <b>a private address (check NAT)</b>. On a split tunnel your public address is normal; on a full or half tunnel it should be the 44 address.</td></tr>
+    <tr><td>AllStar registration</td><td>From 0.0.212. Each node from <code>rpt show registrations</code>, green when registered and red when not, with the server it registers with and the address and port the AllStarLink server sees it at (the Perceived column): <b>Registered as 44.x.x.x:4569 · through the 44Net tunnel</b>, <b>your public internet address (not the tunnel)</b>, or <b>a private address (check NAT)</b>. On a split tunnel your public address is normal; on a full or half tunnel it should be the 44 address. With the half tunnel on, the card warns when AllStar still registers from an address outside the tunnel; with it off, it points to the Half tunnel card.</td></tr>
+    <tr><td>System</td><td>Under the Re-check button: the board, the OS and Debian release, the processor and the WiFi manager, for example "Debian GNU/Linux 13 (trixie) · amd64 · not a Raspberry Pi". The first WiFi adapter that is up is used, then <code>wlan0</code>, then the first WiFi device.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up: on the Pi (full or split) or on a router.</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
     <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600. From 0.0.197: <b>red</b> when the tunnel server routes back into wg0 (a routing loop, section 7.3), <b>amber</b> when it is inside AllowedIPs and the endpoint pin is missing. From 0.0.198 four more checks, each from a problem seen on a real node:
@@ -419,9 +422,12 @@ sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
     <tr><td>DVSwitch, usrp2m17, DNS, updates, everything else</td><td>the normal internet link</td></tr>
   </table>
   <p>How: wg0 runs with <code>Table = off</code> and <code>AllowedIPs = 0.0.0.0/0</code>, so WireGuard accepts packets
-    from any address but adds no routes. A route table (4444) with a default route via wg0 and six routing rules
-    (priority 1100–1105) pick out Asterisk's traffic. The first rule, <code>lookup main suppress_prefixlength 0</code>,
-    keeps the LAN, 44Net and the tunnel server on their normal routes.</p>
+    from any address but adds no routes. WireGuard marks its own packets (<code>FwMark = 0x4444</code>). A route table (4444) with a default route via wg0 and
+    routing rules pick out Asterisk's traffic and 44Net. The rule at priority 1099 sends the marked packets, the tunnel's
+    own, to the normal route, so a tunnel server on a 44Net address is reached on whichever adapter is up and a WiFi change
+    cannot loop the tunnel. The rule <code>lookup main suppress_prefixlength 0</code> keeps the LAN on its normal route.
+    The card is on the Full Tunnel tab and, from 0.0.214, on the Split Tunnel tab too (the same steps, with the split
+    routing lines left out of the test copy and put back by Remove permanent).</p>
   <div class="call care"><span class="t">CAREFUL</span>With the half tunnel on, other nodes and EchoLink reach you at the
     44 address only. A router port forward to the IAX or EchoLink ports stops working, because Asterisk's replies go
     out the tunnel from the 44 address. Everything open in wg0's firewall zone is reachable from the whole internet.</div>
@@ -439,8 +445,8 @@ sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
     <tr><td>0</td><td>Check first</td><td>Read-only. Finds the 44 address, the tunnel server, the IAX port (from <code>iax.conf</code>), whether EchoLink is loaded, the normal route, the LAN, wg0's zone and Asterisk's user. Backs up wg0.conf to the instmon library as <code>wg0.conf.pre-halftunnel</code>. Blocks on anything that would break (5.4).</td></tr>
     <tr><td>1</td><td>Arm auto-undo</td><td>A 15-minute systemd timer that runs <code>/run/44helper-half/undo.sh</code>, even if the page or SSH drops. Nothing below runs until it is armed. Press it again to restart the 15 minutes.</td></tr>
     <tr><td>2</td><td>Restart tunnel in half mode</td><td>Stops <code>wg-quick@wg0</code> and brings wg0 up from a copy in <code>/run</code> with <code>Table = off</code> and <code>AllowedIPs = 0.0.0.0/0</code>. Checks the normal default route is untouched. Before it starts, the DNS check from Chapter 7 runs.</td></tr>
-    <tr><td>3</td><td>Add tunnel route table</td><td>Table 4444 with a default route via wg0, plus the 44Net routes (44.0.0.0/9, 44.128.0.0/10). A tunnel server inside 44Net is pinned to the normal route.</td></tr>
-    <tr><td>4</td><td>Send ASL and EchoLink into the tunnel</td><td>The routing rules: main without its default (1100), from the 44 address (1101), Asterisk's user (1102), the IAX source port (1103), EchoLink 5198-5199/udp (1104), EchoLink directory 5200/tcp (1105).</td></tr>
+    <tr><td>3</td><td>Add tunnel route table</td><td>Table 4444 with a default route via wg0. The 44Net ranges (44.0.0.0/9, 44.128.0.0/10) go into the tunnel by rule (priorities 1107 and 1108), not by routes in the main table, and the tunnel's own marked packets take the normal route (1099).</td></tr>
+    <tr><td>4</td><td>Send ASL and EchoLink into the tunnel</td><td>The routing rules: the tunnel's own marked packets to the normal route (1099), main without its default (1100), from the 44 address (1101), Asterisk's user (1102), the IAX source port (1103), EchoLink 5198-5199/udp (1104), EchoLink directory 5200/tcp (1105).</td></tr>
     <tr><td>5</td><td>Open tunnel ports</td><td>The IAX port and EchoLink, runtime only, in wg0's zone. Ports already open are left alone.</td></tr>
     <tr><td>6</td><td>Loosen the return-path check on wg0</td><td><code>rp_filter = 2</code> on wg0. The kernel uses the higher of <code>all</code> and <code>wg0</code>, so this is enough.</td></tr>
     <tr><td></td><td>Run 2–6 in order</td><td>Runs the steps it hasn't done yet and stops at the first failure, putting everything back. A failed step puts back its own part first.</td></tr>
@@ -476,7 +482,7 @@ sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
     <tr><td>4</td><td>Internet still uses the normal link</td><td><code>1.1.1.1</code> does not route via wg0.</td></tr>
     <tr><td>5</td><td>DNS works</td><td><code>allstarlink.org</code> resolves.</td></tr>
     <tr><td>6</td><td>LAN tools still respond</td><td>The Dashboard, SysMon, instmon and 44helper ports that were listening still answer, their replies to the LAN gateway leave by the LAN link, and replies to your browser don't go out wg0.</td></tr>
-    <tr><td>7</td><td>Tunnel route table exists</td><td>Table 4444 has its default route, and the 44Net routes are on wg0.</td></tr>
+    <tr><td>7</td><td>Tunnel route table exists</td><td>Table 4444 has its default route, and 44Net through wg0 and the marked packets on the normal route both test right.</td></tr>
     <tr><td>8</td><td>Routing rules are loaded</td><td>Every rule from step 4 is in place.</td></tr>
     <tr><td>9</td><td>ASL traffic really goes into the tunnel</td><td>A test lookup for the IAX port, Asterisk's user and EchoLink comes back via wg0, from the 44 address.</td></tr>
     <tr><td>10</td><td>Ports open on the tunnel only</td><td>The ports are open in wg0's zone and the return-path check is loose.</td></tr>
@@ -577,8 +583,8 @@ sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
   <h2><span class="n">7.1</span>The steps</h2>
   <table>
     <tr><th>#</th><th>Step</th><th>What it does</th></tr>
-    <tr><td>1</td><td>Firewall prereq</td><td>Installs and starts firewalld.</td></tr>
-    <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs WireGuard and systemd-resolved, without which the tunnel can fail to start. From 0.0.200 the step is green only when resolved is running <b>and</b> answers (<code>resolvectl status</code> within 5 seconds); the card shows Running and Answers separately. Running the step restarts resolved once if it isn't answering. If it still doesn't answer, the step stays red: reboot, and if that doesn't help, set DNS to Off at 4a.</td></tr>
+    <tr><td>1</td><td>Firewall prereq</td><td>Installs and starts firewalld. It stops with a message when ufw is the active firewall, instead of installing firewalld next to it: the tunnel steps use firewalld zones, and two firewalls fight over the rules. Switch ufw off first.</td></tr>
+    <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs <code>wireguard-tools</code> (without its recommended packages: the module is in every current kernel) and systemd-resolved, without which the tunnel can fail to start. On a machine without NetworkManager the step hands resolved the DNS servers so names keep resolving when <code>/etc/resolv.conf</code> becomes a link to resolved. From 0.0.200 the step is green only when resolved is running <b>and</b> answers (<code>resolvectl status</code> within 5 seconds); the card shows Running and Answers separately. Running the step restarts resolved once if it isn't answering. If it still doesn't answer, the step stays red: reboot, and if that doesn't help, set DNS to Off at 4a.</td></tr>
     <tr><td>2</td><td>Create the 44NetConnect zone</td><td><code>/etc/firewalld/zones/44NetConnect.xml</code>.</td></tr>
     <tr><td>3</td><td>Inbound services and ports</td><td>Tick what other stations may reach: <b>AllStarLink IAX2</b> and <b>EchoLink / SvxLink</b> (on by default), <b>VOTER/RTCM</b> (optional). Asterisk AMI can be added but is flagged red. The Full tab also has your DVSwitch Mobile port and a custom port. From 0.0.212 the Split tab offers IAX2 and VOTER/RTCM but not EchoLink: only 44Net hosts can reach a split tunnel. If firewalld has no <code>iax2</code> (or <code>echolink</code>) service, the step opens the ports instead: the IAX port from <code>iax.conf</code> <code>bindport</code>, default <code>4569/udp</code>. The step counts as done only when IAX is open.</td></tr>
     <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Check and write wg0.conf (chmod 600)</b>. A config with no real private key is refused. A panel shows what the check will change (below); nothing is written until you press <b>Write wg0.conf</b>. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key). From 0.0.212, once wg0.conf exists the step shows <b>Replace the config</b> instead (a new key or tunnel server): the same check before writing, the DNS and MTU settings carried over, and the old file saved as <code>/etc/wireguard/wg0.conf.pre-replace</code>.</td></tr>
@@ -878,11 +884,15 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     not radio traffic.</p>
   <table>
     <tr><th>Method</th><th>Steps</th></tr>
-    <tr><td>token (persistent)</td><td>1. <b>Pre-flight</b> (read-only): is cloudflared installed, which pages run, how it fits with any WireGuard tunnel (none, split or full). 2. <b>Install cloudflared</b> from Cloudflare's repository. 3. <b>Install the connector service</b> (manual): run the <code>sudo cloudflared service install eyJ…</code> command from the Zero Trust dashboard over SSH, so the token never reaches 44helper's log. 4. <b>Verify</b> (read-only). 5. <b>Map a Public Hostname and add an Access policy</b> in the dashboard, for example <code>http://localhost:9999</code> for SysMon.</td></tr>
-    <tr><td>quick (test)</td><td>Pre-flight, install, then <code>cloudflared tunnel --url http://localhost:8989</code> over SSH: a random <code>*.trycloudflare.com</code> address, no account, gone at Ctrl-C.</td></tr>
+    <tr><td>token (persistent)</td><td>1. <b>Pre-flight</b> (read-only): is cloudflared installed, which pages run, how it fits with any WireGuard tunnel (none, split or full). 2. <b>Install cloudflared</b> from Cloudflare's repository. 3. <b>Install the connector service</b>: the card asks for just the tunnel token (hidden, checked for stray characters) and opens the built-in terminal to run <code>cloudflared service install</code>, so the token stays out of the Actions Log. 4. <b>Verify</b> (read-only). 5. <b>Map a Public Hostname and add an Access policy</b> in the dashboard, for example <code>http://localhost:9999</code> for SysMon.</td></tr>
+    <tr><td>quick (test)</td><td>Pre-flight, install, then a <b>Run a quick test tunnel</b> step with a local-port field (default 8989) that runs <code>cloudflared tunnel --url http://localhost:&lt;port&gt;</code> in the built-in terminal: a random <code>*.trycloudflare.com</code> address, no account, gone at Ctrl-C.</td></tr>
   </table>
-  <p><b>Purge</b>: uninstall the connector service, remove the package, the four clean-up steps, and optionally the stored
-    credentials in <code>/etc/cloudflared</code>.</p>
+  <p>The pre-flight also checks Cloudflare's apt source and signing key: Cloudflare changed its key on 30 Oct 2025 and the
+    old key stopped working on 30 Apr 2026, so a node that installed cloudflared earlier may need the new one. Install
+    stops, naming the file, when another apt source file already names Cloudflare's repository, before it writes anything.
+    <b>Purge</b>: uninstall the connector service, remove the package, remove the apt source
+    (<code>/etc/apt/sources.list.d/cloudflared.list</code>) and its signing key, the four clean-up steps, and optionally the
+    stored credentials in <code>/etc/cloudflared</code>.</p>
   <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>needs no inbound port</b>: cloudflared only connects out (to Cloudflare on port 7844), so the
     Ports tab and the firewall cards can't see what you published, and the mapping lives in Cloudflare where
     44helper can't read it. Always put a <b>Cloudflare Access policy</b> (for example, email one-time codes for your
@@ -902,7 +912,8 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   <h1 class="ch">ASL3 and DVSwitch</h1>
   <h2><span class="n">10.1</span>Before any install</h2>
   <ul>
-    <li><b>Pick the right script.</b> Bookworm is Debian 12; Trixie is Debian 13. Check with <code>cat /etc/os-release</code>.</li>
+    <li><b>Pick the right script.</b> Bookworm is Debian 12; Trixie is Debian 13. Check with <code>cat /etc/os-release</code>. The ASL3 list starts on the release the node runs (any other or unknown release starts on Trixie); DVSwitch has packages for Bookworm only, so its list always starts on Bookworm. The Overview shows what 44helper found under the Re-check button, for example "Debian GNU/Linux 13 (trixie) · amd64 · not a Raspberry Pi". ASL3 step 10 installs <code>asl3-appliance-pi</code> only on a Raspberry Pi.</li>
+    <li><b>Other machines than a Pi.</b> Steps run on a Debian or Armbian machine too. firewalld is left out when ufw is the active firewall; when firewalld is new, the ports that already answer (this page, the Dashboard, instmon, wifimon, Cockpit, SysMon, IAX and EchoLink) are kept open in its default zone. Cockpit's NetworkManager plugin is installed only where NetworkManager runs.</li>
     <li><b>Pause the node on a Pi Zero 2 W:</b> quiet mode on the Update tab (Chapter 12), or instmon's Quiet System.</li>
     <li><b>Watch the masked-service card</b> at the top of the tab (Chapter 2). Install buttons stay locked while it is red.</li>
     <li><b>Afterwards</b>, check the Ports tab so nothing you installed is exposed.</li>
@@ -980,8 +991,8 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   <h2><span class="n">11.1</span>SVXLink tab</h2>
   <table>
     <tr><th>Script</th><th>Steps</th></tr>
-    <tr><td><b>USRP fork</b> (default)</td><td>1. Check for conflicts (read-only) · 2. Install build dependencies · 3. Clone the USRP fork (editable branch, default <code>usrp</code>) · 4. Configure &amp; build (from source, no time limit) · 5. Check the USRP part was built · 6. Create the svxlink user · 7. Locate installed files · 8. <code>svxlink.conf</code> + <code>UsrpLogic.conf</code>: switch UsrpLogic on · 9. Systemd unit (<b>written by hand</b>, shown on the card) · 10. Set Callsign · 11–12. Cockpit</td></tr>
-    <tr><td>Bookworm / Trixie</td><td>Debian's <code>svxlink-server</code>: 1. Refresh · 2. Install SvxLink Server · 3. ALSA utilities · 4. Add the svxlink user to the audio and serial groups · 5. Set Callsign · 6. Enable at boot · 7–8. Cockpit. Sound card and PTT/COS stay at their defaults: set them for your hardware.</td></tr>
+    <tr><td><b>USRP fork</b> (default)</td><td>1. Check for conflicts (read-only) · 2. Install build dependencies · 3. Clone the USRP fork (editable branch, default <code>usrp</code>) · 4. Create the svxlink user (before the build, because <code>make install</code> gives its spool folder to that user) · 5. Configure &amp; build (from source, no time limit; it looks for the fork's <code>add_contrib(USRP_LOGIC …)</code> line) · 6. Check the USRP part was built · 7. Locate installed files · 8. Switch UsrpLogic on and set its ports (<code>svxlink.conf</code> and <code>UsrpLogic.conf</code>, including <code>LINKS=LinkToUsrp</code> in <code>[GLOBAL]</code>) · 9. Install &amp; start the <code>svxlink-usrp</code> service (written and started from the page; it refuses while the apt svxlink service runs)</td></tr>
+    <tr><td>Bookworm / Trixie</td><td>Debian's <code>svxlink-server</code>: 1. Refresh · 2. Install SvxLink Server · 3. ALSA utilities · 4. Add the svxlink user to the audio and serial groups · 5. Set Callsign · 6. Enable &amp; start SvxLink (shows SvxLink's own log, with the usual cause, when it stops) · 7–8. Cockpit. Sound card and PTT/COS stay at their defaults: set them for your hardware.</td></tr>
   </table>
   <p>The USRP fork (DL1HRC) adds a UsrpLogic module so SvxLink can talk to the DVSwitch bridges over USRP. It installs
     under <code>/usr/local</code> (config in <code>/usr/local/etc</code>), so it can't collide with the package's files,
@@ -997,19 +1008,22 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     project's own unmodified installer; its licence allows personal, non-commercial use only.</p>
   <table>
     <tr><th>#</th><th>Step</th><th>Kind</th></tr>
-    <tr><td>1–3</td><td>Install git · Install PHP for Apache · Clone USRP2M17-Selector</td><td>Run</td></tr>
-    <tr><td>4</td><td>Run the installer (asks for your callsign)</td><td><b>Manual</b>, or the built-in terminal</td></tr>
-    <tr><td>5</td><td><code>rpt.conf</code>: add the M17 node stanza (node 1917)</td><td><b>Manual edit</b></td></tr>
-    <tr><td>6</td><td><code>modules.conf</code>: enable <code>chan_usrp</code></td><td><b>Manual edit</b></td></tr>
-    <tr><td>7</td><td><code>extensions.conf</code>: add the M17 extension</td><td><b>Manual edit</b></td></tr>
-    <tr><td>8</td><td>Restart Asterisk</td><td>Run</td></tr>
-    <tr><td>9</td><td>Save original configs as Restore point</td><td>Config</td></tr>
-    <tr><td>10</td><td>Install sudoers rule for the web page</td><td>Run</td></tr>
-    <tr><td>11–12</td><td>Cockpit</td><td>Run</td></tr>
+    <tr><td>1–3</td><td>Install git, sudo and the build tools · Install PHP for Apache · Clone USRP2M17-Selector</td><td>Run</td></tr>
+    <tr><td>4</td><td>Run the installer (a Callsign box answers its one question; Open in terminal is the backup)</td><td>Run</td></tr>
+    <tr><td>5</td><td>Add the M17 node to <code>rpt.conf</code>, <code>modules.conf</code> and <code>extensions.conf</code> (one node-number field, default 1917)</td><td>Run</td></tr>
+    <tr><td>6</td><td>Restart Asterisk (<code>astres.sh</code> when the node has it, else <code>systemctl restart asterisk</code>)</td><td>Run</td></tr>
+    <tr><td>7</td><td>Save original configs as Restore point</td><td>Config</td></tr>
+    <tr><td>8</td><td>Install sudoers rule for the web page</td><td>Run</td></tr>
+    <tr><td>9–10</td><td>Cockpit</td><td>Run</td></tr>
   </table>
-  <p>The three Asterisk edits are shown as text, not run, because editing a live Asterisk config unattended is too risky.
-    <b>Purge</b> stops and disables USRP2M17, removes the web page, the sudoers drop-in and the unit, then the four
-    clean-up steps; optional: the clone directory, Cockpit. It <b>never</b> undoes the three edits.</p>
+  <p>Step 5 reads all three files and plans every edit before writing anything, and stops without changes if the node
+    number is already used, a stanza is missing or a file has Windows line endings. It tags the lines it adds and keeps a
+    copy of each file the first time. It does not add the optional <code>NODE1 = …</code> line in rpt.conf
+    <code>[globals]</code>: add it by hand if your config uses NODE/NODE1 globals.
+    <b>Purge</b> starts with <b>Undo the Asterisk config edits</b> and <b>Restart Asterisk</b>, which remove only the tagged
+    lines and put the original <code>noload</code> line back (edits made by hand are left alone), then stops and disables
+    USRP2M17, removes the web page, the sudoers drop-in and the unit, then the four clean-up steps; optional: the clone
+    directory, Cockpit. The purge of the USRP2M17 unit removes the real file in <code>/usr/lib/systemd/system/</code>.</p>
   <div class="call tip"><span class="t">TIP</span>Afterwards, SysMon's M17 tab checks the ports (32008 and 34008) and the
     <code>[1917]</code> node match, and the Config tab's Port check checks the USRP pair.</div>
 
@@ -1017,13 +1031,28 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   <p>Ampersand is a separate, Asterisk-free AllStar/IAX node. Pick a <b>Product</b>:</p>
   <table>
     <tr><th>Product</th><th>Install</th><th>Purge</th></tr>
-    <tr><td>Radio node (<code>amp-server</code>)</td><td>1. Check for conflicts · 2. Install required packages · 3. udev HID rule (COS/PTT) · 4. Download &amp; unpack · 5. First run (foreground smoke test, built-in terminal) · 6. Run as a systemd service</td><td>Stop &amp; disable · remove the unit · the binary · the staged files · clean-up; optional: node config and udev rule</td></tr>
-    <tr><td>Hub (<code>amp-hub</code>)</td><td>1. Check for conflicts · 2. Install wget · 3. Download, unpack &amp; run <code>install.sh</code> · 4. Configure <code>/usr/etc/amp-hub.env</code> · 5. Enable &amp; start</td><td>Stop &amp; disable · remove the unit · the service account · the staged files · clean-up; optional: the env file</td></tr>
+    <tr><td>Radio node (<code>amp-server</code>)</td><td>1. Check for conflicts · 2. Install required packages (also <code>libasound2</code> and <code>libusb-1.0-0</code>) · 3. udev HID rule (COS/PTT access) · 4. Download &amp; unpack (a Version box, the release date; it first checks the processor is aarch64 or x86_64 and that Ampersand publishes that version for it) · 5. (Optional) First run, a foreground smoke test in the built-in terminal · 6. Install &amp; start the service (Run as user, Web UI port) · 7. (Optional) Web UI password</td><td>Stop &amp; disable · remove the unit · the binary · the staged files · clean-up; optional: node config and udev rule</td></tr>
+    <tr><td>Hub (<code>amp-hub</code>)</td><td>1. Check for conflicts · 2. Install required packages (<code>net-tools wget libcurl4-gnutls-dev</code>) · 3. Download &amp; install the hub (running it again upgrades and keeps your settings) · 4. Set the hub's node, password, port and access: fields for the node number, node password (blank for a private node), IAX port, auth mode (OPEN by default) and allowed node numbers · 5. (Optional) Other settings in <code>/usr/etc/amp-hub.env</code> (opens in nano in the built-in terminal) · 6. Enable &amp; start the hub</td><td>Stop &amp; disable · remove the unit · the service account · the staged files · clean-up; optional: the env file</td></tr>
   </table>
   <div class="call care"><span class="t">CAREFUL</span>Ampersand <b>replaces</b> Asterisk; the two don't share a node. On a
     Pi already running ASL3 on IAX 4569/udp, give Ampersand its own node number and IAX port (the hub defaults to 4568),
     or use a separate Pi. The tab never stops Asterisk for you. The download date is pinned in the command box: change
-    it if a newer build exists. Its web page (8080) should stay private.</div>
+    it if a newer build exists. Its web page (8080) should stay private. Ampersand's packages are for Debian 13 (Trixie) only: the download step stops on any other release and names the one it found.</div>
+  <h2><span class="n">11.4</span>Claude Remote tab</h2>
+  <p>Installs Node.js 22 and Claude Code on the node, signs in, and runs <code>claude remote-control</code> as a systemd
+    service (<code>claude-remote.service</code>) in a folder you choose, so the node can be reached from your Claude apps
+    while it runs. It works on Debian 12 and 13, on Debian or Armbian, on x86-64 and arm64.</p>
+  <table>
+    <tr><th>#</th><th>Step</th><th>Notes</th></tr>
+    <tr><td>1</td><td>Check what is here (read-only)</td><td>The release, the processor, Node.js, Claude Code and the service.</td></tr>
+    <tr><td>2</td><td>Install Node.js 22</td><td>Pinned (node-v22.23.4) and downloaded from nodejs.org for the node's processor; its SHA256 is checked against the value pinned in 44helper; installed under <code>/opt</code>. Nothing comes from a third-party apt source.</td></tr>
+    <tr><td>3</td><td>Install Claude Code</td><td>Pinned to <code>@anthropic-ai/claude-code</code> 2.1.317.</td></tr>
+    <tr><td>4</td><td>Sign in as the login user</td><td>Manual, in the built-in terminal: Claude starts as the login user inside the Remote Control folder. Answer <b>Yes</b> to trust the folder (the service refuses to start until it is trusted), then exit with <code>/exit</code> or Ctrl+C twice.</td></tr>
+    <tr><td>5</td><td>Create the Remote Control folder</td><td>Default <code>~/claude-remote</code>; it must be inside the login user's home, not hidden, with no spaces.</td></tr>
+    <tr><td>6</td><td>Start Claude Remote as a service</td><td>Runs as the login user, not root, because the sign-in is stored in that user's home folder.</td></tr>
+    <tr><td>7–8</td><td>Check the service · Stop Claude Remote</td><td>Stop disables the service; the node is then no longer reachable from the apps.</td></tr>
+  </table>
+  <p><b>Purge</b> removes the service, Claude Code and Node.js 22, then the four clean-up steps.</p>
 </section>
 
 <section class="part">
@@ -1125,7 +1154,9 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td>Restart services</td><td>After a change: buttons that restart exactly the services those files belong to. Nothing restarts until you press one.</td></tr>
     <tr><td>Finish: reinstall and reboot</td><td>Reinstalls the Node Controller tools from instmon's library (instmon first, each one put back if its new copy doesn't start) and reboots once instmon, the Dashboard and Asterisk are healthy. Don't power off while it runs.</td></tr>
     <tr><td>Create save point</td><td>A name of up to 40 characters (letters, numbers, spaces, <code>_ . -</code>).</td></tr>
-    <tr><td>Travel Node preset</td><td>The private nodes (1000–1999) in <code>rpt.conf</code> and their <code>[nodes]</code> lines, their extensions, <code>chan_usrp</code>, the USRP2M17 and Analog_Bridge <code>[USRP]</code> ports. Never callsigns, IDs or passwords. <b>Preview</b>, then <b>Save as Travel Node</b>; apply it from Restore on any node. Bridge nodes get the upstream USRP2M17 values, and it warns before breaking EchoLink or a working USRP pair.</td></tr>
+    <tr><td>Travel Node preset</td><td>The private nodes (1000–1999) in <code>rpt.conf</code> and their <code>[nodes]</code> lines, their extensions, <code>chan_usrp</code>, the USRP2M17 and Analog_Bridge <code>[USRP]</code> ports. Never callsigns, IDs or passwords. <b>Preview</b>, then <b>Save as Travel Node</b>; apply it from Restore on any node. Bridge nodes get the upstream USRP2M17 values, and it warns before breaking EchoLink or a working USRP pair. Node Talker's transmit node 1921 is left out when saving and never removed or rewritten when applying: add it on each node from Node Talker's TX card.</td></tr>
+    <tr><td>Add private node</td><td>Adds a private node (1000–1999) to <code>rpt.conf</code> the way the Dashboard's Phone tab and Node Talker do: a stanza built on the main node's template, a <code>[nodes]</code> line on this node's IAX port (<code>radio@127.0.0.1[:port]/N,NONE</code>) and, if ticked, <code>exten =&gt; N,1,rpt,N</code> in <code>extensions.conf</code> <code>[radio-secure]</code>. <b>Number:</b> blank picks the next free one from 1000, skipping every number already in rpt.conf (a number whose only trace is a <code>[functionsN]</code> section counts as taken) and the usual ones (1921 Node Talker, 1999 DVSwitch, 1917 M17); 1921 is refused. <b>Type:</b> Plain (<code>rxchannel = Local/pseudo</code>) or USRP bridge (<code>USRP/127.0.0.1:&lt;other program's port&gt;:&lt;Asterisk's port&gt;</code>, which refuses ports another USRP node already uses). <b>Preview</b> writes nothing; <b>Add node</b> saves an automatic copy first and does not restart Asterisk. It also adds the node to <code>/etc/allmon3/allmon3.ini</code> and Remove takes it out; the ASL3 Restart button restarts Allmon3 with Asterisk. A node added here carries the line <code>; 44helper: private node added on the Config tab (remove it there)</code> and is listed on the card with <b>Preview remove</b> and <b>Remove</b>. Nodes the card did not add, the Dashboard's Phone nodes and Node Talker's node are never touched.</td></tr>
+    <tr><td>Full config replacement</td><td>For a Pi Zero 2 W. <b>Get bundle from GitHub</b> downloads the standard config from <code>configs/pi02w/</code> (every file is checked against the list's sha256 and size; one bad file saves nothing; the branch or tag may only use letters, digits, <code>.</code>, <code>_</code>, <code>-</code> and <code>/</code>). Fill in the callsign, ASL node number, DMR ID and NXDN ID; <b>Preview</b> shows which files would change; <b>Replace config</b> saves an automatic restore point, writes the files and offers the Restart buttons. Systems that are not installed are skipped. Passwords and keys are not in the bundle: each keeps the value the node has now, and a value the node lacks is written empty and listed. The Phone tab's blocks in <code>rpt.conf</code> are kept. Install ASL3, DVSwitch and USRP2M17 from their tabs, and the split tunnel from the Split Tunnel tab with this node's own WireGuard config, first: this card does not touch the firewall or WireGuard.</td></tr>
     <tr><td>Identity</td><td>Checks callsigns, IDs and passwords agree across every file (masked; <b>Reveal</b> needs the root password). Chips: <b>matches</b>, <b>differs</b> (red), <b>some copies empty</b>, <b>not set</b>, <b>no public node</b>, <b>one copy</b>.</td></tr>
     <tr><td>Set the callsign everywhere <span class="badge test">TESTING</span></td><td>On the Identity card's Callsign line: 3–7 letters and digits with at least one digit. Preview first, an automatic save point, then every callsign field (rpt.conf ID text, EchoLink, MMDVM_Bridge, <code>var.txt</code>, ircDDBGateway, the YSF/P25/NXDN gateways, USRP2M17, the Dashboard's and 44helper's config). Nothing restarts: restart the Dashboard first. The ircDDB and DPlus accounts must exist under the new call.</td></tr>
     <tr><td>Digital-mode gateways</td><td><b>Enable and start at boot</b> for ircDDBGateway, YSF/FCS, P25, NXDN and STFU, so every mode is ready after boot. <b>Undo</b> puts them back.</td></tr>
@@ -1224,6 +1255,8 @@ sudo wg show wg0</pre>
     <tr><td class="mono">/etc/44helper/44helper.conf</td><td>settings: server, identity, tunnels, router access, nodes</td></tr>
     <tr><td class="mono">/etc/44helper/44helper_guard_keep.json</td><td>services you chose to keep masked</td></tr>
     <tr><td class="mono">/etc/44helper/44helper_quiet_state.json</td><td>what quiet mode paused, and from 0.0.212 the boot it was turned on in</td></tr>
+    <tr><td class="mono">/etc/systemd/system/claude-remote.service</td><td>the Claude Remote tab's service (runs as the login user)</td></tr>
+    <tr><td class="mono">/opt/node-v22.23.4/ · /usr/local/bin/claude</td><td>Node.js 22 and Claude Code, installed by the Claude Remote tab</td></tr>
     <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td></tr>
     <tr><td class="mono">/run/44helper/sessions.json</td><td>logins (cleared at reboot)</td></tr>
     <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-routing</code> (split policy routing, 0.0.212), <code>-half</code>, <code>-fullx</code>, and <code>-endpoint-pin</code> (older split tunnels only)</td></tr>
