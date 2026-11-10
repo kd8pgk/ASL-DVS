@@ -1,5 +1,18 @@
 # instmon changelog
 
+## 2.99.0 (2026-11-10)
+
+Third step of the "available but opt-in" plan: install several downloaded tools at once, and Full Update that leaves alone what you stopped. This is a release: Python and page behaviour changed.
+
+- **Install selected.** The "Available, not installed" card has a tick box on every tool that is downloaded, and Select all, Clear and Install selected buttons. Install selected runs each ticked tool's own `--install`, one after another, in Full Update's order (the same code as the Install button, with the same checks: it must be in the library, support `--install`, pass a syntax check and be for this node's build). Everything is checked before the first install starts; one bad file refuses the request and nothing runs. A tool that turns out to be installed already is skipped. One failing install does not stop the rest, and the end says how many were installed. It stops if a recording starts, will not start while another Install selected or a disk-image job runs, and is blocked during a recording and during Full Update like the other install actions. Ticks survive the page's refresh.
+- **Terminal Monitor is never part of "all".** It gives a root shell to anyone on the LAN who has the password. Select all leaves it unticked; you can tick it yourself. The page asks a second question for it, and the server refuses a request that names it unless that second confirmation (`root_shell_ok`) is sent.
+- **Full Update leaves stopped what you stopped.** A tool counts as stopped by you when its service is not running and either you stopped it with Stop (the 2.93.0 marker) or it is disabled, unless Quiet System or a disk-image job paused it. Full Update still updates the file, but after installing it stops the service again (and disables it again if it was disabled) and does not start-check it. If the new file fails to install and the old one is put back, that one is stopped again too. A running tool is updated and checked as before. A service that merely crashed (enabled but not running) is treated as running and is started and checked. `--install` itself starts the service for a moment before it is stopped; the tools' own installers cannot be told not to.
+- **Full Update refreshes the downloads of tools that are not installed.** After reading GitHub's list it downloads (never installs) the newest file for every tool that is not installed, with the same rules and limits as Check GitHub, then goes on. Its plan line for such a tool now says it is only downloaded. Full Update still never installs a tool that is not installed.
+- The Available card has its own row layout (tick box, name, port, note, button) and the title line shows the release date.
+- Compatible: a node on an older instmon is unaffected; the new server action is only used by this version's page.
+
+Tests: stopped-by-you rules (running, marked, disabled, Quiet-held, crashed), Full Update on a running, marked, disabled, crashed and Quiet-held service, a failed update with rollback on a stopped service, a failed rollback still needing attention, the download step in Full Update and its failure, Install selected (confirmation, list checks, order, skipped installed tools, bad file refuses everything, other build, one failure, a crash, a recording stopping it, already running, disk-image job, locks), and the card (`ci/test_ci.py`). Checked in headless Chromium: Select all leaves Terminal Monitor unticked, ticks survive the refresh, the confirmation names the tools.
+
 ## 2.98.0 (2026-11-09)
 
 The Manuals card downloads only manuals. This is a release: what is downloaded changed. It used to fetch every PDF in the `docs` folder (36 files, about 10 MB), including the code summaries, audits and review sheets. Now it fetches only the files named `ASL-DVS_*_Manual.pdf` or `ASL-DVS_*_Guide.pdf`: the User Manual, the 44helper Manual, the Node Talker Manual, the Full Build and Pi02w Install Manuals, and the Phone Dialplan Guide (6 files). `ASL-DVS_Idealized_Node_Configuration.pdf` and the `Node_Controller_*` summaries are no longer downloaded. A new manual that follows the same name pattern is picked up without a new instmon.
@@ -86,7 +99,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_98_0_20261109.py`. Newest entries first.
+Current file: `instmon_v2_99_0_20261110.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

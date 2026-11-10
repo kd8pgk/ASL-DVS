@@ -40,8 +40,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.98.0"
-DATE_STR ="2026-11-09"
+VERSION ="2.99.0"
+DATE_STR ="2026-11-10"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -5888,6 +5888,30 @@ def user_stopped_clear(service):
 def user_stopped_is(service):
     return service in user_stopped_read()
 
+def _unit_enabled_state(unit):
+    try:
+        r = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, timeout=5)
+        return (r.stdout or "").strip() or "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+
+def _held_by_quiet(unit):
+    state = _quiesce_state_read()
+    if not state:
+        return False
+    names = {unit, unit + ".service"} if not unit.endswith(".service") else {unit, unit[:-len(".service")]}
+    return any(isinstance(e, (list, tuple)) and len(e) > 2 and e[2] in names for e in state.get("stopped") or [])
+
+def service_user_stopped(comp):
+    unit = unit_of(comp)
+    if systemctl_is_active(unit) == "active":
+        return False
+    if user_stopped_is(comp["service"]):
+        return True
+    if _held_by_quiet(unit):
+        return False
+    return _unit_enabled_state(unit) == "disabled"
+
 def quiet_forget(service):
     with _quiesce_lock:
         state = _quiesce_state_read()
@@ -5978,7 +6002,7 @@ _FU_NO_STOP_PHASES = ("instmon", "recovering")
 RECORDER_STATUS_URL = os.environ.get("INSTMON_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
 _recorder_cache = {"t": -1e9, "v": None}
 _RECORDING_BLOCKED_ACTIONS = frozenset((
-    "install", "uninstall", "start", "stop", "install_config", "run_script", "rpiclone_install", "save_alternate",
+    "install", "install_suite", "uninstall", "start", "stop", "install_config", "run_script", "rpiclone_install", "save_alternate",
     "comms_restart", "reboot", "shutdown", "gh_update", "quiet", "restore", "full_update", "install_confgetter",
     "cg_run", "cg_uninstall", "install_confputter", "cp_uninstall", "cp_apply", "cp_undo"))
 SUITELOG_PATH = os.environ.get("INSTMON_SUITELOG", "/run/asl_dvs/suitelog.jsonl")
@@ -7050,7 +7074,7 @@ def _fu_plan(cands):
         rows.append(row)
         target = resolve_installed_target(comp)
         if not os.path.isfile(target):
-            row.update(status="not_installed", note="not installed -- left alone")
+            row.update(status="not_installed", note="not installed -- left alone (only downloaded; install it from Available, not installed)")
             continue
         inst_ver = read_installed_version(target)
         row["installed_version"] = inst_ver or "?"
@@ -7285,6 +7309,23 @@ def _post_install_watch(comp):
         log_event(f"{comp['name']}: {why} after the install -- check it; the previous version "
                   f"is in its library if you want to go back", "err")
 
+def _fu_stop_service(comp):
+    try:
+        subprocess.run(["systemctl", "stop", unit_of(comp)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_event(f"Full Update: {comp['name']}: could not stop it again: {exc}", "warn")
+
+def _fu_keep_stopped(comp, was_enabled):
+    _fu_stop_service(comp)
+    if not was_enabled:
+        try:
+            subprocess.run(["systemctl", "disable", unit_of(comp)], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log_event(f"Full Update: {comp['name']}: could not disable it again: {exc}", "warn")
+    user_stopped_mark(comp["service"])
+    log_event(f"Full Update: {comp['name']} was stopped by you, so it is left stopped"
+              + ("" if was_enabled else " and disabled"), "info")
+
 def _fu_update_one(comp, row, new_path):
     name = comp["name"]
     target = resolve_installed_target(comp)
@@ -7295,6 +7336,8 @@ def _fu_update_one(comp, row, new_path):
         return "skipped", f"couldn't save a copy of the installed version ({stage_err}) -- left alone"
     old_path = os.path.join(LIB_SUBDIRS[comp["category"]], old_name)
     old_ver, new_ver = row["installed_version"], row["version"]
+    keep_stopped = service_user_stopped(comp)
+    was_enabled = _unit_enabled_state(unit_of(comp)) != "disabled"
     _fu_set(in_progress={"category": comp["category"], "name": name, "old_path": old_path,
                          "old_ver": old_ver, "new_ver": new_ver})
     _fu_save()
@@ -7308,17 +7351,20 @@ def _fu_update_one(comp, row, new_path):
     else:
         if rc != 0:
             log_event(f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway", "warn")
-        ok, state = _fu_try_new(comp, row, new_path)
+        ok, state = _fu_try_new(comp, row, new_path, keep_stopped, was_enabled)
+    tail = "; left stopped, as you had it" if keep_stopped else ""
     if ok:
         if row.get("status") == "switch":
             log_event(f"Full Update: {name} switched: {row['note']}", "ok")
-            return "updated", row["note"]
+            return "updated", row["note"] + tail
         log_event(f"Full Update: {name} updated v{old_ver} -> v{new_ver}", "ok")
-        return "updated", f"v{old_ver} -> v{new_ver}"
-    return _fu_put_back(comp, old_path, old_ver,
-                        "stopped by you" if state == "stopped by you" else f"v{new_ver} failed ({state})")
+        return "updated", f"v{old_ver} -> v{new_ver}" + tail
+    outcome, note = _fu_put_back(comp, old_path, old_ver,
+                                 "stopped by you" if state == "stopped by you" else f"v{new_ver} failed ({state})",
+                                 keep_stopped, was_enabled)
+    return outcome, note + (tail if outcome == "skipped" else "")
 
-def _fu_try_new(comp, row, new_path):
+def _fu_try_new(comp, row, new_path, keep_stopped=False, was_enabled=True):
     name, new_ver = comp["name"], row["version"]
     _fu_set(current=f"{name}: installing v{new_ver}")
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
@@ -7326,6 +7372,12 @@ def _fu_try_new(comp, row, new_path):
     rc = _fu_run_cli(new_path, "--install")
     if _fu_stop_ev.is_set():
         return False, "stopped by you"
+    if keep_stopped:
+        if rc != 0:
+            return False, f"--install exited {rc}"
+        _fu_keep_stopped(comp, was_enabled)
+        log_event(f"Full Update: {name}: v{new_ver} installed but not started, so it was not checked", "info")
+        return True, "installed, left stopped"
     if rc == 0:
         _fu_set(current=f"{name}: v{new_ver} installed")
         log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{new_ver} to start and answer", "info")
@@ -7341,12 +7393,16 @@ def _fu_try_new(comp, row, new_path):
             _fu_wait_end()
     return ok, state
 
-def _fu_put_back(comp, old_path, old_ver, reason):
+def _fu_put_back(comp, old_path, old_ver, reason, keep_stopped=False, was_enabled=True):
     name = comp["name"]
     log_event(f"Full Update: {name}: {reason} -- putting v{old_ver} back", "err")
     _fu_set(current=f"{name}: rolling back to v{old_ver}")
     prepare_install(comp, old_path)
     rc = _fu_run_cli(old_path, "--install", stoppable=False)
+    if keep_stopped and rc == 0:
+        _fu_keep_stopped(comp, was_enabled)
+        log_event(f"Full Update: {name} rolled back to v{old_ver}", "warn")
+        return "skipped", f"{reason}; rolled back to v{old_ver}"
     if rc == 0:
         log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{old_ver} to start and answer", "info")
     ok, state = (_fu_wait_healthy(comp, f"v{old_ver} to start and answer", stoppable=False) if rc == 0
@@ -7505,6 +7561,18 @@ def _fu_wifi_menu_home(entries):
                 except OSError as exc:
                     log_event(f"Full Update: {name}: couldn't remove the old copy {path}: {exc}", "warn")
 
+def _fu_fetch_missing_step(entries):
+    _fu_set(current="downloading tools that are not installed")
+    try:
+        got = _gh_fetch_missing(entries)
+    except Exception as exc:
+        log_event(f"Full Update: downloading tools that are not installed failed: {exc}", "warn")
+        return []
+    if got:
+        log_event("Full Update: tools that are not installed were only downloaded; install them from "
+                  "Available, not installed", "info")
+    return got
+
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
     log_event(f"Full Update started ({_gh_source_label()})", "info")
@@ -7519,6 +7587,7 @@ def _fu_run():
                          checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     scripts = [e for e in entries if e["category"] == "scripts" and e.get("status") in _GH_UPDATABLE]
     _fu_publish_plan(rows, scripts)
+    _fu_fetch_missing_step(entries)
     plan = [r for r in rows if r["status"] in _FU_ACTIONABLE]
     skipped = [{"name": r["name"], "note": r["note"]} for r in rows if r["status"] == "error"]
     _fu_set(skipped=list(skipped))
@@ -8482,6 +8551,7 @@ def _available_note(category):
 
 def render_available_card_html(components, library=None):
     rows = []
+    downloadable = 0
     for c in components:
         if c["category"] in NO_CARD_CATEGORIES or c["category"] == "instmon" or c.get("installed"):
             continue
@@ -8490,15 +8560,20 @@ def render_available_card_html(components, library=None):
         if files:
             best = files[0]
             note = f'Downloaded v{esc(str(best.get("version") or "?"))} ({esc(best["name"])})'
+            root = ' data-root-shell="1"' if c["category"] in SUITE_ROOT_SHELL else ""
+            tick = (f'<input type="checkbox" class="suite-cb" data-category="{c["category"]}" '
+                    f'data-name="{esc(best["name"])}"{root} title="Tick to install with Install selected">')
             btn = (f'<button data-action="install" data-category="{c["category"]}" data-name="{esc(best["name"])}">'
                    f'Install</button>')
+            downloadable += 1
         else:
+            tick = "<span></span>"
             note = esc(_available_note(c["category"]))
             btn = ""
         port = f'port {c["port"]}' if c.get("port") else "no web UI"
         rows.append(f"""
-    <div class="row comp-row">
-      <b>{esc(c['name'])}</b>
+    <div class="avail-row">
+      {tick}<b>{esc(c['name'])}</b>
       <span class="small muted">{port}</span>
       <span class="small">{note}</span>
       {btn}
@@ -8507,11 +8582,72 @@ def render_available_card_html(components, library=None):
         return ""
     build = " (Pi Zero 2 W fork build)" if _build_wanted_variant() else ""
     source = "the Stable channel" if channel_get() == "stable" else f"the Testing channel ({esc(GITHUB_BRANCH)})"
+    suite = suite_status()
+    footer = ""
+    if suite["running"]:
+        left = ", ".join(esc(n) for n in suite["left"])
+        footer = (f'<div class="small" id="suite-status" style="margin-top:.5rem">Installing {esc(suite["current"])} '
+                  f'({len(suite["done"]) + len(suite["failed"]) + 1} of {suite["total"]})'
+                  + (f'; next: {left}' if left else "") + '</div>')
+    elif downloadable:
+        footer = ('<div class="row btn-row" style="margin-top:.5rem">'
+                  '<button data-action="suite_select_all">Select all</button>'
+                  '<button data-action="suite_clear">Clear</button>'
+                  '<button data-action="install_suite" class="b-start">Install selected</button>'
+                  '<span class="small muted">Installs the ticked tools one after another, each exactly as its own Install does. '
+                  'Select all leaves Terminal Monitor (a root shell) unticked; tick it yourself if you want it.</span></div>')
     return f"""
   <div class="card" id="available-card">
     <div class="row"><b>Available, not installed</b></div>
-    <div class="small muted" style="margin:.2rem 0 .4rem">Downloaded from {source}{build}. Nothing here is installed or started until you press Install.</div>{"".join(rows)}
+    <div class="small muted" style="margin:.2rem 0 .4rem">Downloaded from {source}{build}. Nothing here is installed or started until you press Install.</div>{"".join(rows)}{footer}
   </div>"""
+
+_suite_lock = threading.Lock()
+_suite_state = {"running": False, "total": 0, "done": [], "failed": [], "current": "", "left": []}
+SUITE_MAX_ITEMS = 16
+SUITE_ROOT_SHELL = ("termon",)
+
+def suite_status():
+    with _suite_lock:
+        return json.loads(json.dumps(_suite_state))
+
+def _suite_order(categories):
+    rank = {c: i for i, c in enumerate(FU_ORDER)}
+    return sorted(categories, key=lambda c: (rank.get(c, len(rank)), c))
+
+def _suite_run(plan):
+    with _suite_lock:
+        _suite_state.update(running=True, total=len(plan), done=[], failed=[], current="",
+                            left=[c["name"] for c, _s, _n in plan])
+    log_event(f"Install selected: {len(plan)} tool(s), one after another: " + ", ".join(c["name"] for c, _s, _n in plan), "info")
+    try:
+        for index, (comp, src, name) in enumerate(plan):
+            if recorder_busy():
+                log_event("Install selected: a recording started, so the rest were not installed", "warn")
+                break
+            with _suite_lock:
+                _suite_state["current"] = comp["name"]
+                _suite_state["left"] = [c["name"] for c, _s, _n in plan[index + 1:]]
+            with _running_installs_lock:
+                if comp["service"] in _running_installs:
+                    with _suite_lock:
+                        _suite_state["failed"].append({"name": comp["name"], "note": "an install was already running"})
+                    continue
+                _running_installs.add(comp["service"])
+            try:
+                run_self_install_bg(src, name, comp)
+            except Exception as exc:
+                log_event(f"Install selected: {comp['name']} failed: {exc}", "err")
+            installed = os.path.isfile(resolve_installed_target(comp))
+            with _suite_lock:
+                (_suite_state["done"] if installed else _suite_state["failed"]).append(
+                    {"name": comp["name"], "note": name if installed else "its --install did not finish (see the log)"})
+    finally:
+        with _suite_lock:
+            _suite_state.update(running=False, current="", left=[])
+            done, failed = len(_suite_state["done"]), len(_suite_state["failed"])
+        level = "ok" if not failed else "warn"
+        _gh_event(f"Install selected finished: {done} installed" + (f", {failed} not installed (see the log)" if failed else ""), level)
 
 def render_components_section(status):
     return (render_available_card_html(status["components"], status["library"])
@@ -9006,6 +9142,9 @@ input[type=file]{color:var(--muted);font-size:var(--fs-base);max-width:100%}
 @media(min-width:561px){
 .comp-row{display:grid;grid-template-columns:7rem 9.5rem 6rem minmax(0,1fr);gap:.2rem .9rem;align-items:center}
 .comp-row .ver{min-width:0}
+.avail-row{display:grid;grid-template-columns:1.6rem 9.5rem 6rem minmax(0,1fr) 6rem;gap:.3rem .9rem;align-items:center;padding:.25rem 0;border-top:1px solid var(--line, #1c2a40)}
+.avail-row>span,.avail-row>b{min-width:0;overflow-wrap:anywhere}
+@media (max-width:640px){.avail-row{grid-template-columns:1.6rem minmax(0,1fr);}.avail-row>:nth-child(n+3){grid-column:2}}
 .comp-row>:nth-child(5){grid-column:4;grid-row:2}
 .librow-top{display:grid;grid-template-columns:10rem minmax(0,1fr) 6rem;gap:.4rem .9rem;align-items:center}
 .librow-top .ver{min-width:0}
@@ -9489,11 +9628,11 @@ function renderQuietFullUpdate(quiet, fu) {
 }
 
 let recBusy = null;
-const REC_UI = ['start', 'stop', 'uninstall', 'install', 'run_script', 'install_config', 'install_confgetter', 'install_confputter', 'cg_run',
+const REC_UI = ['start', 'stop', 'uninstall', 'install', 'install_suite', 'run_script', 'install_config', 'install_confgetter', 'install_confputter', 'cg_run',
   'cg_uninstall', 'cp_apply', 'cp_undo', 'cp_uninstall', 'restore', 'quiet', 'reboot', 'shutdown', 'comms_restart', 'gh_update', 'full_update',
   'save_alternate', 'rpiclone_install', 'diskimg_backup_start', 'diskimg_format_start', 'diskimg_clone_start', 'diskimg_restore_start',
   'diskimg_mount', 'diskimg_unmount', 'diskimg_eject', 'diskimg_schedule_save'];
-const REC_API = ['install', 'uninstall', 'start', 'stop', 'install_config', 'run_script', 'rpiclone_install', 'save_alternate', 'comms_restart',
+const REC_API = ['install', 'install_suite', 'uninstall', 'start', 'stop', 'install_config', 'run_script', 'rpiclone_install', 'save_alternate', 'comms_restart',
   'reboot', 'shutdown', 'gh_update', 'quiet', 'restore', 'full_update', 'install_confgetter', 'cg_run', 'cg_uninstall', 'install_confputter',
   'cp_uninstall', 'cp_apply', 'cp_undo'];
 const REC_PATHS = ['/api/file', '/api/confputter/upload', '/api/diskimg/backup/start', '/api/diskimg/format/start', '/api/diskimg/clone/start',
@@ -11009,7 +11148,13 @@ async function openEditor(category, name) {
 
 """
 
-_JS_ACTIONS = """function wireButtons() {
+_JS_ACTIONS = """var SUITE_CHECKED = {};
+
+function suiteTicked() {
+  return Array.from(document.querySelectorAll('#available-card input.suite-cb')).filter(cb => cb.checked);
+}
+
+function wireButtons() {
   document.querySelectorAll('input[type=file][data-category]').forEach(inp => {
     if (inp._wired) return;
     inp._wired = true;
@@ -11020,6 +11165,12 @@ _JS_ACTIONS = """function wireButtons() {
     });
   });
   restoreUploadSelections();
+  document.querySelectorAll('input.suite-cb').forEach(cb => {
+    if (cb._wired) return;
+    cb._wired = true;
+    cb.checked = !!SUITE_CHECKED[cb.dataset.category];
+    cb.addEventListener('change', () => { SUITE_CHECKED[cb.dataset.category] = cb.checked; });
+  });
   document.querySelectorAll('input.lib-lock-cb').forEach(cb => {
     if (cb._wired) return;
     cb._wired = true;
@@ -11042,6 +11193,13 @@ _JS_ACTIONS = """function wireButtons() {
         const cat = btn.dataset.category;
         if (_libOpen.has(cat)) { _libOpen.delete(cat); } else { _libOpen.add(cat); }
         applyLibraryCollapseState();
+        return;
+      }
+      if (action === 'suite_select_all' || action === 'suite_clear') {
+        document.querySelectorAll('#available-card input.suite-cb').forEach(cb => {
+          cb.checked = action === 'suite_select_all' && !cb.dataset.rootShell;
+          SUITE_CHECKED[cb.dataset.category] = cb.checked;
+        });
         return;
       }
       if (action === 'toggle_diskimg_card') {
@@ -11133,6 +11291,15 @@ _JS_ACTIONS = """function wireButtons() {
           // No confirmation -- fires immediately, see the banner above
           // the Components card.
           await postAction({action: 'stop', service: btn.dataset.service});
+        } else if (action === 'install_suite') {
+          const ticked = suiteTicked();
+          if (!ticked.length) { showPopup('Tick the tools to install first.', 'warn'); btn.disabled = false; return; }
+          const rootShell = ticked.some(cb => cb.dataset.rootShell);
+          const names = ticked.map(cb => cb.closest('.avail-row').querySelector('b').textContent).join(', ');
+          if (!confirm(`Install ${names}, one after another? Each one restarts its own service.`)) { btn.disabled = false; return; }
+          if (rootShell && !confirm('Terminal Monitor gives a root shell to anyone on your LAN who knows the password. Install it?')) { btn.disabled = false; return; }
+          await postAction({action: 'install_suite', confirm: true, root_shell_ok: rootShell,
+            items: ticked.map(cb => ({category: cb.dataset.category, name: cb.dataset.name}))});
         } else if (action === 'go') {
           if (btn.dataset.path) {
             window.open(`http://${location.hostname}${btn.dataset.path}`, '_blank');
@@ -12612,6 +12779,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 
 _ACTION_HANDLERS ={
 "install":lambda self ,body :self ._action_install (body ),
+"install_suite":lambda self ,body :self ._action_install_suite (body ),
 "uninstall":lambda self ,body :self ._action_uninstall (body ),
 "start":lambda self ,body :self ._action_start (body ),
 "stop":lambda self ,body :self ._action_stop (body ),
@@ -14156,6 +14324,69 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "started":name ,
         "message":f"Installing {name } -- {comp ['name']} will restart itself once its own --install finishes. Watch the log below for output.",
         "level":"info",
+        })
+
+    def _action_install_suite (self ,body ):
+        if body .get ("confirm")is not True :
+            self ._error_json (400 ,"Install selected runs each tool's own --install and requires confirm:true")
+            return 
+        busy =_diskimg_busy_reason ()
+        if busy :
+            self ._send_json (409 ,{"error":busy ,"message":f"Not now: {busy }","level":"warn"})
+            return 
+        items =body .get ("items")
+        if not isinstance (items ,list )or not items or len (items )>SUITE_MAX_ITEMS :
+            self ._error_json (400 ,f"Send between 1 and {SUITE_MAX_ITEMS } tools to install")
+            return 
+        chosen ={}
+        for item in items :
+            if not isinstance (item ,dict )or not isinstance (item .get ("category"),str )or not isinstance (item .get ("name"),str ):
+                self ._error_json (400 ,"Each item needs a category and a file name")
+                return 
+            if item ["category"]in chosen :
+                self ._error_json (400 ,f"{item ['category']} was listed twice")
+                return 
+            chosen [item ["category"]]=item ["name"]
+        if any (c in SUITE_ROOT_SHELL for c in chosen )and body .get ("root_shell_ok")is not True :
+            self ._error_json (400 ,"Terminal Monitor gives a root shell on this node; confirm it separately (root_shell_ok:true)")
+            return 
+        plan ,skipped =[],[]
+        for category in _suite_order (list (chosen )):
+            name =chosen [category ]
+            comp =next ((c for c in COMPONENTS if c ["category"]==category ),None )
+            if comp is None or category =="instmon":
+                self ._error_json (400 ,f"No installable component for category '{category }'")
+                return 
+            if os .path .isfile (resolve_installed_target (comp )):
+                skipped .append (f"{comp ['name']} is already installed")
+                continue 
+            src =safe_join (LIB_SUBDIRS [category ],name )
+            if src is None or not os .path .isfile (src ):
+                self ._error_json (404 ,f"Library file not found: {name }")
+                return 
+            if _build_other (category ,read_installed_version (src ),name ):
+                self ._error_json (400 ,f"{name } is the other build, not the one chosen for this node")
+                return 
+            if not script_has_self_install (src ):
+                self ._error_json (400 ,f"{name } doesn't support self-install -- nothing was run")
+                return 
+            syntax_err =check_script_syntax (src )
+            if syntax_err :
+                self ._error_json (400 ,f"Syntax error in {name } -- nothing was run")
+                return 
+            plan .append ((comp ,src ,name ))
+        if not plan :
+            self ._send_json (200 ,{"started":0 ,"skipped":skipped ,"message":"Nothing to install: "+"; ".join (skipped ),"level":"info"})
+            return 
+        with _suite_lock :
+            if _suite_state ["running"]:
+                self ._send_json (409 ,{"error":"busy","message":"Install selected is already running -- wait for it to finish.","level":"warn"})
+                return 
+            _suite_state .update (running =True ,total =len (plan ),done =[],failed =[],current ="",left =[c ["name"]for c ,_s ,_n in plan ])
+        threading .Thread (target =_suite_run ,args =(plan ,),daemon =True ).start ()
+        self ._send_json (200 ,{
+        "started":len (plan ),"skipped":skipped ,
+        "message":f"Installing {len (plan )} tool(s) one after another -- watch the log below.","level":"info",
         })
 
     def _action_uninstall (self ,body ):
