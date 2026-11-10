@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W and full build</b><br>Edition 2026-10-13</div>
+    <div class="ed"><b>Pi Zero 2 W and full build</b><br>Edition 2026-11-10</div>
   </div>
   <div class="body">
     <h1>Phone Dialplan Guide<br><span>Nuts and Bolts</span></h1>
@@ -26,10 +26,10 @@
     <div class="kicker" style="margin-top:1.2em">Covers</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard Pi02w</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
-      <tr><td>SysMon Pi02w</td><td class="mono">sysmon_pi02w_v6_13_67_17_20261013.py</td><td>6.13.67.17-pi02w</td></tr>
-      <tr><td>Dashboard (full)</td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
-      <tr><td>SysMon (full)</td><td class="mono">sysmon_v6_13_83_20261013.py</td><td>6.13.83</td></tr>
+      <tr><td>Dashboard Pi02w</td><td class="mono">nodecontrol_pi02w_v9_3_108_20261108.py</td><td>9.3.108-pi02w</td></tr>
+      <tr><td>SysMon Pi02w</td><td class="mono">sysmon_pi02w_v6_13_83_20261028.py</td><td>6.13.83-pi02w</td></tr>
+      <tr><td>Dashboard (full)</td><td class="mono">nodecontrol_v9_3_104_20261108.py</td><td>9.3.104</td></tr>
+      <tr><td>SysMon (full)</td><td class="mono">sysmon_v6_13_95_20261028.py</td><td>6.13.95</td></tr>
       <tr><td>Stock reference</td><td>AllStarLink app_rpt sample <span class="mono">rpt.conf</span> / <span class="mono">extensions.conf</span>, and its source (master <span class="mono">d392975</span>)</td><td>ASL3</td></tr>
     </table>
   </div>
@@ -144,14 +144,19 @@
     your own contexts names starting with <code>dvs-</code>.</div>
   <p>The first time the Dashboard changes one of your own files (<code>rpt.conf</code>, <code>extensions.conf</code>,
     <code>pjsip.conf</code>, <code>iax.conf</code>, <code>modules.conf</code>), it keeps a copy next to it named
-    <code>&lt;file&gt;.dvsphone.bak</code>.</p>
+    <code>&lt;file&gt;.dvsphone.bak</code>. Each file keeps its owner and mode when the Dashboard rewrites it (a file that was
+    0640 stays 0640).</p>
+  <p>The Dashboard reads <code>bindport</code> from iax.conf, including from a file pulled in under
+    <code>[general]</code> with <code>#include</code> or <code>#tryinclude</code>. When the port is not 4569, the
+    <code>[nodes]</code> lines it writes name it (<code>radio@127.0.0.1:4570/1001</code>).</p>
 
   <h2>When changes take effect</h2>
   <ul>
     <li>The Dashboard reloads what it changed after Save Phone: the dialplan, app_rpt, PJSIP or IAX2.</li>
     <li>New SIP modules need one Asterisk restart (tick <b>Restart Asterisk if needed</b> on the Edit page).</li>
     <li>About 20 seconds after the Dashboard starts, it compares what it would write with what is on disk and
-      refreshes anything stale. That is how upgrades to the dialplan reach your Pi.</li>
+      refreshes anything stale. If Asterisk is not answering yet, it tries again every 15 seconds for up to 5
+      minutes. That is how upgrades to the dialplan reach your Pi.</li>
   </ul>
 </div>
 
@@ -989,7 +994,23 @@ match=hoip.example.net</pre></div>
       the request folder for <code>*61</code> dials and <code>*980</code>–<code>*982</code> tones.</li>
     <li><b>Dial</b>: Originate (section 7). <b>Hang up</b>: section 14E.</li>
     <li><b>Start-up</b>: compares what it would write with the files and refreshes anything stale.</li>
+    <li><b>Node numbers</b>: a new phone network gets the next free number counting up from the Phone Bridge and
+      wrapping at 1999. Which numbers rpt.conf already uses comes from the same search that Node Recorder and 44helper use;
+      a section written with spaces inside the brackets, such as <code>[ 1777 ]</code>, counts as in use.</li>
+    <li><b>Allmon3</b>: saving or switching on the phone adds each phone node to <code>/etc/allmon3/allmon3.ini</code>
+      (copying <code>host</code>, <code>port</code>, <code>user</code> and <code>pass</code> from your public node's section);
+      a network that is gone, or switching the phone off, removes its section. Allmon3 is not restarted: the result
+      tells you to restart it. With no allmon3.ini, nothing changes.</li>
+    <li><b>While Node Recorder is recording</b>: a Phone apply, activate or revert that restarts Asterisk asks first, in
+      a box that says the recording will be cut short and saved as a partial file (Cancel or Go ahead).</li>
+    <li><b>Node Talker</b>: asks the Dashboard over its local API (localhost, key in
+      <code>/etc/asl_dvs/local_api.key</code>) for <code>phone-status</code> (state <code>idle</code>, <code>dialing</code>,
+      <code>incoming</code> or <code>in_call</code>, with the network and node) and sends keypad tones with
+      <code>phone-tones</code>, through the same code as the Phone tab.</li>
   </ul>
+  <div class="call care"><span class="t">CAREFUL</span>Sending music over a radio node breaks FCC rules. The Phone tab
+    carries an amber notice about it: it applies to a phone system's hold music or a recording played into a call.
+    A radioless node, or a phone system with no RF link, is fine.</div>
   <h2>Listen only</h2>
   <p>With <b>Listen only</b> ticked, the phone node is linked as a monitor link (<code>ilink 2</code> instead of
     <code>ilink 3</code>). app_rpt never keys or sends audio over a monitor link, so nothing from your radio,
