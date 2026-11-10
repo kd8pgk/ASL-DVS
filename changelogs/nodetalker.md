@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.29 (2026-11-10)
+
+- **More Bluetooth detail in the Phone card (stage 2).** In Node Talker Mobile 0.10.29 the Bluetooth part of the Phone card has a **Show more Bluetooth detail** button. It asks Android for the Bluetooth permission (nearby devices); once allowed the card shows whether Bluetooth is on, the phone's Bluetooth name, whether LE Audio and LE Audio broadcast are supported, what is connected on each profile (call headset, music, hearing aid, LE Audio) and the paired devices with their class and link type. Read-only: nothing is connected or changed. The Data file holds it once allowed.
+- Nothing is shown or asked until the button is pressed. An app without `bluetoothDetail` shows only the 0.10.28 table.
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.28 (2026-11-10)
 
 - **Bluetooth section in the Phone card.** In Node Talker Mobile the Phone card has a Bluetooth table, read from the app (`NodeTalkerApp.bluetoothInfo()`): the phone's Bluetooth hardware, each connected Bluetooth audio device with its kind, direction, rates, channels and encodings, where call audio goes, whether Bluetooth call (SCO) and music (A2DP) audio are on, the audio mode, the media and call volumes and the last connect or disconnect. It needs no Bluetooth permission. The Data file holds it too.
@@ -76,7 +82,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_28_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_29_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

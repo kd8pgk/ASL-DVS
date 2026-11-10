@@ -1,5 +1,13 @@
 package io.github.kd8pgk.nodetalker
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -10,6 +18,9 @@ import android.os.Build
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 object Bluetooth {
     data class Change(val connected: Boolean, val name: String, val at: Long)
@@ -193,6 +204,126 @@ object Bluetooth {
             "\"sco_available\":${s.scoAvailable},\"mode\":${quote(s.mode)}," +
             "\"media\":{\"now\":${s.mediaNow},\"max\":${s.mediaMax}},\"call\":{\"now\":${s.callNow},\"max\":${s.callMax}}," +
             "\"last\":$last}"
+    }
+
+    data class Bonded(val name: String, val major: String, val link: String)
+
+    data class Prof(val name: String, val devices: List<String>?)
+
+    data class Detail(
+        val on: Boolean,
+        val state: String,
+        val name: String,
+        val leAudio: String,
+        val leBroadcast: String,
+        val bonded: List<Bonded>,
+        val profiles: List<Prof>,
+    )
+
+    fun granted(c: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            c.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    fun stateName(s: Int): String = when (s) {
+        BluetoothAdapter.STATE_OFF -> "off"
+        BluetoothAdapter.STATE_TURNING_ON -> "turning_on"
+        BluetoothAdapter.STATE_ON -> "on"
+        BluetoothAdapter.STATE_TURNING_OFF -> "turning_off"
+        else -> "state$s"
+    }
+
+    fun majorName(m: Int): String = when (m) {
+        BluetoothClass.Device.Major.AUDIO_VIDEO -> "audio_video"
+        BluetoothClass.Device.Major.PHONE -> "phone"
+        BluetoothClass.Device.Major.COMPUTER -> "computer"
+        BluetoothClass.Device.Major.WEARABLE -> "wearable"
+        BluetoothClass.Device.Major.HEALTH -> "health"
+        BluetoothClass.Device.Major.PERIPHERAL -> "peripheral"
+        BluetoothClass.Device.Major.NETWORKING -> "networking"
+        else -> "other"
+    }
+
+    fun linkName(t: Int): String = when (t) {
+        BluetoothDevice.DEVICE_TYPE_CLASSIC -> "classic"
+        BluetoothDevice.DEVICE_TYPE_LE -> "le"
+        BluetoothDevice.DEVICE_TYPE_DUAL -> "dual"
+        else -> "unknown"
+    }
+
+    fun featureName(code: Int): String = when {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> "not_reported"
+        code == BluetoothStatusCodes.FEATURE_SUPPORTED -> "supported"
+        code == BluetoothStatusCodes.FEATURE_NOT_SUPPORTED -> "not_supported"
+        else -> "unknown"
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectedOn(c: Context, adapter: BluetoothAdapter, profile: Int): List<String>? {
+        val latch = CountDownLatch(1)
+        val names = AtomicReference<List<String>?>(null)
+        val proxy = AtomicReference<BluetoothProfile?>(null)
+        val listener = object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(p: Int, pr: BluetoothProfile) {
+                proxy.set(pr)
+                try {
+                    names.set(pr.connectedDevices.map { it.name.orEmpty() })
+                } catch (e: SecurityException) {
+                    names.set(null)
+                }
+                latch.countDown()
+            }
+
+            override fun onServiceDisconnected(p: Int) {}
+        }
+        if (!adapter.getProfileProxy(c, listener, profile)) return null
+        latch.await(1200, TimeUnit.MILLISECONDS)
+        proxy.get()?.let { adapter.closeProfileProxy(profile, it) }
+        return names.get()
+    }
+
+    @SuppressLint("MissingPermission")
+    fun detail(c: Context): Detail? {
+        if (!granted(c)) return null
+        val adapter = c.getSystemService(BluetoothManager::class.java)?.adapter
+            ?: return Detail(false, "none", "", "not_reported", "not_reported", emptyList(), emptyList())
+        return try {
+            val bonded = (adapter.bondedDevices ?: emptySet<BluetoothDevice>()).map {
+                Bonded(it.name.orEmpty(), majorName(it.bluetoothClass?.majorDeviceClass ?: -1), linkName(it.type))
+            }
+            val profiles = ArrayList<Prof>()
+            if (adapter.isEnabled) {
+                profiles.add(Prof("headset", connectedOn(c, adapter, BluetoothProfile.HEADSET)))
+                profiles.add(Prof("a2dp", connectedOn(c, adapter, BluetoothProfile.A2DP)))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    profiles.add(Prof("hearing_aid", connectedOn(c, adapter, BluetoothProfile.HEARING_AID)))
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    profiles.add(Prof("le_audio", connectedOn(c, adapter, BluetoothProfile.LE_AUDIO)))
+                }
+            }
+            Detail(
+                adapter.isEnabled, stateName(adapter.state), adapter.name.orEmpty(),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) featureName(adapter.isLeAudioSupported()) else "not_reported",
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) featureName(adapter.isLeAudioBroadcastSourceSupported()) else "not_reported",
+                bonded, profiles,
+            )
+        } catch (e: SecurityException) {
+            null
+        }
+    }
+
+    fun detailJson(d: Detail?): String {
+        if (d == null) return "{\"granted\":false}"
+        val bonded = d.bonded.joinToString(",") {
+            "{\"name\":${quote(it.name)},\"class\":${quote(it.major)},\"link\":${quote(it.link)}}"
+        }
+        val profiles = d.profiles.joinToString(",") { p ->
+            val dev = p.devices?.joinToString(",", "[", "]") { quote(it) } ?: "null"
+            "{\"name\":${quote(p.name)},\"devices\":$dev}"
+        }
+        return "{\"granted\":true,\"adapter\":{\"on\":${d.on},\"state\":${quote(d.state)},\"name\":${quote(d.name)}," +
+            "\"le_audio\":${quote(d.leAudio)},\"le_broadcast\":${quote(d.leBroadcast)}}," +
+            "\"bonded\":[$bonded],\"profiles\":[$profiles]}"
     }
 
     fun time(at: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(at))

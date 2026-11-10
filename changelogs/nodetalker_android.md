@@ -1,6 +1,14 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.28`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.29`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.29 (2026-11-10)
+
+- **More Bluetooth detail, only when you ask (stage 2).** New calls `bluetoothDetail()` and `bluetoothDetailAsk()` back the **Show more Bluetooth detail** button in Node Talker's Phone card. Pressing it asks Android for the Bluetooth permission (`BLUETOOTH_CONNECT`, shown as "Nearby devices"). Once allowed, the card shows whether Bluetooth is on, the phone's Bluetooth name, whether LE Audio and LE Audio broadcast are supported, what is connected on the call headset, music, hearing aid and LE Audio profiles, and the paired devices (name, class, link type). Read-only: the app connects to nothing and changes nothing. Device addresses are not read.
+- **A new permission, asked late.** The manifest adds `BLUETOOTH_CONNECT` (Android 12 and later) and `BLUETOOTH` for Android 11 and older (no prompt there). The app does not ask for it at start or when Listen runs; only the button asks. The Bluetooth audio card from 0.6.0 still needs no permission. `uses-feature` marks Bluetooth as not required, so the app still installs on phones without it.
+- **Not read:** the audio codec and a device's battery level. Android keeps both from apps.
+- Needs Node Talker 0.10.29 on the node for the button; an older page never calls it.
+- Tests: the JSON the detail call returns, with and without the permission (`BluetoothDetailJsonTest`).
 
 ## 0.10.28 (2026-11-10)
 
