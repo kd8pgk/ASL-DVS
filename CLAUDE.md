@@ -93,16 +93,11 @@
   Store ties the app to it).
 - The `android` workflow builds and lints every change; on `main` it
   publishes the APK as a pre-release `android-vX.Y.Z`. From 0.3.2 it is a
-  release build (not debuggable, no `-debug` in the name). From 0.10.27 the
-  published APK is signed with a private release key kept in the repository
-  secrets `NODETALKER_KEYSTORE_BASE64`, `NODETALKER_KEYSTORE_PASSWORD`,
-  `NODETALKER_KEY_ALIAS` and `NODETALKER_KEY_PASSWORD`. Until those secrets
-  are set (a stopgap from 2026-11-11), the workflow publishes the APK signed
-  with the shared key in `android/app/debug.keystore`, and the release title
-  and notes say "shared key". That key is public: once the secrets are set
-  the workflow uses the private key by itself, and each phone needs one
-  uninstall. Pull-request builds and a local build always use the shared
-  key. Never commit the release key.
+  release build (not debuggable, no `-debug` in the name). Every build,
+  published or not, is signed with the shared key in
+  `android/app/debug.keystore` (public), so each one installs over the last.
+  Signing with a private release key (added in 0.10.27) was rolled back in
+  0.10.39 on 2026-11-11 and is not to be brought back until the owner asks.
 - The app is not on the stable/testing channels: those update node tools.
 - **After an Android build is merged, always post its APK download link**:
   `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z.apk`
