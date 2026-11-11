@@ -96,10 +96,13 @@
   release build (not debuggable, no `-debug` in the name). From 0.10.27 the
   published APK is signed with a private release key kept in the repository
   secrets `NODETALKER_KEYSTORE_BASE64`, `NODETALKER_KEYSTORE_PASSWORD`,
-  `NODETALKER_KEY_ALIAS` and `NODETALKER_KEY_PASSWORD`; without them the
-  workflow builds and tests but publishes nothing. Pull-request builds and a
-  local build use the shared key in `android/app/debug.keystore`, which is
-  public and never signs a published APK. Never commit the release key.
+  `NODETALKER_KEY_ALIAS` and `NODETALKER_KEY_PASSWORD`. Until those secrets
+  are set (a stopgap from 2026-11-11), the workflow publishes the APK signed
+  with the shared key in `android/app/debug.keystore`, and the release title
+  and notes say "shared key". That key is public: once the secrets are set
+  the workflow uses the private key by itself, and each phone needs one
+  uninstall. Pull-request builds and a local build always use the shared
+  key. Never commit the release key.
 - The app is not on the stable/testing channels: those update node tools.
 - **After an Android build is merged, always post its APK download link**:
   `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z.apk`
