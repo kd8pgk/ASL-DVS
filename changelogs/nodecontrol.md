@@ -1,6 +1,22 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_106_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_107_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.107 (2026-11-10)
+
+Third of three releases from the audit of tuning, disconnecting and the indicator under the title. This one makes the digital tabs show what the bridge reports.
+
+- **The server checks the tuned talkgroup against the bridge.** Every 2 seconds, while something is tuned on a digital tab, the Dashboard compares what it sent with what Analog_Bridge reports (`last_tune` in its status file) and gives a verdict: pending, confirmed or unconfirmed. A tune is pending for up to 15 seconds. It is unconfirmed when the bridge never reports it, reports something else later (a change made from DVSwitch Mobile, a DTMF command or another program), has no status file, or is not running. The check waits while a connect, disconnect or tab switch is running.
+- **"Confirmed" now means confirmed.** The page used to flash confirmed and say READY 10 seconds after any tune, whether or not the bridge had reported it. It now does that only on a real match, asking every 2 seconds while a tune is pending.
+- **An unconfirmed talkgroup is marked.** The indicator keeps the talkgroup you asked for and shows it as "3100 ?" with a dashed border, both dots off, and a tooltip saying it is not confirmed. It goes back to normal when the bridge reports it.
+- **Tapping the same favorite again re-tunes it** when it is unconfirmed. Before, a second tap did nothing because the page thought it was already there.
+- **M17 is checked too**, against the USRP2M17 service and the reflector named in its ini.
+- **D-STAR and XLX keep the normal look.** They show confirmed when the bridge reports the link string, and otherwise stay as sent; they are never marked unconfirmed, because the bridge's status file may not show a reflector link.
+- **FCS confirms on the tune string** (`900102`), so a favorite typed as `FCS00102` confirms like one saved from the card.
+- `/api/status` and `/api/abinfo` carry `tune_state`.
+- More cases in `ci/test_nodecontrol_links.py`.
+- Same changes as the Pi Zero 2 W build's 9.3.111-pi02w, made here because the full build was named.
+- This is a release, not a cosmetic build.
 
 ## 9.3.106 (2026-11-10)
 
