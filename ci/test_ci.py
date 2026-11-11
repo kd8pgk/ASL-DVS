@@ -4836,5 +4836,128 @@ class Wifimon550Tests(unittest.TestCase):
         self.assertTrue(got[0]["cable"])
 
 
+class Wifimon551Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.wm = load_wifimon()
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+
+    def test_every_tool_has_a_package_a_check_and_a_known_group(self):
+        wm = self.wm
+        pkgs = [v["pkg"] for v in wm._INSTALL_TOOLS.values()]
+        self.assertEqual(len(pkgs), len(set(pkgs)))
+        for key, spec in wm._INSTALL_TOOLS.items():
+            self.assertIn(spec["group"], wm._INSTALL_GROUPS, key)
+            self.assertTrue(spec.get("bins") or spec.get("paths"), key)
+            self.assertRegex(spec["pkg"], r"^[a-z0-9][a-z0-9.+-]*$")
+
+    def rows(self, present, pi=True):
+        wm = self.wm
+        have = lambda spec: spec["pkg"] in present
+        with mock.patch.object(wm, "_tool_present", have), mock.patch.object(wm, "_is_pi", lambda: pi), \
+                mock.patch.object(wm, "_firewall_name", lambda: "none"):
+            return {r["id"]: r for r in wm._install_rows()}
+
+    def test_missing_required_is_bad_and_optional_is_not(self):
+        rows = self.rows({"iproute2"})
+        self.assertEqual(rows["iproute2"]["level"], "good")
+        self.assertEqual(rows["iw"]["level"], "bad")
+        self.assertEqual(rows["wireguard-tools"]["level"], "")
+
+    def test_one_wifi_manager_is_enough(self):
+        neither = self.rows(set())
+        self.assertEqual((neither["network-manager"]["level"], neither["wpasupplicant"]["level"]), ("bad", "bad"))
+        one = self.rows({"wpasupplicant"})
+        self.assertEqual((one["network-manager"]["level"], one["wpasupplicant"]["level"]), ("", "good"))
+        self.assertTrue(one["network-manager"]["warn"])
+
+    def test_pi_only_rows_are_hidden_off_a_pi(self):
+        self.assertIn("libraspberrypi-bin", self.rows(set(), pi=True))
+        off = self.rows(set(), pi=False)
+        self.assertNotIn("libraspberrypi-bin", off)
+        self.assertNotIn("raspi-config", off)
+
+    def test_report_only_rows_have_no_install(self):
+        rows = self.rows(set())
+        for key in ("systemd", "pam", "crypt", "firewall"):
+            self.assertFalse(rows[key]["installable"], key)
+
+    def test_install_refuses_unknown_pi_only_and_installed(self):
+        wm = self.wm
+        self.assertFalse(wm._install_start(["curl"])[0])
+        self.assertFalse(wm._install_start(["iw", "../x"])[0])
+        with mock.patch.object(wm, "_is_pi", lambda: False):
+            ok, msg = wm._install_start(["libraspberrypi-bin"])
+        self.assertFalse(ok)
+        self.assertIn("Raspberry Pi", msg)
+        with mock.patch.object(wm, "_tool_present", lambda spec: True):
+            ok, msg = wm._install_start(["iw", "rfkill"])
+        self.assertFalse(ok)
+        self.assertIn("already installed", msg)
+
+    def test_install_without_apt_is_refused_with_a_reason(self):
+        wm = self.wm
+        with mock.patch.object(wm, "_tool_present", lambda spec: False), \
+                mock.patch.object(wm.shutil, "which", lambda n: None):
+            ok, msg = wm._install_start(["iw"])
+        self.assertFalse(ok)
+        self.assertIn("Debian", msg)
+
+    def post(self, body, rows=None):
+        wm = self.wm
+        sent = []
+
+        class H:
+            def _json(self, status, obj):
+                sent.append((status, obj))
+
+        calls = []
+        with mock.patch.object(wm, "_install_start", lambda t: (calls.append(t) or (True, "ok"))), \
+                mock.patch.object(wm, "_install_rows", lambda: rows or []):
+            wm._handle_install_start(H(), body)
+        return sent, calls
+
+    def test_install_all_picks_required_and_recommended_but_never_a_manager(self):
+        rows = [{"id": "iw", "installable": True, "status": "missing", "group": "required"},
+                {"id": "rfkill", "installable": True, "status": "missing", "group": "recommended"},
+                {"id": "network-manager", "installable": True, "status": "missing", "group": "manager"},
+                {"id": "wg", "installable": True, "status": "missing", "group": "optional"},
+                {"id": "ip", "installable": True, "status": "installed", "group": "required"}]
+        sent, calls = self.post({"missing": True, "confirm": True}, rows)
+        self.assertEqual(calls, [["iw", "rfkill"]])
+        self.assertEqual(sent[0][0], 200)
+
+    def test_install_needs_confirmation_and_a_list(self):
+        self.assertEqual(self.post({"tools": ["iw"]})[0][0][0], 400)
+        self.assertEqual(self.post({"tools": "iw", "confirm": True})[0][0][0], 400)
+        self.assertEqual(self.post({"tools": [], "confirm": True})[0][0][0], 400)
+        sent, calls = self.post({"tool": "iw", "confirm": True})
+        self.assertEqual(calls, [["iw"]])
+
+    def test_changes_no_longer_need_an_enable_file(self):
+        wm = self.wm
+        sent = []
+
+        class H:
+            client_address = ("192.168.1.20", 5)
+            headers = {}
+
+            def _authed(self):
+                return True
+
+            def _json(self, status, obj):
+                sent.append(status)
+
+        self.assertTrue(wm._control_gate(H()))
+        H.headers = {"X-Forwarded-For": "1.2.3.4"}
+        self.assertFalse(wm._control_gate(H()))
+        H.headers, H.client_address = {}, ("8.8.8.8", 5)
+        self.assertFalse(wm._control_gate(H()))
+        self.assertEqual(sent, [403, 403])
+        self.assertFalse(hasattr(wm, "_install_enabled"))
+
+
 if __name__ == "__main__":
     unittest.main()

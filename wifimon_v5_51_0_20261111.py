@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.50.0"
+APP_VERSION = "5.51.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -2897,13 +2897,14 @@ def _wpa_on(name: str, args: List[str], timeout: float = 15) -> Tuple[bool, str]
     return out == "OK", out or (r.stderr or "").strip()
 
 def _no_wifi_tool() -> Tuple[bool, str]:
-    return False, "No supported WiFi tool is running here: NetworkManager, or wpa_supplicant with wpa_cli."
+    return False, ("No supported WiFi tool is running here: NetworkManager, or wpa_supplicant with wpa_cli. "
+                   "Install one from the System tools card.")
 
 def _radio_set(on: bool) -> Tuple[bool, str]:
     if _nm_on():
         return _nmcli_ok(["radio", "wifi", "on" if on else "off"])
     if not shutil.which("rfkill"):
-        return False, "rfkill is not installed. Install it from the Wi-Fi management tools card first."
+        return False, "rfkill is not installed. Install it from the System tools card first."
     return _nmcli_free_run(["rfkill", "unblock" if on else "block", "wlan"], timeout=15)
 
 def _dev_disconnect(name: str) -> Tuple[bool, str]:
@@ -5608,7 +5609,7 @@ def _hotspot_ready() -> Tuple[bool, str]:
     if not _nm_on():
         return False, "The hotspot needs NetworkManager (nmcli)."
     if not (shutil.which("dnsmasq") or os.path.exists("/usr/sbin/dnsmasq")):
-        return False, "The hotspot needs dnsmasq to hand out addresses (sudo apt install dnsmasq-base)."
+        return False, "The hotspot needs dnsmasq to hand out addresses (install dnsmasq-base from the System tools card)."
     return True, ""
 
 def _hotspot_public() -> Dict[str, object]:
@@ -5992,20 +5993,42 @@ def _log_safe(text: object) -> str:
     return _LOG_CONTROL_RE.sub(" ", str(text))
 
 import ipaddress
-import stat as _stat
 
-_INSTALL_ENABLE_FILE = os.path.join(CONFIG_DIR, "install.enable")
 _INSTALL_DIR = "/run/wifimon"
 _INSTALL_LOG = os.path.join(_INSTALL_DIR, "install.log")
 _INSTALL_TIMEOUT = 1800
-_INSTALL_TOOLS: Dict[str, Dict[str, str]] = {
-    "iw": {"label": "iw", "pkg": "iw", "desc": "wireless device tool", "bin": "iw"},
-    "rfkill": {"label": "rfkill", "pkg": "rfkill", "desc": "radio block control", "bin": "rfkill"},
-    "wpasupplicant": {"label": "wpa_supplicant", "pkg": "wpasupplicant", "desc": "wpa_cli, WiFi without NetworkManager",
-                      "bin": "wpa_cli"},
-    "network-manager": {"label": "NetworkManager", "pkg": "network-manager",
-                        "desc": "nmcli and nmtui", "bin": "nmtui"},
+_NM_WARN = ("Installing NetworkManager on a node that gets its network another way (ifupdown, dhcpcd or "
+            "systemd-networkd) can change how the node joins WiFi and may cut you off.")
+_INSTALL_TOOLS: Dict[str, Dict[str, object]] = {
+    "iproute2": {"label": "iproute2 (ip)", "pkg": "iproute2", "group": "required", "bins": ("ip",),
+                 "desc": "addresses and routes"},
+    "iputils-ping": {"label": "iputils-ping (ping)", "pkg": "iputils-ping", "group": "required", "bins": ("ping",),
+                     "desc": "the internet check"},
+    "iw": {"label": "iw", "pkg": "iw", "group": "required", "bins": ("iw",),
+           "desc": "signal, bitrate, scan details, power save and country code"},
+    "network-manager": {"label": "NetworkManager", "pkg": "network-manager", "group": "manager", "bins": ("nmcli",),
+                        "desc": "nmcli and nmtui: Keep on and Keep off, adding and editing networks, network options, "
+                                "Auto-join and the hotspot", "warn": _NM_WARN},
+    "wpasupplicant": {"label": "wpa_supplicant", "pkg": "wpasupplicant", "group": "manager", "bins": ("wpa_cli",),
+                      "desc": "wpa_cli: WiFi control without NetworkManager"},
+    "rfkill": {"label": "rfkill", "pkg": "rfkill", "group": "recommended", "bins": ("rfkill",),
+               "desc": "radio on and off (needed without NetworkManager)"},
+    "wireless-tools": {"label": "wireless-tools (iwgetid)", "pkg": "wireless-tools", "group": "recommended",
+                       "bins": ("iwgetid",), "desc": "the network name without NetworkManager"},
+    "libraspberrypi-bin": {"label": "libraspberrypi-bin (vcgencmd)", "pkg": "libraspberrypi-bin", "group": "recommended",
+                           "bins": ("vcgencmd",), "pi": True, "desc": "supply voltage and throttle readings"},
+    "dnsmasq-base": {"label": "dnsmasq-base", "pkg": "dnsmasq-base", "group": "optional", "bins": ("dnsmasq",),
+                     "paths": ("/usr/sbin/dnsmasq",), "desc": "the emergency hotspot"},
+    "wireguard-tools": {"label": "wireguard-tools (wg)", "pkg": "wireguard-tools", "group": "optional",
+                        "bins": ("wg",), "desc": "the tunnel watchdog"},
+    "openssl": {"label": "openssl", "pkg": "openssl", "group": "optional", "bins": ("openssl",),
+                "desc": "the HTTPS certificate (only when HTTPS is on)"},
+    "raspi-config": {"label": "raspi-config", "pkg": "raspi-config", "group": "optional", "bins": ("raspi-config",),
+                     "pi": True, "desc": "the WiFi country code on a Pi"},
 }
+_INSTALL_GROUPS = ("required", "manager", "recommended", "optional")
+_INSTALL_ALL_GROUPS = ("required", "recommended")
+_fw_cache: Dict[str, object] = {"at": -1e9, "name": "none"}
 _INSTALL_STATE_LOCK = threading.Lock()
 _INSTALL_STATE: Dict[str, object] = {"tool": None, "running": False, "rc": None,
                                      "started": 0.0, "message": ""}
@@ -6014,13 +6037,6 @@ _PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X
 _CONTROL_PATHS = frozenset({"/api/radio", "/api/device/disconnect", "/api/device/switch",
                             "/api/device/mode", "/api/device/forget", "/api/service/restart",
                             "/api/install/start"})
-
-def _install_enabled() -> bool:
-    try:
-        st = os.lstat(_INSTALL_ENABLE_FILE)
-    except OSError:
-        return False
-    return _stat.S_ISREG(st.st_mode) and st.st_uid == 0 and not (st.st_mode & 0o022)
 
 def _source_allowed(ip: str) -> bool:
     try:
@@ -6038,10 +6054,6 @@ def _control_gate(h) -> bool:
     if not _source_allowed(h.client_address[0]) or any(h.headers.get(x) for x in _PROXY_HEADERS):
         h._json(403, {"error": "Changes only work from this machine or the local network, not through a proxy."})
         return False
-    if not _install_enabled():
-        h._json(403, {"error": "Changes are switched off. Create " + _INSTALL_ENABLE_FILE +
-                               " (owned by root) to allow them."})
-        return False
     return True
 
 def _install_read_log() -> str:
@@ -6054,14 +6066,75 @@ def _install_read_log() -> str:
     except OSError:
         return ""
 
-def _install_start(tool: str) -> Tuple[bool, str]:
-    spec = _INSTALL_TOOLS.get(tool)
-    if spec is None:
-        return False, "That tool is not on the install list."
-    if shutil.which(spec["bin"]):
-        return False, spec["label"] + " is already installed."
-    if not shutil.which("dpkg") or not shutil.which("systemd-run"):
-        return False, "This install needs dpkg and systemd-run."
+def _tool_present(spec: Dict[str, object]) -> bool:
+    return any(shutil.which(b) for b in spec.get("bins", ())) or any(os.path.exists(p) for p in spec.get("paths", ()))
+
+def _firewall_name() -> str:
+    now = time.monotonic()
+    if now - float(_fw_cache["at"]) > 300:
+        _fw_cache.update(at=now, name=firewall_backend())
+    return str(_fw_cache["name"])
+
+def _install_rows() -> List[Dict[str, object]]:
+    pi = _is_pi()
+    present = {k: _tool_present(v) for k, v in _INSTALL_TOOLS.items()}
+    manager_ok = present["network-manager"] or present["wpasupplicant"]
+    rows: List[Dict[str, object]] = []
+    for group in _INSTALL_GROUPS:
+        for k, v in _INSTALL_TOOLS.items():
+            if v["group"] != group or (v.get("pi") and not pi):
+                continue
+            have = present[k]
+            if have:
+                level = "good"
+            elif group == "required" or (group == "manager" and not manager_ok):
+                level = "bad"
+            else:
+                level = ""
+            rows.append({"id": k, "label": v["label"], "desc": v["desc"], "group": group, "pkg": v["pkg"],
+                         "status": "installed" if have else "missing", "level": level,
+                         "installable": True, "warn": v.get("warn")})
+    checks = (
+        ("systemd", "systemd (systemctl, systemd-run, journalctl)", "the service, restarts, installs and logs",
+         bool(shutil.which("systemctl") and shutil.which("systemd-run") and shutil.which("journalctl"))),
+        ("pam", "PAM library", "dashboard login", bool(ctypes.util.find_library("pam"))),
+        ("crypt", "crypt library", "dashboard login when PAM is unavailable", bool(ctypes.util.find_library("crypt"))),
+    )
+    for k, label, desc, have in checks:
+        rows.append({"id": k, "label": label, "desc": desc, "group": "system", "pkg": None,
+                     "status": "installed" if have else "missing", "level": "good" if have else "bad",
+                     "installable": False, "warn": None})
+    fw = _firewall_name()
+    rows.append({"id": "firewall", "label": "Firewall", "desc": "port " + str(HTTP_PORT) + " is opened in it by the installer",
+                 "group": "system", "pkg": None, "status": "info", "level": "muted",
+                 "installable": False, "detail": "active: " + fw if fw != "none" else "none active", "warn": None})
+    return rows
+
+def _install_blocker() -> str:
+    if not (shutil.which("dpkg") and shutil.which("apt-get") and shutil.which("systemd-run")):
+        return "Installing needs a Debian-based system with dpkg, apt-get and systemd-run."
+    return ""
+
+def _install_start(tools: List[str]) -> Tuple[bool, str]:
+    picked: List[str] = []
+    for tool in tools:
+        spec = _INSTALL_TOOLS.get(tool)
+        if spec is None:
+            return False, "That tool is not on the install list."
+        if tool in picked:
+            continue
+        if spec.get("pi") and not _is_pi():
+            return False, str(spec["label"]) + " is only for a Raspberry Pi."
+        if _tool_present(spec):
+            continue
+        picked.append(tool)
+    if not picked:
+        return False, "Everything picked is already installed."
+    blocker = _install_blocker()
+    if blocker:
+        return False, blocker
+    labels = ", ".join(str(_INSTALL_TOOLS[t]["label"]) for t in picked)
+    packages = " ".join(str(_INSTALL_TOOLS[t]["pkg"]) for t in picked)
     try:
         audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
@@ -6079,12 +6152,12 @@ def _install_start(tool: str) -> Tuple[bool, str]:
             return False, "A change is still waiting to be kept or undone. Finish that one first."
         os.makedirs(_INSTALL_DIR, mode=0o700, exist_ok=True)
         open(_INSTALL_LOG, "w").close()
-        unit = "wifimon-install-" + tool
+        unit = "wifimon-install"
         subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
         subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
         cmd = ("apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y "
                "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "
-               + spec["pkg"] + "; echo WIFIMON_RC=$?")
+               + packages + "; echo WIFIMON_RC=$?")
         start = subprocess.run(["systemd-run", f"--unit={unit}", "-p", "RemainAfterExit=yes",
                                 "-p", f"StandardOutput=append:{_INSTALL_LOG}",
                                 "-p", f"StandardError=append:{_INSTALL_LOG}",
@@ -6098,11 +6171,11 @@ def _install_start(tool: str) -> Tuple[bool, str]:
         _action_lock.release()
         return False, f"Could not start the install job: {exc}"
     with _INSTALL_STATE_LOCK:
-        _INSTALL_STATE.update(tool=tool, running=True, rc=None, started=time.time(),
-                              message="Installing " + spec["label"] + "...")
+        _INSTALL_STATE.update(tool=labels, running=True, rc=None, started=time.time(),
+                              message="Installing " + labels + "...")
     threading.Thread(target=_install_watch, args=(unit,), daemon=True).start()
-    log.info("Install started: %s", spec["pkg"])
-    return True, "Installing " + spec["label"] + ". Output appears below."
+    log.info("Install started: %s", packages)
+    return True, "Installing " + labels + ". Output appears below."
 
 def _install_watch(unit: str) -> None:
     rc = None
@@ -6134,18 +6207,26 @@ def _install_watch(unit: str) -> None:
         _action_lock.release()
 
 def _install_status() -> Dict[str, object]:
-    tools = [{"id": k, "label": v["label"], "desc": v["desc"],
-              "installed": bool(shutil.which(v["bin"]))} for k, v in _INSTALL_TOOLS.items()]
     with _INSTALL_STATE_LOCK:
         job = dict(_INSTALL_STATE)
-    return {"tools": tools, "enabled": _install_enabled(), "job": job,
+    blocker = _install_blocker()
+    return {"tools": _install_rows(), "can_install": not blocker, "reason": blocker, "job": job,
             "output": _install_read_log()[-16000:]}
 
 def _handle_install_start(h, body: Dict[str, object]) -> None:
     if body.get("confirm") is not True:
         h._json(400, {"error": "This install needs confirmation."})
         return
-    ok, msg = _install_start(str(body.get("tool") or ""))
+    tools = body.get("tools")
+    if body.get("missing") is True:
+        tools = [str(r["id"]) for r in _install_rows()
+                 if r["installable"] and r["status"] == "missing" and r["group"] in _INSTALL_ALL_GROUPS]
+    elif tools is None and isinstance(body.get("tool"), str):
+        tools = [body["tool"]]
+    if not isinstance(tools, list) or not tools or len(tools) > 16 or not all(isinstance(t, str) for t in tools):
+        h._json(400, {"error": "Pick what to install."})
+        return
+    ok, msg = _install_start(tools)
     h._json(200 if ok else 409, {"ok": ok, "message": msg})
 
 class _Handler(BaseHTTPRequestHandler):
@@ -8015,10 +8096,13 @@ a.btnlink:hover{border-color:var(--blue)}
     </section>
 
     <section class="card wide" id="card-install" aria-labelledby="in-h">
-      <h2 id="in-h">Wi-Fi management tools</h2>
+      <div class="card-head">
+        <h2 id="in-h">System tools</h2>
+        <button type="button" id="btn-in-all" hidden>Install missing required and recommended</button>
+      </div>
       <p class="note" id="in-note" hidden></p>
       <div id="in-tools"><p class="muted">Loading…</p></div>
-      <p class="rules">Installs run apt in the background, so they keep going if this page reloads. Output is kept in RAM only, and nothing is changed until you press Install and confirm.</p>
+      <p class="rules">Required tools are what wifimon needs to work. Recommended ones add readings and controls, and optional ones add one feature each. Installs run apt in the background, so they keep going if this page reloads. Output is kept in RAM only, and nothing is changed until you press Install and confirm.</p>
       <h3>Install output</h3>
       <p class="muted" id="in-state"></p>
       <pre class="pre" id="in-out" role="log" aria-live="polite"></pre>
@@ -9727,40 +9811,70 @@ a.btnlink:hover{border-color:var(--blue)}
     return String(raw || "").split("\n").map((l) =>
       l.indexOf("WIFIMON_RC=") === 0 ? "[exit " + l.slice(11) + "]" : l).join("\n");
   }
+  let lastInstall = {};
+  const INSTALL_GROUPS = [["required", "Required"], ["manager", "WiFi manager (at least one)"],
+                          ["recommended", "Recommended"], ["optional", "Optional"], ["system", "Checked only"]];
+  function installBusy(s) {
+    return !s.can_install || !!(s.job && s.job.running) || busy;
+  }
   function renderInstall(s) {
+    lastInstall = s;
     const note = $("in-note"), tools = $("in-tools");
     const job = s.job || {};
-    if (!s.enabled) {
-      note.textContent = "Installs are switched off. Create /etc/wifimon/install.enable, owned by root, to allow them.";
+    if (!s.can_install) {
+      note.textContent = s.reason || "Installing is not available on this system.";
       note.hidden = false;
     } else {
       note.hidden = true;
     }
+    const rows = s.tools || [];
+    const missing = rows.filter((t) => t.installable && t.status === "missing" && (t.group === "required" || t.group === "recommended"));
+    const all = $("btn-in-all");
+    all.hidden = !missing.length;
+    all.disabled = installBusy(s);
     tools.textContent = "";
-    (s.tools || []).forEach((t) => {
-      const row = document.createElement("div");
-      row.className = "radio-row";
-      const name = document.createElement("span");
-      name.textContent = t.label + " \u2014 " + t.desc;
-      const st = document.createElement("span");
-      st.className = "v " + (t.installed ? "good" : "bad");
-      st.textContent = t.installed ? "Installed" : "Missing";
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = "Install";
-      btn.disabled = !!t.installed || !s.enabled || !!job.running || busy;
-      btn.addEventListener("click", () => {
-        if (!confirm("Install " + t.label + " with apt? This changes system software on this node.")) return;
-        post("/api/install/start", { tool: t.id, confirm: true }).then(() => pollInstall());
+    for (const [group, title] of INSTALL_GROUPS) {
+      const list = rows.filter((t) => t.group === group);
+      if (!list.length) continue;
+      const h = document.createElement("h3");
+      h.textContent = title;
+      tools.append(h);
+      list.forEach((t) => {
+        const row = document.createElement("div");
+        row.className = "radio-row";
+        const name = document.createElement("span");
+        name.textContent = t.label + " \u2014 " + t.desc;
+        const st = document.createElement("span");
+        st.className = "v " + (t.level || "");
+        st.textContent = t.status === "installed" ? "Installed" : t.status === "missing" ? "Missing" : (t.detail || "");
+        row.append(name, st);
+        if (t.installable) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = "Install";
+          btn.disabled = t.status === "installed" || installBusy(s);
+          btn.addEventListener("click", () => {
+            let q = "Install " + t.label + " with apt (" + t.pkg + ")? This changes system software on this node.";
+            if (t.warn) q += "\n\n" + t.warn;
+            if (!confirm(q)) return;
+            post("/api/install/start", { tools: [t.id], confirm: true }).then(() => pollInstall());
+          });
+          row.append(btn);
+        }
+        tools.append(row);
       });
-      row.append(name, st, btn);
-      tools.append(row);
-    });
+    }
     $("in-state").textContent = job.message || "";
     const out = $("in-out");
     out.textContent = installOutputText(s.output);
     out.scrollTop = out.scrollHeight;
   }
+  $("btn-in-all").addEventListener("click", () => {
+    const todo = ((lastInstall || {}).tools || []).filter((t) => t.installable && t.status === "missing" && (t.group === "required" || t.group === "recommended"));
+    if (!todo.length) return;
+    if (!confirm("Install these with apt?\n\n" + todo.map((t) => t.pkg).join(", ") + "\n\nThis changes system software on this node. A WiFi manager is never installed from here; use its own Install button.")) return;
+    post("/api/install/start", { missing: true, confirm: true }).then(() => pollInstall());
+  });
   async function pollInstall() {
     if (installPolling) return;
     installPolling = true;
@@ -9863,38 +9977,13 @@ if __name__ == "__main__":
     parser.add_argument("--install", action="store_true", help="Install wifimon as a systemd service")
     parser.add_argument("--uninstall", action="store_true", help="Remove wifimon systemd service")
     parser.add_argument("--setup-wifi", action="store_true", help="Add/import WiFi networks")
-    parser.add_argument("--enable-changes", action="store_true",
-                        help="Allow dashboard control (adapter on/off, radio, switch, restart); creates the root-owned " + _INSTALL_ENABLE_FILE)
-    parser.add_argument("--disable-changes", action="store_true",
-                        help="Switch dashboard control off again (removes " + _INSTALL_ENABLE_FILE + ")")
+    parser.add_argument("--enable-changes", action="store_true", help="Does nothing now: dashboard changes are always on")
+    parser.add_argument("--disable-changes", action="store_true", help="Does nothing now: dashboard changes are always on")
     args = parser.parse_args()
 
     if args.enable_changes or args.disable_changes:
-        if os.geteuid() != 0:
-            print("Error: this needs root privileges. Run with 'sudo'.")
-            sys.exit(1)
-        if args.enable_changes and args.disable_changes:
-            print("Error: pick one of --enable-changes or --disable-changes.")
-            sys.exit(2)
-        if args.enable_changes:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            try:
-                os.remove(_INSTALL_ENABLE_FILE)
-            except OSError:
-                pass
-            fd = os.open(_INSTALL_ENABLE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-            os.close(fd)
-            os.chown(_INSTALL_ENABLE_FILE, 0, 0)
-            os.chmod(_INSTALL_ENABLE_FILE, 0o644)
-            print(f"  [+] Dashboard changes enabled ({_INSTALL_ENABLE_FILE})")
-            print("      Needs NetworkManager for adapter Keep on/off; login is still the root password,")
-            print("      and only this machine / private LAN addresses are accepted.")
-        else:
-            try:
-                os.remove(_INSTALL_ENABLE_FILE)
-            except FileNotFoundError:
-                pass
-            print("  [-] Dashboard changes disabled")
+        print("  [i] Dashboard changes are always on now. Login and a local-network address are still required,")
+        print("      so there is nothing to switch.")
         if not (args.install or args.uninstall or args.setup_wifi):
             sys.exit(0)
 

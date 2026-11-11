@@ -1,6 +1,20 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_50_0_20261111.py`. Newest entries first.
+Current file: `wifimon_v5_51_0_20261111.py`. Newest entries first.
+
+## 5.51.0 (2026-11-11)
+
+- **Dashboard changes are on by default.** The `/etc/wifimon/install.enable` file is no longer needed, so radio, disconnect, switch, adapter mode, forget, restart and installs work as soon as you log in. The other guards stay: the root-password login, requests only from this machine or a private LAN address, and none through a proxy. `--enable-changes` and `--disable-changes` still run but do nothing and say so. An old `install.enable` file is ignored and can be deleted.
+- **The Wi-Fi management tools card is now System tools.** It checks every program wifimon uses and shows Installed or Missing for each, in groups:
+  - **Required:** iproute2, iputils-ping, iw.
+  - **WiFi manager (at least one):** NetworkManager, wpa_supplicant. Each is marked Missing only when neither is present. NetworkManager's confirm warns that installing it on a node that gets its network another way can cut you off.
+  - **Recommended:** rfkill, wireless-tools (iwgetid), libraspberrypi-bin (vcgencmd, on a Pi).
+  - **Optional:** dnsmasq-base (hotspot), wireguard-tools (tunnel watchdog), openssl, raspi-config (on a Pi).
+  - **Checked only** (no Install button): systemd, the PAM and crypt libraries, and which firewall is active.
+- **Install buttons.** Each missing tool has an Install button, and **Install missing required and recommended** installs them in one apt run. It never installs a WiFi manager. The page sends tool ids from a fixed list, never package names. The existing refusals remain: unfinished packages (`dpkg --audit`), another change running, or a change waiting to be kept or undone. On a system without dpkg, apt-get or systemd-run the card says so and disables the buttons.
+- NetworkManager is now detected by `nmcli` (it was `nmtui`).
+- Messages that told you to install rfkill, a WiFi tool or dnsmasq now point at the System tools card.
+- This is a release, not a cosmetic build.
 
 ## 5.50.0 (2026-11-11)
 
