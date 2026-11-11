@@ -2,6 +2,8 @@
 
 Current version: `0.10.33`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
 
+**Published builds use the shared key for now (2026-11-11).** From 0.10.27 the workflow published only builds signed with the private release key, and no build has been published since, because that key is not set up yet. Until it is, the workflow publishes the build signed with the shared key in `android/app/debug.keystore` again, as it did up to 0.10.26, and the release title and notes say "shared key". That key is public, so install the app only from the project's release page. A shared-key build installs over 0.10.26 and older. When the private key is set up, the workflow uses it by itself and each phone needs one uninstall, as the 0.10.27 entry says. The app itself is not changed by this.
+
 ## 0.10.33 (2026-11-10)
 
 - **The mic limiter looks ahead.** The limiter in Node Talker Mobile's mic path (the Leveler) now holds the audio back 16 samples (2 ms at 8 kHz) and watches the 16 samples ahead, so it has turned the gain down by the time a sudden peak reaches the output, instead of clamping the peak after it arrived. The ceiling is still about -1 dBFS (peaks stay at or below 0.9 of full scale). It adds 2 ms to the mic path and only when the Leveler is on. The same change is in the Node Talker page's mic path (0.10.33).
