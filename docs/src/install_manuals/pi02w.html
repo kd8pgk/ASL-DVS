@@ -14,7 +14,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-11-10</div>
+    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-11-11</div>
   </div>
   <div class="body">
     <h1>Install Manual<br><span>Pi Zero 2 W</span></h1>
@@ -28,13 +28,13 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_99_0_20261110.py</td><td>2.99.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_103_0_20261111.py</td><td>2.103.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_5_0_20261110.sh</td><td>7.5.0</td></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_108_20261108.py</td><td>9.3.108-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_83_20261028.py</td><td>6.13.83-pi02w</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_49_0_20261107.py</td><td>5.49.0</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_112_20261111.py</td><td>9.3.112-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_84_20261111.py</td><td>6.13.84-pi02w</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_51_0_20261111.py</td><td>5.51.0</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_1_19_20261108.py</td><td>0.1.19</td></tr>
-      <tr><td>Node Talker (optional)</td><td class="mono">nodetalker_v0_10_27_20261110.py</td><td>0.10.27</td></tr>
+      <tr><td>Node Talker (optional)</td><td class="mono">nodetalker_v0_10_38_20261111.py</td><td>0.10.38</td></tr>
       <tr><td>Node Recorder (optional)</td><td class="mono">noderecorder_v0_15_0_20261110.py</td><td>0.15.0</td></tr>
       <tr><td>Pibrary (optional)</td><td class="mono">pibrary_v0_16_1_20261104.py</td><td>0.16.1</td></tr>
       <tr><td>Terminal Monitor (optional)</td><td class="mono">termon_v0_2_4_20261109.py</td><td>0.2.4</td></tr>
@@ -147,14 +147,14 @@ sudo systemctl status sysmon</pre>
 <pre><span class="c"># files from the main branch on GitHub</span>
 cd ~
 B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
-wget $B/instmon_v2_99_0_20261110.py
+wget $B/instmon_v2_103_0_20261111.py
 wget $B/install_all_v7_5_0_20261110.sh
-wget $B/nodecontrol_pi02w_v9_3_108_20261108.py
-wget $B/sysmon_pi02w_v6_13_83_20261028.py
-wget $B/wifimon_v5_49_0_20261107.py
+wget $B/nodecontrol_pi02w_v9_3_112_20261111.py
+wget $B/sysmon_pi02w_v6_13_84_20261111.py
+wget $B/wifimon_v5_51_0_20261111.py
 <span class="c"># optional</span>
 wget $B/44helper_v0_1_19_20261108.py
-wget $B/nodetalker_v0_10_27_20261110.py
+wget $B/nodetalker_v0_10_38_20261111.py
 wget $B/noderecorder_v0_15_0_20261110.py
 wget $B/pibrary_v0_16_1_20261104.py
 wget $B/termon_v0_2_4_20261109.py</pre>
@@ -163,7 +163,7 @@ wget $B/termon_v0_2_4_20261109.py</pre>
   <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
     updates itself.</p>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
-<pre>sudo python3 instmon_v2_99_0_20261110.py --install</pre>
+<pre>sudo python3 instmon_v2_103_0_20261111.py --install</pre>
     <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
   <h2>What --install does</h2>
   <ul>
@@ -395,7 +395,7 @@ ss -tlnp | grep 9999</pre>
   <h1 class="ch">Quick reference</h1>
   <table>
     <tr><th>Task</th><th>Command</th></tr>
-    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_99_0_20261110.py --install</td></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_103_0_20261111.py --install</td></tr>
     <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_5_0_20261110.sh</td></tr>
     <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
     <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>

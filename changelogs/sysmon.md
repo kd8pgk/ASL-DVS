@@ -1,6 +1,37 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_95_20261028.py`. Newest entries first.
+Current file: `sysmon_v6_13_96_20261111.py`. Newest entries first.
+
+## 6.13.96 (2026-11-11)
+
+A fact check of the text on every tab, against the code and against the AllStarLink, Asterisk and Raspberry Pi documentation. The full build already has everything the Pi Zero 2 W build has; nothing needed porting.
+- **Security: `/etc/asterisk` owned by `asterisk` passes.** The `/etc/asterisk` permissions check warned when the folder's owner was not root. ASL3 runs Asterisk as the `asterisk` user, which saves tune settings into that folder itself, so an owner of `root` or `asterisk` now passes. The fix text no longer says `chown root:asterisk`, which would stop Asterisk saving there.
+- **Security: ASL3 is on Asterisk 22.** The AMI and chan_sip explanations said ASL3 is built on Asterisk 20. It was until March 2025 and has been on Asterisk 22 since, so CVE-2024-42365 and chan_sip only concern a node that has not been updated.
+- **Security: AMI sample settings.** ASL3 ships `manager.conf` with `enabled=yes` and `bindaddr=127.0.0.1`. The text said the shipped sample binds `0.0.0.0` with AMI on; that is Asterisk's own sample, and it has `enabled=no`.
+- **Security: USRP port order.** The fix text for an exposed USRP port wrote the `rxchannel` ports as `<local>:<dst>`, using USRP2M17.ini's names, which reads the wrong way round for Asterisk. It now says `USRP/127.0.0.1:<bridge port>:<Asterisk port>`, with the stock `34001:32001` as the example.
+- **Security: why Asterisk is exempt.** The non-root check said Asterisk needs root on ASL3. It does not: systemd starts it as root and it drops to the `asterisk` user by itself, so its unit has no `User=` line. The exemption stays; the reason is corrected.
+- **Security: what the tab reads.** The note under the checks now also names the local `asterisk -rx` and `fail2ban-client` commands, which two checks run.
+- **Firewall guide.** ufw is not the Debian or Raspberry Pi OS default (it is Ubuntu's; on those it is not installed until you add it). The ASL3 Pi appliance image runs firewalld with its own `allstarlink` zone and already allows IAX2; only an `apt` install on plain Debian or Raspberry Pi OS has no firewall. IAX2 `4569/udp` is for links between nodes; registration goes out over HTTPS and needs no open port.
+- **Hardware: ALSA Cards note.** The Playback note said to set `devusb = hw:CARD,0` in `chan_simpleusb.conf`. There is no such setting or file: chan_simpleusb finds its card by USB port (`devstr` in `simpleusb.conf`).
+- **Hardware: Clock note.** Reads "A Raspberry Pi has no clock battery unless one is added" (was "The Pi Zero 2 W", which the full build may not be running on).
+- **DVSM: USRP card.** The notes named `analog_bridge.cfg`; the file read is `Analog_Bridge.ini`. "Host (local)" said to use it when DVSM runs on this node; it is the address Analog_Bridge sends its audio to. The ports are Analog_Bridge's, not Asterisk's.
+- **DVSM: Compatibility Checks.** `remote_dtmf_allowed` and `phonesendlinks` are HamVoIP settings that ASL3 does not read (their rows are removed, below). `propagate_phonedtmf` is an ASL3 setting too (the row said HamVoIP). The `requirecalltoken` row no longer says DVSM handles call tokens automatically, which could not be confirmed; it says what applies when the line is not set.
+- **DVSM: Node Mode.** The Username note says the number shown is this node's own, for reference; DVSM needs a different, unused one.
+- **STFU: port.** The BM Port default shown, and written into the sample stanza, was 62031, the MMDVM hotspot port. STFU uses BrandMeister's Open DMR Terminal port, 54006.
+- **STFU: ports are AMBE, not USRP.** The port group is named "AMBE Ports (Analog_Bridge)": STFU exchanges AMBE frames with Analog_Bridge. The sample stanza uses DVSwitch's own spelling (`txPort`, `rxPort`) and defaults (36100, 36103).
+- **STFU: Talker Alias and Log Level.** Talker Alias is text sent with each transmission (27 characters at most), not a 1/0 switch. Log Level is 0 none, 1 debug, 2 message, 3 info, 4 warning, 5 error, with 3 the default (the tab said 1 normal, 2 debug).
+- **STFU: no subscriber file.** STFU has no `subscriberFile` setting (the DMR ID list belongs to Analog_Bridge), so the Subscriber File row, its check (which warned on every node) and the line in the sample stanza are removed.
+- **STFU: install.** The fix text says to install the `stfu` package (`sudo apt install stfu`); it described downloading `STFU.armhf` and copying a unit file by hand.
+- **IAX users are found: templates and included files.** `iax.conf` stanzas such as `[iaxrpt](!)` and `[KD8PGK](iaxrpt)` did not match the section reader, so their settings were attached to the stanza above, and the `#tryinclude` files ASL3 keeps its IAXRpt users in were never read. The DVSM IAXRpt and IAX2 Direct cards then said "No user section with secret= found", and the IAX2 secret check never graded those secrets. Sections with a template list are now read, templates are inherited, and `#include` / `#tryinclude` files are followed (up to three deep, only inside `/etc/asterisk`).
+- **DVSM: `requirecalltoken`** is read from the user section the cards use (template included), not only from `[general]`.
+- **DVSM: Node Mode** no longer shows this node's own number and registration password as the account to enter. It says to use a separate unused node and its own password, and the badge is INFO.
+- **DVSM: the `remote_dtmf_allowed` and `phonesendlinks` rows are removed.** They are HamVoIP settings that ASL3 does not read.
+- **DVSM: the USRP note** no longer says DVSM and the node's Asterisk link cannot share Analog_Bridge's ports; that could not be confirmed.
+- **STFU: new checks.** A warning when BMPort is 62030 or 62031 (hotspot ports), and when TalkerAlias is longer than 27 characters.
+- **Security: Asterisk version.** The AMI check notes the installed Asterisk version and whether CVE-2024-42365 applies to it (`asterisk -V`).
+- **Zello: Work mode.** The "Private key readable" and "Issuer set" checks failed in Zello Work mode, which does not use them. They now pass with "not needed for Zello Work", the group is labelled "Zello Free only", and no Free WebSocket address is shown as the default in Work mode.
+- The tab colour table gains `m17`, `security` and `console`, so closing a detail panel returns to those tabs with their colour.
+- A second, unused `loadTab_journal` line is removed.
 
 ## 6.13.95 (2026-10-28)
 
