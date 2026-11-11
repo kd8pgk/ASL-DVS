@@ -1,5 +1,25 @@
 # instmon changelog
 
+## 2.103.0 (2026-11-11)
+
+Last of four steps that reorganize the page: a daily version check you can turn on, and two security and policy items. This is a release: Python and page behaviour changed.
+
+- **Daily GitHub check (off unless you turn it on).** The GitHub card has a box: "Check GitHub once a day (versions only, nothing is downloaded)". When it is on, instmon checks GitHub once a day. Unlike Check GitHub, this check downloads nothing: no tools that are not installed and no manuals. It does not start while Full Update runs, and a check that could not start is tried again later. The setting is kept in `/etc/asl_dvs/instmon_autocheck.json`. New action: `gh_autocheck`.
+- **Updates on Home.** After any check the Home tab says how many updates GitHub has ("3 update(s) on GitHub (checked ...)", marked) or that everything is up to date.
+- **The login needs `X-Requested-With`.** A login request without the header is refused (403), like every other request that changes something. instmon's own page sends it; nothing else logs in to instmon. `ci/test_security.py` now holds instmon to the header (it was a known gap).
+- **Error replies carry `message`.** Every error reply has a `message` key, as the repo's policy asks; the `error` key stays, so an older page still reads them. `ci/test_servers.py` now checks `message` for instmon.
+- Tests: `ci/test_instmon_tools.py` adds the daily check (saved setting, once a day, only when on, not during Full Update, a refused start is tried again, nothing downloaded), the Home updates line, and the login and error replies over HTTP.
+
+## 2.102.0 (2026-11-11)
+
+Third of four steps that reorganize the page: four things you had to use SSH for. This is a release: Python and page behaviour changed.
+
+- **Log on each tool's card.** An installed tool's card has a **Log** button. It opens the tool's last 120 journal lines in a window with Refresh, Copy and Close (Escape or a tap outside also closes it). New: `GET /api/journal?service=<tool>&lines=<10-200>`, only for the tools instmon manages.
+- **Start at boot.** An installed tool's card has a **Start at boot** switch (`systemctl enable` / `disable`). It is not shown for instmon itself, or for a tool whose unit cannot be switched (for example a static one). If the change does not take, the switch goes back and the reason is shown. A tool that is stopped and not set to start at boot already counts as stopped by you, so Full Update leaves it stopped (2.99.0). New action: `set_boot`.
+- **Free space on Home.** The Home tab shows the free space on the Pi's disk, and on the library's disk if that is a different one. It is marked as a warning under 10% or 500 MB.
+- **Restore from backup.** The Backup card on the Files tab takes a ZIP made by Download Full Backup and puts library files back. It only adds the files this node is missing: a file already here is kept, even when the backup holds a different copy. Anything that is not a library file (a path outside a library folder, a folder inside one, a hidden file) is skipped, so a ZIP cannot write outside the library. Limits: the usual upload size (`INSTMON_MAX_UPLOAD_MB`), 2,000 files, and four times the upload size unpacked. Nothing is installed. New: `POST /api/backup/restore`.
+- Tests: new `ci/test_instmon_tools.py` (boot state, enable and disable, a change that does not take, the journal limits, free space, restore with unsafe and existing files, a backup made here coming back, restore and journal over HTTP, the card controls).
+
 ## 2.101.0 (2026-11-11)
 
 Second of four steps that reorganize the page: one rule for confirmations, and long help text behind a Help button. It is a release because the page script changed.
@@ -126,7 +146,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_101_0_20261111.py`. Newest entries first.
+Current file: `instmon_v2_103_0_20261111.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

@@ -27,7 +27,7 @@ EXPECT = {
     "noderecorder": {"xfo": "SAMEORIGIN", "referrer": "", "csp": False, "login_guard": "xhr",
                      "proxy_loopback": True, "after_login": ("/api/logout", "xhr")},
     "pibrary": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": None},
-    "instmon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": None,
+    "instmon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
                 "after_login": ("/api/action", "xhr")},
     "wifimon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
                 "after_login": ("/api/logout", "xhr"), "control_proxy": "/api/radio"},
