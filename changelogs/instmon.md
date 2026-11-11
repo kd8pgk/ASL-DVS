@@ -1,5 +1,16 @@
 # instmon changelog
 
+## 2.101.0 (2026-11-11)
+
+Second of four steps that reorganize the page: one rule for confirmations, and long help text behind a Help button. It is a release because the page script changed.
+
+- **Uninstall asks first.** Pressing Uninstall on a tool's card asks "Uninstall <tool>?" and says the library copies are kept; Cancel sends nothing. Start and Stop still act at once, with no prompt. The banner above the Tools tab says so (it used to say Stop and Uninstall both act at once).
+- **Help buttons.** The long explanations on Config putter, Import from USB Drive, Manuals and Quiet System are hidden until you press the card's Help button, as the Disk cards already did. Nothing in them changed.
+- The About Full Update note no longer repeats the Quiet System text; it points to the System tab.
+- The library's note points to the Tools tab for each tool's own versions.
+- Nothing in the server changed.
+- Tests: `ci/test_instmon_page.py` checks Uninstall asks, Start and Stop do not, and each long help text sits behind a Help button.
+
 ## 2.100.0 (2026-11-11)
 
 First of four steps that reorganize the page. This one only moves things: every card does what it did. It is a release because the page script changed.
@@ -115,7 +126,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_100_0_20261111.py`. Newest entries first.
+Current file: `instmon_v2_101_0_20261111.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

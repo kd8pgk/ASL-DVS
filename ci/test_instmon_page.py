@@ -73,6 +73,18 @@ class Page(unittest.TestCase):
                   "tabsInit();", "placeCards();", "instmon_tab"):
             self.assertIn(n, self.html)
 
+    def test_uninstall_asks_and_start_stop_do_not(self):
+        self.assertIn("if (!confirm(`Uninstall ${btn.dataset.name}?", self.html)
+        self.assertIn("Start and Stop act at once, with no prompt. Uninstall asks first.", self.html)
+        self.assertNotIn("NO CONFIRMATIONS", self.html)
+
+    def test_long_help_is_behind_a_help_button(self):
+        for card in ('id="confputter-card"', 'id="usbimp-card"', 'id="docs-card"', 'id="quiet-btn"'):
+            start = self.html.index(card)
+            chunk = self.html[start:start + 4000]
+            self.assertIn('data-action="toggle_diskimg_help"', chunk, card)
+            self.assertIn('class="diskimg-help', chunk, card)
+
     def test_status_answer_is_unchanged(self):
         status = im.build_status()
         section = im.render_components_section(status)
