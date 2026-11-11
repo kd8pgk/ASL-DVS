@@ -17,6 +17,11 @@ A fact check of the text on every tab, against the code and against the AllStarL
 - **DVSM: USRP card.** The notes named `analog_bridge.cfg`; the file read is `Analog_Bridge.ini`. "Host (local)" said to use it when DVSM runs on this node; it is the address Analog_Bridge sends its audio to. The ports are Analog_Bridge's, not Asterisk's, and DVSM and the node's Asterisk link can't both use them at once.
 - **DVSM: Compatibility Checks.** `remote_dtmf_allowed` and `phonesendlinks` are HamVoIP settings that ASL3 does not read; their rows now say so. `propagate_phonedtmf` is an ASL3 setting too (the row said HamVoIP). The `requirecalltoken` row no longer says DVSM handles call tokens automatically, which could not be confirmed; it says what applies when the line is not set.
 - **DVSM: Node Mode.** The Username note says the number shown is this node's own, for reference; DVSM needs a different, unused one.
+- **STFU: port.** The BM Port default shown, and written into the sample stanza, was 62031, the MMDVM hotspot port. STFU uses BrandMeister's Open DMR Terminal port, 54006.
+- **STFU: ports are AMBE, not USRP.** The port group is named "AMBE Ports (Analog_Bridge)": STFU exchanges AMBE frames with Analog_Bridge. The sample stanza uses DVSwitch's own spelling (`txPort`, `rxPort`) and defaults (36100, 36103).
+- **STFU: Talker Alias and Log Level.** Talker Alias is text sent with each transmission (27 characters at most), not a 1/0 switch. Log Level is 0 none, 1 debug, 2 message, 3 info, 4 warning, 5 error, with 3 the default (the tab said 1 normal, 2 debug).
+- **STFU: no subscriber file.** STFU has no `subscriberFile` setting (the DMR ID list belongs to Analog_Bridge), so the Subscriber File row, its check (which warned on every node) and the line in the sample stanza are removed.
+- **STFU: install.** The fix text says to install the `stfu` package (`sudo apt install stfu`); it described downloading `STFU.armhf` and copying a unit file by hand.
 - A second, unused `loadTab_journal` line is removed.
 
 ## 6.13.95 (2026-10-28)
