@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.19"
+APP_VERSION = "0.1.20"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1036,7 +1036,7 @@ def _parse_wg_conf_text(text: str, mask_private_key: bool = True) -> dict:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        lower = line.lower()
+        lower = line.split("#", 1)[0].strip().lower()
         if lower == "[interface]":
             section = "interface"
             continue
@@ -1840,7 +1840,7 @@ def _wg_set_address32(text: str, target: str) -> str | None:
     section = ""
     for i, raw in enumerate(lines):
         body = raw.rstrip("\r\n")
-        low = body.strip().lower()
+        low = body.split("#", 1)[0].strip().lower()
         if low.startswith("["):
             section = low
             continue
@@ -1854,7 +1854,7 @@ def _wg_add_keepalive(text: str) -> str | None:
     section, peers = "", 0
     for i, raw in enumerate(lines):
         body = raw.rstrip("\r\n")
-        low = body.strip().lower()
+        low = body.split("#", 1)[0].strip().lower()
         if low.startswith("["):
             section = low
             peers += low == "[peer]"
@@ -1865,7 +1865,7 @@ def _wg_add_keepalive(text: str) -> str | None:
     nl = "\r\n" if "\r\n" in text else "\n"
     out_lines, in_peer, inserted = [], False, False
     for raw in text.splitlines(keepends=True):
-        low = raw.strip().lower()
+        low = raw.split("#", 1)[0].strip().lower()
         if low.startswith("[") and in_peer and not inserted:
             blanks = []
             while out_lines and not out_lines[-1].strip():
@@ -1914,7 +1914,7 @@ def _wg_set_allowed_ips(text: str, value: str) -> str | None:
     section, peers = "", 0
     for i, raw in enumerate(lines):
         body = raw.rstrip("\r\n")
-        low = body.strip().lower()
+        low = body.split("#", 1)[0].strip().lower()
         if low.startswith("["):
             section = low
             if low == "[peer]":
@@ -1927,6 +1927,37 @@ def _wg_set_allowed_ips(text: str, value: str) -> str | None:
 
 _PI_TAB_ALLOWED_IPS = {"split": "44.0.0.0/9, 44.128.0.0/10", "full": "0.0.0.0/0"}
 
+def _wg_drop_v6_default(text: str) -> tuple[str, list[str]]:
+    for addr in _wg0_conf_addresses(text):
+        if ":" in addr:
+            return text, []
+    lines = text.splitlines(keepends=True)
+    section, dropped = "", []
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        low = body.split("#", 1)[0].strip().lower()
+        if low.startswith("["):
+            section = low
+            continue
+        m = _AIP_LINE_RE.match(body) if section == "[peer]" else None
+        if not m:
+            continue
+        keep, gone = [], []
+        for part in [x.strip() for x in m.group(2).split(",") if x.strip()]:
+            try:
+                net = ipaddress.ip_network(part, strict=False)
+            except ValueError:
+                keep.append(part)
+                continue
+            (gone if net.version == 6 and net.prefixlen == 0 else keep).append(part)
+        if gone and keep:
+            lines[i] = m.group(1) + ", ".join(keep) + m.group(3) + raw[len(body):]
+            dropped += gone
+    return ("".join(lines), dropped) if dropped else (text, [])
+
+_WG_V6_NOTE = ("{0} removed from AllowedIPs: this tunnel has no IPv6 address, so IPv6 sent into wg0 would be "
+               "dropped and hosts with IPv6 addresses would hang.")
+
 def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
     opts = opts or {}
     changes: list[str] = []
@@ -1937,6 +1968,9 @@ def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
     text, sc = _wg_strip_saveconfig(text)
     if sc:
         fixed.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
+    text, v6 = _wg_drop_v6_default(text)
+    if v6:
+        fixed.append(_WG_V6_NOTE.format(", ".join(v6)))
     if re.search(r"^\s*dns\s*=", text, re.I | re.M):
         need = _wg_conf_dns_need(text)
         if need:
@@ -7201,17 +7235,17 @@ def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
     if kind not in ("full", "split"):
         return ""
     parsed = _parse_wg_conf_text(config_text, mask_private_key=False)
-    allowed_ips = parsed["peers"][0].get("AllowedIPs", "") if parsed["peers"] else ""
-    given = {p.strip() for p in allowed_ips.split(",")} if allowed_ips else set()
+    allowed_ips = _wg_conf_field(parsed["peers"][0], "AllowedIPs") if parsed["peers"] else ""
+    given = {p.strip() for p in allowed_ips.split(",") if p.strip()} if allowed_ips else set()
     if not given:
         return ""
     if kind == "split" and given != _PI_SPLIT_ALLOWED_IPS:
         return (" Note: AllowedIPs isn't the 44.0.0.0/9, 44.128.0.0/10 split-tunnel shape expected on the Split "
                 "Tunnel tab (anything else, such as 0.0.0.0/0, ::/0, 0.0.0.0/1 or 44.0.0.0/8, sends more than 44Net "
                 "into the tunnel) — double check this is really a split-tunnel config.")
-    if kind == "full" and given == _PI_SPLIT_ALLOWED_IPS:
-        return (" Note: AllowedIPs looks like split-tunnel (44.0.0.0/9, 44.128.0.0/10), "
-                "not the 0.0.0.0/0 full-tunnel shape expected on the Full Tunnel tab — "
+    if kind == "full" and "0.0.0.0/0" not in given:
+        return (" Note: AllowedIPs has no 0.0.0.0/0, the full-tunnel shape expected on the Full Tunnel tab "
+                "(44.0.0.0/9, 44.128.0.0/10 is the split-tunnel set) — "
                 "double check this is really a full-tunnel config.")
     return ""
 
@@ -7246,20 +7280,22 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
             carried.append("backup")
         except OSError:
             pass
+    swap: list[str] = []
     try:
         wg_dir = os.path.dirname(WG0_CONF_PATH)
         os.makedirs(wg_dir, mode=0o700, exist_ok=True)
-        _wg_atomic_write(config_text)
+        _wg_swap_write(config_text, swap)
         log(f"Wrote {WG0_CONF_PATH} (private key never logged)")
     except OSError as e:
-        return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+        return {"success": False, "verified": False, "output": "\n".join(swap + [f"Write failed: {e}"])}
 
-    output_lines = ["wg0.conf written, permissions set to 600."] + norm["changes"]
+    restarted = any(_WG_SWAP_NOTE in ln for ln in swap)
+    output_lines = ["wg0.conf written, permissions set to 600."] + norm["changes"] + swap
     if old is not None:
         kept = [c for c in carried if c != "backup"]
         output_lines.append("Replaced the previous config" + (" (saved as wg0.conf.pre-replace)" if "backup" in carried else "")
                             + (f"; kept its {' and '.join(kept)} settings" if kept else "")
-                            + ". Restart the tunnel (step 6 or the Health card) to use it.")
+                            + ("." if restarted else ". Restart the tunnel (step 6 or the Health card) to use it."))
     if backup_to_library:
         try:
             wrote, reason = _compare_before_write(_wg_library_path(), config_text.encode("utf-8"))
@@ -7278,7 +7314,8 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
         if kind in ("full", "split"):
             _cfg["tunnels"]["tunnel.pi.kind"] = kind
         save_config(_cfg)
-    return {"success": True, "verified": status["done"], "output": "\n".join(output_lines)}
+    swap_ok = not any(ln.startswith("FAIL") for ln in swap)
+    return {"success": swap_ok, "verified": status["done"] and swap_ok, "output": "\n".join(output_lines)}
 
 def action_load_wg_from_library() -> dict:
     err = _require_root()
@@ -7535,7 +7572,7 @@ def _wg_insert_in_interface(text: str, block_lines):
     inserted = False
     for ln in text.splitlines():
         out.append(ln)
-        if not inserted and ln.strip().lower() == "[interface]":
+        if not inserted and ln.split("#", 1)[0].strip().lower() == "[interface]":
             out.extend(block_lines)
             inserted = True
     if not inserted:
@@ -7704,6 +7741,81 @@ def _wg_atomic_write(text: str) -> None:
     except OSError:
         pass
 
+_WG_UNITS = ("wg-quick@wg0", "44net-tunnel.service")
+_WG_SWAP_NOTE = "tunnel started again with the new config"
+
+def _wg_route_kind(text: str | None) -> str:
+    if not text:
+        return "other"
+    if any(ln.strip() == _WG_RT_BEGIN for ln in text.splitlines()):
+        return "split"
+    tables = [ln.split("#", 1)[0].split("=", 1)[1].strip().lower() for ln in text.splitlines()
+              if re.match(r"^\s*table\s*=", ln, re.I)]
+    if any(t != "auto" for t in tables):
+        return "other"
+    return "full" if any(n.prefixlen == 0 for n in _wg_peer_allowed_nets(text)) else "other"
+
+def _wg_clear_stale_rules(out: list[str]) -> None:
+    rc, shown = _ov_q(["wg", "show", "interfaces"])
+    if rc != 0 or shown.strip():
+        return
+    cleared = 0
+    for fam in ("-4", "-6"):
+        rc, rules = _ov_q(["ip", fam, "rule", "show"])
+        if rc != 0:
+            continue
+        for ln in rules.splitlines():
+            prio, _, rest = ln.partition(":")
+            rest = " ".join(rest.split())
+            if not prio.strip().isdigit():
+                continue
+            if (re.search(r"lookup (51820|%s)\b" % _WG_RT_TABLE, rest)
+                    or rest == "from all lookup main suppress_prefixlength 0"):
+                if _run_argv(["ip", fam, "rule", "del", "priority", prio.strip()])["success"]:
+                    cleared += 1
+    if cleared:
+        out.append(f"ok    {cleared} routing rule{'s' if cleared != 1 else ''} left by an earlier tunnel start removed")
+
+def _wg_swap_begin(new_text: str, out: list[str]) -> str:
+    if not _wg0_interface_present():
+        return ""
+    old_kind = _wg_route_kind(_hl_read_conf())
+    if old_kind not in ("full", "split") or old_kind == _wg_route_kind(new_text):
+        return ""
+    unit = next((u for u in _WG_UNITS if _systemctl_is_active(u)), "")
+    if not unit:
+        return ""
+    r = _run_argv(["systemctl", "stop", unit], timeout=60)
+    if _wg0_interface_present():
+        raise OSError("the tunnel's routing changes with this config, and the running tunnel couldn't be stopped first"
+                      + (": " + r["output"] if r["output"] else "") + ". The file was left as it was")
+    out.append("ok    tunnel stopped first: this config changes its routing, and the old rules have to be taken "
+               "down with the old file")
+    return unit
+
+def _wg_swap_end(unit: str, out: list[str]) -> None:
+    if not unit:
+        return
+    _wg_clear_stale_rules(out)
+    t0 = int(time.time())
+    r = _run_argv(["systemctl", "start", unit], timeout=_WG_START_WAIT)
+    if r["success"]:
+        out.append("ok    " + _WG_SWAP_NOTE)
+    else:
+        out.append("FAIL  the tunnel didn't start again" + (": " + r["output"] if r["output"] else ""))
+        out += _wg_start_report(unit, t0)
+
+def _wg_swap_write(new_text: str, out: list[str]) -> None:
+    unit = _wg_swap_begin(new_text, out)
+    try:
+        _wg_atomic_write(new_text)
+    except OSError:
+        if unit:
+            _run_argv(["systemctl", "start", unit], timeout=_WG_START_WAIT)
+            out.append("The write failed, so the tunnel was started again with the old config.")
+        raise
+    _wg_swap_end(unit, out)
+
 def _wg_keepalive_off(value: str) -> bool:
     return value.strip().lower() in ("", "0", "off")
 
@@ -7725,7 +7837,10 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     new_text, pin_note = _wg_apply_endpoint_pin(new_text)
     if pin_note:
         out.append(pin_note)
-    _wg_atomic_write(new_text)
+    new_text, v6 = _wg_drop_v6_default(new_text)
+    if v6:
+        out.append(_WG_V6_NOTE.format(", ".join(v6)))
+    _wg_swap_write(new_text, out)
     out.append("wg0.conf updated, permissions set to 600.")
     if backup_to_library:
         try:
@@ -7898,7 +8013,7 @@ def _wg_repair_allowed_ips_text(text: str) -> tuple[str, int]:
     for i, raw in enumerate(lines):
         body = raw.rstrip("\r\n")
         term = raw[len(body):]
-        low = body.strip().lower()
+        low = body.split("#", 1)[0].strip().lower()
         if low == "[interface]":
             section = "interface"
             continue
@@ -8057,8 +8172,11 @@ def action_wg_repair_allowed_ips() -> dict:
     plural = "s" if changed != 1 else ""
     out.append(f"AllowedIPs narrowed to the split-tunnel set: {after['allowed_ips']} "
                f"({changed} peer line{plural} rewritten).")
-    out.append("Restart the tunnel so wg-quick sets up the narrower routes and DNS lookups leave the tunnel again:  "
-               "systemctl restart wg-quick@wg0")
+    if any(ln.startswith("FAIL") for ln in out):
+        return {"success": False, "verified": False, "output": "\n".join(out)}
+    if not any(_WG_SWAP_NOTE in ln for ln in out):
+        out.append("Restart the tunnel so wg-quick sets up the narrower routes and DNS lookups leave the tunnel again:  "
+                   "systemctl restart wg-quick@wg0")
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
 _WG_EGRESS_IFACE = "wg0"
@@ -8291,6 +8409,8 @@ def action_enable_tunnel() -> dict:
                     "tunnel again.")
         return {"success": False, "verified": False, "output": "\n".join(gate)}
     t0 = int(time.time())
+    if not _wg0_interface_present():
+        _wg_clear_stale_rules(gate)
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
         verb = "restart" if _systemctl_is_active(unit) else "start"
@@ -11465,7 +11585,7 @@ def _half_set_full_aip_text(text: str) -> tuple[str, bool]:
     for i, raw in enumerate(lines):
         body = raw.rstrip("\r\n")
         term = raw[len(body):]
-        low = body.strip().lower()
+        low = body.split("#", 1)[0].strip().lower()
         if low == "[interface]":
             section = "interface"
             continue
@@ -11650,6 +11770,7 @@ def _half_step2(st: dict, out: list[str]) -> bool:
     if _wg0_interface_present():
         out.append("FAIL  wg0 is still up after stopping wg-quick@wg0.")
         return False
+    _wg_clear_stale_rules(out)
     if not _half_run_lines([["wg-quick", "up", _HALF_TEMP_CONF]], out):
         return False
     md = _half_main_default()
@@ -20094,7 +20215,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += renderStepWarn('This wg0.conf still carries the portal default <code>AllowedIPs = 0.0.0.0/0</code> (full tunnel). On the Split Tunnel tab that routes ALL traffic, DNS included, into wg0, which is the exact cause of the breakage where ASL keeps working (it dials cached peer IPs) but DVSwitch and usrp2m17 fail (they resolve by hostname). Narrowing the peer AllowedIPs to <code>44.0.0.0/9, 44.128.0.0/10</code> sends only 44Net traffic through the tunnel.');
     html += '<div class="step-body">Current: <code>' + asl3EscapeAttr(current) + '</code> becomes <code>44.0.0.0/9, 44.128.0.0/10</code>. Each [Peer] AllowedIPs line of 0.0.0.0/0 is rewritten; the private key and Endpoint are not touched. The tidy-up 44helper does on every write also applies (SaveConfig removed, and the endpoint pin added when the tunnel server is a 44Net address). The library backup is updated after the write.</div>';
     html += '<div class="step-actions"><button class="btn-run" onclick="piRepairAllowedIps()">Repair AllowedIPs (44Net split range)</button></div>';
-    html += '<div class="step-body" style="font-size:var(--fs-sm);color:var(--muted)">After repairing, restart the tunnel so wg-quick sets up the narrower routes and DNS leaves the tunnel again:  systemctl restart wg-quick@wg0</div>';
+    html += '<div class="step-body" style="font-size:var(--fs-sm);color:var(--muted)">If the tunnel is running it is stopped before the change and started again after it, so the full-tunnel routing rules are taken down cleanly. Do this from the LAN: a session that comes in through the tunnel drops.</div>';
   } else {
     html += current ? '<div class="step-body">AllowedIPs is <code>' + asl3EscapeAttr(current) + '</code>, already narrowed (not the full-tunnel 0.0.0.0/0 shape), so this repair has nothing to do. Edit the config by hand for a different range.</div>'
       : '<div class="step-body">wg0.conf has no AllowedIPs line under [Peer], so there is nothing to repair. Check the config against the portal.</div>';
@@ -20127,7 +20248,7 @@ function piRepairAllowedIps(what) {
   var kind = 'split';
   if (what === 'pin') {
     if (!confirm('Keep the tunnel server on the normal route? This adds two lines to wg0.conf (the library backup is updated too) and adds the route now.')) return;
-  } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that line changes, plus the usual SaveConfig and endpoint-pin tidy-up; the library backup is updated after the write. Restart the tunnel afterward.')) return;
+  } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that line changes, plus the usual SaveConfig and endpoint-pin tidy-up; the library backup is updated after the write. A running tunnel is stopped first and started again afterwards, so do this from the LAN.')) return;
   var out = document.getElementById('pi-aip-out-' + kind);
   if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
   fetch('/api/pi_install/action', {
