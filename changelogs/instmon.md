@@ -1,5 +1,21 @@
 # instmon changelog
 
+## 2.100.0 (2026-11-11)
+
+First of four steps that reorganize the page. This one only moves things: every card does what it did. It is a release because the page script changed.
+
+- **Five tabs instead of one long page.** The header has Home, Tools, Files, Disk and System. The page opens on the tab you used last.
+  - **Home:** a line per tool (name, version, state) with a count of tools that are not running, Quick Links, and GitHub Updates (Check GitHub, Full Update, channel and build). Tapping a tool's line opens its card.
+  - **Tools:** the component cards, the Available card and Node Talker Mobile.
+  - **Files:** Config getter and Config putter together, Import from USB Drive, the Scripts and Configuration Library, Manuals and Backup & Export.
+  - **Disk:** Disk Image & Clone with Full Format, Backup, Clone and Restore.
+  - **System:** Quiet System and Restore (moved out of the GitHub card), System & Comms (restart, reboot, shutdown) and the Suite Log.
+- **The log is docked at the bottom of every tab.** Closed, it is one line showing the newest entry; **Log** opens it over the lower part of the page and **Hide log** closes it. The page remembers which. Copy Log shows while it is open.
+- Full Update's result banners stay above the tabs, so they show whichever tab is open.
+- Lists on a hidden tab are not polled; they refresh when you open the tab.
+- Nothing in the server's answers changed. An older page still works against this server and the other way round.
+- Tests: new `ci/test_instmon_page.py` (each card is in its tab once, the log is docked outside the tabs, the status answer is unchanged).
+
 ## 2.99.0 (2026-11-10)
 
 Third step of the "available but opt-in" plan: install several downloaded tools at once, and Full Update that leaves alone what you stopped. This is a release: Python and page behaviour changed.
@@ -99,7 +115,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_99_0_20261110.py`. Newest entries first.
+Current file: `instmon_v2_100_0_20261111.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
