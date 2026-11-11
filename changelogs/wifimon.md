@@ -1,6 +1,15 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_49_0_20261107.py`. Newest entries first.
+Current file: `wifimon_v5_50_0_20261111.py`. Newest entries first.
+
+## 5.50.0 (2026-11-11)
+
+- **Wired (Ethernet) adapters have Auto, Keep on and Keep off.** A new **Wired (Ethernet)** list under WiFi devices in the Radio & device card shows each Ethernet adapter with its cable state and the same three settings as a WiFi adapter. Auto (the default) leaves it to NetworkManager. Keep on turns auto-connect on and brings the connection up again when it drops (when a cable is plugged in). Keep off turns auto-connect off, disconnects it, and keeps NetworkManager from managing it at boot. The setting follows the adapter by its hardware address and shares the WiFi adapters' saved settings, forget button and 60-second undo. The page warns when Keep off is for the adapter you are reaching it through. Wired settings need NetworkManager; without it the list is read-only. Switch and Disconnect still apply to WiFi devices only, and the watchdog never moves to a wired adapter.
+- **Dashboard changes work on a wpa_supplicant node.** Radio, disconnect, switch, connect, reconnect, delete and country now run when only wpa_supplicant (`wpa_cli`) is present. Before, every one was refused as "needs NetworkManager", and the page locked its controls, including Rescan. Keep on/off, adding and editing networks, network options, Auto-join and the hotspot still need NetworkManager, and the page says so.
+- **Voltage watchdog reads the Pi's own under-voltage flag.** It reads the alarm from whichever hwmon device is `rpi_volt` (not always `hwmon0`) and also the live under-voltage bit of `vcgencmd get_throttled`. The core-voltage threshold is used only when neither flag can be read; before, a Pi that idles with a core voltage under the threshold could be shut down while healthy, and one that sits above it was never caught if the alarm file was elsewhere.
+- **WiFi scan on wpa_supplicant shows a percentage** (from the dBm level) instead of a negative number.
+- **Fewer ways to get stuck.** A reconnect pass that hits an error no longer leaves the reconnect flag set, and a hotspot stop that fails no longer leaves the change lock held. Joining through `wpa_cli` now reports a failed join instead of success. Saves to `state.json` are serialized so two threads cannot lose each other's change.
+- This is a release, not a cosmetic build.
 
 ## 5.49.0 (2026-11-07)
 
