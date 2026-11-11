@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.102.0"
+VERSION ="2.103.0"
 DATE_STR ="2026-11-11"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -5386,7 +5386,7 @@ def _gh_is_network_error(exc):
 def _gh_check_current (gen ):
     return _gh_state ["gen"]==gen and _gh_state ["phase"]=="checking"
 
-def _gh_check_bg (gen =None ):
+def _gh_check_bg (gen =None ,auto =False ):
     started =time .monotonic ()
     try :
         entries ,skipped ,listed =_gh_collect_full (gen )
@@ -5430,11 +5430,12 @@ def _gh_check_bg (gen =None ):
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
     _gh_event ("GitHub check: "+", ".join (parts )+f". ({time .monotonic ()-started :.0f}s)",level )
-    try:
-        _gh_fetch_missing(entries)
-    except Exception as exc:
-        log_event(f"GitHub: downloading tools that are not installed failed: {exc}", "warn")
-    _docs_refresh_remote()
+    if not auto:
+        try:
+            _gh_fetch_missing(entries)
+        except Exception as exc:
+            log_event(f"GitHub: downloading tools that are not installed failed: {exc}", "warn")
+        _docs_refresh_remote()
     full_update_preview()
 
 FETCH_MISSING_MAX = max(0, int(os.environ.get("INSTMON_FETCH_MISSING_MAX", "8")))
@@ -5582,7 +5583,77 @@ def _gh_check_timeout (gen ):
         checked_at =datetime .now ().strftime ("%Y-%m-%d %H:%M"))
     _gh_event (f"GitHub check failed: {msg }","err")
 
-def gh_start_check ():
+_AUTOCHECK_PATH = os.path.join(CONFIG_DIR, "instmon_autocheck.json")
+AUTOCHECK_EVERY_SEC = 24 * 3600
+AUTOCHECK_TICK_SEC = 600
+
+def autocheck_get():
+    try:
+        with open(_AUTOCHECK_PATH, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
+    try:
+        last = float(d.get("last") or 0)
+    except (TypeError, ValueError):
+        last = 0.0
+    return {"on": d.get("on") is True, "last": last}
+
+def _autocheck_write(state):
+    ensure_dirs()
+    compare_before_write(_AUTOCHECK_PATH, json.dumps(state, indent=2).encode("utf-8"))
+
+def autocheck_set(on):
+    if not isinstance(on, bool):
+        return _fail(400, "on must be true or false")
+    st = autocheck_get()
+    st["on"] = on
+    _autocheck_write(st)
+    log_event("Daily GitHub check turned " + ("on (versions only, no downloads)" if on else "off"), "ok")
+    return 200, {"on": on, "level": "ok",
+                 "message": "instmon checks GitHub once a day (versions only)." if on else "The daily GitHub check is off."}
+
+def autocheck_tick(now=None):
+    now = time.time() if now is None else now
+    st = autocheck_get()
+    if not st["on"] or now - st["last"] < AUTOCHECK_EVERY_SEC or full_update_running():
+        return False
+    ok, _msg = gh_start_check(auto=True)
+    if ok:
+        st["last"] = now
+        _autocheck_write(st)
+    return ok
+
+def _autocheck_loop():
+    time.sleep(120)
+    while True:
+        try:
+            autocheck_tick()
+        except Exception as exc:
+            log_event(f"Daily GitHub check error: {exc}", "warn")
+        time.sleep(AUTOCHECK_TICK_SEC)
+
+def gh_updates_summary():
+    with _gh_lock:
+        phase = _gh_state["phase"]
+        entries = list(_gh_state["entries"] or [])
+        checked = _gh_state.get("checked_at")
+    count = sum(1 for e in entries if e.get("status") in ("update", "missing"))
+    if phase != "done" or not checked:
+        text = ""
+    elif count:
+        text = f"{count} update(s) on GitHub (checked {checked}). Full Update is below."
+    else:
+        text = f"Everything is up to date with GitHub (checked {checked})."
+    return {"count": count if phase == "done" else 0, "text": text}
+
+def gh_updates_html():
+    u = gh_updates_summary()
+    return f'<div id="home-updates" class="small{" log-warn" if u["count"] else ""}">{esc(u["text"])}</div>'
+
+def gh_start_check (auto =False ):
     with _gh_lock :
         if _gh_state ["phase"]=="checking":
             return False ,"A GitHub check is already running."
@@ -5594,11 +5665,11 @@ def gh_start_check ():
         _gh_state ["error"]=None 
         _gh_state ["started_at"]=time .monotonic ()
         _gh_state ["progress_at"]=None 
-    log_event (f"GitHub check started ({_gh_source_label ()})","info")
+    log_event (f"GitHub check started ({_gh_source_label ()}{', daily, versions only' if auto else ''})","info")
     timer =threading .Timer (GH_CHECK_LIMIT_SEC ,_gh_check_timeout ,args =(gen ,))
     timer .daemon =True 
     timer .start ()
-    threading .Thread (target =_gh_check_bg ,args =(gen ,),daemon =True ).start ()
+    threading .Thread (target =_gh_check_bg ,args =(gen ,auto ),daemon =True ).start ()
     return True ,"Checking GitHub -- results appear in each library group."
 
 def _gh_verify_content (entry ,data ):
@@ -5772,6 +5843,7 @@ def _gh_status_payload ():
         level =_gh_state ["event_level"]
     return {
     "gh_summary_html":_gh_summary_html (),
+    "gh_updates":gh_updates_summary (),
     "gh_event_seq":seq ,
     "gh_event_msg":msg ,
     "gh_event_level":level ,
@@ -9366,7 +9438,7 @@ body.log-open .wrap{padding-bottom:calc(45vh + 4.5rem)}
 
 _CSS_TOOLS = """
 .boot-sw{display:inline-flex;align-items:center;gap:.3rem;margin-left:auto;cursor:pointer;white-space:nowrap}
-#home-disk{margin-bottom:.3rem}
+#home-disk,#home-updates{margin-bottom:.3rem}
 #svclog-overlay{position:fixed;inset:0;z-index:1150;display:flex;align-items:center;justify-content:center;
   background:rgba(0,0,0,.6);padding:1rem}
 #svclog-overlay[hidden]{display:none}
@@ -9908,6 +9980,7 @@ async function refreshStatus() {
     document.getElementById('components').innerHTML = data.components_html;
     placeCards();
     homeDisk(data.disk);
+    homeUpdates(data.gh_updates);
     document.getElementById('library').innerHTML = data.library_html;
     if (typeof cpUpdateStatus === 'function') cpUpdateStatus(data.confputter);
     const ghEl = document.getElementById('gh-summary');
@@ -11910,7 +11983,7 @@ async function _doLogin(ev) {
   try {
     const r = await _rawFetch('/api/login', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
       body: JSON.stringify({password: password}),
     });
     const data = await r.json();
@@ -12510,6 +12583,12 @@ function svcLogClose() {
   _svcLog = null;
   document.getElementById('svclog-overlay').hidden = true;
 }
+function homeUpdates(u) {
+  const el = document.getElementById('home-updates');
+  if (!el || !u) return;
+  el.textContent = u.text || '';
+  el.className = 'small' + (u.count ? ' log-warn' : '');
+}
 function homeDisk(d) {
   const el = document.getElementById('home-disk');
   if (!el || !d) return;
@@ -12544,6 +12623,15 @@ function toolsInit() {
   });
   document.getElementById('svclog-overlay').addEventListener('click', function (ev) {
     if (ev.target.id === 'svclog-overlay') svcLogClose();
+  });
+  const ac = document.getElementById('autocheck-cb');
+  if (ac) ac.addEventListener('change', async function () {
+    const want = ac.checked;
+    ac.disabled = true;
+    let d = null;
+    try { d = await postAction({action: 'gh_autocheck', on: want}); } catch (e) {}
+    if (!d || d.on !== want) ac.checked = !want;
+    ac.disabled = false;
   });
   const rb = document.getElementById('bk-restore-btn');
   if (rb) rb.addEventListener('click', bkRestore);
@@ -12604,6 +12692,8 @@ def render_page (lite =False ):
     components_html =components_html ,
     library_html =library_html ,
     github_html =_gh_summary_html (),
+    updates_html =gh_updates_html (),
+    autocheck_checked =" checked"if autocheck_get ()["on"]else "",
     disk_html =disk_html (),
     log_html =log_html ,
     )
@@ -12675,6 +12765,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="hdr">Tools</div>
 <div class="card">
   <div id="home-sum" class="small"></div>
+  {updates_html}
   {disk_html}
   <div id="home-tools"></div>
 </div>
@@ -12694,6 +12785,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   <div id="gh-summary" class="small" style="margin-top:.35rem">{github_html}</div>
   <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
+  <label class="small" id="autocheck-row" style="display:block;margin-top:.35rem;cursor:pointer">
+    <input type="checkbox" id="autocheck-cb"{autocheck_checked}> Check GitHub once a day (versions only, nothing is downloaded)</label>
   <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress" style="font-size:1.15rem"></div>
   <div id="fu-plan"></div>
@@ -13240,6 +13333,7 @@ _ACTION_HANDLERS ={
 "uninstall":lambda self ,body :self ._action_uninstall (body ),
 "start":lambda self ,body :self ._action_start (body ),
 "stop":lambda self ,body :self ._action_stop (body ),
+"gh_autocheck":lambda self ,body :self ._send_json (*autocheck_set (body .get ("on"))),
 "set_boot":lambda self ,body :self ._send_json (*set_boot (body .get ("service",""),body .get ("enable"))),
 "install_config":lambda self ,body :self ._action_install_config (body ),
 "delete":lambda self ,body :self ._action_delete (body ),
@@ -13424,7 +13518,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
     def _error_json (self ,status ,message ):
         log_event (f"HTTP {status }: {message } ({self .command } {self .path })","err")
-        self ._send_json (status ,{"error":message })
+        self ._send_json (status ,{"error":message ,"message":message })
 
     def _session_token(self):
         cookie_header = self.headers.get("Cookie", "")
@@ -14436,11 +14530,16 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         handler_fn (self )
 
     def _handle_login(self):
+        if not self._check_csrf():
+            self._send_json(403, {"ok": False, "error": "Missing or invalid X-Requested-With header",
+                                  "message": "Missing or invalid X-Requested-With header"})
+            return
         client_ip = self.client_address[0]
         remaining = _auth_lockout_remaining(client_ip)
         if remaining > 0:
             retry_after = int(remaining) + 1
-            self._send_json(429, {"ok": False, "error": f"Too many failed login attempts. Try again in {retry_after}s."},
+            self._send_json(429, {"ok": False, "error": f"Too many failed login attempts. Try again in {retry_after}s.",
+                                  "message": f"Too many failed login attempts. Try again in {retry_after}s."},
                              extra_headers=[("Retry-After", str(retry_after))])
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -14457,7 +14556,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                              extra_headers=[("Set-Cookie", _session_cookie_header(token, _SESSION_TTL_SEC))])
         else:
             _record_auth_failure(client_ip)
-            self._send_json(401, {"ok": False, "error": "Invalid password"})
+            self._send_json(401, {"ok": False, "error": "Invalid password", "message": "Invalid password"})
 
     def handle_download (self ):
         query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )
@@ -15800,6 +15899,7 @@ def run ():
     threading.Thread(target=_sd_watchdog_loop, daemon=True).start()
 
     threading.Thread(target=_diskimg_scheduler_loop, daemon=True).start()
+    threading.Thread(target=_autocheck_loop, name="gh-autocheck", daemon=True).start()
     log_event("Disk-image scheduler thread started (checks once a minute).", "info")
 
     server_address =("",PORT )

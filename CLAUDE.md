@@ -162,11 +162,11 @@
   records each tool's response headers and request guards. A change that
   weakens one fails CI. A change that strengthens one updates the table in the
   same pull request. A known gap is listed in `KNOWN_GAPS` until it is fixed,
-  and fixing it removes the entry. Known today: instmon and Pibrary accept a
-  login request without `X-Requested-With`.
+  and fixing it removes the entry. Known today: Pibrary accepts a login request
+  without `X-Requested-With`.
 - **Error replies carry a message.** New tools answer errors with a
-  `message` key. instmon and wifimon (`error`) and 44helper (`output`) are
-  recorded in the server tests as they are; move them to `message` in their
+  `message` key. wifimon (`error`) and 44helper (`output`) are recorded in
+  the server tests as they are; move them to `message` in their
   next release and update `error_keys`.
 - **Promotion waits for green.** `promote-stable` promotes only when the
   `checks` workflow passed on the newest `main` commit (other than a

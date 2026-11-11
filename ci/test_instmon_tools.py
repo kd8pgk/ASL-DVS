@@ -239,6 +239,109 @@ class Served(unittest.TestCase):
         self.assertEqual((r.status, data["text"], data["lines"]), (200, "hello\n", 50))
 
 
+class AutoCheck(unittest.TestCase):
+    def setUp(self):
+        try:
+            os.remove(im._AUTOCHECK_PATH)
+        except OSError:
+            pass
+
+    def test_setting_is_saved(self):
+        self.assertEqual(im.autocheck_set("yes")[0], 400)
+        self.assertFalse(im.autocheck_get()["on"])
+        self.assertEqual(im.autocheck_set(True)[0], 200)
+        self.assertTrue(im.autocheck_get()["on"])
+        self.assertEqual(im.autocheck_set(False)[1]["on"], False)
+
+    def test_runs_once_a_day_and_only_when_on(self):
+        with mock.patch.object(im, "gh_start_check", return_value=(True, "")) as start, \
+                mock.patch.object(im, "full_update_running", return_value=False):
+            self.assertFalse(im.autocheck_tick(now=1_000_000))
+            im.autocheck_set(True)
+            self.assertTrue(im.autocheck_tick(now=1_000_000))
+            start.assert_called_once_with(auto=True)
+            self.assertEqual(im.autocheck_get()["last"], 1_000_000)
+            self.assertFalse(im.autocheck_tick(now=1_000_000 + 3600))
+            self.assertTrue(im.autocheck_tick(now=1_000_000 + im.AUTOCHECK_EVERY_SEC))
+        with mock.patch.object(im, "gh_start_check", return_value=(True, "")) as start, \
+                mock.patch.object(im, "full_update_running", return_value=True):
+            self.assertFalse(im.autocheck_tick(now=9_000_000))
+            start.assert_not_called()
+
+    def test_a_refused_start_is_tried_again(self):
+        im.autocheck_set(True)
+        with mock.patch.object(im, "gh_start_check", return_value=(False, "busy")), \
+                mock.patch.object(im, "full_update_running", return_value=False):
+            self.assertFalse(im.autocheck_tick(now=5_000_000))
+        self.assertEqual(im.autocheck_get()["last"], 0.0)
+
+    def test_the_daily_check_downloads_nothing(self):
+        for auto, calls in ((True, 0), (False, 1)):
+            with mock.patch.object(im, "_gh_collect_full", return_value=([], 0, [])), \
+                    mock.patch.object(im, "_gh_fetch_missing") as fetch, \
+                    mock.patch.object(im, "_docs_refresh_remote") as docs, \
+                    mock.patch.object(im, "full_update_preview") as preview:
+                im._gh_check_bg(None, auto)
+            self.assertEqual((fetch.call_count, docs.call_count, preview.call_count), (calls, calls, 1), auto)
+
+    def test_home_line_counts_updates(self):
+        with im._gh_lock:
+            saved = dict(im._gh_state)
+            im._gh_state.update(phase="done", checked_at="2026-11-11 10:00",
+                                entries=[{"status": "update"}, {"status": "missing"}, {"status": "up_to_date"}])
+        try:
+            u = im.gh_updates_summary()
+            self.assertEqual(u["count"], 2)
+            self.assertIn("2 update(s)", u["text"])
+            with im._gh_lock:
+                im._gh_state.update(entries=[{"status": "up_to_date"}])
+            self.assertIn("up to date", im.gh_updates_summary()["text"])
+            with im._gh_lock:
+                im._gh_state.update(phase="checking")
+            self.assertEqual(im.gh_updates_summary(), {"count": 0, "text": ""})
+        finally:
+            with im._gh_lock:
+                im._gh_state.clear()
+                im._gh_state.update(saved)
+
+
+class Login(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = im.http.server.ThreadingHTTPServer(("127.0.0.1", 0), im.InstmonHandler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def call(self, method, path, body=None, xrw=True):
+        headers = {"Content-Type": "application/json"}
+        if xrw:
+            headers["X-Requested-With"] = "XMLHttpRequest"
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=10)
+        c.request(method, path, body, headers)
+        r = c.getresponse()
+        out = (r.status, json.loads(r.read() or b"{}"))
+        c.close()
+        return out
+
+    def test_login_needs_the_header_and_errors_carry_a_message(self):
+        with mock.patch.object(im, "_verify_root_password", return_value=False), \
+                mock.patch.object(im, "_record_auth_failure"):
+            status, payload = self.call("POST", "/api/login", json.dumps({"password": "x"}), xrw=False)
+            self.assertEqual(status, 403)
+            self.assertIn("message", payload)
+            status, payload = self.call("POST", "/api/login", json.dumps({"password": "x"}))
+            self.assertEqual(status, 401)
+            self.assertEqual(payload["message"], "Invalid password")
+        with mock.patch.object(im, "_check_session", lambda token: True):
+            status, payload = self.call("GET", "/api/no-such-route")
+        self.assertEqual(status, 404)
+        self.assertIn("message", payload)
+
+
 class Page(unittest.TestCase):
     def card(self, **kw):
         c = {"name": "SysMon", "service": "sysmon", "port": 9999, "scheme": "http", "category": "sysmon",
@@ -265,13 +368,18 @@ class Page(unittest.TestCase):
         self.assertIn('id="home-disk"', home)
         self.assertIn('id="bk-restore-btn"', files)
         self.assertIn('id="svclog-overlay" hidden', html)
-        for n in ("function svcLogOpen", "function bkRestore", "action: 'set_boot'", "homeDisk(data.disk)", "toolsInit();"):
+        self.assertIn('id="home-updates"', home)
+        self.assertIn('id="autocheck-cb"', home)
+        self.assertIn("'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},\n      body: JSON.stringify({password", html)
+        for n in ("function svcLogOpen", "function bkRestore", "action: 'set_boot'", "homeDisk(data.disk)", "toolsInit();",
+                  "action: 'gh_autocheck'", "homeUpdates(data.gh_updates)"):
             self.assertIn(n, html)
 
     def test_routes_and_action_are_registered(self):
         self.assertIn("/api/journal", im._GET_ROUTES)
         self.assertIn("/api/backup/restore", im._POST_ROUTES)
         self.assertIn("set_boot", im._ACTION_HANDLERS)
+        self.assertIn("gh_autocheck", im._ACTION_HANDLERS)
 
 
 if __name__ == "__main__":
