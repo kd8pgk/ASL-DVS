@@ -1,8 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.38`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.39`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
 
-**Published builds use the shared key for now (2026-11-11).** From 0.10.27 the workflow published only builds signed with the private release key, and no build has been published since, because that key is not set up yet. Until it is, the workflow publishes the build signed with the shared key in `android/app/debug.keystore` again, as it did up to 0.10.26, and the release title and notes say "shared key". That key is public, so install the app only from the project's release page. A shared-key build installs over 0.10.26 and older. When the private key is set up, the workflow uses it by itself and each phone needs one uninstall, as the 0.10.27 entry says. The app itself is not changed by this.
+## 0.10.39 (2026-11-11)
+
+- **The private release key is rolled back.** 0.10.27 added signing with a private key kept in the repository secrets. Those secrets were never set, and the key is not wanted for now, so the workflow and the Gradle build no longer look for it: every build, published or not, is signed with the shared key in `android/app/debug.keystore`, as up to 0.10.26. The stopgap note from earlier today is gone with it.
+- **Installs over every published build.** All published builds so far, from 0.3.1 to 0.10.38, are signed with that same shared key (certificate SHA-256 `96112b8a…6a33be`), and the version only goes up, so this one installs over any of them and keeps your nodes and settings. Only a build you made yourself with a different key needs an uninstall first.
+- The release title no longer says "shared key"; the notes still say how the APK is signed.
+- The app itself is not changed.
 
 ## 0.10.38 (2026-11-11)
 
