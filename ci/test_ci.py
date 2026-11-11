@@ -4959,5 +4959,37 @@ class Wifimon551Tests(unittest.TestCase):
         self.assertFalse(hasattr(wm, "_install_enabled"))
 
 
+class WifimonTabsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.page = load_wifimon()._PAGE_HTML
+
+    def test_every_card_sits_in_exactly_one_tab(self):
+        page = self.page
+        panels = re.findall(r'<div class="tabp" id="tabp-([a-z]+)" data-tab="([a-z]+)"', page)
+        self.assertEqual([a for a, b in panels], [b for a, b in panels])
+        names = [a for a, b in panels]
+        self.assertEqual(names, ["status", "networks", "devices", "watchdogs", "system"])
+        buttons = re.findall(r'class="tab-btn" role="tab" id="tab-([a-z]+)" aria-controls="tabp-([a-z]+)"', page)
+        self.assertEqual([a for a, b in buttons], names)
+        self.assertEqual([b for a, b in buttons], names)
+        main = page[page.index("<main>"):page.index("</main>")]
+        cards = re.findall(r'<section class="card[^"]*" id="(card-[a-z0-9]+)"', main)
+        self.assertEqual(len(cards), len(set(cards)))
+        for card in ("card-status", "card-saved", "card-scan", "card-radio", "card-wifidevs", "card-wired",
+                     "card-hotspot", "card-country", "card-watchdog", "card-tunnel", "card-alerts",
+                     "card-service", "card-install", "card-log"):
+            self.assertIn(card, cards)
+        chunks = main.split('<div class="tabp"')[1:]
+        self.assertEqual(sum(c.count("<section") for c in chunks), len(cards))
+
+    def test_banners_stay_outside_the_tabs(self):
+        page = self.page
+        main = page[page.index("<main>"):page.index("</main>")]
+        for banner in ('id="banner"', 'id="pending"', 'id="job"', 'id="hs-banner"', 'id="rep-banner"'):
+            self.assertIn(banner, page)
+            self.assertNotIn(banner, main)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,22 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_51_0_20261111.py`. Newest entries first.
+Current file: `wifimon_v5_52_0_20261111.py`. Newest entries first.
+
+## 5.52.0 (2026-11-11)
+
+- **The page is split into tabs.** Five tabs sit under the header:
+  - **Status:** the link, signal, address, internet check, today's WiFi health, and More details.
+  - **Networks:** Saved networks (with Add and Options) and Nearby networks.
+  - **Devices:** the Radio & device card is split into **Radio**, **WiFi devices**, **Wired (Ethernet)** and **Emergency hotspot** cards, and the WiFi country code and chip roaming move into a **Country & roaming** card. Those two are no longer hidden behind More details.
+  - **Watchdogs:** Watchdog, Tunnel watchdog and Alerts.
+  - **System & log:** Service, System tools, and the Activity log with Shutdown reports.
+- **Banners stay above the tabs**, so a pending change with its Undo, a connect job, the hotspot timer and a new shutdown report show whichever tab is open.
+- **A red dot marks a tab that needs you:** Devices when the radio is off, the hotspot is on or no country code is set; Watchdogs during a shutdown countdown or when the tunnel watchdog is acting or gave up; System & log when a required tool is missing, root has no password, or there is a new shutdown report.
+- **Links move you to the right tab:** Fix (country code) opens Devices, and View report opens System & log.
+- **The open tab is remembered** in this browser. Left and right arrow keys move between tabs.
+- **Only the open tab's cards are redrawn** on each 5-second refresh, with less work for a Pi Zero and a phone. The header, banners and dots still update on every tab.
+- No server changes.
+- This is a release, not a cosmetic build.
 
 ## 5.51.0 (2026-11-11)
 
