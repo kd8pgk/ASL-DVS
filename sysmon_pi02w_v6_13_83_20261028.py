@@ -19281,8 +19281,7 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   else "Not set — check MMDVM_Bridge.ini [General] Id")},
     ]
     notes = [
-        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort.",
-        "Analog_Bridge sends audio to one address only, so DVSM and this node's Asterisk link can't both use these ports at once.",
+        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort. Analog_Bridge sends audio to one address only, so DVSM and this node's Asterisk link can't both use these ports at once.",
     ]
     if ab.get("source"):
         notes.append(f"Source: {ab['source']}")
