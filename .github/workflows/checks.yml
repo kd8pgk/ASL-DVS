@@ -52,6 +52,8 @@ jobs:
         run: python3 ci/test_instmon_slowlink.py
       - name: instmon download tests (gzip, resume, header peek, slow-line rules)
         run: python3 ci/test_instmon_downloads.py
+      - name: instmon page layout tests (tabs, docked log)
+        run: python3 ci/test_instmon_page.py
       - name: Node Talker baseline tests
         run: python3 ci/test_talker_baseline.py
       - name: Node Talker stream tests (login, handshake, origin, idle, listeners)

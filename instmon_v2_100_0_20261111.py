@@ -40,8 +40,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.99.0"
-DATE_STR ="2026-11-10"
+VERSION ="2.100.0"
+DATE_STR ="2026-11-11"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -9168,6 +9168,36 @@ input[type=file]{color:var(--muted);font-size:var(--fs-base);max-width:100%}
 #fu-progress{font-family:var(--sans);font-size:var(--fs-base);color:var(--cyn);margin-top:.35rem}
 """
 
+_CSS_TABS = """
+header{flex-wrap:wrap}
+.hdr-left{flex:1 1 0}
+#tabs{flex-basis:100%;display:flex;gap:.3rem;margin-top:.4rem;overflow-x:auto}
+#tabs .tab-btn{flex:1 1 0;min-width:4.2rem;padding:.3rem .4rem;border-radius:4px 4px 0 0;opacity:.75}
+#tabs .tab-btn[aria-pressed="true"]{opacity:1;border-color:var(--amber);color:var(--amber);
+  box-shadow:inset 0 -2px 0 var(--amber)}
+.tabp{display:flex;flex-direction:column;gap:.55rem}
+.tabp[hidden]{display:none}
+.tabp>.hdr:first-child{margin-top:.4rem}
+.wrap{padding-bottom:4.5rem}
+body.log-open .wrap{padding-bottom:calc(45vh + 4.5rem)}
+.home-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:.2rem .6rem;align-items:center;
+  width:100%;text-align:left;padding:.3rem .4rem;margin:0;border:0;border-bottom:1px solid var(--border);
+  border-radius:0;background:none;font-weight:400;letter-spacing:0;cursor:pointer}
+.home-row:last-child{border-bottom:0}
+.home-row:hover{background:rgba(255,255,255,.04)}
+.home-row b{color:var(--text-bright);overflow-wrap:anywhere}
+#home-sum{margin-bottom:.3rem}
+#logdock{position:fixed;left:0;right:0;bottom:0;z-index:90;background:#0b111a;
+  border-top:2px solid var(--amber);box-shadow:0 -6px 24px rgba(0,0,0,.6)}
+#logdock-bar{max-width:860px;margin:0 auto;padding:.3rem 1rem;display:flex;align-items:center;gap:.5rem}
+#logdock-last{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--mono);font-size:var(--fs-sm)}
+#logdock-toggle,#logdock #log-copy-btn{padding:.2rem .6rem;font-size:var(--fs-sm);flex-shrink:0}
+#logdock #log{max-width:860px;margin:0 auto .4rem;max-height:45vh;border-radius:0;box-shadow:none}
+#logdock.closed #log{display:none}
+#logdock.closed #log-copy-btn{display:none}
+"""
+
 _CSS_LOG = """#log{background:#070b10;border:1px solid var(--border2);border-radius:0 6px 6px 6px;
   padding:.6rem .8rem;margin-top:.5rem;white-space:pre-wrap;
   font-family:var(--mono);font-size:var(--fs-base);max-height:450px;overflow:auto;display:block;
@@ -9402,6 +9432,7 @@ _CSS = (
     + _CSS_COMPONENTS
     + _CSS_LIBRARY
     + _CSS_LOG
+    + _CSS_TABS
     + _CSS_EDITOR
     + _CSS_LOGIN
     + _CSS_DISKIMG
@@ -9693,6 +9724,7 @@ async function refreshStatus() {
     _statusTag = tag;
     recBusy = data.recording || null;
     document.getElementById('components').innerHTML = data.components_html;
+    placeCards();
     document.getElementById('library').innerHTML = data.library_html;
     if (typeof cpUpdateStatus === 'function') cpUpdateStatus(data.confputter);
     const ghEl = document.getElementById('gh-summary');
@@ -11825,6 +11857,7 @@ _wireFreezeDependsOnQuiesce('clone');
 applyCloneBackend();
 
 function _startApp() {
+  tabsInit();
   applyLibraryCollapseState();
   wireButtons();
   // Skip poll ticks while the tab isn't visible -- no point hitting
@@ -12172,8 +12205,107 @@ document.addEventListener('click', function (ev) {
 document.addEventListener('DOMContentLoaded', function () { NET.show(); });
 """
 
+_JS_TABS = """const TABS = ['home', 'tools', 'files', 'disk', 'system'];
+let curTab = 'home';
+function showTab(name, quiet) {
+  if (!TABS.includes(name)) name = 'home';
+  curTab = name;
+  TABS.forEach(function (t) {
+    const p = document.getElementById('tabp-' + t);
+    if (p) p.hidden = t !== name;
+  });
+  document.querySelectorAll('#tabs [data-tab]').forEach(function (b) {
+    b.setAttribute('aria-pressed', String(b.getAttribute('data-tab') === name));
+  });
+  if (quiet) return;
+  try { localStorage.setItem('instmon_tab', name); } catch (e) {}
+  window.scrollTo(0, 0);
+  if (name === 'files' || name === 'disk') {
+    if (typeof pollDrives === 'function') pollDrives(true);
+    if (name === 'disk' && typeof pollDiskimgBackups === 'function') pollDiskimgBackups(true);
+  }
+  if (name === 'system' && typeof slPoll === 'function') slPoll(true);
+}
+function homeTools() {
+  const box = document.getElementById('home-tools'), sum = document.getElementById('home-sum');
+  if (!box) return;
+  const cards = Array.from(document.querySelectorAll('#components .card, #cg-holder .card')).filter(function (c) {
+    return c.querySelector(':scope > .comp-row') && !c.closest('.libgrp-nested');
+  });
+  let down = 0, services = 0;
+  box.replaceChildren();
+  cards.forEach(function (card) {
+    const row = card.querySelector(':scope > .comp-row');
+    const name = row.querySelector('b'), ver = row.querySelector('.ver'), badge = row.querySelector('.badge');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'home-row';
+    const n = document.createElement('b');
+    n.textContent = name ? name.textContent : '';
+    const v = document.createElement('span');
+    v.className = 'small muted';
+    v.textContent = ver ? ver.textContent : '';
+    b.append(n, v, badge ? badge.cloneNode(true) : document.createElement('span'));
+    const state = badge ? badge.textContent.trim() : '';
+    if (['RUNNING', 'STOPPED', 'FAILED', 'UNKNOWN'].includes(state)) {
+      services++;
+      if (state !== 'RUNNING') down++;
+    }
+    b.addEventListener('click', function () {
+      showTab(card.closest('#cg-holder') ? 'files' : 'tools');
+      card.scrollIntoView({block: 'center'});
+    });
+    box.appendChild(b);
+  });
+  if (sum) {
+    sum.textContent = !services ? '' : down ? down + ' of ' + services + ' tools are not running.' : 'All ' + services + ' tools are running.';
+    sum.className = 'small ' + (down ? 'log-warn' : 'log-ok');
+  }
+}
+function placeCards() {
+  const holder = document.getElementById('cg-holder');
+  const cg = document.querySelector('#components #cg-card');
+  if (holder && cg) holder.replaceChildren(cg);
+  homeTools();
+}
+function logDockLast() {
+  const log = document.getElementById('log'), out = document.getElementById('logdock-last');
+  if (!log || !out) return;
+  const last = log.lastElementChild;
+  const lines = log.textContent.trim().split('\\n');
+  out.textContent = last ? last.textContent : lines[lines.length - 1];
+  out.className = last ? last.className : '';
+}
+function logDock(open) {
+  const dock = document.getElementById('logdock'), btn = document.getElementById('logdock-toggle');
+  if (!dock) return;
+  dock.classList.toggle('closed', !open);
+  document.body.classList.toggle('log-open', open);
+  if (btn) { btn.setAttribute('aria-expanded', String(open)); btn.textContent = open ? 'Hide log' : 'Log'; }
+  const log = document.getElementById('log');
+  if (open && log) log.scrollTop = log.scrollHeight;
+  try { localStorage.setItem('instmon_log', open ? '1' : ''); } catch (e) {}
+}
+function tabsInit() {
+  document.querySelectorAll('#tabs [data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () { showTab(b.getAttribute('data-tab')); });
+  });
+  const tg = document.getElementById('logdock-toggle');
+  if (tg) tg.addEventListener('click', function () { logDock(document.getElementById('logdock').classList.contains('closed')); });
+  const log = document.getElementById('log');
+  if (log && window.MutationObserver) new MutationObserver(logDockLast).observe(log, {childList: true});
+  logDockLast();
+  let tab = 'home', open = false;
+  try { tab = localStorage.getItem('instmon_tab') || 'home'; open = localStorage.getItem('instmon_log') === '1'; } catch (e) {}
+  showTab(tab, true);
+  logDock(open);
+  placeCards();
+}
+"""
+
 _JS = (
     _JS_NET
+    + _JS_TABS
     + _JS_LOG_POLL
     + _JS_STATUS_TOAST
     + _JS_EDITOR
@@ -12249,6 +12381,13 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <span class="hdr-meta">{date} &middot; port {port}</span>
     <button id="logout-btn" onclick="doLogout()">Log Out</button>
   </div>
+  <nav id="tabs" aria-label="Sections">
+    <button class="tab-btn" data-tab="home" aria-pressed="true">Home</button>
+    <button class="tab-btn" data-tab="tools" aria-pressed="false">Tools</button>
+    <button class="tab-btn" data-tab="files" aria-pressed="false">Files</button>
+    <button class="tab-btn" data-tab="disk" aria-pressed="false">Disk</button>
+    <button class="tab-btn" data-tab="system" aria-pressed="false">System</button>
+  </nav>
 </header>
 <div id="login-screen">
   <div class="welcome">Welcome to the <b>KD8PGK</b> Install Monitor</div>
@@ -12265,6 +12404,13 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="wrap">
 
 <div id="fu-banners"></div>
+
+<div class="tabp" id="tabp-home">
+<div class="hdr">Tools</div>
+<div class="card">
+  <div id="home-sum" class="small"></div>
+  <div id="home-tools"></div>
+</div>
 
 <div class="hdr">Quick Links</div>
 <div class="card">
@@ -12296,17 +12442,19 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <br><br>
     Quiet System, before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
     Node Talker, Node Recorder, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</div>
-  <div class="row btn-row">
-    <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
-    <button id="restore-btn" data-action="restore" disabled>Restore</button>
-  </div>
+</div>
 </div>
 
+<div class="tabp" id="tabp-tools" hidden>
 <div class="hdr">Components</div>
 <div class="no-confirm-banner">NO CONFIRMATIONS -- Stop and Uninstall act immediately, no prompt.</div>
 <div id="components">{components_html}
 </div>
+</div>
 
+<div class="tabp" id="tabp-files" hidden>
+<div class="hdr">Configuration Snapshots</div>
+<div id="cg-holder"></div>
 <div class="card" id="confputter-card">
   <div class="row comp-row">
     <b>Config putter</b>
@@ -12405,7 +12553,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <span class="small muted">Archive all files in the library directory.</span>
   </div>
 </div>
+</div>
 
+<div class="tabp" id="tabp-disk" hidden>
 <div class="hdr">Disk Image &amp; Clone</div>
 <div class="card diskimg-intro">
   <div class="diskimg-corner">
@@ -12709,6 +12859,19 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   </div>
 </div>
+</div>
+
+<div class="tabp" id="tabp-system" hidden>
+<div class="hdr">Quiet System</div>
+<div class="card">
+  <div class="row btn-row">
+    <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
+    <button id="restore-btn" data-action="restore" disabled>Restore</button>
+  </div>
+  <div class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
+  Node Talker, Node Recorder, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon
+  stay up. Restore starts them again.</div>
+</div>
 
 <div class="hdr">System &amp; Comms</div>
 <div class="card danger-card">
@@ -12737,14 +12900,18 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div id="sl-sources" class="small muted"></div>
   <div class="small muted" style="margin-top:.35rem">Testing only. One file in memory (/run, 20 MB cap, the oldest data goes first). It is gone after a reboot, so download first. Addresses, MAC addresses, network names and passwords are hidden. Clear keeps the Kerchunk rows.</div>
 </div>
-
-<div class="hdr">Execution Log</div>
-<div class="row" style="justify-content:flex-end;margin-bottom:.3rem">
-  <button id="log-copy-btn" onclick="copyExecutionLog()">&#9111; Copy Log</button>
 </div>
-<div id="log">{log_html}</div>
 
 {theme_row}
+</div>
+
+<div id="logdock" class="closed">
+  <div id="logdock-bar">
+    <button id="logdock-toggle" aria-expanded="false" aria-controls="log">Log</button>
+    <span id="logdock-last"></span>
+    <button id="log-copy-btn" onclick="copyExecutionLog()">&#9111; Copy Log</button>
+  </div>
+  <div id="log">{log_html}</div>
 </div>
 
 <div id="popup-overlay"><div id="popup-box" class="popup-box"></div></div>
