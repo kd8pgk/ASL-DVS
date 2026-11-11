@@ -4959,5 +4959,179 @@ class Wifimon551Tests(unittest.TestCase):
         self.assertFalse(hasattr(wm, "_install_enabled"))
 
 
+WG_KEY = "A" * 43 + "="
+
+
+def wg_conf(aip, endpoint="198.51.100.7:51820", extra="", addr="44.27.1.5/32", header="[Interface]", aip_key="AllowedIPs"):
+    return (f"{header}\nPrivateKey = {WG_KEY}\nAddress = {addr}\n{extra}\n[Peer]\nPublicKey = {WG_KEY}\n"
+            f"{aip_key} = {aip}\nEndpoint = {endpoint}\nPersistentKeepalive = 25\n")
+
+
+class Helper44TunnelConfigTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.h = load_helper44()
+
+    def aip(self, text):
+        return self.h._wg_conf_field(self.h._parse_wg_conf_text(text)["peers"][0], "AllowedIPs")
+
+    def test_ipv6_default_removed_when_no_ipv6_address(self):
+        n = self.h._wg_normalize(wg_conf("0.0.0.0/0, ::/0"), "full", {})
+        self.assertEqual(self.aip(n["text"]), "0.0.0.0/0")
+        self.assertEqual(n["blocker"], "")
+        self.assertTrue(any("::/0 removed" in f for f in n["fixed"]))
+        self.assertNotIn(self.h._WG_RT_BEGIN, n["text"])
+
+    def test_ipv6_default_kept_with_ipv6_address_or_alone(self):
+        text = wg_conf("0.0.0.0/0, ::/0", addr="44.27.1.5/32, fd00::5/128")
+        self.assertEqual(self.h._wg_drop_v6_default(text), (text, []))
+        alone = wg_conf("::/0")
+        self.assertEqual(self.h._wg_drop_v6_default(alone), (alone, []))
+
+    def test_split_tab_rewrites_portal_default(self):
+        n = self.h._wg_normalize(wg_conf("0.0.0.0/0, ::/0"), "split", {})
+        self.assertTrue(n["blocker"])
+        n = self.h._wg_normalize(wg_conf("0.0.0.0/0, ::/0"), "split", {"allowed": "rewrite"})
+        self.assertEqual(self.aip(n["text"]), "44.0.0.0/9, 44.128.0.0/10")
+        self.assertIn(self.h._WG_RT_BEGIN, n["text"])
+        self.assertEqual(self.h._wg_route_kind(n["text"]), "split")
+
+    def test_full_tab_refuses_a_range_without_the_default_route(self):
+        for given in ("44.0.0.0/8", "44.0.0.0/9, 44.128.0.0/10", "0.0.0.0/1, 128.0.0.0/1"):
+            n = self.h._wg_normalize(wg_conf(given), "full", {})
+            self.assertTrue(n["blocker"], given)
+            n = self.h._wg_normalize(wg_conf(given), "full", {"allowed": "rewrite"})
+            self.assertEqual(self.aip(n["text"]), "0.0.0.0/0", given)
+            self.assertNotIn(self.h._WG_RT_BEGIN, n["text"], given)
+            self.assertEqual(self.h._wg_route_kind(n["text"]), "full")
+        self.assertEqual(self.h._wg_normalize(wg_conf("0.0.0.0/0"), "full", {})["blocker"], "")
+
+    def test_lower_case_key_is_still_checked(self):
+        n = self.h._wg_normalize(wg_conf("0.0.0.0/0", aip_key="allowedips"), "split", {})
+        self.assertTrue(n["blocker"])
+        n = self.h._wg_normalize(wg_conf("0.0.0.0/0", aip_key="allowedips"), "split", {"allowed": "rewrite"})
+        self.assertEqual(self.aip(n["text"]), "44.0.0.0/9, 44.128.0.0/10")
+
+    def test_header_with_a_comment_is_a_section(self):
+        text = wg_conf("44.0.0.0/9, 44.128.0.0/10", header="[Interface] # mine").replace("[Peer]", "[Peer] # theirs")
+        self.assertEqual(self.h._validate_wg_config_text(text), (True, "OK"))
+        n = self.h._wg_normalize(text, "split", {})
+        self.assertEqual(self.h._wg_routing_state(n["text"]), "policy")
+        self.assertIn("[Interface] # mine", n["text"])
+        self.assertEqual(self.aip(self.h._wg_set_allowed_ips(text, "0.0.0.0/0")), "0.0.0.0/0")
+
+    def test_route_kind(self):
+        k = self.h._wg_route_kind
+        self.assertEqual(k(wg_conf("0.0.0.0/0")), "full")
+        self.assertEqual(k(wg_conf("0.0.0.0/0", extra="Table = off")), "other")
+        self.assertEqual(k(wg_conf("0.0.0.0/0", extra="Table = auto")), "full")
+        self.assertEqual(k(wg_conf("44.0.0.0/9, 44.128.0.0/10")), "other")
+        self.assertEqual(k(None), "other")
+
+
+class Helper44TunnelSwapTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.h = load_helper44()
+
+    def run_swap(self, old, new, up=True, active="wg-quick@wg0", stop_works=True, write_fails=False,
+                 start_ok=True, interfaces=""):
+        h = self.h
+        state = {"up": up}
+        calls = []
+        rules = ("0:\tfrom all lookup local\n32764:\tfrom all lookup main suppress_prefixlength 0\n"
+                 "32765:\tnot from all fwmark 0xca6c lookup 51820\n10045:\tnot from all fwmark 0x4445 lookup 4445\n"
+                 "1100:\tfrom 192.168.1.9 lookup main\n32766:\tfrom all lookup main\n")
+
+        def run_argv(argv, timeout=20):
+            calls.append(" ".join(argv))
+            if argv[:2] == ["systemctl", "stop"] and stop_works:
+                state["up"] = False
+            if argv[:2] == ["systemctl", "start"]:
+                state["up"] = start_ok
+                return {"success": start_ok, "output": "" if start_ok else "boom"}
+            return {"success": True, "output": ""}
+
+        def ov_q(argv, timeout=6):
+            if argv[:3] == ["wg", "show", "interfaces"]:
+                return 0, interfaces
+            if argv[0] == "ip" and argv[2:] == ["rule", "show"]:
+                return 0, rules if argv[1] == "-4" else ""
+            return 0, ""
+
+        def write(text):
+            calls.append("WRITE")
+            if write_fails:
+                raise OSError("disk full")
+
+        saved = {n: getattr(h, n) for n in ("_wg0_interface_present", "_hl_read_conf", "_systemctl_is_active",
+                                            "_run_argv", "_ov_q", "_wg_atomic_write", "_wg_start_report")}
+        h._wg0_interface_present = lambda: state["up"]
+        h._hl_read_conf = lambda: old
+        h._systemctl_is_active = lambda u: u == active
+        h._run_argv = run_argv
+        h._ov_q = ov_q
+        h._wg_atomic_write = write
+        h._wg_start_report = lambda unit, since: ["report"]
+        out = []
+        err = None
+        try:
+            h._wg_swap_write(new, out)
+        except OSError as exc:
+            err = exc
+        finally:
+            for n, fn in saved.items():
+                setattr(h, n, fn)
+        return calls, out, err
+
+    def test_full_to_split_stops_writes_cleans_and_starts(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        calls, out, err = self.run_swap(wg_conf("0.0.0.0/0"), split)
+        self.assertIsNone(err)
+        self.assertEqual(calls, ["systemctl stop wg-quick@wg0", "WRITE", "ip -4 rule del priority 32764",
+                                 "ip -4 rule del priority 32765", "ip -4 rule del priority 10045",
+                                 "systemctl start wg-quick@wg0"])
+        self.assertTrue(any(self.h._WG_SWAP_NOTE in ln for ln in out))
+
+    def test_split_to_full_uses_the_fallback_unit_when_that_runs(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        calls, _out, err = self.run_swap(split, wg_conf("0.0.0.0/0"), active="44net-tunnel.service")
+        self.assertIsNone(err)
+        self.assertEqual(calls[0], "systemctl stop 44net-tunnel.service")
+        self.assertEqual(calls[-1], "systemctl start 44net-tunnel.service")
+
+    def test_same_kind_or_tunnel_down_only_writes(self):
+        full = wg_conf("0.0.0.0/0")
+        self.assertEqual(self.run_swap(full, full.replace("25", "20"))[0], ["WRITE"])
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        self.assertEqual(self.run_swap(full, split, up=False)[0], ["WRITE"])
+        self.assertEqual(self.run_swap(wg_conf("44.0.0.0/9, 44.128.0.0/10"), split)[0], ["WRITE"])
+        self.assertEqual(self.run_swap(full, split, active="")[0], ["WRITE"])
+
+    def test_tunnel_that_will_not_stop_leaves_the_file(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        calls, _out, err = self.run_swap(wg_conf("0.0.0.0/0"), split, stop_works=False)
+        self.assertIsNotNone(err)
+        self.assertNotIn("WRITE", calls)
+
+    def test_failed_write_starts_the_old_tunnel_again(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        calls, _out, err = self.run_swap(wg_conf("0.0.0.0/0"), split, write_fails=True)
+        self.assertIsNotNone(err)
+        self.assertEqual(calls, ["systemctl stop wg-quick@wg0", "WRITE", "systemctl start wg-quick@wg0"])
+
+    def test_failed_start_is_reported(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        _calls, out, err = self.run_swap(wg_conf("0.0.0.0/0"), split, start_ok=False)
+        self.assertIsNone(err)
+        self.assertTrue(any(ln.startswith("FAIL") for ln in out))
+        self.assertIn("report", out)
+
+    def test_rules_are_left_alone_while_another_tunnel_is_up(self):
+        split = self.h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        calls, _out, _err = self.run_swap(wg_conf("0.0.0.0/0"), split, interfaces="wg1\n")
+        self.assertFalse([c for c in calls if c.startswith("ip ")])
+
+
 if __name__ == "__main__":
     unittest.main()

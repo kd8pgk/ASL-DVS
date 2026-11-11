@@ -38,7 +38,7 @@ SERVERS = {
                               "INSTMON_RECORDER_STATUS_URL": None}},
     "wifimon": {"file": "wifimon_v5_51_0_20261111.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
                 "health_expect": b'"version"', "error_keys": ("error",)},
-    "44helper": {"file": "44helper_v0_1_19_20261108.py", "port": 9997, "scheme": "http",
+    "44helper": {"file": "44helper_v0_1_20_20261111.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
     "termon": {"file": "termon_v0_2_4_20261109.py", "port": 7878, "scheme": "https", "health": "/api/health",
                "no_launcher": True,
