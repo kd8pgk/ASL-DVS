@@ -1,8 +1,16 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.33`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.38`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
 
 **Published builds use the shared key for now (2026-11-11).** From 0.10.27 the workflow published only builds signed with the private release key, and no build has been published since, because that key is not set up yet. Until it is, the workflow publishes the build signed with the shared key in `android/app/debug.keystore` again, as it did up to 0.10.26, and the release title and notes say "shared key". That key is public, so install the app only from the project's release page. A shared-key build installs over 0.10.26 and older. When the private key is set up, the workflow uses it by itself and each phone needs one uninstall, as the 0.10.27 entry says. The app itself is not changed by this.
+
+## 0.10.38 (2026-11-11)
+
+- **The app sends the Quick Key Guard setting with each key-up.** Node Talker 0.10.37 added a 2 s silent lead and a 2 s silent tail when Quick Key Guard is on. Until now the app did not send the setting, so the server used the copy saved on the Pi. The app now passes on the page's choice (`qk` in the `key` request), so the setting on the phone is what counts.
+- **No early audio during the lead.** When the server answers with a lead, the audio buffered while keying up is dropped instead of sent; the server would discard it anyway.
+- Needs Node Talker 0.10.38 for the page to pass the setting. With an older page the app sends the key-up as before and the server uses the Pi's copy.
+- No new permission. Tests: `KeyOpTest` (the key-up message with and without the setting).
+- Published with the shared key, like 0.10.33.
 
 ## 0.10.33 (2026-11-10)
 

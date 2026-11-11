@@ -210,7 +210,8 @@ class TalkerActivity : Activity() {
                     it.optBoolean("ns") || it.optBoolean("ec") || it.optBoolean("agc"),
                 )
             }
-            return s.key(o.optDouble("guard", 0.0), o.optDouble("gain", 0.0), opts)
+            val qk = if (o.has("qk")) o.optBoolean("qk") else null
+            return s.key(o.optDouble("guard", 0.0), o.optDouble("gain", 0.0), opts, qk)
         }
 
         @JavascriptInterface

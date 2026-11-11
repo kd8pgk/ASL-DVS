@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.10.33"
+val appVersion = "0.10.38"
 
 val releaseKeystore = System.getenv("NODETALKER_KEYSTORE")?.let { file(it) }?.takeIf { it.isFile }
 val releaseStorePassword = System.getenv("NODETALKER_KEYSTORE_PASSWORD")
