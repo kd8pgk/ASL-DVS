@@ -14,6 +14,9 @@ A fact check of the text on every tab, against the code and against the AllStarL
 - **Firewall guide.** ufw is not the Debian or Raspberry Pi OS default (it is Ubuntu's; on those it is not installed until you add it). The ASL3 Pi appliance image runs firewalld with its own `allstarlink` zone and already allows IAX2; only an `apt` install on plain Debian or Raspberry Pi OS has no firewall. IAX2 `4569/udp` is for links between nodes; registration goes out over HTTPS and needs no open port.
 - **Hardware: ALSA Cards note.** The Playback note said to set `devusb = hw:CARD,0` in `chan_simpleusb.conf`. There is no such setting or file: chan_simpleusb finds its card by USB port (`devstr` in `simpleusb.conf`).
 - **Hardware: Clock note.** Reads "A Raspberry Pi has no clock battery unless one is added" (was "The Pi Zero 2 W", which the full build may not be running on).
+- **DVSM: USRP card.** The notes named `analog_bridge.cfg`; the file read is `Analog_Bridge.ini`. "Host (local)" said to use it when DVSM runs on this node; it is the address Analog_Bridge sends its audio to. The ports are Analog_Bridge's, not Asterisk's, and DVSM and the node's Asterisk link can't both use them at once.
+- **DVSM: Compatibility Checks.** `remote_dtmf_allowed` and `phonesendlinks` are HamVoIP settings that ASL3 does not read; their rows now say so. `propagate_phonedtmf` is an ASL3 setting too (the row said HamVoIP). The `requirecalltoken` row no longer says DVSM handles call tokens automatically, which could not be confirmed; it says what applies when the line is not set.
+- **DVSM: Node Mode.** The Username note says the number shown is this node's own, for reference; DVSM needs a different, unused one.
 - A second, unused `loadTab_journal` line is removed.
 
 ## 6.13.95 (2026-10-28)

@@ -24871,7 +24871,7 @@ def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
          "masked": False, "secret": None, "note": "Fixed value — AllStarLink registration port"},
         {"label": "Username",   "value": sh["reg_node"],
          "masked": False, "secret": None,
-         "note": "Source: first public register=> node number in iax.conf"},
+         "note": "This node's own registered number, shown for reference — DVSM needs a different, unused one"},
         {"label": "Password",   "value": None,  "masked": True,
          "secret": sh["reg_pass"],
          "note": (f"From {sh['reg_source'] or 'iax.conf'} — register=>{sh['reg_node']}:●●@{sh['reg_host']}"
@@ -24904,7 +24904,7 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
          "masked": False, "secret": None, "note": "Fixed value — not read from config"},
         {"label": "Host (local)", "value": _ab_addr,
          "masked": False, "secret": None,
-         "note": "Use when DVSM runs on this node (loopback) — Source: analog_bridge.cfg [USRP] address"},
+         "note": "Where Analog_Bridge sends its audio — Source: Analog_Bridge.ini [USRP] address. On 127.0.0.1 that is Asterisk on this node, not a phone"},
         {"label": "Host (LAN)",  "value": node_ip,
          "masked": False, "secret": None,
          "note": "Use when DVSM is on the same network (detected live, not from a config file)"},
@@ -24914,10 +24914,10 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   if wan_ip else "Could not detect — check router WAN address")},
         {"label": "DVSM TX→",   "value": ab["rx_port"] or "—",
          "masked": False, "secret": None,
-         "note": "Source: analog_bridge.cfg [USRP] rxPort — DVSM sends audio here"},
+         "note": "Source: Analog_Bridge.ini [USRP] rxPort — DVSM sends audio here"},
         {"label": "DVSM RX←",  "value": ab["tx_port"] or "—",
          "masked": False, "secret": None,
-         "note": "Source: analog_bridge.cfg [USRP] txPort — DVSM receives audio here"},
+         "note": "Source: Analog_Bridge.ini [USRP] txPort — DVSM receives audio here"},
         {"label": "Callsign",   "value": sh["callsign"],
          "masked": False, "secret": None,
          "note": "Source: rpt.conf callsign → iax.conf CallerID → sysmon.conf [identity] (first match wins)"},
@@ -24927,7 +24927,8 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   else "Not set — check MMDVM_Bridge.ini [General] Id")},
     ]
     notes = [
-        "Ports shown from ASL perspective. DVSM TX → ASL rxPort; DVSM RX ← ASL txPort.",
+        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort.",
+        "Analog_Bridge sends audio to one address only, so DVSM and this node's Asterisk link can't both use these ports at once.",
     ]
     if ab.get("source"):
         notes.append(f"Source: {ab['source']}")
@@ -24972,13 +24973,13 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
         compat += [
             _opt("propagate_dtmf", "DTMF commands from DVSM",
                  n["propagate_dtmf"], "propagate_dtmf = yes"),
-            _risky("propagate_phonedtmf", "Phone DTMF (HamVoIP nodes)",
+            _risky("propagate_phonedtmf", "Phone DTMF passed to linked nodes",
                    n["propagate_phonedtmf"],
                    "phone callers' tones (like *99 and #) are passed to every linked node, bridges included."),
-            _risky("remote_dtmf_allowed", "DTMF from remote connections",
+            _risky("remote_dtmf_allowed", "DTMF from remote connections (HamVoIP only; ASL3 ignores it)",
                    n["remote_dtmf_allowed"],
                    "any linked node can send commands to this node."),
-            _opt("phonesendlinks", "DVSM Status tab — linked-node list",
+            _opt("phonesendlinks", "DVSM Status tab — linked-node list (HamVoIP only; ASL3 ignores it)",
                  n["phonesendlinks"], "phonesendlinks = 1"),
         ]
     else:
@@ -24994,9 +24995,9 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
     if not rct_val and not cto_val:
         compat.append(_compat(
             "requirecalltoken", "iax.conf",
-            "Call token enforcement (DVSM handles automatically)",
+            "Call token enforcement",
             True, None,
-            info_msg="Not set — default behavior. DVSM handles call tokens automatically.",
+            info_msg="Not set in [general] — Asterisk's default (yes) applies, unless the user's own section sets it. ASL3's [iaxrpt] template sets no.",
         ))
     else:
         rct_relaxed = rct_val in ("no", "0", "false")
