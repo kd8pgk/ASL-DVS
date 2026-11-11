@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.52.0"
+APP_VERSION = "5.53.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -886,34 +886,20 @@ def _prompt_manual_networks(start_priority: int = 1) -> List[Dict[str, object]]:
 
 def _discover_nmcli_networks() -> List[Dict[str, object]]:
     found: List[Dict[str, object]] = []
-    try:
-        out = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return found
-
-    seen_ssids = set()
-    for line in out.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) < 2 or parts[1] != "802-11-wireless":
+    seen = set()
+    for prof in _nm_wifi_profiles():
+        ssid = str(prof["ssid"])
+        if ssid in seen:
             continue
-        name = parts[0]
-        if name in seen_ssids:
-            continue
-        seen_ssids.add(name)
-        psk = ""
-        try:
-            sec = subprocess.run(
-                ["nmcli", "-s", "-g", "802-11-wireless-security.psk",
-                 "connection", "show", name],
-                capture_output=True, text=True, timeout=10,
-            )
-            psk = sec.stdout.strip()
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        found.append({"ssid": name, "psk": psk, "found_pw": bool(psk)})
+        seen.add(ssid)
+        psk = _run_text(["nmcli", "-s", "--escape", "no", "-g", "802-11-wireless-security.psk",
+                         "connection", "show", "uuid", str(prof["uuid"])], timeout=10).rstrip("\n")
+        net: Dict[str, object] = {"ssid": ssid, "psk": psk, "found_pw": bool(psk)}
+        if prof.get("hidden"):
+            net["hidden"] = True
+        if prof.get("name") and prof["name"] != ssid:
+            net["profile"] = prof["name"]
+        found.append(net)
     return found
 
 def _discover_wpa_supplicant_networks() -> List[Dict[str, object]]:
@@ -963,7 +949,8 @@ def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
         pw_note = "password saved" if n.get("found_pw") else "no password found"
         if n.get("hashed"):
             pw_note += ", pre-hashed key (wpa_cli-only)"
-        print(f"    {i}) {n['ssid']}  [{pw_note}]")
+        prof = f" (profile {n['profile']})" if n.get("profile") else ""
+        print(f"    {i}) {n['ssid']}{prof}  [{pw_note}]")
 
     choice = input("Import all? [Y/n], or enter numbers (e.g. 1,3): ").strip().lower()
     if choice in ("", "y", "yes"):
@@ -982,7 +969,10 @@ def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
     for i, n in enumerate(selected, start=start_priority):
         if n.get("hashed"):
             log.info("Imported %s as a pre-hashed key (wpa_cli-only)", n["ssid"])
-        networks.append({"ssid": n["ssid"], "psk": n.get("psk", ""), "priority": i})
+        net = {"ssid": n["ssid"], "psk": n.get("psk", ""), "priority": i}
+        if n.get("hidden"):
+            net["hidden"] = True
+        networks.append(net)
     return networks
 
 def run_wifi_setup() -> None:
@@ -1371,14 +1361,20 @@ def _current_ssid() -> Optional[str]:
     except (subprocess.SubprocessError, FileNotFoundError):
         pass
 
-    try:
-        r = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "device", "wifi"],
-                            capture_output=True, text=True, timeout=5)
-        for line in r.stdout.splitlines():
-            if line.startswith("yes:"):
-                return line.split(":", 1)[1]
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    ssid = _parse_iw_link(_run_text(["iw", "dev", INTERFACE, "link"])).get("ssid_iw")
+    if ssid:
+        return str(ssid)
+
+    if _wpa_socket(INTERFACE):
+        wpa_state, ssid = _wpa_status(INTERFACE)
+        if wpa_state == "connected" and ssid:
+            return ssid
+
+    for f in (_nmcli_split(line) for line in _run_text(
+            ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi", "list", "ifname", INTERFACE,
+             "--rescan", "no"]).splitlines()):
+        if len(f) >= 2 and f[0] == "yes" and f[1]:
+            return f[1]
 
     return None
 
@@ -6719,14 +6715,14 @@ class _Handler(BaseHTTPRequestHandler):
             log.info("Dashboard: %s set to %s by %s", name, word, self.client_address[0])
             _grace_start(f"{name} set to {word} from the dashboard")
             p = _begin_change("device_mode", f"{name} set to {word}", undo)
-            _set_dev_mode(key, name, str(mode))
             ok, msg = _nmcli_ok(["device", "set", name, "autoconnect", "no" if mode == "off" else "yes"])
-            if ok:
-                _devmode_applied.add(key)
             if ok and mode == "off" and state.startswith("connect"):
                 ok, msg = _nmcli_ok(["device", "disconnect", name])
-            if not ok:
-                _set_dev_mode(key, name, prev)
+            if ok:
+                _set_dev_mode(key, name, str(mode))
+                _devmode_applied.add(key)
+            else:
+                _nmcli_ok(["device", "set", name, "autoconnect", "no" if prev == "off" else "yes"])
             done = f"{name} set to {word}."
             if mode == "on" and wired and not _connected_state(state):
                 done += " wifimon will bring it up in a few seconds if a cable is plugged in."

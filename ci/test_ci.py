@@ -4991,5 +4991,111 @@ class WifimonTabsTests(unittest.TestCase):
             self.assertNotIn(banner, main)
 
 
+class Wifimon553Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.wm = load_wifimon()
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+
+    def ssid_with(self, outputs, socket=False, wpa=("disconnected", None)):
+        wm = self.wm
+
+        class R:
+            stdout = ""
+
+        def run(cmd, **kw):
+            raise FileNotFoundError(cmd[0])
+
+        def run_text(cmd, timeout=5):
+            return outputs.get(cmd[0], "")
+
+        with mock.patch.object(wm.subprocess, "run", run), mock.patch.object(wm, "_run_text", run_text), \
+                mock.patch.object(wm, "_wpa_socket", lambda n: socket), mock.patch.object(wm, "_wpa_status", lambda n: wpa):
+            return wm._current_ssid()
+
+    def test_ssid_without_iwgetid_comes_from_iw(self):
+        out = {"iw": "Connected to aa:bb:cc:dd:ee:ff (on wlan0)\n\tSSID: HomeNet\n\tfreq: 2437\n"}
+        self.assertEqual(self.ssid_with(out), "HomeNet")
+
+    def test_ssid_without_iw_comes_from_wpa_supplicant(self):
+        self.assertEqual(self.ssid_with({}, socket=True, wpa=("connected", "Cabin")), "Cabin")
+        self.assertIsNone(self.ssid_with({}, socket=True, wpa=("connecting", "Cabin")))
+
+    def test_ssid_from_nmcli_is_for_the_watched_adapter_only(self):
+        wm = self.wm
+        seen = []
+
+        def run_text(cmd, timeout=5):
+            if cmd[0] == "nmcli":
+                seen.append(cmd)
+                return "no:Other\nyes:Home\\:Net\n"
+            return ""
+
+        with mock.patch.object(wm.subprocess, "run", side_effect=FileNotFoundError("iwgetid")), \
+                mock.patch.object(wm, "_run_text", run_text), mock.patch.object(wm, "_wpa_socket", lambda n: False):
+            self.assertEqual(wm._current_ssid(), "Home:Net")
+        self.assertIn("ifname", seen[0])
+        self.assertIn(wm.INTERFACE, seen[0])
+
+    def test_setup_import_uses_network_names_not_profile_names(self):
+        wm = self.wm
+        profiles = [{"name": "Hotel Lobby", "uuid": "u1", "ssid": "HOTEL:5G", "hidden": False},
+                    {"name": "HOTEL:5G 1", "uuid": "u2", "ssid": "HOTEL:5G"},
+                    {"name": "Cabin", "uuid": "u3", "ssid": "Cabin", "hidden": True}]
+        secrets_by_uuid = {"u1": "pw one\n", "u3": ""}
+        with mock.patch.object(wm, "_nm_wifi_profiles", lambda: profiles), \
+                mock.patch.object(wm, "_run_text", lambda cmd, timeout=5: secrets_by_uuid.get(cmd[-1], "")):
+            found = wm._discover_nmcli_networks()
+        self.assertEqual([n["ssid"] for n in found], ["HOTEL:5G", "Cabin"])
+        self.assertEqual(found[0]["psk"], "pw one")
+        self.assertEqual(found[0]["profile"], "Hotel Lobby")
+        self.assertTrue(found[1]["hidden"])
+        self.assertFalse(found[1]["found_pw"])
+
+    def devmode(self, results, prev="auto", mode="off", state="connected"):
+        wm = self.wm
+        calls, order = [], []
+        dev = {"device": "wlan1", "kind": "wifi", "state": state, "connection": "Net", "hw": "aa:bb:cc:00:00:09"}
+
+        class H:
+            _defer = False
+            _deferred = None
+            client_address = ("127.0.0.1", 1)
+
+            def _json(self, status, obj, extra=None):
+                pass
+
+        h = H()
+        h._change_begin_checks = lambda b, allow_hotspot=False, need_nm=False: True
+        h._device_from_body = lambda b, wired=False: dev
+        h._change_result = lambda p, ok, msg, done: calls.append(("result", ok))
+        h._release_and_send = lambda release=True: None
+
+        def nmcli(args, timeout=30):
+            order.append(("nmcli", args[-2:] if args[1] == "set" else args[:2]))
+            return results.pop(0) if results else (True, "")
+
+        with mock.patch.object(wm, "_nmcli_ok", nmcli), mock.patch.object(wm, "_nm_on", lambda: True), \
+                mock.patch.object(wm, "_dev_mode_of", lambda k: prev), \
+                mock.patch.object(wm, "_set_dev_mode", lambda k, n, m, persist=True: order.append(("mode", m))), \
+                mock.patch.object(wm, "_begin_change", lambda *a: {"id": "x"}), \
+                mock.patch.object(wm, "_grace_start", lambda *a: None):
+            wm._Handler._handle_devmode(h, {"device": "wlan1", "mode": mode, "confirm": True})
+        return order, calls
+
+    def test_keep_off_disconnects_before_the_adapter_is_unmanaged(self):
+        order, calls = self.devmode([(True, ""), (True, "")])
+        self.assertEqual(order, [("nmcli", ["autoconnect", "no"]), ("nmcli", ["device", "disconnect"]), ("mode", "off")])
+        self.assertEqual(calls, [("result", True)])
+
+    def test_failed_keep_off_leaves_the_setting_and_restores_autoconnect(self):
+        order, calls = self.devmode([(True, ""), (False, "busy")])
+        self.assertNotIn(("mode", "off"), order)
+        self.assertEqual(order[-1], ("nmcli", ["autoconnect", "yes"]))
+        self.assertEqual(calls, [("result", False)])
+
+
 if __name__ == "__main__":
     unittest.main()

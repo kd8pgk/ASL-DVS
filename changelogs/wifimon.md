@@ -1,6 +1,13 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_52_0_20261111.py`. Newest entries first.
+Current file: `wifimon_v5_53_0_20261111.py`. Newest entries first.
+
+## 5.53.0 (2026-11-11)
+
+- **The network name is found without `iwgetid`.** When wireless-tools is not installed, wifimon reads it from `iw dev <device> link`, then from wpa_supplicant (`wpa_cli status`, only when it reports connected), then from NetworkManager. Before, a wpa_supplicant node without `iwgetid` never knew its network, so the last good network, Known good tagging and the In use mark did not work there. The NetworkManager lookup now asks only about the watched adapter; before, it could return the network of another adapter.
+- **Keep off on a connected adapter disconnects it first.** Setting a WiFi or wired adapter to Keep off now turns auto-connect off and disconnects it while NetworkManager still manages it, and only then saves the setting (which tells NetworkManager to stop managing it). Before, the setting was saved first, so NetworkManager stopped managing the adapter before the disconnect, which could make the change fail and revert. If the disconnect fails, the adapter's previous auto-connect setting is put back and nothing is saved.
+- **`--setup-wifi` imports network names, not profile names.** Importing from NetworkManager now takes each profile's network name (SSID), password and hidden flag, one entry per network. Before, it used the profile name, which differs when a profile was renamed or has a suffix, and split on ":", so a name with a colon was cut short. The list shows the profile name when it differs.
+- This is a release, not a cosmetic build.
 
 ## 5.52.0 (2026-11-11)
 
