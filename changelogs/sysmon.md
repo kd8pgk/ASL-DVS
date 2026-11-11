@@ -1,6 +1,20 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_95_20261028.py`. Newest entries first.
+Current file: `sysmon_v6_13_96_20261111.py`. Newest entries first.
+
+## 6.13.96 (2026-11-11)
+
+A fact check of the text on every tab, against the code and against the AllStarLink, Asterisk and Raspberry Pi documentation. The full build already has everything the Pi Zero 2 W build has; nothing needed porting.
+- **Security: `/etc/asterisk` owned by `asterisk` passes.** The `/etc/asterisk` permissions check warned when the folder's owner was not root. ASL3 runs Asterisk as the `asterisk` user, which saves tune settings into that folder itself, so an owner of `root` or `asterisk` now passes. The fix text no longer says `chown root:asterisk`, which would stop Asterisk saving there.
+- **Security: ASL3 is on Asterisk 22.** The AMI and chan_sip explanations said ASL3 is built on Asterisk 20. It was until March 2025 and has been on Asterisk 22 since, so CVE-2024-42365 and chan_sip only concern a node that has not been updated.
+- **Security: AMI sample settings.** ASL3 ships `manager.conf` with `enabled=yes` and `bindaddr=127.0.0.1`. The text said the shipped sample binds `0.0.0.0` with AMI on; that is Asterisk's own sample, and it has `enabled=no`.
+- **Security: USRP port order.** The fix text for an exposed USRP port gave the `rxchannel` ports the wrong way round. It is `USRP/127.0.0.1:<dst>:<local>` (the bridge's port, then the port Asterisk listens on).
+- **Security: why Asterisk is exempt.** The non-root check said Asterisk needs root on ASL3. It does not: systemd starts it as root and it drops to the `asterisk` user by itself, so its unit has no `User=` line. The exemption stays; the reason is corrected.
+- **Security: what the tab reads.** The note under the checks now also names the local `asterisk -rx` and `fail2ban-client` commands, which two checks run.
+- **Firewall guide.** ufw is not the Debian or Raspberry Pi OS default (it is Ubuntu's; on those it is not installed until you add it). The ASL3 Pi appliance image runs firewalld with its own `allstarlink` zone and already allows IAX2; only an `apt` install on plain Debian or Raspberry Pi OS has no firewall. IAX2 `4569/udp` is for links between nodes; registration goes out over HTTPS and needs no open port.
+- **Hardware: ALSA Cards note.** The Playback note said to set `devusb = hw:CARD,0` in `chan_simpleusb.conf`. There is no such setting or file: chan_simpleusb finds its card by USB port (`devstr` in `simpleusb.conf`).
+- **Hardware: Clock note.** Reads "A Raspberry Pi has no clock battery unless one is added" (was "The Pi Zero 2 W", which the full build may not be running on).
+- A second, unused `loadTab_journal` line is removed.
 
 ## 6.13.95 (2026-10-28)
 

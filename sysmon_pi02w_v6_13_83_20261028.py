@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.83-pi02w"
+VERSION      = "6.13.83.1-pi02w"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -8646,7 +8646,7 @@ function _renderAlsaView(data) {
   const note = document.createElement("div");
   note.className   = "hw-diag-note";
   note.textContent = _hwAlsaView === "playback"
-    ? "Playback devices — set devusb = hw:CARD,0 in chan_simpleusb.conf (e.g. devusb = hw:1,0)"
+    ? "Playback devices as ALSA numbers them. chan_simpleusb finds its card by USB port (devstr in simpleusb.conf), not by these hw: numbers"
     : "Capture devices — microphone/line-in paths for the same card index";
   body.appendChild(note);
 

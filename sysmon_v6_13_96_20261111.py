@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.95"
+VERSION      = "6.13.96"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -3182,10 +3182,12 @@ body.tab-edit #zone-content{
         <div class="fw-manual-inner">
           <h4>Which backend am I running?</h4>
           <p>sysmon auto-detects whichever firewall is installed and shows it in the
-          <b>Backend</b> field above. <code>ufw</code> is Debian/Raspberry Pi OS's
-          default frontend to <code>iptables</code>/<code>nftables</code>.
-          <code>firewalld</code> is the default on RHEL-family systems
-          (Rocky, Alma, Fedora) and is zone-based rather than rule-list-based.
+          <b>Backend</b> field above. <code>ufw</code> is a simple frontend to
+          <code>iptables</code>/<code>nftables</code>. It is Ubuntu's default and is
+          not installed on Debian or Raspberry Pi OS until you add it.
+          <code>firewalld</code> is what the AllStarLink 3 Pi appliance image uses
+          (managed in Cockpit) and the default on RHEL-family systems
+          (Rocky, Alma, Fedora); it is zone-based rather than rule-list-based.
           Only one is normally active at a time — running both causes
           conflicting rule sets.</p>
 
@@ -3230,21 +3232,22 @@ body.tab-edit #zone-content{
 
           <h4>AllStarLink 3 default posture</h4>
           <ul>
-            <li>A stock ASL3 image ships with the firewall largely open on
-            the LAN side (or firewalld absent/disabled on some images) —
-            it does <b>not</b> lock down IAX2 (<code>4569/udp</code>) or the
-            RPT/HTTP registration ports by default. Treat "detected: none"
-            or "inactive" above as the out-of-box state, not a bug.</li>
+            <li>The ASL3 Pi appliance image runs <code>firewalld</code> with
+            its own <code>allstarlink</code> zone on every interface, managed in
+            Cockpit → Networking → Firewall. It already allows IAX2
+            (UDP <code>4560-4580</code>). ASL3 installed with <code>apt</code> on
+            plain Debian or Raspberry Pi OS has <b>no</b> firewall until you add
+            one, so "detected: none" there is the out-of-box state, not a bug.</li>
             <li>If you enable a firewall on an ASL3 node, the ports that
-            matter most are IAX2 <code>4569/udp</code> (node-to-node/hub
-            registration), and whatever the local dashboard/API is bound to
+            matter most are IAX2 <code>4569/udp</code> (links between nodes;
+            registration goes out over HTTPS and needs no open port), and whatever the local dashboard/API is bound to
             (this tool, DVSwitch web UIs, etc). USRP audio bridging between
             Asterisk and Analog_Bridge is typically loopback-only and
             doesn't need to cross the firewall.</li>
             <li>On a home/NAT install, most nodes rely on router port
             forwarding rather than a host firewall — enabling ufw/firewalld
             here adds a second layer, so double-check the port list below
-            matches what's forwarded upstream or registration/keying will
+            matches what's forwarded upstream or incoming links will
             silently fail.</li>
           </ul>
 
@@ -4568,8 +4571,9 @@ body.tab-edit #zone-content{
 
     <div class="sec-scope-note">
       Passive checks only &mdash; every result above comes from config files,
-      /sys, /proc, <span class="sec-cmd">ss -tlnpu</span> and
-      systemd state. This tab never connects to AMI, M17, USRP or the
+      /sys, /proc, <span class="sec-cmd">ss -tlnpu</span>,
+      systemd state, and the local <span class="sec-cmd">asterisk -rx</span> and
+      <span class="sec-cmd">fail2ban-client</span> commands. This tab never connects to AMI, M17, USRP or the
       dashboard, so running it cannot pollute security.log or trip fail2ban.
       Checks that read credentials report booleans only; no secret value is
       sent to this page.
@@ -6090,7 +6094,6 @@ let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
 
-window.loadTab_journal = function() { loadJournalList(); };
 window.loadTab_journal = function() { loadJournalList(); dvlLoad(); };
 
 let _dvlSources = [];
@@ -10001,7 +10004,7 @@ function _renderAlsaView(data) {
   const note = document.createElement("div");
   note.className   = "hw-diag-note";
   note.textContent = _hwAlsaView === "playback"
-    ? "Playback devices — set devusb = hw:CARD,0 in chan_simpleusb.conf (e.g. devusb = hw:1,0)"
+    ? "Playback devices as ALSA numbers them. chan_simpleusb finds its card by USB port (devstr in simpleusb.conf), not by these hw: numbers"
     : "Capture devices — microphone/line-in paths for the same card index";
   body.appendChild(note);
 
@@ -14581,6 +14584,7 @@ _SEC_SSHD_CONFIG_DIR = Path("/etc/ssh/sshd_config.d")
 _SEC_ASTERISK_DIR    = _AST_DIR
 _SEC_ASTERISK_EXPECTED_MODE  = 0o750
 _SEC_ASTERISK_EXPECTED_GROUP = "asterisk"
+_SEC_ASTERISK_EXPECTED_OWNERS = ("root", "asterisk")
 _SEC_ASTERISK_SECRET_FILES   = ("iax.conf", "manager.conf", "rpt.conf")
 
 def _sec_read_mmdvm_bridge() -> dict:
@@ -15358,7 +15362,7 @@ def _check_asterisk_perms() -> dict:
     notes  = [f"{_SEC_ASTERISK_DIR}: mode {oct(perm)}"
               f"{' +setgid' if setgid else ''} owner {owner}:{group} "
               f"(expected {oct(_SEC_ASTERISK_EXPECTED_MODE)} "
-              f"root:{_SEC_ASTERISK_EXPECTED_GROUP})"]
+              f"owner root or asterisk, group {_SEC_ASTERISK_EXPECTED_GROUP})"]
     status = CHK_PASS
 
     if perm & 0o007:
@@ -15373,9 +15377,9 @@ def _check_asterisk_perms() -> dict:
         notes.append(f"mode {oct(perm)} is stricter than the expected "
                       f"{oct(_SEC_ASTERISK_EXPECTED_MODE)} -- fine, noted only")
 
-    if owner != "root":
+    if owner not in _SEC_ASTERISK_EXPECTED_OWNERS:
         status = _sec_worst([status, CHK_WARN])
-        notes.append(f"owner is {owner}, expected root")
+        notes.append(f"owner is {owner}, expected root or asterisk")
     if group != _SEC_ASTERISK_EXPECTED_GROUP and (perm & 0o070):
         status = _sec_worst([status, CHK_WARN])
         notes.append(f"group {group} has access but "
@@ -15476,7 +15480,7 @@ SECURITY_CHECKS = [
                      "the whole distance between 'local only' and 'anyone'."),
         "remediation": ("Bind both ends to 127.0.0.1. In USRP2M17.ini the USRP "
                          "address belongs on loopback; in rpt.conf the rxchannel line "
-                         "should read USRP/127.0.0.1:<local>:<dst>.\n\n"
+                         "should read USRP/127.0.0.1:<dst>:<local>.\n\n"
                          "If you genuinely bridge between two hosts, do it inside "
                          "WireGuard or Tailscale and bind to that interface's "
                          "address rather than 0.0.0.0 -- then this check passes while "
@@ -15551,9 +15555,10 @@ SECURITY_CHECKS = [
         "label":    "Asterisk Manager Interface (AMI) port exposure",
         "severity": "high",
         "source":   "manager.conf [general] enabled=/bindaddr=/port=, cross-referenced "
-                    "against a passive `ss -tlnpu` snapshot. Asterisk's shipped sample "
-                    "has enabled=yes, port=5038 and bindaddr=0.0.0.0, so an untouched "
-                    "manager.conf is an exposed one.",
+                    "against a passive `ss -tlnpu` snapshot. ASL3 ships "
+                    "enabled=yes, port=5038 and bindaddr=127.0.0.1. Asterisk's own "
+                    "sample has bindaddr=0.0.0.0 (with enabled=no), so a manager.conf "
+                    "copied from it and switched on is an exposed one.",
         "meaning":  ("Where the Asterisk Manager Interface is listening.\n\n"
                      "PASS -- AMI is disabled, or bound to loopback, or bound to a "
                      "VPN address whose interface is up.\n"
@@ -15579,8 +15584,9 @@ SECURITY_CHECKS = [
                      "low-privilege setting -- could chain the FILE()/CURL() dialplan "
                      "functions to write into /etc/asterisk, reload, and execute "
                      "arbitrary commands. It affects Asterisk up to and including "
-                     "20.9.1, which is the version family ASL3 is built on, and it "
-                     "works regardless of the live_dangerously setting. Separately, "
+                     "20.9.1. ASL3 was built on Asterisk 20 until March 2025 and on "
+                     "Asterisk 22 since, so only a node that has not been updated "
+                     "is still affected. It works regardless of the live_dangerously setting. Separately, "
                      "an account with the `command` class can run any Asterisk CLI "
                      "command by design.\n\n"
                      "AMI has no built-in lockout or rate limiting either, so an "
@@ -15588,7 +15594,9 @@ SECURITY_CHECKS = [
         "remediation": ("Set bindaddr=127.0.0.1 in manager.conf [general] -- or "
                          "enabled=no if nothing on this node uses AMI. Allmon3 and "
                          "similar tools run locally and are happy on loopback.\n\n"
-                         "Patch Asterisk to 20.9.2 or later for CVE-2024-42365.\n\n"
+                         "For CVE-2024-42365 run Asterisk 20.9.2 or later. A current "
+                        "ASL3 (Asterisk 22) has the fix: `sudo apt update && sudo "
+                        "apt upgrade`.\n\n"
                          "Regardless of bind address, write an explicit ACL: "
                          "deny=0.0.0.0/0.0.0.0 first, then permit only the addresses "
                          "that need it. Give each consumer its own account with the "
@@ -15647,7 +15655,7 @@ SECURITY_CHECKS = [
                          "account per consuming application, each with the narrowest "
                          "read=/write= classes it actually needs.\n\n"
                          "manager.conf holds that secret in cleartext, so keep it at "
-                         "mode 640 owned root:asterisk (the /etc/asterisk permissions "
+                         "mode 640 with group asterisk (the /etc/asterisk permissions "
                          "check on this page covers that), and prefer loopback-only "
                          "AMI over any credential strength."),
         "references": [
@@ -15804,10 +15812,11 @@ SECURITY_CHECKS = [
                      "was unreachable and modules.conf does not noload it.\n"
                      "FAIL -- loaded with configured peers.\n\n"
                      "Version context matters here: chan_sip was deprecated in "
-                     "Asterisk 17 and removed outright in Asterisk 21. ASL3 runs on "
-                     "Asterisk 20, which is the last family that still has it -- so "
-                     "on this node it is genuinely possible to be carrying an "
-                     "unmaintained SIP stack, which is exactly why the check exists. "
+                     "Asterisk 17 and removed outright in Asterisk 21. ASL3 was built "
+                     "on Asterisk 20, the last family that still has it, until March "
+                     "2025, and on Asterisk 22 since, where it no longer exists. So "
+                     "only a node that has not been updated can still be carrying an "
+                     "unmaintained SIP stack, which is why the check exists. "
                      "It is rated low severity because a default ASL3 node does not "
                      "load it."),
         "risk":     ("A loaded chan_sip binds UDP 5060 and answers anything that asks "
@@ -15825,8 +15834,8 @@ SECURITY_CHECKS = [
                          "If you do want a SIP phone on the node, use chan_pjsip -- "
                          "that is what the ASL3 manual documents, and Asterisk ships "
                          "contrib/scripts/sip_to_pjsip/sip_to_pjsip.py to convert an "
-                         "existing sip.conf. Doing this now also means Asterisk 21+ "
-                         "will not break the node when it removes chan_sip entirely."),
+                         "existing sip.conf. Asterisk 21 and later have no chan_sip at all, "
+                        "so updating ASL3 removes it either way."),
         "references": [
             {"label": "Asterisk -- chan_sip removal in Asterisk 21 (deprecated in 17)",
              "url":   "https://www.asterisk.org/asterisk-21-module-removal-chan_sip/"},
@@ -16020,7 +16029,8 @@ SECURITY_CHECKS = [
                      "FAIL -- the installed build carries no session-auth markers at "
                      "all.\n\n"
                      "This check reads the dashboard's source. It never connects to "
-                     "port 8989 -- no check on this page opens a socket, which is "
+                     "port 8989 -- no check on this page opens a network "
+                     "connection, which is "
                      "what keeps running the tab from writing entries into the very "
                      "logs an operator is trying to read."),
         "risk":     ("sysmon and the dashboard deliberately share one session table "
@@ -16062,11 +16072,12 @@ SECURITY_CHECKS = [
                     "rpt.conf inside it.",
         "meaning":  ("Whether the directory holding this node's cleartext secrets is "
                      "readable by accounts that should not have them. Expected: mode "
-                     "0750, owner root:asterisk.\n\n"
+                     "0750, owned by root or asterisk, group asterisk.\n\n"
                      "FAIL -- the directory is world-accessible, or a secret-bearing "
                      "config file is world-readable.\n"
                      "WARN -- the mode is LOOSER than expected (group-writable, say), "
-                     "the owner is not root, or a different group has access.\n"
+                     "the owner is neither root nor asterisk, or a different group "
+                     "has access.\n"
                      "PASS -- as expected, or stricter.\n\n"
                      "Two things this check is careful about. A mode tighter than "
                      "0750, such as 0700, is better than the expectation and is "
@@ -16086,9 +16097,12 @@ SECURITY_CHECKS = [
                      "CVE-2024-42365. This is rated low severity only because it "
                      "needs a foothold on the box first; given one, it is the step "
                      "that makes the foothold matter."),
-        "remediation": ("`chown root:asterisk /etc/asterisk` and `chmod 750 "
-                         "/etc/asterisk`, then `chmod 640` the config files inside "
-                         "it. Keeping the setgid bit (2750) is fine.\n\n"
+        "remediation": ("`chmod 750 /etc/asterisk` and `chmod 640` the config files "
+                        "inside it, with the group set to asterisk (`chgrp "
+                        "asterisk`). Leave the owner as ASL3 set it: Asterisk runs "
+                        "as the asterisk user there and saves tune settings into "
+                        "this folder itself, so taking its write access away "
+                        "breaks that. Keeping the setgid bit (2750) is fine.\n\n"
                          "If you edit these files as a normal user or copy them "
                          "around, re-check afterwards -- a restored backup or an "
                          "editor writing a new file is the usual way a 644 appears "
@@ -16115,8 +16129,9 @@ SECURITY_CHECKS = [
                      "PASS -- it drops privileges, or it is one of the documented "
                      "exemptions.\n\n"
                      "Four exemptions pass with a note rather than warning. Asterisk "
-                     "needs root on ASL3: app_rpt wants realtime scheduling and direct "
-                     "DAHDI/USB access, and that is how upstream ships it. fail2ban "
+                     "is started by systemd as root and then drops to the asterisk "
+                     "user by itself on ASL3, so its unit has no User= line and would "
+                     "be misread as root here. fail2ban "
                      "needs root because its entire job is rewriting firewall rules. "
                      "sshd must be root to authenticate and then setuid to the user "
                      "logging in. Cockpit's privileged side is the point of Cockpit.\n\n"
@@ -23575,7 +23590,7 @@ def _hc_clock() -> dict:
             ["Time sync", "on" if ntp else "off"], ["Synced", "yes" if synced else "no"]]
     if synced:
         return _hc("clock", "Clock", "pass", "Clock is in sync", rows)
-    note = ("The Pi Zero 2 W has no clock battery, so after a power cut its time is wrong until it syncs. "
+    note = ("A Raspberry Pi has no clock battery unless one is added, so after a power cut its time is wrong until it syncs. "
             "A wrong clock breaks HTTPS (GitHub updates), AllStarLink registration and some digital-mode logins. "
             + ("Turn sync on: sudo timedatectl set-ntp true" if not ntp
                else "Sync is on but hasn't worked: check the internet and that UDP port 123 isn't blocked."))

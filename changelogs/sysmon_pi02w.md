@@ -2,6 +2,11 @@
 
 Current file: `sysmon_pi02w_v6_13_83_20261028.py`. Newest entries first.
 
+## 6.13.83.1-pi02w (2026-11-11)
+
+Cosmetic: text only, from a fact check of every tab.
+- **Hardware: ALSA Cards note.** The Playback note said to set `devusb = hw:CARD,0` in `chan_simpleusb.conf`. There is no such setting or file: chan_simpleusb finds its card by USB port (`devstr` in `simpleusb.conf`). The note now says so.
+
 ## 6.13.83-pi02w (2026-10-28)
 
 - **Dark and light mode.** A Dark / Light switch at the bottom of the Edit tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
