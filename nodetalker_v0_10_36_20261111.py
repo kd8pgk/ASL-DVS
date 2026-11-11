@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.35"
+VERSION = "0.10.36"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3625,7 +3625,8 @@ def build_status(full):
         st["m17"] = m17_current() if nc and _has_m17(favs) else ""
         st["tuned"] = (nc_dvs_target(favs) if _has_dvs(favs) else "") if nc else solo_status(node)
         st["tuned_now"] = tuned_now(nc)
-        st["link"] = live_link(links, ok, nc, favs)
+        st["tuned_state"] = tune_state_now(nc) if st["tuned_now"] else ""
+        st["link"] = live_link(links, ok, nc, favs, st["tuned_state"] == "unconfirmed")
         st["default_mode"] = _default_tune_mode(nc)
         tx = tx_state(node)
         tx.update(TALKER.state())
@@ -4664,11 +4665,64 @@ def _linked(node, peer, max_age=0):
 
 
 _tune_lock = threading.Lock()
-_solo = {"mode": "", "target": "", "name": "", "bridge": ""}
+_solo = {"mode": "", "target": "", "name": "", "bridge": "", "tune": ""}
+_solo_at = {"t": None}
+ABINFO_GLOB = os.environ.get("NODETALKER_ABINFO_GLOB", "/tmp/ABInfo_*.json")
+TUNE_GRACE_SEC = 15.0
+TUNE_STATE_TTL = 2.0
+TUNE_STATES = ("pending", "confirmed", "unconfirmed", "sent")
+_tune_state_cache = {"t": -1e9, "key": None, "v": ""}
+
+
+def _norm_tune(value):
+    return re.sub(r"\s+", "", str(value or "")).upper()
+
+
+def _abinfo_last_tune():
+    try:
+        files = [f for f in glob.glob(ABINFO_GLOB) if os.stat(f).st_uid == 0]
+        if not files:
+            return None
+        with open(max(files, key=os.path.getmtime), "r", encoding="utf-8", errors="replace") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return str(d.get("last_tune", "")) if isinstance(d, dict) else None
+
+
+def _m17_tuned(name):
+    try:
+        with open(M17_INI, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    return f"Name={name}\n" in text and _svc_active(M17_SERVICE)
+
+
+def solo_tune_state():
+    if not _solo["target"] or not _solo["tune"]:
+        return ""
+    now = time.monotonic()
+    key = (_solo["mode"], _solo["target"], _solo["tune"])
+    c = _tune_state_cache
+    if c["key"] == key and now - c["t"] < TUNE_STATE_TTL:
+        return c["v"]
+    if _solo["mode"] == "M17":
+        ok = _m17_tuned(_solo["tune"])
+    else:
+        last = _abinfo_last_tune()
+        ok = last is not None and _norm_tune(last) == _norm_tune(_solo["tune"])
+    age = now - _solo_at["t"] if _solo_at["t"] is not None else TUNE_GRACE_SEC
+    v = ("confirmed" if ok else "pending" if age < TUNE_GRACE_SEC
+         else "sent" if _solo["mode"] == "DSTAR" else "unconfirmed")
+    c.update(t=now, key=key, v=v)
+    return v
 
 
 def _solo_set(**kw):
-    _solo.update(mode="", target="", name="", bridge="")
+    _solo.update(mode="", target="", name="", bridge="", tune="")
+    _solo_at["t"] = time.monotonic() if kw.get("target") else None
+    _tune_state_cache["key"] = None
     _solo.update({k: str(v) for k, v in kw.items() if k in _solo})
     try:
         _atomic_write(TUNED_PATH, json.dumps(_solo) + "\n", 0o644)
@@ -5160,7 +5214,7 @@ def solo_dvs(f, node, net_action=None):
         ok, out = dvs("tune", f["num"])
         if not ok:
             return {"ok": False, "error": f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"}
-        _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge)
+        _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge, tune=f["num"])
     finally:
         _tune_lock.release()
     log_event(f"Tuned {fav_name(f)}; bridge node {bridge} linked to node {node}"
@@ -5206,7 +5260,8 @@ def solo_m17(f, node):
             ok, out = ilink(node, 3, bridge)
             if not ok:
                 return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
-        _solo_set(mode="M17", target=fav_target(f), name=fav_name(f), bridge=bridge)
+        _solo_set(mode="M17", target=fav_target(f), name=fav_name(f), bridge=bridge,
+                  tune=f"{f['num']} {f['module']}")
     finally:
         _tune_lock.release()
     log_event(f"Tuned {fav_name(f)} ({addr}); bridge node {bridge} linked to node {node}"
@@ -5896,7 +5951,7 @@ def _bridge_tune(n, nc, dvs, m17_now, dig, m17):
     return "", ""
 
 
-def live_link(links, links_ok, nc, favs):
+def live_link(links, links_ok, nc, favs, unsure=False):
     if not links_ok:
         return {"state": "unreachable", "mode": "", "label": "", "tag": ""}
     if not links:
@@ -5916,6 +5971,8 @@ def live_link(links, links_ok, nc, favs):
             if label:
                 m = MODE_LABEL.get(mode, mode).upper()
                 text = label[len(m):].strip() if label.upper().split()[:1] == [m] else label
+                if unsure:
+                    text += " ?"
                 bridge = (m, text, "linking" if str(l.get("state", "")).upper().startswith("CONN") else "connected")
                 break
 
@@ -5942,6 +5999,14 @@ def _default_tune_mode(nc):
         if page:
             return page
     return _solo["mode"] or ""
+
+
+def tune_state_now(nc):
+    if not nc:
+        return solo_tune_state()
+    d = nc_dvs_current() or {}
+    v = d.get("m17_state") if m17_current() else d.get("state") if d.get("fav") else ""
+    return v if v in TUNE_STATES else ""
 
 
 def tuned_now(nc):
@@ -8377,7 +8442,9 @@ async function pollStatus() {
   listenLinkShow();
   linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
   connectLabel();
-  $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now : '';
+  const unsure = d.tuned_state === 'unconfirmed';
+  $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now + (unsure ? ' ?' : '') : '';
+  $('t-now').title = d.tuned_now && unsure ? 'Not confirmed by the bridge. Tune it again.' : '';
   tunedNow = d.tuned_now || '';
   defaultMode = d.default_mode || '';
   if (tnLast) {

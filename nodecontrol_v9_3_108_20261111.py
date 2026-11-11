@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.107"
-BUILD_DATE   = "2026-11-10"
+VERSION      = "9.3.108"
+BUILD_DATE   = "2026-11-11"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -14947,9 +14947,12 @@ def action_local(data: dict) -> Tuple[bool, str]:
         st = get_state()
         srv = next((s for s in st.dmr_servers if s.get("name") == st.active_dmr_server), None)
         on = st.page in _LOCAL_DVS_MODES and bool(st.current_fav)
+        view = _tune_view({"page": st.page, "current_fav": st.current_fav, "tune_state": st.tune_state})
         return True, json.dumps({"page": st.page, "fav": str(st.current_fav or "") if on else "",
                                  "server": st.active_dmr_server or "",
-                                 "address": str(srv.get("address", "")) if srv else ""})
+                                 "address": str(srv.get("address", "")) if srv else "",
+                                 "state": view if on else "",
+                                 "m17_state": view if st.page == "M17" else ""})
     if act == "phone-status":
         doc = _phone_doc()
         net = _phone_active_net(doc)

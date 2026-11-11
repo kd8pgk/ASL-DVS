@@ -1,6 +1,13 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_111_20261110.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_112_20261111.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.112-pi02w (2026-11-11)
+
+- **Node Talker can read the bridge's verdict.** The `dvs-status` answer of the local API, which Node Talker already asks for, now also carries `state` (pending, confirmed, unconfirmed or sent for the tuned talkgroup) and `m17_state` (the same for M17). Node Talker 0.10.36 and later uses them to mark a talkgroup the bridge does not confirm. An older Node Talker ignores the new fields.
+- Nothing else is changed.
+- Same change as the full build's 9.3.108.
+- This is a release, not a cosmetic build.
 
 ## 9.3.111-pi02w (2026-11-10)
 

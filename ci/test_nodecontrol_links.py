@@ -567,6 +567,33 @@ class _Links:
         self.assertEqual(m._tune_check(), "")
         self.assertEqual(self.st().tune_state, "")
 
+    def test_local_status_carries_the_verdict_for_node_talker(self):
+        import json
+        m = self.mod
+        m._enter_page("P25")
+        m.action_tune("P25", "10200", "NA")
+        self.ab = {"last_tune": "10200"}
+        m._tune_check()
+        ok, text = m.action_local({"action": "dvs-status"})
+        d = json.loads(text)
+        self.assertTrue(ok)
+        self.assertEqual((d["fav"], d["state"], d["m17_state"]), ("10200", "confirmed", ""))
+        m._enter_page("DMR")
+        d = json.loads(m.action_local({"action": "dvs-status"})[1])
+        self.assertEqual((d["fav"], d["state"]), ("", ""))
+        real = m.M17_INI_PATH
+        m.M17_INI_PATH = os.path.join(WORK, "USRP2M17.ini")
+        try:
+            m._enter_page("M17")
+            m.action_m17_connect("R", "M17-USA", "1.2.3.4", "A")
+            with open(m.M17_INI_PATH, "w", encoding="utf-8") as fh:
+                fh.write(m._m17_ini_content("N0CALL", "M17-USA", "1.2.3.4", "A"))
+            m._tune_check()
+            d = json.loads(m.action_local({"action": "dvs-status"})[1])
+        finally:
+            m.M17_INI_PATH = real
+        self.assertEqual((d["state"], d["m17_state"]), ("", "confirmed"))
+
     def test_page_uses_the_server_verdict(self):
         with open(self.mod.__file__, encoding="utf-8") as fh:
             src = fh.read()

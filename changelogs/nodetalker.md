@@ -1,5 +1,17 @@
 # Node Talker changelog
 
+## 0.10.36 (2026-11-11)
+
+Second of three releases that check Node Talker for the faults fixed in Node Controller 9.3.109 to 9.3.111.
+
+- **The tuned line shows whether the bridge agrees.** The "Tuned:" line and the link line showed what was asked for. They now carry a verdict: a tune is pending for up to 15 seconds, then confirmed, or marked with a "?" when Analog_Bridge never reports it or reports something else later.
+  - **Solo mode:** Node Talker compares the talkgroup it sent with `last_tune` in Analog_Bridge's status file, and M17 with the reflector named in the USRP2M17 ini and its service. D-STAR keeps the normal look and is never marked, because the status file may not show a reflector link.
+  - **Through Node Controller:** Node Talker passes on Node Controller's own verdict (9.3.112-pi02w / 9.3.108 and later). With an older Node Controller nothing is marked, as before.
+- A talkgroup tuned by an older Node Talker, still remembered after the update, has no verdict until it is tuned again.
+- `/api/status` carries `tuned_state`.
+- More cases in `ci/test_nodetalker_links.py`.
+- This is a release, not a cosmetic build.
+
 ## 0.10.35 (2026-11-11)
 
 First of three releases that check Node Talker for the faults fixed in Node Controller 9.3.109 to 9.3.111. Most of these are in solo mode, when Node Controller is not running and Node Talker tunes DVSwitch itself.
@@ -128,7 +140,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_35_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_36_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
