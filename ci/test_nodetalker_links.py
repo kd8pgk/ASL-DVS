@@ -41,6 +41,168 @@ def fav(mode, num, **kw):
     return f
 
 
+class Owner:
+    def __init__(self):
+        self.sent = []
+
+    def send_json(self, obj):
+        self.sent.append(obj)
+
+
+class QuickKey(unittest.TestCase):
+    CFG = {"tot_sec": 120, "busy_lockout": False, "phone_tones": False, "phone_lead_ms": 500, "ptt_rx_gap": False}
+
+    def setUp(self):
+        self.now = 1000.0
+        self.out = []
+        self.cfg = dict(self.CFG)
+        self.saved = {}
+        fakes = {
+            "tx_state": lambda node=None: {"ready": True, "linked": True},
+            "_cfg_get": lambda key: self.cfg[key],
+            "tune_value": lambda key: {"tx_buffer_ms": 100, "tx_gain_db": 0}[key],
+            "log_event": lambda *a, **k: None,
+            "apply_gain": lambda fr, gain: fr,
+        }
+        for name, fake in fakes.items():
+            self.saved[name] = getattr(nt, name)
+            setattr(nt, name, fake)
+        self.saved_clock = nt.time.monotonic
+        nt.time.monotonic = lambda: self.now
+        self.saved_lock = nt.PTT_LOCK["on"]
+        nt.PTT_LOCK["on"] = False
+        self.t = nt.Talker()
+        self.t._packet = lambda payload, keyup: self.out.append((round(self.now - 1000.0, 2), keyup, payload != nt.PCM_SILENCE))
+        self.owner = Owner()
+
+    def tearDown(self):
+        for name, real in self.saved.items():
+            setattr(nt, name, real)
+        nt.time.monotonic = self.saved_clock
+        nt.PTT_LOCK["on"] = self.saved_lock
+
+    def run_for(self, secs, talk=True):
+        voice = b"\x10\x20" * (nt.FRAME_BYTES // 2)
+        for _ in range(round(secs / nt.FRAME_SEC)):
+            if talk:
+                self.t.audio(self.owner, voice)
+            self.t._tick()
+            self.now += nt.FRAME_SEC
+
+    def keyed(self):
+        return [o for o in self.out if o[1]]
+
+    def test_lead_is_silent_key_up_then_audio(self):
+        self.assertEqual(self.t.key(self.owner, "me", lead=2.0, tail=2.0), (True, ""))
+        self.run_for(1.9)
+        self.assertTrue(self.keyed())
+        self.assertFalse(any(real for _t, _k, real in self.out))
+        self.assertGreaterEqual(len(self.keyed()), 90)
+        self.assertEqual(len(self.t.q), 0)
+        self.run_for(1.0)
+        first = next(t for t, _k, real in self.out if real)
+        self.assertGreaterEqual(first, 2.0)
+        self.assertLess(first, 2.3)
+        self.assertEqual(self.t.gaps, 0)
+        times = [t for t, k, _r in self.out if k]
+        self.assertLess(max(b - a for a, b in zip(times, times[1:])), 0.05)
+
+    def test_tail_is_silent_key_up_then_unkey(self):
+        self.t.key(self.owner, "me", lead=2.0, tail=2.0)
+        self.run_for(3.0)
+        self.t.release(self.owner)
+        mark = len(self.out)
+        at = self.now
+        self.run_for(3.0, talk=False)
+        self.assertFalse(self.t.keyed)
+        tail = self.out[mark:]
+        unkey_at = next(t for t, k, _r in tail if not k)
+        self.assertAlmostEqual(unkey_at - (at - 1000.0), 2.0, delta=0.6)
+        silent = [o for o in tail if o[1] and not o[2]]
+        self.assertGreaterEqual(len(silent), 80)
+        ev = self.owner.sent[-1]
+        self.assertEqual((ev["ev"], ev["why"]), ("unkeyed", "release"))
+        self.assertLess(ev["audio_ms"], 400)
+
+    def test_tail_is_not_cut_by_the_dead_audio_check(self):
+        self.t.key(self.owner, "me", lead=0.0, tail=2.0)
+        self.run_for(1.0)
+        self.t.release(self.owner)
+        self.run_for(1.5, talk=False)
+        self.assertTrue(self.t.keyed)
+
+    def test_without_the_guard_nothing_changes(self):
+        self.t.key(self.owner, "me")
+        self.run_for(0.5)
+        self.assertTrue(any(real for _t, _k, real in self.out))
+        self.t.release(self.owner)
+        self.run_for(0.5, talk=False)
+        self.assertFalse(self.t.keyed)
+
+    def test_release_during_the_lead_unkeys_at_once(self):
+        self.t.key(self.owner, "me", lead=2.0, tail=2.0)
+        self.run_for(0.5)
+        self.t.release(self.owner)
+        self.run_for(0.1, talk=False)
+        self.assertFalse(self.t.keyed)
+
+    def test_time_out_and_lock_skip_the_tail(self):
+        self.cfg["tot_sec"] = 3
+        self.t.key(self.owner, "me", lead=0.0, tail=2.0)
+        self.run_for(3.2)
+        self.assertFalse(self.t.keyed)
+        self.assertEqual(self.owner.sent[-1]["why"], "timeout")
+        self.cfg["tot_sec"] = 120
+        self.t.key(self.owner, "me", lead=0.0, tail=2.0)
+        self.run_for(0.5)
+        self.t.stop_for_lock()
+        self.assertFalse(self.t.keyed)
+
+    def test_time_out_during_the_tail(self):
+        self.cfg["tot_sec"] = 3
+        self.t.key(self.owner, "me", lead=0.0, tail=2.0)
+        self.run_for(2.5)
+        self.t.release(self.owner)
+        self.run_for(1.0, talk=False)
+        self.assertFalse(self.t.keyed)
+        self.assertEqual(self.owner.sent[-1]["why"], "timeout")
+
+    def test_a_phone_call_gets_no_lead_or_tail(self):
+        self.cfg["phone_tones"] = True
+        real_open = nt.PHONE.open
+        nt.PHONE.open = lambda sid, owner: None
+        try:
+            self.t.key(self.owner, "me", lead=2.0, tail=2.0)
+        finally:
+            nt.PHONE.open = real_open
+        self.run_for(0.2)
+        self.assertEqual(self.out, [])
+        self.t.phone_release(self.t.phone_sid, True)
+        self.assertEqual((self.t.lead_sec, self.t.tail_sec), (0.0, 0.0))
+        self.run_for(1.5)
+        self.assertTrue(any(real for _t, _k, real in self.out))
+
+    def test_no_call_keeps_the_lead(self):
+        self.cfg["phone_tones"] = True
+        real_open = nt.PHONE.open
+        nt.PHONE.open = lambda sid, owner: None
+        try:
+            self.t.key(self.owner, "me", lead=2.0, tail=2.0)
+        finally:
+            nt.PHONE.open = real_open
+        self.t.phone_release(self.t.phone_sid, False)
+        self.run_for(1.5)
+        self.assertTrue(self.keyed())
+        self.assertFalse(any(real for _t, _k, real in self.out))
+
+    def test_page_and_socket_carry_the_setting(self):
+        with open(nt.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        for needle in ("{op: 'key', qk: !!ptt.gap}", '"lead_ms"', '"tail_ms"', "function qkLeft()", "tailUntil",
+                       '_cfg_get("ptt_rx_gap")', "Finishing the last transmission"):
+            self.assertIn(needle, src)
+
+
 class Links(unittest.TestCase):
     def setUp(self):
         self.calls = []

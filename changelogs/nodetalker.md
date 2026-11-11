@@ -1,5 +1,17 @@
 # Node Talker changelog
 
+## 0.10.37 (2026-11-11)
+
+- **Quick Key Guard keys up silently before you talk, and holds the key after you stop.** With Quick Key Guard on:
+  - **Lead (2 s).** Push-to-talk keys the node at once and sends 2 seconds of silence before any audio is passed, so repeaters and links have time to open. Anything said during the lead is thrown away, not sent late. The corner of the spectrum counts 1, then 0 (the same place as the receive countdown; beside the PTT button when the spectrum is not showing). Talk after the 0: the button changes to TALKING and the phone vibrates.
+  - **Tail (2 s).** After you release (or tap to stop) your audio stops, the key stays up with silence for 2 seconds, then the node unkeys. The same corner counts 1, 0 and push-to-talk is refused until it ends.
+- **What does not get a lead or tail.** A transmission on a phone call (the phone patch), the tone test, and any transmission with Quick Key Guard off. A release during the lead unkeys at once. The TX time-out and a PTT lock unkey at once, with no tail; the lead and the tail count toward the time-out and the guard timer.
+- **No new setting.** Lead and tail follow the Quick Key Guard checkbox. The page sends the choice with each key-up. A client that does not send it (Node Talker Mobile today) gets the copy of the setting saved on the Pi, so save it once from the phone.
+- **Server side, so every client behaves the same.** The key stays up without a break between the lead and your audio. The dead-audio check does not cut the tail. "Time to first audio" in the health report is measured from the end of the lead. Node Talker's own transmissions were already left out of the kerchunk count.
+- The `keyed` message on the talk channel carries `lead_ms` and `tail_ms`; the `key` request takes `qk`.
+- More cases in `ci/test_nodetalker_links.py`.
+- This is a release, not a cosmetic build.
+
 ## 0.10.36 (2026-11-11)
 
 Second of three releases that check Node Talker for the faults fixed in Node Controller 9.3.109 to 9.3.111.
@@ -140,7 +152,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_36_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_37_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
