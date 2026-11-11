@@ -1,5 +1,15 @@
 # instmon changelog
 
+## 2.102.0 (2026-11-11)
+
+Third of four steps that reorganize the page: four things you had to use SSH for. This is a release: Python and page behaviour changed.
+
+- **Log on each tool's card.** An installed tool's card has a **Log** button. It opens the tool's last 120 journal lines in a window with Refresh, Copy and Close (Escape or a tap outside also closes it). New: `GET /api/journal?service=<tool>&lines=<10-200>`, only for the tools instmon manages.
+- **Start at boot.** An installed tool's card has a **Start at boot** switch (`systemctl enable` / `disable`). It is not shown for instmon itself, or for a tool whose unit cannot be switched (for example a static one). If the change does not take, the switch goes back and the reason is shown. A tool that is stopped and not set to start at boot already counts as stopped by you, so Full Update leaves it stopped (2.99.0). New action: `set_boot`.
+- **Free space on Home.** The Home tab shows the free space on the Pi's disk, and on the library's disk if that is a different one. It is marked as a warning under 10% or 500 MB.
+- **Restore from backup.** The Backup card on the Files tab takes a ZIP made by Download Full Backup and puts library files back. It only adds the files this node is missing: a file already here is kept, even when the backup holds a different copy. Anything that is not a library file (a path outside a library folder, a folder inside one, a hidden file) is skipped, so a ZIP cannot write outside the library. Limits: the usual upload size (`INSTMON_MAX_UPLOAD_MB`), 2,000 files, and four times the upload size unpacked. Nothing is installed. New: `POST /api/backup/restore`.
+- Tests: new `ci/test_instmon_tools.py` (boot state, enable and disable, a change that does not take, the journal limits, free space, restore with unsafe and existing files, a backup made here coming back, restore and journal over HTTP, the card controls).
+
 ## 2.101.0 (2026-11-11)
 
 Second of four steps that reorganize the page: one rule for confirmations, and long help text behind a Help button. It is a release because the page script changed.
@@ -126,7 +136,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_101_0_20261111.py`. Newest entries first.
+Current file: `instmon_v2_102_0_20261111.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
