@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "43577fb4159ae0fdeef9ce414cca0341b01ccc72",
-   "commit": "b0165c03e77c5361b1858d7825bfca229f948cb0",
-   "file": "44helper_v0_1_15_20261103.py",
-   "landed": "2026-11-03T05:46:23Z",
-   "promoted": "2026-11-08T22:17:48Z",
+   "blob": "c27ac7422e63c182a8e1659fed307de8d4e94c4f",
+   "commit": "c54ba6df65114193efedaa026a0058c9fd1af2b3",
+   "file": "44helper_v0_1_16_20261103.py",
+   "landed": "2026-11-03T05:57:07Z",
+   "promoted": "2026-11-11T22:44:49Z",
    "reason": "count",
-   "version": "0.1.15"
+   "version": "0.1.16"
   },
   "amp_nodetalker": {
    "blob": "3fcda70a6f1a3066afd678087e3a1ca1552b0c5b",
@@ -56,22 +56,22 @@
    "version": "2.92.0"
   },
   "nodecontrol": {
-   "blob": "e72d7f9e93c67a56468d1e0e12c42c501a708624",
-   "commit": "c362cc1724d65d81188063580d22ca5794b7ab60",
-   "file": "nodecontrol_v9_3_103_20261108.py",
-   "landed": "2026-11-08T21:55:07Z",
-   "promoted": "2026-11-11T21:55:07Z",
+   "blob": "c06dc046dbedc066d62764da528acc495f1ead49",
+   "commit": "1e8951565c72f6c8ba5234b4c2a41aff74bf8839",
+   "file": "nodecontrol_v9_3_104_20261108.py",
+   "landed": "2026-11-08T22:17:48Z",
+   "promoted": "2026-11-11T22:17:48Z",
    "reason": "count",
-   "version": "9.3.103"
+   "version": "9.3.104"
   },
   "nodecontrol_pi02w": {
-   "blob": "5bfa98a7b967f1a0b4ad1fcbfb3a4985837a6c29",
-   "commit": "411a58ec3d4383845fe8f715518bf13c173d4c4c",
-   "file": "nodecontrol_pi02w_v9_3_107_20261102.py",
-   "landed": "2026-11-02T14:53:37Z",
-   "promoted": "2026-11-11T00:12:41Z",
+   "blob": "dd32cecde8c5c9f144af7457206d0640f5120bdb",
+   "commit": "7fff7b1c6aa4a6a0f9ddaded874f9a09c0e169b6",
+   "file": "nodecontrol_pi02w_v9_3_108_20261108.py",
+   "landed": "2026-11-08T22:44:07Z",
+   "promoted": "2026-11-11T22:44:07Z",
    "reason": "count",
-   "version": "9.3.107-pi02w"
+   "version": "9.3.108-pi02w"
   },
   "noderecorder": {
    "blob": "9bdc6a259aef3399fe5aa5f83a52970f5453f039",
