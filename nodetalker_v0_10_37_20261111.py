@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.36"
+VERSION = "0.10.37"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -6333,6 +6333,10 @@ class PhonePatch:
             log_event(f"Phone: could not send {code} after transmitting ({(r or {}).get('error') or 'Node Controller did not answer'})", "warn")
 
 
+QK_LEAD_SEC = 2.0
+QK_TAIL_SEC = 2.0
+
+
 class Talker:
     def __init__(self):
         self.lock = threading.Lock()
@@ -6362,6 +6366,10 @@ class Talker:
         self.phone_sid = 0
         self.phone_session = False
         self.phone_until = None
+        self.lead_sec = 0.0
+        self.tail_sec = 0.0
+        self.lead_until = None
+        self.tail_until = None
 
     def phone_release(self, sid, opened):
         with self.lock:
@@ -6370,6 +6378,9 @@ class Talker:
             self.phone_until = time.monotonic() + (_cfg_get("phone_lead_ms") / 1000.0 if opened else 0.0)
             if not opened:
                 self.phone_session = False
+            else:
+                self.lead_sec = self.tail_sec = 0.0
+                self.lead_until = None
 
     def _phone_holding(self, now):
         return (self.phone_session and (self.phone_until is None or now < self.phone_until)
@@ -6397,7 +6408,7 @@ class Talker:
                     "last_peak_db": self.last_peak, "gaps": self.gaps if self.keyed else None,
                     "last_gaps": self.last_gaps}
 
-    def key(self, owner, who, phone=True):
+    def key(self, owner, who, phone=True, lead=0.0, tail=0.0):
         if PTT_LOCK["on"]:
             return False, "locked"
         st = tx_state()
@@ -6433,6 +6444,9 @@ class Talker:
             sid = self.phone_sid
             self.phone_session = bool(phone and _cfg_get("phone_tones"))
             self.phone_until = None
+            self.lead_sec, self.tail_sec = max(0.0, float(lead)), max(0.0, float(tail))
+            self.lead_until = now + self.lead_sec if self.lead_sec else None
+            self.tail_until = None
         log_event(f"TX: {who} keyed node {TX_NODE}", "ok")
         if self.phone_session:
             PHONE.open(sid, owner)
@@ -6443,6 +6457,9 @@ class Talker:
             if not self.keyed or self.owner is not owner or self.releasing:
                 return
             self.last_rx = time.monotonic()
+            if self.lead_until is not None and self.last_rx < self.lead_until:
+                self.buf = bytearray()
+                return
             self.buf += data
             gain = tune_value("tx_gain_db")
             while len(self.buf) >= FRAME_BYTES:
@@ -6477,8 +6494,10 @@ class Talker:
                 return
             owner, who = self.owner, self.who
             secs = time.monotonic() - self.start
-            audio_ms = round((self.first_at - self.key_at) * 1000) if (self.first_at and self.key_at) else None
+            audio_ms = (max(0, round((self.first_at - self.key_at - self.lead_sec) * 1000))
+                        if (self.first_at and self.key_at) else None)
             self.keyed = self.sending = self.releasing = False
+            self.lead_until = self.tail_until = None
             self.owner = None
             self.q.clear()
             self.last_unkey = time.monotonic()
@@ -6504,10 +6523,18 @@ class Talker:
 
         paced_loop(step, "TX pacer")
 
+    def _released(self, now):
+        if self.tail_sec > 0:
+            self.tail_until = now + self.tail_sec
+            self.sending = False
+            return None
+        return "release"
+
     def _tick(self):
         now = time.monotonic()
         why = None
         frame = None
+        real = False
         with self.lock:
             if not self.keyed:
                 return
@@ -6515,21 +6542,36 @@ class Talker:
             holding = self._phone_holding(now)
             if now - self.start > _cfg_get("tot_sec"):
                 why = "timeout"
+            elif self.tail_until is not None:
+                if now >= self.tail_until:
+                    why = "release"
+                else:
+                    frame = PCM_SILENCE
+            elif self.lead_until is not None and now < self.lead_until:
+                if self.releasing:
+                    why = "release"
+                elif now - self.last_rx > TX_DEADMAN_SEC:
+                    why = "deadman"
+                elif not holding:
+                    frame = PCM_SILENCE
             elif not self.sending:
                 if holding:
                     pass
                 elif (len(self.q) >= target or (self.releasing and self.q)
-                        or (not self.primed_once and now - self.start > target * FRAME_SEC + 0.3)):
+                        or (not self.primed_once and now - (self.lead_until or self.start) > target * FRAME_SEC + 0.3)):
                     self.sending = True
                     self.primed_once = True
-                elif self.primed_once:
+                elif self.primed_once or self.lead_sec:
                     frame = PCM_SILENCE
                 if self.releasing and not self.q:
-                    why = "release"
+                    why = self._released(now)
+                    if why is None:
+                        frame = PCM_SILENCE
                 elif now - self.last_rx > TX_DEADMAN_SEC:
                     why = "deadman"
             if why is None and self.sending:
                 if self.q:
+                    real = True
                     frame = self.q.popleft()
                     if self.after_gap:
                         frame = fade_in(frame)
@@ -6538,7 +6580,9 @@ class Talker:
                         frame = fade_out(frame)
                     self.last_frame = frame
                 elif self.releasing:
-                    why = "release"
+                    why = self._released(now)
+                    if why is None:
+                        frame = PCM_SILENCE
                 elif now - self.last_rx > TX_DEADMAN_SEC:
                     why = "deadman"
                 else:
@@ -6552,7 +6596,7 @@ class Talker:
             self._unkey(why)
         elif frame is not None:
             with self.lock:
-                if self.first_at is None:
+                if self.first_at is None and (real or not self.lead_sec):
                     self.first_at = now
             self._packet(frame, True)
 
@@ -7848,6 +7892,7 @@ const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC =
 const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500, RX_LOCAL_TRUST_MS = 2000, RX_HOLD_MS = 600;
 let ptt = {mode: 'hold', guard: 60, gap: true}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
 let rxSeenAt = -1e9, rxLocalAt = -1e9, rxStatusOn = false, gapShown = '';
+let qkTail = 0, leadUntil = 0, tailUntil = 0;
 try {
   const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
   if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard), gap: s.gap === true}; pttSrc = 'phone'; }
@@ -10789,7 +10834,7 @@ function pttLabel() {
   const tap = ptt.mode === 'tap';
   const ph = phoneOn ? ' · PHONE' : '';
   $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING') + ph
-    : pttState === 'keying' ? 'Keying...' : pttLocked ? 'PPT locked' : (busyText || (gapLeft() > 0 ? 'Wait...' : (tap ? 'Tap to talk' : 'Hold to talk') + ph));
+    : pttState === 'keying' ? 'Keying...' : pttLocked ? 'PPT locked' : (busyText || (gapLeft() > 0 || qkLeft() > 0 ? 'Wait...' : (tap ? 'Tap to talk' : 'Hold to talk') + ph));
   $('ptt').setAttribute('aria-label', tap ? 'Push to talk: tap to transmit, tap again to stop' : 'Push to talk: hold to transmit');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
@@ -10895,10 +10940,24 @@ function talkMsg(m) {
   if (chk && chk.running) chkWs(m);
   if (m.ev === 'keyed') {
     keyed = true; keyedAt = performance.now(); totSec = m.tot || totSec;
-    if (ws) preKey.forEach((f) => ws.send(f));
-    preKey = [];
-    pttUi('talking', '');
-    if (navigator.vibrate) navigator.vibrate(30);
+    qkTail = Number(m.tail_ms) || 0;
+    const lead = Number(m.lead_ms) || 0;
+    if (lead > 0) {
+      preKey = [];
+      const until = leadUntil = keyedAt + lead;
+      pttUi('keying', '');
+      setTimeout(() => {
+        if (leadUntil !== until || !talking || !keyed) return;
+        leadUntil = 0;
+        pttUi('talking', '');
+        if (navigator.vibrate) navigator.vibrate(30);
+      }, lead);
+    } else {
+      if (ws) preKey.forEach((f) => ws.send(f));
+      preKey = [];
+      pttUi('talking', '');
+      if (navigator.vibrate) navigator.vibrate(30);
+    }
   } else if (m.ev === 'lock') {
     applyPttLock(m.locked);
   } else if (m.ev === 'phone') {
@@ -10911,6 +10970,8 @@ function talkMsg(m) {
       'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
     endTalk(); pttUi('ready', why, 'warn');
   } else if (m.ev === 'unkeyed') {
+    if (tailUntil) ownUnkeyAt = performance.now();
+    tailUntil = 0;
     keyed = false; endTalk();
     if (guardStop) { pttUi('ready', guardStop, 'warn'); guardStop = ''; return; }
     const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
@@ -11375,6 +11436,7 @@ function stopMic() {
 function endTalk() {
   if (talking) ownUnkeyAt = performance.now();
   talking = false;
+  leadUntil = 0;
   hsTx = false;
   rxMeterBack();
   preKey = [];
@@ -11391,6 +11453,7 @@ async function pttDown(ev) {
   if (ev) ev.preventDefault();
   if (talking || testing) return;
   if (pttLocked) { note('ptt-msg', 'warn', 'PPT is Locked'); return; }
+  if (performance.now() < tailUntil) { note('ptt-msg', 'warn', 'Finishing the last transmission...'); return; }
   const wait = gapLeft();
   if (wait > 0) {
     note('ptt-msg', 'warn', 'Waiting after receive: talk in ' + Math.ceil(wait / 1000) + ' s.');
@@ -11412,7 +11475,7 @@ async function pttDown(ev) {
     return;
   }
   keyReqAt = performance.now();
-  ws.send(JSON.stringify({op: 'key'}));
+  ws.send(JSON.stringify({op: 'key', qk: !!ptt.gap}));
   talkTimer = setInterval(talkTick, 250);
   wakeLockApply();
   micPending = true;
@@ -11428,10 +11491,17 @@ async function pttDown(ev) {
 function pttUp(ev) {
   if (ev) ev.preventDefault();
   if (!talking) return;
+  const tail = keyed && performance.now() >= leadUntil ? qkTail : 0;
   sendOp('unkey');
   keyed = false;
   endTalk();
+  tailUntil = tail > 0 ? performance.now() + tail : 0;
   pttUi(wsReady ? 'ready' : 'off');
+}
+
+function qkLeft() {
+  const now = performance.now();
+  return Math.max(0, talking ? leadUntil - now : 0, tailUntil - now);
 }
 
 function ownRecent(now) { return talking || keyed || now - ownUnkeyAt < OWN_TX_IGNORE_MS; }
@@ -11460,7 +11530,10 @@ function gapLeft() { return ptt.gap ? Math.max(0, RX_GAP_MS - (performance.now()
 function gapTick() {
   const left = gapLeft();
   const since = performance.now() - rxRef();
-  const txt = left > 0 && since >= RX_QUIET_MS ? String(Math.min(3, Math.floor(left / 1000))) : '';
+  const qk = qkLeft();
+  if (tailUntil && !qk) tailUntil = 0;
+  const txt = qk > 0 ? String(Math.floor(qk / 1000))
+    : left > 0 && since >= RX_QUIET_MS ? String(Math.min(3, Math.floor(left / 1000))) : '';
   if (txt === gapShown) return;
   gapShown = txt;
   const el = $('gap-cd'), box = $('spec-box');
@@ -11468,7 +11541,7 @@ function gapTick() {
   if (showBox) el.style.fontSize = Math.max(14, Math.round(Math.min(box.clientHeight * 0.5 * 0.8, box.clientWidth * 0.25 / 0.6 * 0.8))) + 'px';
   el.textContent = showBox ? txt : '';
   el.classList.toggle('hidden', !showBox);
-  if (!talking) $('ptt-time').textContent = txt && !showBox ? txt : '';
+  if (!talking || qk > 0) $('ptt-time').textContent = txt && !showBox ? txt : '';
   pttLabel();
 }
 
@@ -11495,7 +11568,7 @@ function guardBeep() {
 }
 
 function talkTick() {
-  if (!keyed) return;
+  if (!keyed || performance.now() < leadUntil) return;
   const secs = (performance.now() - keyedAt) / 1000;
   if (!guardOn()) { $('ptt-time').textContent = fmtSecs(secs) + ' / ' + fmtSecs(totSec); return; }
   const left = guardSec() - secs;
@@ -12987,7 +13060,9 @@ not the node, the radio or DVSwitch.</p>
 <option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
 <div class="row"><label><input type="checkbox" id="ptt-gap"> Quick Key Guard</label></div>
 <p class="muted small">With Quick Key Guard on, push-to-talk is locked while the node receives and for 4 s after, counting
-3 to 0 in the corner of the spectrum, so other stations get a chance to answer first.</p>
+3 to 0 in the corner of the spectrum, so other stations get a chance to answer first. It also keys up silently for 2 s
+before your audio is passed, so repeaters and links have time to open, and holds the key for 2 s of silence after you
+release. Both count 1, 0 in the same corner: talk after the first 0. Phone calls are not delayed.</p>
 <p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
 unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
 <p class="muted small" id="ptt-src"></p>
@@ -13557,8 +13632,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(msg, dict):
                         continue
                     if msg.get("op") == "key":
-                        ok, why = TALKER.key(ws, who)
-                        ws.send_json({"ev": "keyed", "tot": _cfg_get("tot_sec")} if ok else {"ev": "denied", "why": why})
+                        qk = msg.get("qk")
+                        if not isinstance(qk, bool):
+                            qk = bool(_cfg_get("ptt_rx_gap"))
+                        ok, why = TALKER.key(ws, who, lead=QK_LEAD_SEC if qk else 0.0, tail=QK_TAIL_SEC if qk else 0.0)
+                        ws.send_json({"ev": "keyed", "tot": _cfg_get("tot_sec"), "lead_ms": round(TALKER.lead_sec * 1000),
+                                      "tail_ms": round(TALKER.tail_sec * 1000)} if ok else {"ev": "denied", "why": why})
                     elif msg.get("op") == "unkey":
                         TALKER.release(ws)
         except (EOFError, OSError, socket.timeout, ValueError, struct.error):
