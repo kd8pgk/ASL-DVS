@@ -857,11 +857,72 @@ _IAX_CONF  = Path("/etc/asterisk/iax.conf")
 _RPT_CONF  = Path("/etc/asterisk/rpt.conf")
 _AB_CFG    = Path("/etc/dvswitch/analog_bridge.cfg")
 
-_IAX_SECTION_RE = re.compile(r'^\s*\[([^\]]+)\]\s*(?:;.*)?$')
+_IAX_SECTION_RE = re.compile(r'^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?\s*(?:;.*)?$')
+_IAX_INCLUDE_RE = re.compile(r'^\s*#(?:try)?include\s+"?([^"\s;]+)"?', re.IGNORECASE)
+_IAX_INCLUDE_DEPTH = 3
+
+def _iax_expand_includes(content: str, depth: int = 0) -> str:
+    if depth >= _IAX_INCLUDE_DEPTH:
+        return content
+    root = os.path.realpath(str(_IAX_CONF.parent))
+    out: list = []
+    for line in content.splitlines():
+        m = _IAX_INCLUDE_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        pat = m.group(1)
+        if not pat.startswith("/"):
+            pat = os.path.join(root, pat)
+        for hit in sorted(glob.glob(pat)):
+            real = os.path.realpath(hit)
+            if not real.startswith(root + os.sep):
+                continue
+            text, err = read_path_file(Path(real))
+            if not err:
+                out.append(_iax_expand_includes(text, depth + 1))
+    return "\n".join(out)
 
 def _iax_parse_sections(content: str) -> "dict[str, dict]":
-    return _ini_sections(content, _IAX_SECTION_RE, _RPT_KV_RE,
-                         comment_re=_RPT_COMMENT_RE, lower_keys=True)
+    content = _iax_expand_includes(content)
+    sections: "dict[str, dict]" = {}
+    templates: "dict[str, dict]" = {}
+    cur = None
+    cur_spec = ""
+    kv: "dict[str, str]" = {}
+
+    def close() -> None:
+        if cur is None:
+            return
+        parts = [p.strip() for p in cur_spec.split(",") if p.strip()]
+        merged: "dict[str, str]" = {}
+        for p in parts:
+            if p in ("!", "+"):
+                continue
+            merged.update(templates.get(p.lower(), sections.get(p, {})))
+        if "+" in parts and cur in sections:
+            merged = dict(sections[cur])
+        merged.update(kv)
+        if "!" in parts:
+            templates[cur.lower()] = merged
+        else:
+            sections[cur] = merged
+
+    for line in content.splitlines():
+        if _RPT_COMMENT_RE.match(line):
+            continue
+        sm = _IAX_SECTION_RE.match(line)
+        if sm:
+            close()
+            cur = sm.group(1).strip()
+            cur_spec = sm.group(2) or ""
+            kv = {}
+            continue
+        m = _RPT_KV_RE.match(line)
+        if m:
+            kv[m.group(1).lower()] = m.group(2).strip()
+    close()
+    return sections
 
 def _iax_collect_iaxrpt_candidates(sections: "dict[str, dict]") -> list:
     _IAX_SYSTEM = frozenset({
@@ -884,6 +945,7 @@ def _iax_collect_iaxrpt_candidates(sections: "dict[str, dict]") -> list:
             "name":     sname,
             "secret":   sec_val,
             "callerid": cid,
+            "requirecalltoken": kv.get("requirecalltoken", "").strip(),
         })
     return candidates
 
@@ -4734,9 +4796,9 @@ let _dpActiveView = "";
 let _dpOriginTab  = "";
 const TAB_RGB = {
   overview:"0,255,229", services:"0,255,229", ports:"34,212,255",
-  journal:"212,102,255", asldvs:"255,61,90", phone:"0,255,176",
+  journal:"212,102,255", asldvs:"255,61,90", reg:"120,180,255", phone:"0,255,176",
   tune:"255,68,204", hardware:"0,200,120", dvsm:"255,170,34",
-  stfu:"0,191,255", sdcard:"180,140,255", edit:"255,208,64"
+  stfu:"0,191,255", m17:"124,255,60", sdcard:"180,140,255", edit:"255,208,64"
 };
 
 function dpUnit() { return _dpUnit; }
@@ -7705,7 +7767,7 @@ function phRenderDialing(s, nets) {
     [
       "*61 from the radio lands in the dvs-radio context. It doesn't dial: it hands the number to the dashboard and hangs up, which ends the autopatch straight away.",
       "The dashboard then places the call through the network's dialing rules (the dvs-node and dvs-net contexts shown here), the same way as its own Dial button. The call joins the node like an incoming call, so the radio only transmits while the far end talks.",
-      "Before sysmon 6.13.67.4 this card started only from the *61 context, so it stopped at the dvs-radio step and didn't show the dialing rules. It now also starts from each phone node's own context.",
+      "This card starts from each phone node's own context as well as the *61 context, so the dialing rules still show past the dvs-radio step.",
     ].forEach(t => det.appendChild(phEl("p", "", t)));
     body.appendChild(det);
   }
@@ -19129,6 +19191,7 @@ def _dvsm_resolve_shared(iax: dict, rpt: dict) -> dict:
     iaxrpt_ok     = _sel is not None
     iaxrpt_secret = _sel["secret"] if _sel else ""
     iaxrpt_name   = _sel["name"]   if _sel else ""
+    iaxrpt_rct    = _sel.get("requirecalltoken", "") if _sel else ""
 
     return {
         "callsign": callsign, "bindport": bindport,
@@ -19136,7 +19199,7 @@ def _dvsm_resolve_shared(iax: dict, rpt: dict) -> dict:
         "reg_node": reg_node, "reg_pass": reg_pass, "reg_host": reg_host,
         "reg_source": reg_source, "node_mode_ok": node_mode_ok,
         "iaxrpt_ok": iaxrpt_ok, "iaxrpt_secret": iaxrpt_secret,
-        "iaxrpt_name": iaxrpt_name,
+        "iaxrpt_name": iaxrpt_name, "iaxrpt_rct": iaxrpt_rct,
     }
 
 def _dvsm_account_direct_iax2(sh: dict, iax: dict, node_ip: str, wan_ip: str) -> dict:
@@ -19215,7 +19278,8 @@ def _dvsm_account_iaxrpt(sh: dict, iax: dict, node_ip: str, wan_ip: str) -> dict
     }
 
 def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
-    status = "pass" if sh["node_mode_ok"] else ("warn" if iax["raw_ok"] else "fail")
+    own = sh["reg_node"] if sh["reg_node"] and sh["reg_node"] != "—" else ""
+    not_own = f" Not {own}: that is this node, and two registrations for one number fight." if own else ""
     fields = [
         {"label": "Protocol",   "value": "IAX2",
          "masked": False, "secret": None, "note": "Fixed value — not read from config"},
@@ -19223,13 +19287,13 @@ def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
          "masked": False, "secret": None, "note": "Fixed value — always register.allstarlink.org"},
         {"label": "Port",       "value": "4569",
          "masked": False, "secret": None, "note": "Fixed value — AllStarLink registration port"},
-        {"label": "Username",   "value": sh["reg_node"],
+        {"label": "Username",   "value": None,
          "masked": False, "secret": None,
-         "note": "This node's own registered number, shown for reference — DVSM needs a different, unused one"},
+         "note": ("A node number of yours that is not running anywhere else, from "
+                  "allstarlink.org → Portal → Node Settings." + not_own)},
         {"label": "Password",   "value": None,  "masked": True,
-         "secret": sh["reg_pass"],
-         "note": (f"From {sh['reg_source'] or 'iax.conf'} — register=>{sh['reg_node']}:●●@{sh['reg_host']}"
-                  if sh["reg_pass"] else "No register=> line found for a public node (>1999)")},
+         "secret": "",
+         "note": "The password of that unused node, from the same Portal page. This node's own password is not shown here"},
         {"label": "CallerID",   "value": sh["callsign"],
          "masked": False, "secret": None,
          "note": "Source: rpt.conf callsign → iax.conf CallerID → sysmon.conf [identity] (first match wins)"},
@@ -19244,7 +19308,7 @@ def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
         "Auto Connect — UNCHECK",
     ]
     return {
-        "status": status, "fields": fields, "notes": notes,
+        "status": "info", "fields": fields, "notes": notes,
         "error": "" if iax["raw_ok"] else iax["error"],
     }
 
@@ -19281,7 +19345,7 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   else "Not set — check MMDVM_Bridge.ini [General] Id")},
     ]
     notes = [
-        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort. Analog_Bridge sends audio to one address only, so DVSM and this node's Asterisk link can't both use these ports at once.",
+        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort.",
     ]
     if ab.get("source"):
         notes.append(f"Source: {ab['source']}")
@@ -19329,11 +19393,6 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
             _risky("propagate_phonedtmf", "Phone DTMF passed to linked nodes",
                    n["propagate_phonedtmf"],
                    "phone callers' tones (like *99 and #) are passed to every linked node, bridges included."),
-            _risky("remote_dtmf_allowed", "DTMF from remote connections (HamVoIP only; ASL3 ignores it)",
-                   n["remote_dtmf_allowed"],
-                   "any linked node can send commands to this node."),
-            _opt("phonesendlinks", "DVSM Status tab — linked-node list (HamVoIP only; ASL3 ignores it)",
-                 n["phonesendlinks"], "phonesendlinks = 1"),
         ]
     else:
         compat.append({
@@ -19345,12 +19404,22 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
 
     rct_val = iax.get("requirecalltoken", "").lower()
     cto_val = iax.get("calltokenopt",     "").lower()
-    if not rct_val and not cto_val:
+    user_rct = (sh.get("iaxrpt_rct") or "").lower()
+    if user_rct:
+        compat.append({
+            "key":     "requirecalltoken",
+            "source":  "iax.conf",
+            "enables": f"Call tokens for [{sh['iaxrpt_name']}] (DVSM, IAXRpt)",
+            "status":  "pass" if user_rct in ("no", "0", "false") else "info",
+            "value":   f"[{sh['iaxrpt_name']}] {user_rct}",
+            "fix":     None,
+        })
+    elif not rct_val and not cto_val:
         compat.append(_compat(
             "requirecalltoken", "iax.conf",
             "Call token enforcement",
             True, None,
-            info_msg="Not set in [general] — Asterisk's default (yes) applies, unless the user's own section sets it. ASL3's [iaxrpt] template sets no.",
+            info_msg="Not set in [general] or in the user section — Asterisk's default (yes) applies.",
         ))
     else:
         rct_relaxed = rct_val in ("no", "0", "false")
@@ -19515,11 +19584,22 @@ def _stfu_build_compat(cfg: dict, inst: dict) -> list:
          "status": "pass" if id_ok else "fail",
          "value":  cfg["dmr_id"] or "not set",
          "fix":    "Set UserID in DVSwitch.ini [STFU]" if not id_ok else None},
+        {"key": "BMPort is the BrandMeister port",
+         "enables": "STFU reaches BrandMeister",
+         "status": "warn" if cfg["bm_port"] in ("62030", "62031") else "pass",
+         "value":  cfg["bm_port"],
+         "fix":    ("62030 and 62031 are MMDVM hotspot ports; STFU uses BrandMeister's "
+                    "Open DMR Terminal port, 54006" if cfg["bm_port"] in ("62030", "62031") else None)},
         {"key": "Ports configured",
          "enables": "RX and TX ports set",
          "status": "pass" if port_ok else "warn",
          "value":  f"RX={cfg['rx_port'] or '—'} TX={cfg['tx_port'] or '—'}",
          "fix":    "Set rxPort and txPort in DVSwitch.ini [STFU]" if not port_ok else None},
+        {"key": "TalkerAlias length",
+         "enables": "Alias fits what DVSwitch allows",
+         "status": "warn" if len(cfg["talker_alias"]) > 27 else "pass",
+         "value":  f"{len(cfg['talker_alias'])} characters" if cfg["talker_alias"] else "not set",
+         "fix":    "DVSwitch allows 27 characters at most in TalkerAlias" if len(cfg["talker_alias"]) > 27 else None},
         {"key": "Service running",
          "enables": "STFU active",
          "status": ("pass" if inst["service_active"] else
@@ -20822,8 +20902,6 @@ def _sanitize_enabled_tabs(raw) -> list:
     else:
         items = []
     wanted = {str(t).strip().lower() for t in items}
-    if "security" in wanted:
-        wanted.add("reg")
     wanted.update(_LOCKED_TABS)
     return [t for t in _ALL_TABS if t in wanted]
 
