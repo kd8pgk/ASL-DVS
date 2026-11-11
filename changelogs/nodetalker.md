@@ -1,5 +1,18 @@
 # Node Talker changelog
 
+## 0.10.35 (2026-11-11)
+
+First of three releases that check Node Talker for the faults fixed in Node Controller 9.3.109 to 9.3.111. Most of these are in solo mode, when Node Controller is not running and Node Talker tunes DVSwitch itself.
+
+- **A failed mode switch stops the tune (solo).** When `dvswitch.sh mode` failed it was logged and the tune went out anyway, in the old mode. The tune now stops with a message, and the next tune tries the mode again.
+- **Disconnect reports a failure (solo).** The talkgroup disconnect and the M17 reset ignored their results and always said "Disconnected". A failed `dvswitch.sh` disconnect, an M17 ini that cannot be written, or a USRP2M17 service that does not restart now fails the disconnect, and what was tuned stays shown. A new tune still goes ahead when the old one's teardown fails.
+- **Link drops are checked.** After a disconnect Node Talker reads the link list again (for up to 3 seconds). A node Asterisk still lists is reported as still linked instead of "Disconnected". If the list cannot be read, the disconnect is reported as before.
+- **One missed link query no longer shows "Node unreachable".** The last good link list is kept for up to 10 seconds.
+- **Disconnect All forgets the remembered mode and DMR network (solo)**, so the first tune after the services restart sets both again.
+- **Node Talker waits 220 s for a tune through Node Controller**, up from 100 s. Node Controller can take longer than 100 s, so Node Talker could say "not answering" for a tune that then completed.
+- New test: `ci/test_nodetalker_links.py`.
+- This is a release, not a cosmetic build.
+
 ## 0.10.34 (2026-11-10)
 
 - **The balancer judges each side by what its settings change.** The TX score now counts only what TX gain and the TX buffer can change, read at the Pi: transmissions with gaps, peaks over -1 dBFS at the Pi, and the level after TX gain (target -18 dBFS). Before, it scored the level and clipping measured on the phone, before TX gain, so a TX change was kept or put back by how you happened to talk that minute. The RX score adds station spread above 8 dB and sound below 300 Hz above -25 dB, which are what the Automatic level and Cut below 300 Hz trials are for.
@@ -115,7 +128,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_34_20261110.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_35_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
