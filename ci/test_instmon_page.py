@@ -8,7 +8,10 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = tempfile.mkdtemp(prefix="instmon_page_")
-os.environ.setdefault("INSTMON_LIB_DIR", os.path.join(WORK, "lib"))
+for key, sub in (("INSTMON_CONFIG_DIR", "config"), ("INSTMON_LIBRARY_DIR", "library"), ("INSTMON_SUITELOG", "run/suitelog.jsonl"),
+                 ("INSTMON_SUITELOG_FLAG", "run/suitelog.on")):
+    os.environ[key] = os.path.join(WORK, sub)
+os.environ["INSTMON_RECORDER_STATUS_URL"] = "http://127.0.0.1:9/x"
 
 
 def newest(pattern):
