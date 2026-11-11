@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.100.0"
+VERSION ="2.101.0"
 DATE_STR ="2026-11-11"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -9177,6 +9177,10 @@ header{flex-wrap:wrap}
   box-shadow:inset 0 -2px 0 var(--amber)}
 .tabp{display:flex;flex-direction:column;gap:.55rem}
 .tabp[hidden]{display:none}
+.help-right{margin-left:auto}
+html{scroll-padding-top:7rem;scroll-padding-bottom:4rem}
+.card-title{margin-bottom:.3rem}
+.card-title b{color:var(--text-bright)}
 .tabp>.hdr:first-child{margin-top:.4rem}
 .wrap{padding-bottom:4.5rem}
 body.log-open .wrap{padding-bottom:calc(45vh + 4.5rem)}
@@ -11310,9 +11314,9 @@ function wireButtons() {
           if (!confirm(`Install ${btn.dataset.name}? This will restart its service.`)) { btn.disabled = false; return; }
           await postAction({action: 'install', category: btn.dataset.category, name: btn.dataset.name, confirm: true});
         } else if (action === 'uninstall') {
-          // No confirmation -- see the "NO CONFIRMATIONS" banner above
-          // the Components card. Stops and removes the service (unit,
-          // symlink, and installed files) immediately.
+          // Asks first (2.101.0). Stops and removes the service (unit,
+          // symlink, and installed files); the library copies stay.
+          if (!confirm(`Uninstall ${btn.dataset.name}? Its service is stopped and its installed files are removed. The copies in its library are kept.`)) { btn.disabled = false; return; }
           await postAction({action: 'uninstall', category: btn.dataset.category});
         } else if (action === 'start') {
           // No confirmation -- fires immediately, see the banner above
@@ -12432,22 +12436,20 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div id="fu-plan"></div>
   <div class="row" style="margin-top:.6rem">
     <button id="gh-notes-btn" onclick="ghNotesToggle()">Show</button>
-    <span class="small muted">About Full Update and Quiet System</span>
+    <span class="small muted">About Full Update</span>
   </div>
   <div id="gh-notes" class="small muted" style="display:none;margin-top:.35rem">
     Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
     installs the new one component at a time (instmon last). A component that fails is put back, skipped and
     listed at the end. New install scripts only go to the Scripts library -- they are never run for you.
     Stop Full Update puts the tool it is on back to the version it had and skips the rest.
-    <br><br>
-    Quiet System, before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
-    Node Talker, Node Recorder, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</div>
+    Quiet System is on the System tab.</div>
 </div>
 </div>
 
 <div class="tabp" id="tabp-tools" hidden>
 <div class="hdr">Components</div>
-<div class="no-confirm-banner">NO CONFIRMATIONS -- Stop and Uninstall act immediately, no prompt.</div>
+<div class="no-confirm-banner">Start and Stop act at once, with no prompt. Uninstall asks first.</div>
 <div id="components">{components_html}
 </div>
 </div>
@@ -12461,12 +12463,13 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <span class="ver" id="cp-ver"></span>
     <span class="badge b-src" id="cp-badge">NOT INSTALLED</span>
     <span class="muted small">confputter.py &middot; runs on demand, no service</span>
+    <button class="diskimg-help-toggle help-right" data-action="toggle_diskimg_help">Help</button>
   </div>
   <div class="row btn-row">
     <button class="b-del" id="cp-undo-btn" onclick="cpUndo()" style="display:none">Undo last restore</button>
     <button class="b-del" id="cp-uninstall-btn" onclick="cpUninstall()" style="display:none">Uninstall</button>
   </div>
-  <div class="small muted">Puts the files of a Config getter snapshot back on this node: to undo a bad edit, to apply a copy
+  <div class="diskimg-help small muted">Puts the files of a Config getter snapshot back on this node: to undo a bad edit, to apply a copy
   you or Claude corrected, or to rebuild a wiped node. Press Preview on a snapshot: nothing is written until you
   tick files and press Restore. The files it replaces are saved first (Undo last restore). Passwords and keys are not in a
   snapshot: each one keeps the value this node has now, and you type any it does not have. Firewall and WireGuard files
@@ -12485,8 +12488,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </div>
 
 <div class="card" id="usbimp-card">
-  <div style="font-weight:700;color:var(--text-bright);margin-bottom:.3rem">Import from USB Drive</div>
-  <div class="small muted" style="margin-bottom:.4rem">
+  <div class="row card-title"><b>Import from USB Drive</b><button class="diskimg-help-toggle help-right" data-action="toggle_diskimg_help">Help</button></div>
+  <div class="diskimg-help small muted" style="margin-bottom:.4rem">
     Copies .py / .sh / .conf files from an attached USB drive into the library below. Same extension,
     name-match and size rules as a browser upload. A .pdf goes to Manuals, whatever group is picked.
     The drive is read-only; files on it are never changed or removed.</div>
@@ -12517,14 +12520,15 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 
 <div class="hdr">Scripts &amp; Configuration Library</div>
 <div class="small muted" style="margin-bottom:.4rem">
-  Run shell scripts or manage alternative configuration files. Per-component version
-  libraries (Dashboard, SysMon, etc.) now live inside their component's card above.</div>
+  Run shell scripts or manage alternative configuration files. Each tool's own versions
+  (Dashboard, SysMon and the rest) are in its card on the Tools tab.</div>
 <div id="library">{library_html}
 </div>
 
 <div class="hdr">Manuals</div>
 <div class="card diskimg-card collapsed" id="docs-card">
   <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
     <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="docs">Show</button>
   </div>
   <div class="diskimg-card-body">
@@ -12537,7 +12541,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button data-action="upload" data-category="docs">Upload PDF</button>
     <span id="upmsg-docs" class="small muted"></span>
   </div>
-  <div class="small muted" style="margin-top:.35rem">
+  <div class="diskimg-help small muted" style="margin-top:.35rem">
     The install, user and configuration manuals (PDF) from the docs folder on GitHub, and any other PDF you
     upload here or import from a USB drive. They download when instmon is installed, and a Full Update
     fetches any that are new or changed on GitHub. Open shows one in a new tab in the browser's own PDF reader;
@@ -12867,8 +12871,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div class="row btn-row">
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
+    <button class="diskimg-help-toggle help-right" data-action="toggle_diskimg_help">Help</button>
   </div>
-  <div class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
+  <div class="diskimg-help small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
   Node Talker, Node Recorder, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon
   stay up. Restore starts them again.</div>
 </div>
