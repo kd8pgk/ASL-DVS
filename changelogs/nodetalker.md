@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.38 (2026-11-11)
+
+- **The page passes the Quick Key Guard setting to Node Talker Mobile.** When the page runs inside the app, the key-up options it hands the app now include `qk`, so the app (0.10.38 and later) sends it with the key-up instead of the server falling back to the copy saved on the Pi. In a browser nothing changes.
+- An older app ignores the new option.
+- This is a release, not a cosmetic build.
+
 ## 0.10.37 (2026-11-11)
 
 - **Quick Key Guard keys up silently before you talk, and holds the key after you stop.** With Quick Key Guard on:
@@ -152,7 +158,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_37_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_38_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

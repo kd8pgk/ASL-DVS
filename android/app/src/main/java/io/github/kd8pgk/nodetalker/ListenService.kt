@@ -94,6 +94,8 @@ object Talk {
 
     fun emit(json: String) = listeners.forEach { it(json) }
 
+    fun keyOp(qk: Boolean?): String = if (qk == null) "{\"op\":\"key\"}" else "{\"op\":\"key\",\"qk\":$qk}"
+
     fun json(): String = JSONObject().put("open", open).put("talking", talking).put("error", error).put("why", why).put("fails", fails).toString()
 
     fun open(c: Context, node: Node) {
@@ -367,9 +369,10 @@ class ListenService : Service() {
         when (m.optString("ev")) {
             "keyed" -> {
                 val pk: List<ByteArray>
+                val lead = m.optInt("lead_ms", 0) > 0
                 synchronized(talkLock) {
                     keyed = talking
-                    pk = preKey.toList()
+                    pk = if (lead) emptyList() else preKey.toList()
                     preKey.clear()
                 }
                 val c = ws
@@ -385,7 +388,7 @@ class ListenService : Service() {
         Talk.emit(t)
     }
 
-    fun key(guardSec: Double, gainDb: Double, opts: MicOpts? = null): Boolean {
+    fun key(guardSec: Double, gainDb: Double, opts: MicOpts? = null, qk: Boolean? = null): Boolean {
         val c = ws ?: return false
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         synchronized(talkLock) {
@@ -400,7 +403,7 @@ class ListenService : Service() {
         handler.removeCallbacks(guardRun)
         Listen.muted = true
         try {
-            c.sendText("{\"op\":\"key\"}")
+            c.sendText(Talk.keyOp(qk))
         } catch (e: IOException) {
             talkWriteFailed(e)
             stopTalk()

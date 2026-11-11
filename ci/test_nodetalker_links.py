@@ -199,7 +199,8 @@ class QuickKey(unittest.TestCase):
         with open(nt.__file__, encoding="utf-8") as fh:
             src = fh.read()
         for needle in ("{op: 'key', qk: !!ptt.gap}", '"lead_ms"', '"tail_ms"', "function qkLeft()", "tailUntil",
-                       '_cfg_get("ptt_rx_gap")', "Finishing the last transmission"):
+                       '_cfg_get("ptt_rx_gap")', "Finishing the last transmission",
+                       "gain: Number(mic.gain) || 0, qk: !!ptt.gap,"):
             self.assertIn(needle, src)
 
 

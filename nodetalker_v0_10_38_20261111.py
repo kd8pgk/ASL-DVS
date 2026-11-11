@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.37"
+VERSION = "0.10.38"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -11467,7 +11467,7 @@ async function pttDown(ev) {
   pttUi('keying', '');
   if (appTalk()) {
     talkTimer = setInterval(talkTick, 250);
-    if (!appCall('talkKey', JSON.stringify({guard: guardOn() ? guardSec() : 0, gain: Number(mic.gain) || 0,
+    if (!appCall('talkKey', JSON.stringify({guard: guardOn() ? guardSec() : 0, gain: Number(mic.gain) || 0, qk: !!ptt.gap,
       mic: {hp: !!mic.hp, eq: !!mic.eq, gate: Number(mic.gate) || 0, lev: !!mic.lev, ns: !!mic.ns, ec: !!mic.ec, agc: !!mic.agc}}))) {
       keyed = false; endTalk();
       pttUi(wsReady ? 'ready' : 'off', 'The app could not key up (talk channel or microphone).', 'err');
