@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.49.0"
+APP_VERSION = "5.50.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -1177,6 +1177,9 @@ def _connect_wpa_cli(ssid: str, psk: str) -> bool:
     try:
         out = subprocess.run(["wpa_cli", "-i", INTERFACE, "list_networks"],
                               capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            log.debug("wpa_cli list_networks failed: %s", (out.stdout or out.stderr).strip())
+            return False
         net_id = None
         for line in out.stdout.splitlines()[1:]:
             fields = line.split("\t")
@@ -1188,6 +1191,9 @@ def _connect_wpa_cli(ssid: str, psk: str) -> bool:
             add_out = subprocess.run(["wpa_cli", "-i", INTERFACE, "add_network"],
                                       capture_output=True, text=True, timeout=10)
             net_id = add_out.stdout.strip().splitlines()[-1]
+            if not net_id.isdigit():
+                log.debug("wpa_cli add_network gave %r", net_id)
+                return False
             subprocess.run(["wpa_cli", "-i", INTERFACE, "set_network", net_id,
                              "ssid", _wpa_cli_quote(ssid)], capture_output=True, timeout=10)
             if psk:
@@ -1199,8 +1205,11 @@ def _connect_wpa_cli(ssid: str, psk: str) -> bool:
 
         subprocess.run(["wpa_cli", "-i", INTERFACE, "enable_network", net_id],
                         capture_output=True, timeout=10)
-        subprocess.run(["wpa_cli", "-i", INTERFACE, "select_network", net_id],
-                        capture_output=True, timeout=10)
+        sel = subprocess.run(["wpa_cli", "-i", INTERFACE, "select_network", net_id],
+                              capture_output=True, text=True, timeout=10)
+        if (sel.stdout or "").strip() != "OK":
+            log.debug("wpa_cli select_network for %s said %r", ssid, (sel.stdout or sel.stderr).strip())
+            return False
         subprocess.run(["wpa_cli", "-i", INTERFACE, "save_config"],
                         capture_output=True, timeout=10)
         return True
@@ -1246,6 +1255,16 @@ def _joined_ssid() -> Optional[str]:
 
 def _attempt_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[str],
                        allow_rejoin: bool = False, interrupt_nm: bool = False) -> None:
+    global _reconnecting
+    try:
+        _reconnect_body(networks, last_ssid, allow_rejoin, interrupt_nm)
+    except Exception:
+        log.exception("Reconnect pass failed -- the watchdog will try again")
+    finally:
+        _reconnecting = False
+
+def _reconnect_body(networks: List[Dict[str, object]], last_ssid: Optional[str],
+                    allow_rejoin: bool = False, interrupt_nm: bool = False) -> None:
     global _reconnecting, _last_absent
     backend = _wifi_backend()
     if backend is None:
@@ -1366,15 +1385,45 @@ def _current_ssid() -> Optional[str]:
 def _is_pi() -> bool:
     return _system().get("board") == "pi"
 
+def _volt_alarm_paths() -> List[str]:
+    base = "/sys/class/hwmon"
+    paths: List[str] = []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        names = []
+    for n in names:
+        if (_read_text(os.path.join(base, n, "name")) or "").strip() == "rpi_volt":
+            paths.append(os.path.join(base, n, "in0_lcrit_alarm"))
+    if not paths:
+        paths.append(base + "/hwmon0/in0_lcrit_alarm")
+    return paths
+
+def _volt_flag() -> Optional[bool]:
+    seen = False
+    for path in _volt_alarm_paths():
+        txt = _read_text(path)
+        if txt is None:
+            continue
+        seen = True
+        if txt.strip() == "1":
+            return True
+    if shutil.which("vcgencmd"):
+        m = re.search(r"throttled=(0x[0-9a-fA-F]+)", _run_text(["vcgencmd", "get_throttled"]))
+        if m:
+            seen = True
+            if int(m.group(1), 16) & 0x1:
+                return True
+    return False if seen else None
+
 def _check_voltage() -> Optional[float]:
     if not _is_pi():
         return None
-    try:
-        with open("/sys/class/hwmon/hwmon0/in0_lcrit_alarm", "r") as f:
-            if f.read().strip() == "1":
-                return 0.80
-    except OSError:
-        pass
+    flag = _volt_flag()
+    if flag is True:
+        return 0.80
+    if flag is False:
+        return None
 
     if not shutil.which("vcgencmd"):
         return None
@@ -2879,7 +2928,9 @@ def _wpa_scan_lines(current: Optional[str]) -> List[List[str]]:
             continue
         bssid, freq, signal, flags, ssid = parts[0], parts[1], parts[2], parts[3], "\t".join(parts[4:])
         in_use = "*" if current and ssid == current else ""
-        lines.append([in_use, ssid, bssid, "", freq, signal, _wpa_sec(flags)])
+        dbm = _first_int(signal)
+        pct = max(0, min(100, 2 * (dbm + 100))) if dbm is not None and dbm < 0 else (dbm or 0)
+        lines.append([in_use, ssid, bssid, "", freq, str(pct), _wpa_sec(flags)])
     return lines
 
 def _adapter_info(name: str) -> Dict[str, Optional[str]]:
@@ -2909,7 +2960,7 @@ def _wifi_devices() -> List[Dict[str, object]]:
             f = _nmcli_split(line)
             if len(f) >= 4 and f[1] == "wifi":
                 conn = f[3].strip()
-                out.append({"device": f[0], "state": f[2],
+                out.append({"device": f[0], "kind": "wifi", "state": f[2],
                             "connection": conn if conn and conn != "--" else None,
                             "hw": _adapter_key(f[0]), **_adapter_info(f[0])})
         return out
@@ -2926,9 +2977,43 @@ def _wifi_devices() -> List[Dict[str, object]]:
                 wpa_state, ssid = _wpa_status(name)
                 if wpa_state is not None:
                     state, conn = wpa_state, ssid
-            out.append({"device": name, "state": state, "connection": conn,
+            out.append({"device": name, "kind": "wifi", "state": state, "connection": conn,
                         "hw": _adapter_key(name), **_adapter_info(name)})
     return out
+
+def _eth_cable(name: str) -> Optional[bool]:
+    txt = _read_text(f"/sys/class/net/{name}/carrier")
+    return None if txt is None else txt.strip() == "1"
+
+def _eth_devices() -> List[Dict[str, object]]:
+    out: List[Dict[str, object]] = []
+    if _nm_on():
+        txt = _run_text(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"])
+        for line in txt.splitlines():
+            f = _nmcli_split(line)
+            if len(f) >= 4 and f[1] == "ethernet" and _IFACE_RE.match(f[0]):
+                conn = f[3].strip()
+                out.append({"device": f[0], "kind": "ethernet", "state": f[2],
+                            "connection": conn if conn and conn != "--" else None,
+                            "cable": _eth_cable(f[0]), "hw": _adapter_key(f[0]), **_adapter_info(f[0])})
+        return out
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return out
+    for name in names:
+        base = f"/sys/class/net/{name}"
+        if os.path.isdir(base + "/wireless") or not os.path.exists(base + "/device") or not _IFACE_RE.match(name):
+            continue
+        if (_read_text(base + "/type") or "").strip() != "1":
+            continue
+        out.append({"device": name, "kind": "ethernet",
+                    "state": (_read_text(base + "/operstate") or "").strip() or None, "connection": None,
+                    "cable": _eth_cable(name), "hw": _adapter_key(name), **_adapter_info(name)})
+    return out
+
+def _net_devices() -> List[Dict[str, object]]:
+    return _wifi_devices() + _eth_devices()
 
 def _ipv4_map() -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -2946,9 +3031,10 @@ def _read_power() -> Dict[str, object]:
     }
     if not _is_pi():
         return out
-    alarm = _read_text("/sys/class/hwmon/hwmon0/in0_lcrit_alarm")
-    if alarm is not None:
-        out["lcrit_alarm"] = alarm.strip() == "1"
+    for apath in _volt_alarm_paths():
+        alarm = _read_text(apath)
+        if alarm is not None:
+            out["lcrit_alarm"] = bool(out["lcrit_alarm"]) or alarm.strip() == "1"
     if shutil.which("vcgencmd"):
         m = re.search(r"=\s*([\d.]+)", _run_text(["vcgencmd", "measure_volts", "core"]))
         if m:
@@ -3036,6 +3122,7 @@ def _collect_slow() -> Dict[str, object]:
     out["connectivity"] = (_run_text(["nmcli", "networking", "connectivity"]).strip() or None
                            if _nm_on() else None)
     out["devices"] = _wifi_devices()
+    out["eth"] = _eth_devices()
     out["ipmap"] = _ipv4_map()
     return out
 
@@ -3257,7 +3344,7 @@ def _build_status() -> Dict[str, object]:
         "systemd": bool(os.environ.get("INVOCATION_ID")),
         "root_pw": _service_info.get("root_pw"),
     }
-    devices, absent = _devices_public(slow.get("devices") or [])
+    devices, eth_devices, absent = _devices_public(slow.get("devices") or [], slow.get("eth") or [])
     return {
         "now": now,
         "fast_at": fast_at,
@@ -3270,6 +3357,7 @@ def _build_status() -> Dict[str, object]:
         "health": dict(_health_public(), roam=slow.get("roam") or {}),
         "service": service,
         "devices": devices,
+        "eth_devices": eth_devices,
         "adapters_absent": absent,
         "control": _control_public(),
         "saved": _saved_public(slow, wifi["ssid"]),
@@ -3317,7 +3405,13 @@ def _nmcli_ok(args: List[str], timeout: float = 30) -> Tuple[bool, str]:
     msg = (r.stderr or r.stdout or "").strip()
     return r.returncode == 0, _log_safe(msg[:300])
 
+_state_file_lock = threading.Lock()
+
 def _save_state(data: Dict[str, object]) -> None:
+    with _state_file_lock:
+        _save_state_locked(data)
+
+def _save_state_locked(data: Dict[str, object]) -> None:
     merged: Dict[str, object] = {}
     try:
         old = json.loads(_read_text(STATE_FILE) or "{}")
@@ -3562,7 +3656,8 @@ def _control_public() -> Dict[str, object]:
     with _change_lock:
         last = dict(_last_result) if _last_result else None
     return {
-        "available": _nm_on(),
+        "available": _wifi_backend() is not None,
+        "nm": _nm_on(),
         "pending": _pending_public(),
         "grace_remaining": grace if grace > 0 else None,
         "grace_total": CHANGE_GRACE_SECS,
@@ -3687,7 +3782,7 @@ def _keepoff_sync() -> None:
                 os.remove(KEEPOFF_NM_CONF)
         if changed:
             _nmcli_ok(["general", "reload", "conf"], timeout=20)
-            names = {d.get("hw"): str(d["device"]) for d in _wifi_devices()}
+            names = {d.get("hw"): str(d["device"]) for d in _net_devices()}
             for k in keys:
                 if k in names:
                     _nmcli_ok(["device", "set", names[k], "managed", "no"], timeout=20)
@@ -3767,6 +3862,49 @@ def _keep_on_join(name: str) -> Tuple[bool, str]:
         last = msg
     return False, last or "couldn't join"
 
+def _devmode_tick_eth(d: Dict[str, object], key: str, m: Dict[str, str], nm_off: set) -> None:
+    name, state = str(d["device"]), str(d.get("state") or "")
+    ours = m["mode"] == "off" and key in nm_off
+    if state == "unmanaged" and not ours:
+        _devmode_note(key, "NetworkManager isn't managing this adapter, so wifimon can't control it.")
+        return
+    if m["mode"] == "off":
+        _devmode_note(key, None)
+        if state == "unmanaged":
+            return
+        if key not in _devmode_applied:
+            ok, _m = _nmcli_ok(["device", "set", name, "autoconnect", "no"])
+            if ok:
+                _devmode_applied.add(key)
+        if state.startswith("connect"):
+            ok, msg = _nmcli_ok(["device", "disconnect", name])
+            if ok:
+                _devmode_log_off(name)
+            else:
+                log.warning("Keep off: couldn't disconnect %s: %s", name, msg)
+        return
+    if key not in _devmode_applied:
+        ok, _m = _nmcli_ok(["device", "set", name, "autoconnect", "yes"])
+        if ok:
+            _devmode_applied.add(key)
+    if state.startswith("connected"):
+        _devmode_note(key, None)
+        return
+    if state != "disconnected":
+        _devmode_note(key, "No cable is plugged in. wifimon will bring it up when one is." if d.get("cable") is False else None)
+        return
+    now = time.monotonic()
+    if now - _devmode_last_try.get(key, -1e9) < RECONNECT_INTERVAL_SECS:
+        return
+    _devmode_last_try[key] = now
+    ok, msg = _nmcli_ok(["device", "connect", name], timeout=45)
+    if ok:
+        log.info("Keep on: %s had dropped -- brought it up again", name)
+        _devmode_note(key, None)
+    else:
+        log.warning("Keep on: couldn't bring up %s: %s", name, msg)
+        _devmode_note(key, "Last try to bring it up failed: " + msg)
+
 def _devmode_tick() -> None:
     with _devmode_lock:
         modes = {k: dict(v) for k, v in _dev_modes.items()}
@@ -3778,7 +3916,7 @@ def _devmode_tick() -> None:
         with _change_lock:
             if _pending is not None:
                 return
-        devs = _wifi_devices()
+        devs = _net_devices()
         renamed = False
         for d in devs:
             key = d.get("hw")
@@ -3798,6 +3936,9 @@ def _devmode_tick() -> None:
             m = modes.get(key) if key else None
             if not m:
                 continue
+            if d.get("kind") == "ethernet":
+                _devmode_tick_eth(d, str(key), m, nm_off)
+                continue
             name, state = str(d["device"]), str(d.get("state") or "")
             ours = m["mode"] == "off" and key in nm_off
             if state == "unmanaged" and not ours:
@@ -3809,7 +3950,8 @@ def _devmode_tick() -> None:
                     for pref in ("on", "connected", "any"):
                         for o in devs:
                             om = _dev_mode_of(o.get("hw"))
-                            if o["device"] == name or om == "off" or o.get("state") == "unmanaged":
+                            if o["device"] == name or om == "off" or o.get("state") == "unmanaged" \
+                                    or o.get("kind") == "ethernet":
                                 continue
                             if pref == "on" and om != "on":
                                 continue
@@ -3885,21 +4027,28 @@ def _devmode_loop() -> None:
         _devmode_wake.wait(DEVMODE_CHECK_SECS)
         _devmode_wake.clear()
 
-def _devices_public(devs: List[Dict[str, object]]) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+def _devices_public(devs: List[Dict[str, object]], eth: Optional[List[Dict[str, object]]] = None) \
+        -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]]]:
     with _devmode_lock:
         modes = {k: dict(v) for k, v in _dev_modes.items()}
         notes = dict(_devmode_notes)
     present = set()
-    out = []
-    for d in devs:
-        key = d.get("hw")
-        present.add(key)
-        m = modes.get(key) if key else None
-        out.append(dict(d, watched=(d.get("device") == INTERFACE),
-                        mode=m["mode"] if m else "auto", mode_note=notes.get(key) if key else None))
+
+    def shape(group: List[Dict[str, object]], wifi: bool) -> List[Dict[str, object]]:
+        out = []
+        for d in group:
+            key = d.get("hw")
+            present.add(key)
+            m = modes.get(key) if key else None
+            out.append(dict(d, watched=(wifi and d.get("device") == INTERFACE),
+                            mode=m["mode"] if m else "auto", mode_note=notes.get(key) if key else None))
+        return out
+
+    wifi_out = shape(devs, True)
+    eth_out = shape(eth or [], False)
     absent = [{"key": k, "name": v["name"], "mode": v["mode"]}
               for k, v in sorted(modes.items()) if k not in present]
-    return out, absent
+    return wifi_out, eth_out, absent
 
 _conf_lock = threading.Lock()
 _networks_changed = threading.Event()
@@ -4034,7 +4183,7 @@ def _saved_public(slow: Dict[str, object], active_ssid: object) -> Dict[str, obj
         row["signal"] = scan[ssid]["signal"] if ssid in scan else None
         row["security"] = row.get("security") or (scan[ssid]["security"] if ssid in scan else None)
         result.append(row)
-    return {"available": _nm_on(), "networks": result,
+    return {"available": _wifi_backend() is not None, "nm": _nm_on(), "networks": result,
             "test_secs": NEW_NETWORK_TEST_SECS, "fallback_secs": FALLBACK_TEST_SECS}
 
 def _keyfile_escape(value: str) -> str:
@@ -5540,7 +5689,10 @@ def _hotspot_timer(token: str) -> None:
             if not _action_lock.acquire(timeout=5):
                 continue
             log.info("Hotspot auto-stop time reached")
-            _hotspot_stop(None, "auto-stop")
+            try:
+                _hotspot_stop(None, "auto-stop")
+            except Exception:
+                log.exception("Hotspot auto-stop failed")
             return
 
 def _hotspot_stop(connect_to: Optional[str], why: str) -> str:
@@ -5551,10 +5703,13 @@ def _hotspot_stop(connect_to: Optional[str], why: str) -> str:
     if h.get("uuid"):
         _nmcli_ok(["connection", "down", "uuid", str(h["uuid"])])
     log.info("Hotspot stopped (%s)", why)
-    target = connect_to or h.get("previous")
-    if target and (_profiles_for(str(target)) or any(n["ssid"] == target for n in _conf_networks())):
-        _start_connect_job(str(target), kind="return")
-        return f"Hotspot stopped. Connecting to {target}…"
+    try:
+        target = connect_to or h.get("previous")
+        if target and (_profiles_for(str(target)) or any(n["ssid"] == target for n in _conf_networks())):
+            _start_connect_job(str(target), kind="return")
+            return f"Hotspot stopped. Connecting to {target}…"
+    except Exception:
+        log.exception("Couldn't start the reconnect after the hotspot")
     _action_lock.release()
     _grace_clear()
     return "Hotspot stopped. The watchdog will reconnect to a known network."
@@ -6136,8 +6291,10 @@ class _Handler(BaseHTTPRequestHandler):
         with _status_lock:
             ipmap = dict(_status["slow"].get("ipmap") or {})
             wifi_names = {d.get("device") for d in (_status["slow"].get("devices") or [])}
+            eth_names = {d.get("device") for d in (_status["slow"].get("eth") or [])}
         iface = ipmap.get(local) if local else None
-        return {"local_ip": local, "via_iface": iface, "via_wifi": iface in wifi_names}
+        return {"local_ip": local, "via_iface": iface, "via_wifi": iface in wifi_names,
+                "via_eth": iface in eth_names}
 
     def do_POST(self) -> None:
         self._refresh_cookie = None
@@ -6302,15 +6459,19 @@ class _Handler(BaseHTTPRequestHandler):
         log.info("Service restart requested from the dashboard by %s", self.client_address[0])
         self._json(200, {"ok": True, "message": "Restarting in about 2 seconds."})
 
-    def _change_begin_checks(self, body: Dict[str, object], allow_hotspot: bool = False) -> bool:
+    def _change_begin_checks(self, body: Dict[str, object], allow_hotspot: bool = False,
+                             need_nm: bool = False) -> bool:
         if _hotspot_active() and not allow_hotspot:
             self._json(409, {"error": "The hotspot is on. Stop it first (Radio & device card)."})
             return False
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
             return False
-        if not _nm_on():
-            self._json(409, {"error": "This needs NetworkManager (nmcli), which isn't installed."})
+        if need_nm and not _nm_on():
+            self._json(409, {"error": "This needs NetworkManager (nmcli), which isn't running here."})
+            return False
+        if _wifi_backend() is None:
+            self._json(409, {"error": "This needs NetworkManager (nmcli) or wpa_supplicant (wpa_cli), and neither is running here."})
             return False
         if not _action_lock.acquire(blocking=False):
             self._json(409, {"error": "Another change is running. Try again in a moment."})
@@ -6334,15 +6495,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._deferred = None
             self._json(status, obj, extra)
 
-    def _device_from_body(self, body: Dict[str, object]) -> Optional[Dict[str, object]]:
+    def _device_from_body(self, body: Dict[str, object], wired: bool = False) -> Optional[Dict[str, object]]:
         name = body.get("device")
         if not isinstance(name, str) or not _IFACE_RE.match(name):
-            self._json(400, {"error": "Pick a WiFi device."})
+            self._json(400, {"error": "Pick a WiFi or wired device." if wired else "Pick a WiFi device."})
             return None
-        for d in _wifi_devices():
+        for d in (_net_devices() if wired else _wifi_devices()):
             if d["device"] == name:
                 return d
-        self._json(400, {"error": f"{name} isn't a WiFi device on this node."})
+        self._json(400, {"error": f"{name} isn't a {'WiFi or wired' if wired else 'WiFi'} device on this node."})
         return None
 
     def _change_result(self, p: Dict[str, object], ok: bool, msg: str, done_text: str) -> None:
@@ -6352,7 +6513,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "message": done_text, "pending": _pending_public()})
         else:
             _drop_change(p)
-            self._json(500, {"error": f"That didn't work: {msg or 'nmcli failed'}"})
+            self._json(500, {"error": f"That didn't work: {msg or 'the command failed'}"})
 
     def _handle_radio(self, body: Dict[str, object]) -> None:
         on = body.get("on")
@@ -6371,7 +6532,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if ok:
                     self._json(200, {"ok": True, "message": "WiFi radio turned on."})
                 else:
-                    self._json(500, {"error": f"That didn't work: {msg or 'nmcli failed'}"})
+                    self._json(500, {"error": f"That didn't work: {msg or 'the command failed'}"})
                 return
             profile = None
             for d in _wifi_devices():
@@ -6445,13 +6606,14 @@ class _Handler(BaseHTTPRequestHandler):
         if mode not in _DEV_MODES:
             self._json(400, {"error": "Pick Auto, Keep on or Keep off."})
             return
-        if not self._change_begin_checks(body):
+        if not self._change_begin_checks(body, need_nm=True):
             return
         try:
-            dev = self._device_from_body(body)
+            dev = self._device_from_body(body, wired=True)
             if dev is None:
                 return
             name, key = str(dev["device"]), dev.get("hw")
+            wired = dev.get("kind") == "ethernet"
             word = _DEV_MODE_WORDS[str(mode)]
             if not key:
                 self._json(409, {"error": f"Couldn't identify the {name} adapter."})
@@ -6464,7 +6626,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(409, {"error": "Keep on and Keep off need NetworkManager. This node is not "
                                           "running NetworkManager, so the adapter's mode can't be changed here."})
                 return
-            if mode == "off" and name == INTERFACE:
+            if mode == "off" and name == INTERFACE and not wired:
                 self._json(409, {"error": f"The watchdog is using {name}. Press \"Use this device\" on "
                                           "another adapter first, then set this one to Keep off."})
                 return
@@ -6485,7 +6647,11 @@ class _Handler(BaseHTTPRequestHandler):
             if not ok:
                 _set_dev_mode(key, name, prev)
             done = f"{name} set to {word}."
-            if mode == "on" and name != INTERFACE and not _connected_state(state):
+            if mode == "on" and wired and not _connected_state(state):
+                done += " wifimon will bring it up in a few seconds if a cable is plugged in."
+            elif mode == "on" and wired:
+                done += " wifimon will bring it up again if it drops."
+            elif mode == "on" and name != INTERFACE and not _connected_state(state):
                 done += " wifimon will join it to a saved network in a few seconds."
             elif mode == "on" and name == INTERFACE:
                 done += " The watchdog already reconnects this adapter; NetworkManager may now rejoin it too."
@@ -6503,7 +6669,7 @@ class _Handler(BaseHTTPRequestHandler):
         if m is None:
             self._json(409, {"error": "That adapter has no saved setting."})
             return
-        if any(d.get("hw") == key for d in _wifi_devices()):
+        if any(d.get("hw") == key for d in _net_devices()):
             self._json(409, {"error": f"{m['name']} is plugged in. Set it to Auto instead."})
             return
         _set_dev_mode(key, m["name"], "auto")
@@ -6588,7 +6754,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         connect = body.get("connect") is True
         if not self._change_begin_checks({"confirm": True} if not connect else body,
-                                         allow_hotspot=not connect):
+                                         allow_hotspot=not connect, need_nm=True):
             return
         started = False
         try:
@@ -6744,7 +6910,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "message": f"{ssid} taken off the reconnect list."})
 
     def _handle_net_edit(self, body: Dict[str, object]) -> None:
-        if not self._change_begin_checks(body):
+        if not self._change_begin_checks(body, need_nm=True):
             return
         try:
             row = self._saved_row(body.get("ssid"))
@@ -6901,6 +7067,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         started_job = False
         try:
+            if not _nm_on():
+                self._json(409, {"error": "The hotspot needs NetworkManager (nmcli)."})
+                return
             previous = self._in_use_ssid()
             ok, result = _hotspot_keyfile(ssid, password)
             if not ok:
@@ -6917,8 +7086,8 @@ class _Handler(BaseHTTPRequestHandler):
                                  "ifname", INTERFACE], timeout=WM_CONNECT_WAIT + 15)
             if not ok:
                 log.warning("Hotspot didn't start: %s", msg)
-                note = _hotspot_stop(None, "failed to start")
                 started_job = True
+                note = _hotspot_stop(None, "failed to start")
                 self._json(500, {"error": f"The hotspot didn't start: {msg or 'nmcli failed'}. {note}"})
                 return
             addr = _ip4_address().get("ip4") or "10.42.0.1"
@@ -7719,6 +7888,8 @@ a.btnlink:hover{border-color:var(--blue)}
       </div>
       <h3>WiFi devices</h3>
       <div id="r-devs"><p class="muted">Loading…</p></div>
+      <h3>Wired (Ethernet)</h3>
+      <div id="r-eth"><p class="muted">Loading…</p></div>
       <p class="rules" id="r-rules"></p>
       <h3>Emergency hotspot</h3>
       <p class="note" id="h-note" hidden></p>
@@ -8279,7 +8450,7 @@ a.btnlink:hover{border-color:var(--blue)}
     // v5.7: power-save offer + Reconnect now
     const sv = d.saved || {}, lockNow = locked(d);
     const savedNames = new Set((sv.networks || []).map((x) => x.ssid));
-    $("s-ps").hidden = !(w.power_save === true && sv.available);
+    $("s-ps").hidden = !(w.power_save === true && sv.nm);
     $("btn-ps-cur").disabled = lockNow || !has(w.ssid) || !savedNames.has(w.ssid);
     $("btn-ps-all").disabled = lockNow;
     $("btn-reconnect").disabled = lockNow || !has(w.ssid) || !savedNames.has(w.ssid);
@@ -8531,10 +8702,13 @@ a.btnlink:hover{border-color:var(--blue)}
     const locked = busy || !ctl.available || !!ctl.pending || !!(d.job && d.job.state === "running");
     const note = $("r-note");
     if (!ctl.available) {
-      note.textContent = "These controls need NetworkManager (nmcli), which isn't installed on this node.";
+      note.textContent = "These controls need NetworkManager (nmcli) or wpa_supplicant (wpa_cli), and neither is running on this node.";
       note.hidden = false;
     } else if (ctl.pending) {
       note.textContent = "Waiting for the last change to be kept or undone.";
+      note.hidden = false;
+    } else if (ctl.nm === false) {
+      note.textContent = "Keep on and Keep off, for WiFi and wired adapters, need NetworkManager (nmcli), which isn't running on this node.";
       note.hidden = false;
     } else {
       note.hidden = true;
@@ -8614,7 +8788,7 @@ a.btnlink:hover{border-color:var(--blue)}
           b.type = "button"; b.textContent = label;
           const cur = (dv.mode || "auto") === m;
           b.setAttribute("aria-pressed", String(cur));
-          b.disabled = locked || cur || (m === "off" && dv.watched);
+          b.disabled = locked || !ctl.nm || cur || (m === "off" && dv.watched);
           if (m === "off" && dv.watched) b.title = "The watchdog is using this adapter. Use another one first.";
           b.addEventListener("click", () => doChange("/api/device/mode", { device: dv.device, mode: m },
             DEV_MODE_ASK[m](dv.device), m === "off" ? dv.device : "-"));
@@ -8624,6 +8798,65 @@ a.btnlink:hover{border-color:var(--blue)}
       }
       if (acts.childNodes.length) row.appendChild(acts);
       box.appendChild(row);
+    }
+    const ebox = $("r-eth");
+    ebox.textContent = "";
+    const eths = d.eth_devices || [];
+    if (!eths.length) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "No wired (Ethernet) adapters found.";
+      ebox.appendChild(p);
+    }
+    for (const dv of eths) {
+      const row = document.createElement("div");
+      row.className = "dev";
+      const head = document.createElement("div");
+      head.className = "dev-head";
+      const name = document.createElement("span");
+      name.className = "dev-name";
+      name.textContent = dv.device;
+      head.appendChild(name);
+      if (dv.cable === true || dv.cable === false) {
+        const b = document.createElement("span");
+        b.className = "badge " + (dv.cable ? "good" : "muted");
+        b.textContent = dv.cable ? "Cable in" : "No cable";
+        head.appendChild(b);
+      }
+      if (dv.mode === "on" || dv.mode === "off") {
+        const b = document.createElement("span");
+        b.className = "badge " + (dv.mode === "on" ? "cyan" : "muted");
+        b.textContent = dv.mode === "on" ? "Kept on" : "Kept off";
+        head.appendChild(b);
+      }
+      const st = document.createElement("div");
+      st.className = "dev-state";
+      st.textContent = stateText(dv);
+      row.append(head, st);
+      if (dv.mode_note) {
+        const n = document.createElement("div");
+        n.className = "dev-note";
+        n.textContent = dv.mode_note;
+        row.appendChild(n);
+      }
+      if (dv.hw) {
+        const seg = document.createElement("div");
+        seg.className = "seg";
+        seg.setAttribute("role", "group");
+        seg.setAttribute("aria-label", dv.device + " setting");
+        for (const [m, label] of [["auto", "Auto"], ["on", "Keep on"], ["off", "Keep off"]]) {
+          const b = document.createElement("button");
+          b.type = "button"; b.textContent = label;
+          const cur = (dv.mode || "auto") === m;
+          b.setAttribute("aria-pressed", String(cur));
+          b.disabled = locked || !ctl.nm || cur;
+          b.addEventListener("click", () => doChange("/api/device/mode", { device: dv.device, mode: m },
+            ETH_MODE_ASK[m](dv.device), m === "off" ? dv.device : "-"));
+          seg.appendChild(b);
+        }
+        row.appendChild(seg);
+      }
+      ebox.appendChild(row);
     }
     for (const ab of (d.adapters_absent || [])) {
       const row = document.createElement("div");
@@ -8654,7 +8887,9 @@ a.btnlink:hover{border-color:var(--blue)}
     }
     $("r-rules").textContent = "Auto: NetworkManager decides. Keep on: wifimon rejoins the adapter if it drops "
       + "(the adapter in use is reconnected by the watchdog). Keep off: wifimon keeps the adapter disconnected, "
-      + "even after a reboot. Settings follow the adapter itself, even if its wlan name changes. "
+      + "even after a reboot. Wired adapters work the same way: Keep on brings the cable connection up again "
+      + "when it drops, and Keep off disconnects it. Settings follow the adapter itself, even if its name changes. "
+      + "Keep off on the adapter you reach this page through cuts you off until the change undoes itself. "
       + "Turning the radio off, disconnecting, switching devices, or changing an adapter setting undoes itself after "
       + dur(ctl.undo_secs) + " unless this page can still reach the node. The watchdog's shutdown timer pauses for "
       + dur(ctl.grace_total) + " after any change here.";
@@ -8698,11 +8933,16 @@ a.btnlink:hover{border-color:var(--blue)}
     }
   }
 
+  const ETH_MODE_ASK = {
+    auto: (n) => "Set " + n + " to Auto? NetworkManager decides when it connects.",
+    on: (n) => "Set " + n + " to Keep on? wifimon will bring the wired connection up again whenever it drops.",
+    off: (n) => "Set " + n + " to Keep off? wifimon will disconnect the wired connection and keep it off, even after a reboot."
+  };
   async function doChange(path, body, question, dropsIface) {
     const c = (lastData && lastData.client) || {};
     const undoSecs = ((lastData && lastData.control) || {}).undo_secs || 60;
     let q = question;
-    if (c.via_wifi && (!dropsIface || dropsIface === c.via_iface)) {
+    if ((c.via_wifi || c.via_eth) && (!dropsIface || dropsIface === c.via_iface)) {
       q += "\n\nYou're reaching this page through " + c.via_iface + ", so this may cut you off. "
          + "If the page can't reach the node again within " + undoSecs + " seconds, the change undoes itself.";
     } else {
@@ -8754,9 +8994,9 @@ a.btnlink:hover{border-color:var(--blue)}
   function renderSaved(d) {
     const sv = d.saved || {}, lock = locked(d), list = $("n-list");
     const note = $("n-note");
-    note.hidden = sv.available !== false;
-    note.textContent = "Saving and connecting need NetworkManager (nmcli), which isn't installed on this node.";
-    $("btn-add").disabled = lock;
+    note.hidden = sv.nm !== false;
+    note.textContent = "Saving new networks, Auto-join and network options need NetworkManager (nmcli), which isn't running on this node.";
+    $("btn-add").disabled = lock || sv.nm === false;
     // Keep a half-typed Show-password prompt across the 5 s refresh.
     const oldAsk = list.querySelector(".pw-ask input");
     const typed = oldAsk ? oldAsk.value : "";
@@ -8767,7 +9007,7 @@ a.btnlink:hover{border-color:var(--blue)}
     const listed = nets.filter((n) => n.in_conf).map((n) => n.ssid);
     const nmOnly = nets.filter((n) => !n.in_conf).length;
     $("btn-track-all").hidden = nmOnly < 2;
-    $("btn-track-all").disabled = busy || sv.available === false;
+    $("btn-track-all").disabled = busy || sv.nm === false;
     for (const n of nets) {
       const row = el("div", "net");
       const head = el("div", "net-head");
@@ -8811,7 +9051,7 @@ a.btnlink:hover{border-color:var(--blue)}
       if (!n.in_use && (!n.security || EDITABLE[n.security])) acts.appendChild(btn("Edit", "", () => openEdit(n), lock));
       if (n.options) acts.appendChild(btn("Options", "", () => openOptions(n), lock));
       if (n.autojoin !== null && n.autojoin !== undefined) {
-        const aj = btn(n.autojoin ? "Auto-join: on" : "Auto-join: off", "", () => setAutojoin(n.ssid, !n.autojoin), busy || sv.available === false);
+        const aj = btn(n.autojoin ? "Auto-join: on" : "Auto-join: off", "", () => setAutojoin(n.ssid, !n.autojoin), busy || sv.nm === false);
         aj.setAttribute("aria-pressed", String(!!n.autojoin));
         acts.appendChild(aj);
       }
@@ -8850,7 +9090,7 @@ a.btnlink:hover{border-color:var(--blue)}
     $("sc-age").textContent = has(sc.at) ? "List from " + ago(sc.at, d.now) + "." : "";
     list.textContent = "";
     const nets = sc.networks || [];
-    if (!nets.length) list.appendChild(el("p", "muted", (d.saved || {}).available === false ? "Scanning needs NetworkManager (nmcli)." : "No networks found. Try Rescan."));
+    if (!nets.length) list.appendChild(el("p", "muted", (d.saved || {}).available === false ? "Scanning needs NetworkManager (nmcli) or wpa_supplicant (wpa_cli)." : "No networks found. Try Rescan."));
     for (const n of nets) {
       const row = el("div", "net");
       const head = el("div", "net-head");

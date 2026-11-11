@@ -4647,5 +4647,194 @@ class NodeTalkerBalancerScoreTests(unittest.TestCase):
         self.assertIn("On trial", got["notes"][-1][2])
 
 
+class Wifimon550Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.wm = load_wifimon()
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+
+    def handler(self, wm):
+        sent = []
+
+        class H:
+            _defer = False
+            _deferred = None
+            client_address = ("127.0.0.1", 1)
+
+            def _json(self, status, obj, extra=None):
+                sent.append((status, obj))
+
+        h = H()
+        h._change_begin_checks = lambda b, allow_hotspot=False, need_nm=False: wm._Handler._change_begin_checks(
+            h, b, allow_hotspot, need_nm)
+        return h, sent
+
+    def test_changes_work_on_a_wpa_supplicant_node(self):
+        wm = self.wm
+        with mock.patch.object(wm, "_nm_on", lambda: False), mock.patch.object(wm, "_wifi_backend", lambda: "wpa_cli"):
+            h, sent = self.handler(wm)
+            self.assertTrue(h._change_begin_checks({"confirm": True}))
+            wm._action_lock.release()
+            self.assertEqual(sent, [])
+            h, sent = self.handler(wm)
+            self.assertFalse(h._change_begin_checks({"confirm": True}, need_nm=True))
+            self.assertEqual(sent[0][0], 409)
+            self.assertFalse(wm._control_public()["nm"])
+            self.assertTrue(wm._control_public()["available"])
+
+    def test_changes_are_refused_with_no_wifi_tool(self):
+        wm = self.wm
+        with mock.patch.object(wm, "_nm_on", lambda: False), mock.patch.object(wm, "_wifi_backend", lambda: None):
+            h, sent = self.handler(wm)
+            self.assertFalse(h._change_begin_checks({"confirm": True}))
+            self.assertEqual(sent[0][0], 409)
+            self.assertFalse(wm._control_public()["available"])
+
+    def test_wpa_scan_signal_is_a_percentage(self):
+        wm = self.wm
+        rows = "bssid / frequency / signal level / flags / ssid\naa:bb\t2437\t-48\t[WPA2-PSK-CCMP]\tHome\n" \
+               "cc:dd\t5180\t-95\t[WPA2-PSK-CCMP]\tFar\n"
+        with mock.patch.object(wm, "_run_text", lambda *a, **k: rows):
+            lines = wm._wpa_scan_lines(None)
+        got = {n["ssid"]: n["signal"] for n in wm._scan_from_lines(lines)}
+        self.assertEqual(got, {"Home": 100, "Far": 10})
+
+    def volt(self, flag_files, throttled, core):
+        wm = self.wm
+        reads = dict(flag_files)
+
+        def read_text(path):
+            return reads.get(path)
+
+        def run_text(cmd, timeout=5):
+            return throttled if cmd[1] == "get_throttled" else ""
+
+        class R:
+            stdout = "volt=%.4fV\n" % core
+
+        patches = [mock.patch.object(wm, "_is_pi", lambda: True), mock.patch.object(wm, "_read_text", read_text),
+                   mock.patch.object(wm, "_run_text", run_text), mock.patch.object(wm.shutil, "which", lambda n: "/x/" + n),
+                   mock.patch.object(wm.os, "listdir", lambda p: ["hwmon3"] if p.endswith("hwmon") else []),
+                   mock.patch.object(wm.subprocess, "run", lambda *a, **k: R())]
+        for p in patches:
+            p.start()
+        try:
+            return wm._check_voltage()
+        finally:
+            mock.patch.stopall()
+
+    def test_voltage_uses_the_pi_flag_not_the_core_volts(self):
+        name = {"/sys/class/hwmon/hwmon3/name": "rpi_volt\n"}
+        quiet = dict(name, **{"/sys/class/hwmon/hwmon3/in0_lcrit_alarm": "0\n"})
+        self.assertIsNone(self.volt(quiet, "throttled=0x0", 0.85))
+        alarm = dict(name, **{"/sys/class/hwmon/hwmon3/in0_lcrit_alarm": "1\n"})
+        self.assertIsNotNone(self.volt(alarm, "throttled=0x0", 1.25))
+        self.assertIsNotNone(self.volt(quiet, "throttled=0x50005", 1.25))
+        self.assertIsNone(self.volt(quiet, "throttled=0x50004", 1.25))
+
+    def test_voltage_falls_back_to_core_volts_when_no_flag_is_readable(self):
+        self.assertIsNotNone(self.volt({}, "", 0.85))
+        self.assertIsNone(self.volt({}, "", 1.25))
+
+    def test_reconnect_flag_is_cleared_after_a_crash(self):
+        wm = self.wm
+        wm._reconnecting = True
+        with mock.patch.object(wm, "_reconnect_body", side_effect=RuntimeError("boom")):
+            wm._attempt_reconnect([], None)
+        self.assertFalse(wm._reconnecting)
+
+    def eth(self, name, state, cable=True, key="aa:bb:cc:00:00:01"):
+        return {"device": name, "kind": "ethernet", "state": state, "connection": None, "cable": cable, "hw": key}
+
+    def test_wired_keep_off_disconnects_and_sets_autoconnect_off(self):
+        wm = self.wm
+        key = "aa:bb:cc:00:00:01"
+        calls = []
+        wm._dev_modes.clear()
+        wm._devmode_applied.clear()
+        wm._dev_modes[key] = {"mode": "off", "name": "eth0"}
+        with mock.patch.object(wm, "_nmcli_ok", lambda a, timeout=30: (calls.append(a) or (True, ""))):
+            wm._devmode_tick_eth(self.eth("eth0", "connected"), key, wm._dev_modes[key], set())
+        self.assertIn(["device", "set", "eth0", "autoconnect", "no"], calls)
+        self.assertIn(["device", "disconnect", "eth0"], calls)
+        wm._dev_modes.clear()
+
+    def test_wired_keep_on_brings_a_dropped_link_up_and_skips_a_missing_cable(self):
+        wm = self.wm
+        key = "aa:bb:cc:00:00:02"
+        calls = []
+        wm._devmode_applied.clear()
+        wm._devmode_last_try.clear()
+        mode = {"mode": "on", "name": "eth0"}
+        with mock.patch.object(wm, "_nmcli_ok", lambda a, timeout=30: (calls.append(a) or (True, ""))):
+            wm._devmode_tick_eth(self.eth("eth0", "unavailable", cable=False, key=key), key, mode, set())
+            self.assertNotIn(["device", "connect", "eth0"], calls)
+            wm._devmode_tick_eth(self.eth("eth0", "disconnected", key=key), key, mode, set())
+        self.assertIn(["device", "connect", "eth0"], calls)
+        self.assertIn(["device", "set", "eth0", "autoconnect", "yes"], calls)
+
+    def test_wired_devices_are_listed_apart_and_never_become_the_watched_adapter(self):
+        wm = self.wm
+        wifi = [{"device": "wlan0", "kind": "wifi", "hw": "w1", "state": "connected"}]
+        eth = [self.eth("eth0", "connected")]
+        with wm._devmode_lock:
+            wm._dev_modes.clear()
+            wm._dev_modes["gone:1"] = {"mode": "off", "name": "eth1"}
+        out_w, out_e, absent = wm._devices_public(wifi, eth)
+        self.assertEqual([d["device"] for d in out_w], ["wlan0"])
+        self.assertEqual([d["device"] for d in out_e], ["eth0"])
+        self.assertFalse(out_e[0]["watched"])
+        self.assertEqual(out_e[0]["mode"], "auto")
+        self.assertEqual(absent, [{"key": "gone:1", "name": "eth1", "mode": "off"}])
+        wm._dev_modes.clear()
+
+    def test_switch_and_disconnect_ignore_wired_adapters(self):
+        wm = self.wm
+        h, sent = self.handler(wm)
+        with mock.patch.object(wm, "_wifi_devices", lambda: []):
+            self.assertIsNone(wm._Handler._device_from_body(h, {"device": "eth0"}))
+        self.assertEqual(sent[0][0], 400)
+        with mock.patch.object(wm, "_net_devices", lambda: [self.eth("eth0", "connected")]):
+            self.assertEqual(wm._Handler._device_from_body(h, {"device": "eth0"}, wired=True)["kind"], "ethernet")
+
+    def test_eth_devices_without_networkmanager_come_from_sysfs(self):
+        wm = self.wm
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        for name, wireless, has_dev, typ in (("eth0", False, True, "1"), ("wlan0", True, True, "1"),
+                                              ("lo", False, False, "772"), ("docker0", False, False, "1")):
+            d = os.path.join(tmp, name)
+            os.makedirs(d)
+            if wireless:
+                os.makedirs(os.path.join(d, "wireless"))
+            if has_dev:
+                os.makedirs(os.path.join(d, "device"))
+            with open(os.path.join(d, "type"), "w") as fh:
+                fh.write(typ)
+            with open(os.path.join(d, "operstate"), "w") as fh:
+                fh.write("up\n")
+            with open(os.path.join(d, "carrier"), "w") as fh:
+                fh.write("1\n")
+        real_exists, real_isdir, real_list = os.path.exists, os.path.isdir, os.listdir
+        fix = lambda p: p.replace("/sys/class/net", tmp, 1) if p.startswith("/sys/class/net") else p
+
+        def read_fixed(p):
+            if not real_exists(fix(p)):
+                return None
+            with open(fix(p)) as fh:
+                return fh.read()
+        with mock.patch.object(wm, "_nm_on", lambda: False), mock.patch.object(wm, "_adapter_key", lambda n: "if:" + n), \
+                mock.patch.object(wm, "_adapter_info", lambda n: {}), \
+                mock.patch.object(wm, "_read_text", read_fixed), \
+                mock.patch.object(wm.os, "listdir", lambda p: real_list(fix(p))), \
+                mock.patch.object(wm.os.path, "isdir", lambda p: real_isdir(fix(p))), \
+                mock.patch.object(wm.os.path, "exists", lambda p: real_exists(fix(p))):
+            got = wm._eth_devices()
+        self.assertEqual([d["device"] for d in got], ["eth0"])
+        self.assertTrue(got[0]["cable"])
+
+
 if __name__ == "__main__":
     unittest.main()
