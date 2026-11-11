@@ -56,22 +56,22 @@
    "version": "2.91.1"
   },
   "nodecontrol": {
-   "blob": "7e215033a0a36f70c4084361db2d66b3c72ab747",
-   "commit": "5b0bd8f763cd0c299d12a6b5e36fb37ffabfe763",
-   "file": "nodecontrol_v9_3_101_20261101.py",
-   "landed": "2026-11-02T00:15:52Z",
-   "promoted": "2026-11-10T23:19:54Z",
+   "blob": "300755808a7fcd393e232ed04dbf913a8121d49c",
+   "commit": "8e205c5a0f168dd26a102160fa0709c60956b99b",
+   "file": "nodecontrol_v9_3_102_20261102.py",
+   "landed": "2026-11-02T16:09:53Z",
+   "promoted": "2026-11-10T23:49:45Z",
    "reason": "count",
-   "version": "9.3.101"
+   "version": "9.3.102"
   },
   "nodecontrol_pi02w": {
-   "blob": "8205e35602e6518fa92218c6d921ee0b6e469179",
-   "commit": "90d5ac86e7d591bf0d4aa19fd075dccaabf81119",
-   "file": "nodecontrol_pi02w_v9_3_104_20261030.py",
-   "landed": "2026-10-30T06:26:05Z",
-   "promoted": "2026-11-10T23:19:54Z",
+   "blob": "af8f12e763319daf75e4994aaf11ccaeb95db1d0",
+   "commit": "5b0bd8f763cd0c299d12a6b5e36fb37ffabfe763",
+   "file": "nodecontrol_pi02w_v9_3_106_20261101.py",
+   "landed": "2026-11-02T00:15:52Z",
+   "promoted": "2026-11-10T23:49:45Z",
    "reason": "count",
-   "version": "9.3.104-pi02w"
+   "version": "9.3.106-pi02w"
   },
   "noderecorder": {
    "blob": "9614bc55cae11f5106ef488f180bac9446d23c82",
