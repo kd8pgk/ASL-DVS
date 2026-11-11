@@ -50,6 +50,9 @@ class Links(unittest.TestCase):
         self.sticky = set()
         self.ini_fails = False
         self.restart_rc = 0
+        self.last_tune = None
+        self.nc_status = None
+        self.m17_now = ""
         self.saved = {}
         fakes = {
             "dvs": self.fake_dvs,
@@ -71,6 +74,9 @@ class Links(unittest.TestCase):
             "_m17_present": lambda: True,
             "callsign_now": lambda: ("N0CALL", "set"),
             "m17_lookup": lambda ref, module: ("1.2.3.4", ""),
+            "_abinfo_last_tune": lambda: self.last_tune,
+            "nc_dvs_current": lambda max_age=5.0: self.nc_status,
+            "m17_current": lambda max_age=5.0: self.m17_now,
         }
         for name, fake in fakes.items():
             self.saved[name] = getattr(nt, name)
@@ -80,6 +86,9 @@ class Links(unittest.TestCase):
         nt._solo.update(mode="", target="", name="", bridge="")
         nt._dvs_now.update(mode="", dmr="")
         nt._links_good.update(t=-1e9, node="", links=[])
+        nt._solo.update(tune="")
+        nt._solo_at["t"] = None
+        nt._tune_state_cache.update(t=-1e9, key=None, v="")
 
     def tearDown(self):
         for name, real in self.saved.items():
@@ -206,6 +215,91 @@ class Links(unittest.TestCase):
             src = fh.read()
         body = src.split("def _reset_run():", 1)[1].split("\ndef ", 1)[0]
         self.assertIn('_dvs_now.update(mode="", dmr="")', body)
+
+    def fresh(self):
+        nt._tune_state_cache["t"] = -1e9
+
+    def late(self):
+        nt._solo_at["t"] -= nt.TUNE_GRACE_SEC + 1
+        self.fresh()
+
+    def test_solo_tune_is_pending_then_confirmed(self):
+        self.assertEqual(nt.solo_tune_state(), "")
+        self.assertTrue(nt.solo_dvs(fav("P25", "10200"), NODE)["ok"])
+        self.assertEqual(nt.solo_tune_state(), "pending")
+        self.last_tune = "10200"
+        self.assertEqual(nt.solo_tune_state(), "pending")
+        self.fresh()
+        self.assertEqual(nt.solo_tune_state(), "confirmed")
+
+    def test_solo_tune_that_never_confirms_is_marked(self):
+        self.assertTrue(nt.solo_dvs(fav("NXDN", "65000"), NODE)["ok"])
+        self.last_tune = "disconnect"
+        self.late()
+        self.assertEqual(nt.solo_tune_state(), "unconfirmed")
+        self.assertEqual(nt.tune_state_now(False), "unconfirmed")
+        self.last_tune = "65000"
+        self.fresh()
+        self.assertEqual(nt.solo_tune_state(), "confirmed")
+        self.last_tune = None
+        self.fresh()
+        self.assertEqual(nt.solo_tune_state(), "unconfirmed")
+
+    def test_solo_dstar_keeps_the_normal_look(self):
+        self.assertTrue(nt.solo_dvs(fav("DSTAR", "REF001CL"), NODE)["ok"])
+        self.last_tune = "other"
+        self.late()
+        self.assertEqual(nt.solo_tune_state(), "sent")
+
+    def test_solo_m17_is_checked_against_its_ini(self):
+        real_ini, real_active = nt.M17_INI, nt._svc_active
+        nt.M17_INI = os.path.join(WORK, "USRP2M17.ini")
+        active = [True]
+        nt._svc_active = lambda svc: active[0]
+        try:
+            self.assertTrue(nt.solo_m17(fav("M17", "M17-USA", module="A", ip=""), NODE)["ok"])
+            with open(nt.M17_INI, "w", encoding="utf-8") as fh:
+                fh.write(nt._m17_ini_text("N0CALL", "M17-USA", "1.2.3.4", "A"))
+            self.fresh()
+            self.assertEqual(nt.solo_tune_state(), "confirmed")
+            active[0] = False
+            self.late()
+            self.assertEqual(nt.solo_tune_state(), "unconfirmed")
+        finally:
+            nt.M17_INI, nt._svc_active = real_ini, real_active
+
+    def test_state_saved_by_an_older_version_has_no_verdict(self):
+        nt._solo.update(mode="P25", target="P25:10200", name="P25 10200", bridge=BRIDGE, tune="")
+        self.assertEqual(nt.solo_tune_state(), "")
+
+    def test_node_controller_verdict_is_passed_on(self):
+        self.nc_status = {"page": "DMR", "fav": "3100", "server": "TGIF", "address": "", "state": "unconfirmed", "m17_state": ""}
+        self.assertEqual(nt.tune_state_now(True), "unconfirmed")
+        self.nc_status = {"page": "DMR", "fav": "3100", "server": "TGIF", "address": ""}
+        self.assertEqual(nt.tune_state_now(True), "")
+        self.nc_status = {"page": "DMR", "fav": "", "state": "confirmed"}
+        self.assertEqual(nt.tune_state_now(True), "")
+        self.nc_status = {"page": "M17", "fav": "", "state": "", "m17_state": "confirmed"}
+        self.m17_now = "M17-USA|A"
+        self.assertEqual(nt.tune_state_now(True), "confirmed")
+        self.nc_status = {"page": "DMR", "fav": "3100", "state": "bogus"}
+        self.m17_now = ""
+        self.assertEqual(nt.tune_state_now(True), "")
+        self.nc_status = None
+        self.assertEqual(nt.tune_state_now(True), "")
+
+    def test_link_line_marks_an_unconfirmed_talkgroup(self):
+        self.assertTrue(nt.solo_dvs(fav("P25", "10200", label="North America"), NODE)["ok"])
+        links = self.fake_links(NODE)[1]
+        plain = nt.live_link(links, True, False, [])
+        marked = nt.live_link(links, True, False, [], True)
+        self.assertFalse(plain["label"].endswith("?"))
+        self.assertEqual(marked["label"], plain["label"] + " ?")
+
+    def test_page_marks_the_tuned_line(self):
+        with open(nt.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("d.tuned_state === 'unconfirmed'", src)
 
     def test_node_talker_outwaits_node_controller(self):
         self.assertGreaterEqual(nt.NC_TUNE_TIMEOUT, 200)
