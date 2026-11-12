@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.39"
+VERSION = "0.10.40"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -257,7 +257,7 @@ DEFAULT_CONFIG = {
     "rx_gate": 1,
     "rx_notch_hz": 0.0,
     "rx_notch_auto": False,
-    "tests_off": "",
+    "balancer_off": False,
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
     "ptt_rx_gap": False,
@@ -338,27 +338,6 @@ def _norm_gain(value):
     return v
 
 
-TEST_NAMES = {"check": "Audio check", "balance": "Automatic balancing", "tone_rx": "RX tone test",
-              "tone_tx": "TX tone test", "mic": "Mic test", "node": "Node test", "kerchunk": "Kerchunk test"}
-
-
-def _norm_tests_off(value):
-    items = value if isinstance(value, (list, tuple)) else str(value).split(",")
-    off = {str(x).strip() for x in items if str(x).strip()}
-    bad = sorted(off - set(TEST_NAMES))
-    if bad:
-        raise ValueError("tests_off has unknown tests: " + ", ".join(bad))
-    return ",".join(k for k in TEST_NAMES if k in off)
-
-
-def test_off(tid):
-    return tid in str(_cfg_get("tests_off") or "").split(",")
-
-
-def test_off_error(tid):
-    return {"ok": False, "error": f"{TEST_NAMES[tid]} is turned off under Tests on the Setup tab."}
-
-
 def _norm_notch(value):
     try:
         v = round(float(str(value).strip()), 1)
@@ -399,7 +378,7 @@ _NORMALIZERS = {
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
     "rx_notch_hz": _norm_notch,
     "rx_notch_auto": _parse_bool,
-    "tests_off": _norm_tests_off,
+    "balancer_off": _parse_bool,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -426,6 +405,8 @@ def load_config():
                     cfg[key] = norm(cp.get(sec, key))
                 except ValueError as exc:
                     log_event(f"Config: bad {key} ({exc}); using {DEFAULT_CONFIG[key]}", "warn")
+        if not cp.has_option(sec, "balancer_off") and cp.has_option(sec, "tests_off"):
+            cfg["balancer_off"] = "balance" in cp.get(sec, "tests_off").split(",")
     with _config_lock:
         _config.clear()
         _config.update(cfg)
@@ -1200,8 +1181,6 @@ class RxClean:
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
         notch = _cfg_get("rx_notch_hz")
         auto = bool(_cfg_get("rx_notch_auto")) and not notch
-        if agc and TONE.recording:
-            agc = False
         if not auto and (self.auto_hz is not None or self.det_n):
             self.auto_hz = None
             self._det_clear()
@@ -1368,14 +1347,8 @@ KERCHUNK_LOG_MAX = 2000
 KERCHUNK_LEARN_MIN = 6
 KERCHUNK_LEARN_LO = 0.15
 KERCHUNK_LEARN_HI = 0.8
-KERCHUNK_TEST_MIN = 15
-KERCHUNK_TEST_MIN_LO = 1
-KERCHUNK_TEST_MAX = 60
 _kc_lock = threading.Lock()
 _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
-_kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": [], "pending": False}
-_kc_last = {"row": None, "at": 0.0, "marked": False}
-KERCHUNK_MARK_SEC = 5.0
 _kc_q = queue.Queue()
 _kc_writer = None
 _kc_last_id = 0
@@ -1493,12 +1466,6 @@ def _kc_refresh():
     _kc_state.update(threshold=thr, learned=learned, labels=n)
 
 
-def _kc_test_check(now):
-    if _kc_test["on"] and now >= _kc_test["ends"]:
-        _kc_test["on"] = False
-        log_event("Kerchunk test ended: time is up", "ok")
-
-
 def _kc_add(secs, peak, source="audio", keyed_secs=None, who="", kerchunk=None):
     global _kc_last_id
     if kerchunk is None:
@@ -1513,18 +1480,6 @@ def _kc_add(secs, peak, source="audio", keyed_secs=None, who="", kerchunk=None):
         else:
             log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
     return row
-
-
-def _kc_closed(row):
-    take = False
-    with _kc_lock:
-        _kc_last.update(row=row, at=time.time(), marked=False)
-        if _kc_test["on"] and _kc_test["pending"]:
-            _kc_test["pending"] = False
-            _kc_last["marked"] = True
-            take = True
-    if take:
-        _kc_test_take(row)
 
 
 def _kc_set_label(bid, label):
@@ -1573,14 +1528,6 @@ def _kc_put(kind, arg):
     _kc_q.put((kind, arg))
 
 
-def _kc_test_take(row):
-    _kc_put("label", row["id"])
-    with _kc_lock:
-        _kc_test["rows"].append({"id": row["id"], "secs": round(row["secs"], 2), "peak": row["peak"],
-                                 "kerchunk": row["kerchunk"], "source": row.get("source", "audio"),
-                                 "keyed_secs": row.get("keyed_secs"), "who": row.get("who", "")})
-
-
 def _kc_report(rows):
     thr = _kc_state["threshold"]
     lab = [(r["secs"], r["label"] == "kerchunk") for r in rows if r["label"] in ("kerchunk", "real")]
@@ -1606,33 +1553,7 @@ def _kc_by_node(rows):
     return out
 
 
-def _kc_test_summary():
-    rows = _kc_test["rows"]
-    return {"on": _kc_test["on"], "started": _kc_test["started"], "ends": _kc_test["ends"],
-            "minutes": _kc_test["minutes"], "bursts": len(rows),
-            "kerchunks": sum(r["kerchunk"] for r in rows), "rows": rows[-300:]}
-
-
-def kerchunk_mark(_body=None):
-    with _kc_lock:
-        _kc_test_check(time.time())
-        if not _kc_test["on"]:
-            return {"ok": False, "error": "Start a test first, then mark each key-up you make."}
-        last = _kc_last["row"]
-        recent = last is not None and not _kc_last["marked"] and time.time() - _kc_last["at"] <= KERCHUNK_MARK_SEC
-        if recent:
-            _kc_last["marked"] = True
-        else:
-            _kc_test["pending"] = True
-    if recent:
-        _kc_test_take(last)
-        return {"ok": True, "message": f"Marked the burst that just ended ({last['secs']:.1f} s) as a kerchunk."}
-    return {"ok": True, "message": "Marked. The next burst is kept as a kerchunk."}
-
-
 def kerchunk_status(_body=None):
-    with _kc_lock:
-        _kc_test_check(time.time())
     rows = _kc_rows()
     day0 = time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d")) * 1000
     today = [r for r in rows if int(r["id"]) >= day0]
@@ -1645,41 +1566,11 @@ def kerchunk_status(_body=None):
                         "keyed_secs": None if r.get("keyed_secs") is None else round(r["keyed_secs"], 2),
                         "who": r.get("who", "")} for r in rows[-300:][::-1]],
             "source": "keyed" if KEYED.ok else "audio", "keyed": KEYED.state(),
-            "report": _kc_report(rows), "test": _kc_test_summary()}
-
-
-def kerchunk_test_start(body):
-    if test_off("kerchunk"):
-        return test_off_error("kerchunk")
-    try:
-        minutes = int(body.get("minutes", KERCHUNK_TEST_MIN))
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "The test length must be a whole number of minutes."}
-    if not KERCHUNK_TEST_MIN_LO <= minutes <= KERCHUNK_TEST_MAX:
-        return {"ok": False, "error": f"The test runs for {KERCHUNK_TEST_MIN_LO} to {KERCHUNK_TEST_MAX} minutes."}
-    with _kc_lock:
-        _kc_test_check(time.time())
-        if _kc_test["on"]:
-            return {"ok": False, "error": "A kerchunk test is already running."}
-        now = time.time()
-        _kc_test.update(on=True, started=now, ends=now + minutes * 60, minutes=minutes, rows=[], pending=False)
-        _kc_last["marked"] = True
-    log_event(f"Kerchunk test started for {minutes} min: key up the node as you normally would", "ok")
-    return {"ok": True, "message": f"Test started for {minutes} minutes."}
-
-
-def kerchunk_test_stop(_body=None):
-    with _kc_lock:
-        if not _kc_test["on"]:
-            return {"ok": False, "error": "No kerchunk test is running."}
-        _kc_test["on"] = False
-    log_event("Kerchunk test stopped", "ok")
-    return {"ok": True, "message": "Test stopped."}
+            "report": _kc_report(rows)}
 
 
 def kerchunk_reset(_body=None):
     with _kc_lock:
-        _kc_test.update(on=False, rows=[], pending=False)
         with _kc_mem:
             _kc_cache["rows"] = []
             _kc_save("kc_reset", {})
@@ -1832,7 +1723,7 @@ class KeyedWatch:
         if db > ACTIVE_DB:
             self.audio_frames += 1
             self.audio_peak = max(self.audio_peak, db)
-        if TALKER.keyed or TONE.running:
+        if TALKER.keyed:
             self.own = True
 
     def update(self, keyed, who, now):
@@ -1842,7 +1733,7 @@ class KeyedWatch:
             if keyed and not self.keyed:
                 self.keyed, self.who, self.key_at = True, who, now
                 self.audio_frames, self.audio_peak = 0, -120.0
-                self.own = TALKER.keyed or TONE.running
+                self.own = TALKER.keyed
                 self.partial = first
             elif not keyed and self.keyed:
                 self.keyed, self.unkey_at = False, now
@@ -1853,10 +1744,10 @@ class KeyedWatch:
             self._finish(*done)
 
     def _finish(self, keyed_secs, audio_secs, peak, who, own):
-        if own or TALKER.keyed or TONE.running:
+        if own or TALKER.keyed:
             return
         kerchunk = keyed_secs < KERCHUNK_KEYED_MAX_SEC and audio_secs < _kc_state["threshold"]
-        _kc_closed(_kc_add(audio_secs, peak, source="keyed", keyed_secs=keyed_secs, who=who, kerchunk=kerchunk))
+        _kc_add(audio_secs, peak, source="keyed", keyed_secs=keyed_secs, who=who, kerchunk=kerchunk)
 
     def _down(self, error):
         with self.lock:
@@ -2833,7 +2724,7 @@ class Hub:
         if self.burst_own:
             return
         if secs >= KERCHUNK_MIN_SEC and not KEYED.ok:
-            _kc_closed(_kc_add(secs, peak))
+            _kc_add(secs, peak)
         if secs < _kc_state["threshold"]:
             self.kc_seqs.append(self.burst_seq)
 
@@ -2875,7 +2766,7 @@ class Hub:
                     self.burst_own = False
                 self.burst_last = now
                 self.burst_peak = max(self.burst_peak, db)
-                if TALKER.keyed or TONE.running or now - TALKER.last_unkey < TX_BUSY_GRACE_SEC:
+                if TALKER.keyed or now - TALKER.last_unkey < TX_BUSY_GRACE_SEC:
                     self.burst_own = True
                 if now - self.burst_start >= KERCHUNK_MAX_SEC:
                     self.last_active = now
@@ -2885,16 +2776,12 @@ class Hub:
         seq = self.burst_seq if self.burst_last > 0 else None
         if now - self.burst_last > ACTIVE_HOLD_SEC:
             self._close_burst()
-        if TONE.recording:
-            TONE.tap_raw(frame)
-        if have_listeners or TONE.recording:
+        if have_listeners:
             if frame is not None:
                 pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
             else:
                 RXC.idle_tick()
                 pcm = PCM_SILENCE
-            if TONE.recording:
-                TONE.tap_proc(pcm)
             self.delayed.append((now, seq, pcm))
         self._release(now)
         self.pump_beat = now
@@ -3252,9 +3139,6 @@ def _reset_step(i, **kw):
 def _reset_run():
     _reset_step(0, state="running")
     stopped = []
-    if TONE.status().get("running"):
-        TONE.stop()
-        stopped.append("tone test")
     if TALKER.state()["keyed"]:
         try:
             TALKER._unkey("reset")
@@ -3500,7 +3384,7 @@ _recorder_lock = threading.Lock()
 _RECORDING_BLOCKED = frozenset((
     "/api/node/enable", "/api/node/disable", "/api/tx/enable", "/api/tx/disable", "/api/connect",
     "/api/disconnect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/tune/disconnect",
-    "/api/digital", "/api/tonetest/start", "/api/tonetest/link"))
+    "/api/digital"))
 _RECORDING_CFG_KEYS = frozenset(("port", "udp_port", "https", "node"))
 _RECORDING_POWER = frozenset(("/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/setup/apply"))
 _RECORDING_BRIDGE = frozenset(("/api/tune", "/api/tune/disconnect"))
@@ -3628,9 +3512,6 @@ def build_status(full):
         st["default_mode"] = _default_tune_mode(nc)
         tx = tx_state(node)
         tx.update(TALKER.state())
-        with _kc_lock:
-            _kc_test_check(time.time())
-            st["kc_test"] = _kc_test["on"]
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
                                             "peak_db", "last_peak_db", "gaps", "last_gaps")}
         ph = phone_status_cached() if _cfg_get("phone_tones") and nc else None
@@ -6646,266 +6527,11 @@ def ptt_lock_set(body):
             "message": "PPT is locked: nobody can transmit until it is unlocked." if on else "PPT is unlocked."}
 
 
-TONE_RATE = 8000
-TONE_DEFAULT_HZ = [150, 300, 500, 1000, 1500, 2000, 2500, 3000, 3400]
-TONE_SEC_CHOICES = (0.5, 1.0, 2.0)
-TONE_LEVEL_DB = -10.0
-TONE_PRE_FRAMES = 25
-TONE_LEAD_FRAMES = 25
-TONE_GAP_FRAMES = 10
-TONE_TAIL_FRAMES = 10
-TONE_TRIM_FRAMES = 5
-TONE_RETURN_SEC = 1.5
-TONE_MAX_SEC = 120.0
-TONE_CLEAR_SEC = 3.0
-TONE_MAX_COUNT = 12
-TONE_HZ_MIN, TONE_HZ_MAX = 100, 3800
-TONE_ONSET_DB = 12.0
-TONE_EDGE_DB = -6.0
-TONE_ID_WPM = 20
-TONE_ID_HZ = 700
-TONE_ID_LEVEL_DB = -10.0
-TONE_KEY_ERRORS = {
-    "not-ready": "The node is not ready (check the Node Talker setup).",
-    "not-linked": "The node is not linked to the network.",
-    "busy": "The node is busy (someone is talking).",
-    "in-use": "Another transmission is using the node.",
-    "locked": "PPT is locked: nobody can transmit until it is unlocked.",
-}
-TONE_MORSE = {
-    "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.", "G": "--.", "H": "....",
-    "I": "..", "J": ".---", "K": "-.-", "L": ".-..", "M": "--", "N": "-.", "O": "---", "P": ".--.",
-    "Q": "--.-", "R": ".-.", "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
-    "Y": "-.--", "Z": "--..", "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-",
-    "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----.", "/": "-..-.", "-": "-....-",
-}
-
-
-class _ToneOwner:
-
-    def send_json(self, obj):
-        pass
-
-
-def _tone_request(body):
-    hz = body.get("tones") or TONE_DEFAULT_HZ
-    if not isinstance(hz, list) or not 1 <= len(hz) <= TONE_MAX_COUNT:
-        raise ValueError(f"tones must be a list of 1 to {TONE_MAX_COUNT} frequencies")
-    try:
-        hz = [int(x) for x in hz]
-    except (TypeError, ValueError):
-        raise ValueError("tones must be whole numbers of Hz")
-    if any(not TONE_HZ_MIN <= x <= TONE_HZ_MAX for x in hz):
-        raise ValueError(f"each tone must be {TONE_HZ_MIN}-{TONE_HZ_MAX} Hz")
-    try:
-        sec = float(body.get("tone_sec", 1.0))
-    except (TypeError, ValueError):
-        raise ValueError("tone_sec must be 0.5, 1 or 2")
-    if sec not in TONE_SEC_CHOICES:
-        raise ValueError("tone_sec must be 0.5, 1 or 2")
-    return hz, sec
-
-
-def _cw_frames(text):
-    dot = int(round(1.2 / TONE_ID_WPM * TONE_RATE))
-    ramp = 40
-    amp = 10 ** (TONE_ID_LEVEL_DB / 20.0) * 32767.0
-    w = 2.0 * math.pi * TONE_ID_HZ / TONE_RATE
-
-    def mark(n):
-        return [int(round(amp * min(1.0, i / ramp, (n - 1 - i) / ramp) * math.sin(w * i))) for i in range(n)]
-
-    out = []
-    for wi, word in enumerate(text.split()):
-        if wi:
-            out += [0] * (7 * dot)
-        for ci, ch in enumerate(word):
-            if ci:
-                out += [0] * (3 * dot)
-            code = TONE_MORSE.get(ch)
-            if code is None:
-                raise ValueError(f"the callsign has a character the ID cannot send: {ch!r}")
-            for ei, e in enumerate(code):
-                if ei:
-                    out += [0] * dot
-                out += mark(dot if e == "." else 3 * dot)
-    out += [0] * ((-len(out)) % FRAME_SAMPLES)
-    return [struct.pack("<%dh" % FRAME_SAMPLES, *out[i:i + FRAME_SAMPLES]) for i in range(0, len(out), FRAME_SAMPLES)]
-
-
-def _tone_plan(hz_list, tone_sec, call):
-    id_frames = _cw_frames(f"DE {call}")
-    tone_frames = max(1, int(round(tone_sec / FRAME_SEC)))
-    amp = 10 ** (TONE_LEVEL_DB / 20.0) * 32767.0
-    w_scale = 2.0 * math.pi / TONE_RATE
-    frames = [PCM_SILENCE] * TONE_PRE_FRAMES + id_frames + [PCM_SILENCE] * TONE_LEAD_FRAMES
-    plan = []
-    for hz in hz_list:
-        start = len(frames)
-        w = w_scale * hz
-        for f in range(tone_frames):
-            base = f * FRAME_SAMPLES
-            samples = [int(round(amp * math.sin(w * (base + i)))) for i in range(FRAME_SAMPLES)]
-            frames.append(struct.pack("<%dh" % FRAME_SAMPLES, *samples))
-        plan.append({"hz": hz, "start": start, "end": len(frames)})
-        frames.extend([PCM_SILENCE] * TONE_GAP_FRAMES)
-    frames.extend([PCM_SILENCE] * TONE_TAIL_FRAMES)
-    frames.extend(id_frames)
-    return frames, plan
-
-
-def _goertzel(samples, hz):
-    n = len(samples)
-    if not n:
-        return 0.0
-    coeff = 2.0 * math.cos(2.0 * math.pi * hz / TONE_RATE)
-    s1 = s2 = 0.0
-    for x in samples:
-        s0 = x + coeff * s1 - s2
-        s2, s1 = s1, s0
-    power = s1 * s1 + s2 * s2 - coeff * s1 * s2
-    return 2.0 * math.sqrt(max(power, 0.0)) / n
-
-
-def _amp_db(amp):
-    return max(-120.0, 20.0 * math.log10(amp / 32768.0)) if amp > 0 else -120.0
-
-
-def _median_db(vals):
-    if not vals:
-        return -120.0
-    s = sorted(vals)
-    return s[len(s) // 2]
-
-
-def _window_samples(frames):
-    data = b"".join(f if f is not None else PCM_SILENCE for f in frames)
-    if not data:
-        return ()
-    return struct.unpack("<%dh" % (len(data) // 2), data)
-
-
-def _tone_measure(samples, hz):
-    if len(samples) < FRAME_SAMPLES * 4:
-        return None
-    best_hz, best = float(hz), 0.0
-    for k in range(-20, 21):
-        cand = hz * (1.0 + 0.0025 * k)
-        amp = _goertzel(samples, cand)
-        if amp > best:
-            best, best_hz = amp, cand
-    step = hz * 0.0025
-    for _ in range(8):
-        for cand in (best_hz - step, best_hz + step):
-            amp = _goertzel(samples, cand)
-            if amp > best:
-                best, best_hz = amp, cand
-        step /= 2.0
-    fund_db = _amp_db(best)
-
-    def rel(mult):
-        f = mult * best_hz
-        if f >= TONE_RATE / 2:
-            return None
-        return round(_amp_db(_goertzel(samples, f)) - fund_db, 1)
-
-    return {"db": round(fund_db, 1), "hz": round(best_hz, 1), "err_hz": round(best_hz - hz, 1),
-            "h2": rel(2), "h3": rel(3)}
-
-
-def _tone_analyse(raw, proc, plan, meta):
-    pre = TONE_PRE_FRAMES
-    n = min(len(raw), len(proc))
-    raw, proc = raw[:n], proc[:n]
-    noise_raw = _median_db([frame_db(f) for f in raw[:pre] if f is not None])
-    noise_proc = _median_db([frame_db(f) for f in proc[:pre] if f is not None])
-
-
-    lvl = [frame_db(f) if f is not None else -120.0 for f in raw]
-    thr = noise_raw + TONE_ONSET_DB
-    onset = None
-    for i in range(pre, n - 2):
-        if lvl[i] > thr and lvl[i + 1] > thr and lvl[i + 2] > thr:
-            onset = i
-            break
-    detected = onset is not None
-    lat = (onset - pre) if detected else 0
-
-    sent_db = meta["level_db"] + meta["tx_gain_db"]
-    rows = []
-    for p in plan:
-        row = {"hz": p["hz"], "sent_db": round(sent_db, 1)}
-        if detected:
-            a = max(0, p["start"] + lat + TONE_TRIM_FRAMES)
-            b = min(n, p["end"] + lat - TONE_TRIM_FRAMES)
-            pd = GATE_DELAY if meta.get("rx_gate") else 0
-            raw_w, proc_w = raw[a:b], proc[min(n, a + pd):min(n, b + pd)]
-            row["dropouts"] = sum(1 for f in raw_w if f is None)
-            mr = _tone_measure(_window_samples(raw_w), p["hz"])
-            mp = _tone_measure(_window_samples(proc_w), p["hz"])
-            if mr:
-                row.update(raw_db=mr["db"], raw_resp_db=round(mr["db"] - sent_db, 1),
-                           raw_freq_hz=mr["hz"], raw_freq_err_hz=mr["err_hz"],
-                           raw_h2_db=mr["h2"], raw_h3_db=mr["h3"],
-                           raw_snr_db=round((mr["db"] - 3.01) - noise_raw, 1))
-            if mp:
-                row.update(proc_db=mp["db"], proc_resp_db=round(mp["db"] - sent_db, 1),
-                           proc_freq_err_hz=mp["err_hz"])
-                if mr:
-                    row["proc_minus_raw_db"] = round(mp["db"] - mr["db"], 1)
-        rows.append(row)
-
-
-    cand = [r for r in rows if "raw_resp_db" in r]
-    ref = next((r for r in cand if r["hz"] == 1000), None)
-    ref_val = ref["raw_resp_db"] if ref else (max(r["raw_resp_db"] for r in cand) if cand else None)
-    usable = [r["hz"] for r in cand if ref_val is not None and r["raw_resp_db"] - ref_val >= TONE_EDGE_DB]
-
-    warnings = []
-    if not detected:
-        warnings.append("No return signal: the Pi heard nothing above the noise floor during the test. "
-                        "The node may not be sending transmitted audio back, so only the TX levels are meaningful.")
-    elif ref is None:
-        warnings.append("No 1 kHz tone in the set: the response is shown relative to the strongest tone.")
-    if detected and lat < 0:
-        warnings.append("Return audio started before the transmission, so the delay estimate is unreliable.")
-
-    return {
-        "ok": True,
-        "rx_detected": detected,
-        "latency_ms": round(lat * FRAME_SEC * 1000) if detected else None,
-        "noise_raw_db": round(noise_raw, 1),
-        "noise_proc_db": round(noise_proc, 1),
-        "seconds": round(n * FRAME_SEC, 1),
-        "dropouts": sum(r.get("dropouts", 0) for r in rows),
-        "reference_hz": 1000 if ref else None,
-        "band_low_hz": min(usable) if usable else None,
-        "band_high_hz": max(usable) if usable else None,
-        "rows": rows,
-        "warnings": warnings,
-        "node": meta["node"],
-        "callsign": meta["callsign"],
-        "tx_gain_db": meta["tx_gain_db"],
-        "rx_gain_db": meta["rx_gain_db"],
-        "level_db": meta["level_db"],
-        "tone_sec": meta["tone_sec"],
-        "tones": meta["tones"],
-        "started": meta["started"],
-        "agc_bypassed": bool(meta.get("rx_agc")) and meta["mode"] == "rx",
-    }
-
-
-def _tone_keyed(owner):
-    with TALKER.lock:
-        return TALKER.keyed and TALKER.owner is owner
-
-
 LOAD_CPU_PCT = 90.0
 LOAD_CPU_SEC = 10.0
 LOAD_TEMP_C = 80.0
 LOAD_MEM_FLOOR_MB = 40.0
 LOAD_MEM_FRAC = 0.10
-LINK_WATCH_SEC = 5.0
 
 
 def _read_cpu_times():
@@ -6983,239 +6609,6 @@ class LoadGuard:
 
 GUARD = LoadGuard()
 
-
-TONE_LINK = {"node": ""}
-
-
-def tone_link_set(body):
-    action = body.get("action")
-    node = str(body.get("node", "")).strip()
-    main = main_node()
-    if not main:
-        return {"ok": False, "error": "No main node is set up."}
-    if action == "connect":
-        if not re.fullmatch(r"[0-9]{1,7}", node) or node in (TX_NODE, main):
-            return {"ok": False, "error": f"Enter a node number other than {TX_NODE} and {main}."}
-        if TONE.status()["running"] or TALKER.state()["keyed"]:
-            return {"ok": False, "error": "Wait until the test or transmission is over."}
-        ok, out = ilink(main, 3, node)
-        if not ok:
-            return {"ok": False, "error": "Could not connect node " + node + ": " + str(out).strip()[:200]}
-        TONE_LINK["node"] = node
-        log_event(f"Tone test link: connected node {main} to {node}", "ok")
-        return {"ok": True, "node": node, "message": f"Connecting node {main} to {node}. Wait a few seconds, then run the test."}
-    if action == "disconnect":
-        target = TONE_LINK["node"] or node
-        if not target:
-            return {"ok": True, "message": "Nothing to disconnect."}
-        if not re.fullmatch(r"[0-9]{1,7}", target) or target in (TX_NODE, main):
-            return {"ok": False, "error": f"Enter a node number other than {TX_NODE} and {main}."}
-        if not TONE_LINK["node"]:
-            ok, links = rpt_links(main, max_age=0.5)
-            if not ok or target not in {x["node"] for x in links}:
-                return {"ok": False, "error": f"Node {target} is not linked to node {main}."}
-        ok, out = ilink(main, 1, target)
-        TONE_LINK["node"] = ""
-        if not ok:
-            return {"ok": False, "error": "Could not disconnect node " + target + ": " + str(out).strip()[:200]}
-        log_event(f"Tone test link: disconnected node {target} from {main}", "ok")
-        return {"ok": True, "message": f"Disconnected node {target}."}
-    raise ValueError("action must be connect or disconnect")
-
-
-def tone_link_block(tx=False):
-    node = main_node()
-    ok, links = rpt_links(node, max_age=0.5)
-    if not ok:
-        return "The node's link list could not be read, so no tones are sent. Check that Asterisk is running."
-    allowed = {TONE_LINK["node"]} - {""} if tx else set()
-    other = sorted({x["node"] for x in links} - {TX_NODE} - allowed)
-    if other:
-        bridges = bridge_nodes()
-        names = [f"{n} (bridge)" if n in (bridges.get("digital"), bridges.get("m17")) else n for n in other]
-        return "The node is linked to " + ", ".join(names) + ". Disconnect the links before a tone test."
-    now = tuned_now(nc_running(cached=True))
-    if now:
-        return "Something is tuned (" + now + "). Untune it before a tone test."
-    return ""
-
-
-class ToneTest:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.recording = False
-        self.running = False
-        self.abort = False
-        self.mode = "rx"
-        self.stage = "idle"
-        self.progress = 0.0
-        self.error = ""
-        self.report = None
-        self.raw = []
-        self.proc = []
-        self.peak = {"cpu_pct": None, "mem_avail_mb": None}
-        self.watch_err = ""
-
-    def _check_load(self):
-        load = GUARD.sample()
-        with self.lock:
-            if load["cpu_pct"] is not None:
-                self.peak["cpu_pct"] = max(self.peak["cpu_pct"] or 0.0, load["cpu_pct"])
-            if load["mem_avail_mb"] is not None:
-                low = self.peak["mem_avail_mb"]
-                self.peak["mem_avail_mb"] = load["mem_avail_mb"] if low is None else min(low, load["mem_avail_mb"])
-        return "Stopped to protect the Pi: " + load["breach"] + "." if load["breach"] else ""
-
-    def _watch_loop(self, stop):
-        last_link = time.monotonic()
-        while not stop.wait(1.0):
-            try:
-                why = self._check_load()
-                if not why and time.monotonic() - last_link >= LINK_WATCH_SEC:
-                    last_link = time.monotonic()
-                    block = tone_link_block(tx=self.mode == "tx")
-                    why = "Stopped: " + block if block else ""
-            except Exception as exc:
-                why = ""
-                log_event(f"Tone test watch: {exc}", "warn")
-            if why:
-                self.watch_err = why
-                return
-
-
-    def tap_raw(self, frame):
-        self.raw.append(frame)
-
-    def tap_proc(self, pcm):
-        self.proc.append(pcm)
-
-    def _set(self, **kw):
-        with self.lock:
-            for k, v in kw.items():
-                setattr(self, k, v)
-
-    def status(self):
-        with self.lock:
-            return {"ok": True, "running": self.running, "stage": self.stage, "mode": self.mode,
-                    "progress": round(self.progress, 3), "error": self.error, "report": self.report,
-                    "target": TONE_LINK["node"]}
-
-    def stop(self):
-        with self.lock:
-            if not self.running:
-                return {"ok": False, "error": "No tone test is running."}
-            self.abort = True
-        return {"ok": True, "message": "Stopping the tone test."}
-
-    def start(self, body):
-        hz, sec = _tone_request(body)
-        mode = body.get("mode", "rx")
-        if mode not in ("rx", "tx"):
-            raise ValueError("mode must be rx or tx")
-        if test_off("tone_" + mode):
-            return test_off_error("tone_" + mode)
-        call, _src = callsign_now()
-        if not call:
-            return {"ok": False, "error": "Set your callsign in Setup first: the test identifies itself on air."}
-        block = tone_link_block(tx=mode == "tx")
-        if block:
-            return {"ok": False, "error": block}
-        frames, plan = _tone_plan(hz, sec, call)
-        total = len(frames) * FRAME_SEC
-        limit = min(TONE_MAX_SEC, float(_cfg_get("tot_sec")) - 5.0)
-        if total > limit:
-            raise ValueError(f"the test would last {total:.0f} s; the limit is {limit:.0f} s (the TX time-out less 5 s)")
-        now = time.monotonic()
-        with self.lock:
-            if self.running:
-                return {"ok": False, "error": "A tone test is already running."}
-
-
-            if now - HUB.last_active < TONE_CLEAR_SEC:
-                return {"ok": False, "error": "Audio is coming in on the channel (above the activity level), so the test waits. If the channel is always busy, the background noise is above that level."}
-            if TALKER.state()["keyed"]:
-                return {"ok": False, "error": "The node is already transmitting."}
-            self.running, self.abort = True, False
-            self.mode = mode
-            self.stage, self.progress, self.error, self.report = "keying", 0.0, "", None
-            self.raw, self.proc = [], []
-        owner = _ToneOwner()
-        ok, why = TALKER.key(owner, "tone test", phone=False)
-        if not ok:
-            msg = TONE_KEY_ERRORS.get(why, why)
-            self._set(running=False, stage="idle", error=msg)
-            return {"ok": False, "error": msg}
-        meta = {"node": TX_NODE, "callsign": call, "tx_gain_db": tune_value("tx_gain_db"),
-                "rx_gain_db": tune_value("rx_gain_db"), "level_db": TONE_LEVEL_DB, "rx_gate": _cfg_get("rx_gate"),
-                "rx_agc": bool(_cfg_get("rx_agc")), "tone_sec": sec, "tones": hz, "mode": mode, "started": time.time()}
-        threading.Thread(target=self._run, args=(owner, frames, plan, meta), daemon=True,
-                         name="tone-test").start()
-        log_event(f"{mode.upper()} tone test started: {len(hz)} tones, {sec} s each, {total:.1f} s", "ok")
-        return {"ok": True, "message": "Tone test started.", "tones": hz, "tone_sec": sec,
-                "seconds": round(total, 1), "callsign": call}
-
-    def _run(self, owner, frames, plan, meta):
-        err = ""
-        self.peak = {"cpu_pct": None, "mem_avail_mb": None}
-        self.watch_err = ""
-        stop = threading.Event()
-        threading.Thread(target=self._watch_loop, args=(stop,), daemon=True, name="tone-watch").start()
-        try:
-            self.recording = meta["mode"] == "rx"
-            self._set(stage="sending")
-            t0 = time.monotonic()
-            for i, fr in enumerate(frames):
-                if self.abort:
-                    err = "Stopped."
-                    break
-                if self.watch_err:
-                    err = self.watch_err
-                    break
-                if not _tone_keyed(owner):
-                    err = "The transmitter dropped out."
-                    break
-                TALKER.audio(owner, fr)
-                self._set(progress=(i + 1) / len(frames))
-                time.sleep(max(0.0, t0 + (i + 1) * FRAME_SEC - time.monotonic()))
-            TALKER.release(owner)
-            end = time.monotonic() + 5.0
-            while _tone_keyed(owner) and time.monotonic() < end:
-                time.sleep(0.05)
-            if meta["mode"] == "rx":
-                time.sleep(TONE_RETURN_SEC)
-        except Exception as exc:
-            err = f"Test error: {exc}"
-        finally:
-            stop.set()
-            self.recording = False
-            TALKER.release(owner)
-        if err:
-            self._set(running=False, stage="failed", error=err)
-            log_event(f"Tone test ended early: {err}", "warn")
-            return
-        if meta["mode"] == "tx":
-            report = {"mode": "tx", "node": meta["node"], "callsign": meta["callsign"], "tones": meta["tones"],
-                      "tone_sec": meta["tone_sec"], "level_db": TONE_LEVEL_DB, "seconds": round(len(frames) * FRAME_SEC, 1),
-                      "load": dict(self.peak)}
-            self._set(running=False, stage="done", report=report, progress=1.0)
-            log_event("TX tone test finished", "ok")
-            return
-        self._set(stage="analysing")
-        try:
-            report = _tone_analyse(list(self.raw), list(self.proc), plan, meta)
-            report["load"] = dict(self.peak)
-            report["mode"] = "rx"
-        except Exception as exc:
-            self._set(running=False, stage="failed", error=f"Analysis error: {exc}")
-            log_event(f"Tone test analysis failed: {exc}", "err")
-            return
-        self._set(running=False, stage="done", report=report, progress=1.0)
-        log_event("Tone test finished", "ok")
-
-
-TONE = ToneTest()
-
-
 BALANCE_PATH = os.path.join(CONFIG_DIR, "nodetalker_balance.json")
 BALANCE_KEYS = ("rx_agc", "rx_gain_db", "tx_gain_db", "rx_gate", "rx_hpf", "jitter_ms", "tx_buffer_ms", "tune_enabled")
 
@@ -7240,8 +6633,6 @@ def balance_get(_body=None):
 
 
 def balance_snapshot(_body=None):
-    if test_off("balance"):
-        return test_off_error("balance")
     if os.path.exists(BALANCE_PATH):
         return {"ok": False, "error": "An earlier balance run is still open. Restore or keep its changes first."}
     with _config_lock:
@@ -7267,6 +6658,29 @@ def balance_restore(_body=None):
     _remove_quiet(BALANCE_PATH)
     log_event("Balance run restored: the original settings are back", "ok")
     return {"ok": True, "message": "Original settings put back."}
+
+
+BALANCE_LEASE_SEC = 420.0
+_balance_lease = {"id": "", "until": 0.0}
+_balance_lease_lock = threading.Lock()
+
+
+def balance_lease(body):
+    pid = str(body.get("id") or "")
+    if not re.fullmatch(r"[0-9A-Za-z_-]{8,40}", pid):
+        raise ValueError("id must be 8 to 40 letters, digits, - or _")
+    now = time.monotonic()
+    with _balance_lease_lock:
+        mine = _balance_lease["id"] == pid
+        free = not _balance_lease["id"] or _balance_lease["until"] <= now
+        if _parse_bool(body.get("release")):
+            if mine:
+                _balance_lease.update(id="", until=0.0)
+            return {"ok": True, "owner": False}
+        if mine or free:
+            _balance_lease.update(id=pid, until=now + BALANCE_LEASE_SEC)
+            return {"ok": True, "owner": True}
+    return {"ok": True, "owner": False}
 
 
 def balance_keep(_body=None):
@@ -7519,7 +6933,6 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .kc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)}
 .kc-row span{flex:1;min-width:200px}
 .kc-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
-.kc-min{width:64px}
 .kc-sub{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px}
 .kc-sub-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .fold-body{padding:6px 0 10px}
@@ -7571,7 +6984,6 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .hidden{display:none !important}
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
-.tests-sw{display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0}
 .why{margin:4px 0 8px}
 :root{--tn-gap:2px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
@@ -7661,41 +7073,7 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .spec-meter{display:flex;align-items:center;gap:8px}
 .spec-meter.tx #st-level{color:var(--red);font-weight:700}
 .spec-meter.tx .meter i{background:linear-gradient(90deg,#f2545b,#f2545b 85%,#ffb3b6)}
-.vu{margin:8px 0}
-.vu-bar{position:relative;height:16px;border-radius:5px;overflow:hidden;
-background:linear-gradient(90deg,#1b2530 0 90%,#14382f 90% 95%,#1b2530 95% 98.3%,#3a1518 98.3%)}
-.vu-avg{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);opacity:.85}
-.vu-pk{position:absolute;top:0;bottom:0;width:3px;left:0;background:var(--amber)}
-.vu-hold{position:absolute;top:-2px;bottom:-2px;width:2px;left:0;background:var(--text)}
-.vu-gr{position:relative;height:5px;margin-top:3px;border-radius:3px;background:#1b2530;overflow:hidden}
-.vu-gr i{position:absolute;right:0;top:0;bottom:0;width:0;background:var(--amber)}
-.vu-txt{display:flex;justify-content:space-between;gap:8px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--soft);margin-top:3px}
-.vu-scale{display:flex;justify-content:space-between;font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
-.rep{margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card2)}
-.rep h3{font-size:13px;margin:0 0 6px;color:var(--soft)}
-.rep-strip{position:relative;height:56px;margin:2px 0 6px}
-.rep-strip canvas{width:100%;height:100%;display:block;border-radius:6px;background:#0a1016}
-.rep-strip .rep-lbl{position:absolute;left:6px;top:3px;font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
-.rep-head{position:absolute;top:0;bottom:0;width:2px;left:0;background:var(--text);display:none}
-.rep-n{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:4px 10px;font-size:13px;margin:4px 0}
-.rep-n b{font-family:ui-monospace,Menlo,Consolas,monospace}
-.rep-v{font-size:14px;font-weight:600;margin-top:6px}
-.rep-v.ok{color:var(--accent)}.rep-v.warn{color:var(--amber)}.rep-v.err{color:var(--red)}
 .chk{flex:none;padding:0 6px;border-radius:6px;background:var(--amber-bg);color:var(--amber);font:700 11px ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
-.chk-run{font-size:14px;margin:6px 0}
-table.chk-t{table-layout:fixed}
-table.chk-t td,table.chk-t th{padding:5px 3px;font-size:12px;white-space:normal;overflow-wrap:break-word}
-table.chk-t thead th:first-child{width:40%}
-.tone-scroll{overflow-x:auto}
-table.tone-t{table-layout:auto}
-.chk-min{display:grid;grid-template-columns:76px repeat(var(--n,5),minmax(0,1fr));gap:3px;font-size:11px;align-items:end}
-.chk-min .lab{color:var(--muted);align-self:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chk-min .cell{display:flex;flex-direction:column;align-items:center;gap:2px}
-.chk-min .bar{width:100%;height:36px;background:var(--line);border-radius:3px;position:relative;overflow:hidden}
-.chk-min .fill{position:absolute;left:0;right:0;bottom:0;background:#4da3ff}
-.chk-min .val{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px}
-table.tone-t td,table.tone-t th{padding:4px 3px;font-size:11px;white-space:nowrap}
-table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 .sug{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .sug .t{flex:1}
 .sug .btn{min-height:36px;padding:0 12px;font-size:13px}
@@ -7704,8 +7082,6 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
 .ptt-row{display:flex;gap:8px}
 .ptt-row #ptt{flex:1;min-width:0}
-#ptt-mark{flex:0 0 38%;height:var(--lt-h);border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
-#ptt-mark:active{filter:brightness(1.3)}
 #ptt{width:100%;height:var(--lt-h);border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 .ptt-wrap{position:relative;flex:1;min-width:0}
@@ -7746,14 +7122,18 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 .net-row .net-url{grid-column:1/-1}
 .net-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
 @media (max-width:480px){.net-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px}.net-row .net-pw{grid-column:1/3}}
+table.chk-t{table-layout:fixed}
+table.chk-t td,table.chk-t th{padding:5px 3px;font-size:12px;white-space:normal;overflow-wrap:break-word}
+table.chk-t thead th:first-child{width:40%}
+table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
 let recBusy = null;
 const REC_LOCK_IDS = ['c-connect', 'c-disc', 't-go', 't-disc', 'da-btn', 'nd-enable', 'nd-disable', 'tx-add', 'tx-remove',
-  'tone-start', 'tx-tone-start', 'dig-save'];
+  'dig-save'];
 const REC_PATHS = ['/api/node/enable', '/api/node/disable', '/api/tx/enable', '/api/tx/disable', '/api/connect', '/api/disconnect',
-  '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/digital', '/api/tonetest/start', '/api/tonetest/link'];
+  '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/digital'];
 const REC_ASK_PATHS = ['/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot', '/api/system/shutdown', '/api/setup/apply'];
 let recInfo = null;
 const REC_CFG_KEYS = ['port', 'udp_port', 'https', 'node'];
@@ -7868,7 +7248,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (ok) ok.addEventListener('click', () => document.getElementById('rec-dlg').close());
 });
 let loginWanted = false;
-let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
+let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0;
 let ctx = null, gainNode = null, ctrl = null, playing = false, nextT = 0;
 let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
@@ -7881,7 +7261,7 @@ const FAV_HINT = {ASL: ['Node', 'Node number', 'numeric'], EchoLink: ['Number', 
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
 let micPending = false, jitterSec = 0.25, sysmonPort = null;
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
-let rs = null, frameSink = null, testing = false, testBuf = [];
+let rs = null, frameSink = null;
 const MIC_DEFAULTS = {agc: false, ns: true, ec: false, gain: 0, hp: true, lev: true, gate: 0, eq: false};
 let mic = Object.assign({}, MIC_DEFAULTS);
 try {
@@ -7892,8 +7272,8 @@ try {
 const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true, spec: true};
 let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
-let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
-let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null, keyReqAt = 0;
+let streamPcm = false, oddByte = -1, ups = null, autoWait = null, starting = false;
+let listenAt = 0, rxLastDb = -120, chk = null, keyReqAt = 0;
 let sessNode = null, draining = false, busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
 let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
@@ -8022,12 +7402,6 @@ function makeBuffer(ac, x8k, u) {
   return ab;
 }
 
-function playBack(ac, x8k) {
-  const src = ac.createBufferSource();
-  src.buffer = makeBuffer(ac, x8k) || ac.createBuffer(1, 1, 8000); src.connect(ac.destination); src.start();
-  return src;
-}
-
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 function newAudioCtx() { return new AudioCtx(); }
 function peakDb(a) { return a > 0 ? 20 * Math.log10(a) : -120; }
@@ -8057,20 +7431,9 @@ async function api(url, opts) {
 
 const post = (url, body) => api(url, {method: 'POST', body: body});
 function kcColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-let kcLast = null;
-function kcLeft(ms) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-}
-function kcTestLine(t) {
-  if (!t) return '';
-  if (t.on) return 'Test running: ' + kcLeft(t.ends * 1000 - Date.now()) + ' left. ' + t.bursts + ' marked as kerchunks so far. Only bursts you mark are counted.';
-  return t.bursts ? 'Last test: ' + t.bursts + ' marked as kerchunks.' : 'No test run yet. Start a test, then press Mark kerchunk after each key-up you make.';
-}
 async function kcRefresh() {
   const d = await api('/api/kerchunks');
   if (!d.ok) { $('kc-state').textContent = d.error || 'Could not read the burst log.'; return; }
-  kcLast = d;
   $('sum-kc').textContent = d.kerchunks_today ? d.kerchunks_today + ' today' : '';
   const how = d.learned ? 'learned from ' + d.labels + ' labeled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
   const r = d.report;
@@ -8083,9 +7446,6 @@ async function kcRefresh() {
     + ', shortest real label ' + (r.shortest_real_label == null ? '-' : r.shortest_real_label + ' s')
     + (r.overlap ? ' (they overlap)' : '') + '. Wrong at this cut-off: ' + r.wrong_at_cutoff + '.'
     + (by ? ' Kerchunks by node: ' + by + '.' : '');
-  $('kc-test').textContent = d.test.on ? 'Stop test' : 'Start test';
-  $('kc-mark').disabled = !d.test.on;
-  $('kc-test-state').textContent = kcTestLine(d.test);
   kcDraw(d.bursts, d.threshold, d.source !== 'keyed');
   kcList(d.bursts);
 }
@@ -8093,24 +7453,6 @@ async function kcReset() {
   if (!confirm('Reset the kerchunk log?\n\nThe current log is kept as a backup file. The cut-off goes back to 0.4 s, and a running test stops.')) return;
   const d = await post('/api/kerchunks/reset', {});
   $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not reset the log.');
-  kcRefresh();
-}
-async function pttMark() {
-  const d = await post('/api/kerchunks/test/mark', {});
-  const text = d.ok ? d.message : (d.error || 'Could not mark the key-up.');
-  note('ptt-msg', d.ok ? 'ok' : 'err', text);
-  setTimeout(() => { if ($('ptt-msg').textContent === text) note('ptt-msg', '', ''); }, 4000);
-  if (foldOpen('kc')) kcRefresh();
-}
-async function kcMark() {
-  const d = await post('/api/kerchunks/test/mark', {});
-  $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not mark the burst.');
-  kcRefresh();
-}
-async function kcTestToggle() {
-  const on = !!(kcLast && kcLast.test && kcLast.test.on);
-  const d = on ? await post('/api/kerchunks/test/stop', {}) : await post('/api/kerchunks/test/start', {minutes: Number($('kc-min').value)});
-  if (!d.ok) $('kc-state').textContent = d.error || 'Could not change the test.';
   kcRefresh();
 }
 function kcLen(b) { return b.keyed_secs != null ? b.keyed_secs : b.secs; }
@@ -8273,7 +7615,7 @@ function showTab(name) {
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); tonePoll(); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); }
   if (name === 'listen') openTalk();
   if (name === 'setup') { loadDashFavs(); loadDigital(); }
   if (name === 'connect') connectTabEnter();
@@ -8441,12 +7783,10 @@ async function pollStatus() {
   if (!(authed || publicListen) || document.visibilityState === 'hidden' && !playing) return;
   const d = await api('/api/status');
   if (!d || d.ok === false) return;
-  lastStatus = d;
   recBusy = d.recording || null;
   recInfo = d.recorder || null;
   recApplyLocks();
   recApplyNote();
-  $('ptt-mark').classList.toggle('hidden', !(authed && d.kc_test));
   $('st-node').textContent = d.node || '(not set)';
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
   $('st-listeners').textContent = d.listeners + ' / ' + d.max_listeners;
@@ -8542,35 +7882,12 @@ function flush() {
   peakLocal = 0;
 }
 
-const VU_MIN = -60, CLIP_DB = -0.5;
-let micTaps = [], vuMic = null, vuHold = {db: -120, t: 0};
+const CLIP_DB = -0.5;
+let micTaps = [];
 
 function micFrame(st) {
-  vuMic = st;
   micTaps.forEach((f) => f(st));
   if (talking) txMeter(st);
-}
-
-function vuPct(db) { return Math.max(0, Math.min(100, (db - VU_MIN) / -VU_MIN * 100)); }
-
-function vuDraw(el, st) {
-  const now = performance.now();
-  if (st.pk > vuHold.db || now - vuHold.t > 1000) vuHold = {db: st.pk, t: now};
-  el.querySelector('.vu-avg').style.width = vuPct(st.db) + '%';
-  el.querySelector('.vu-pk').style.left = 'calc(' + vuPct(st.pk) + '% - 3px)';
-  el.querySelector('.vu-hold').style.left = 'calc(' + vuPct(vuHold.db) + '% - 2px)';
-  el.querySelector('.vu-gr i').style.width = Math.min(100, st.lim / 12 * 100) + '%';
-  el.querySelector('.vu-num').textContent = 'peak ' + fmtDb(vuHold.db) + ' · avg ' + fmtDb(st.db);
-  el.querySelector('.vu-lim').textContent = st.gate ? 'gate closed' : st.lim >= 0.5 ? 'limiting ' + st.lim.toFixed(1) + ' dB' : 'not limiting';
-}
-
-function vuRun(el, until) {
-  el.classList.remove('hidden');
-  const loop = () => {
-    if (vuMic) vuDraw(el, vuMic);
-    if (until()) requestAnimationFrame(loop);
-  };
-  requestAnimationFrame(loop);
 }
 
 function txMeter(st) {
@@ -8584,99 +7901,7 @@ function rxMeterBack() {
   $('st-level').textContent = '-';
 }
 
-function framesOf(f32) {
-  const out = [];
-  for (let i = 0; i + 160 <= f32.length; i += 160) {
-    let ss = 0, pk = 0;
-    for (let j = i; j < i + 160; j++) { const v = f32[j], a = v < 0 ? -v : v; ss += v * v; if (a > pk) pk = a; }
-    out.push({db: ss > 0 ? 10 * Math.log10(ss / 160) : -120, pk: peakDb(pk), lim: 0, gate: false});
-  }
-  return out;
-}
-
-function analyze(fr) {
-  const act = fr.filter((f) => f.db > -45);
-  const pw = (a) => a.length ? 10 * Math.log10(a.reduce((s, f) => s + Math.pow(10, f.db / 10), 0) / a.length) : -120;
-  const sorted = fr.map((f) => f.db).sort((x, y) => x - y);
-  const low = sorted.slice(0, Math.max(1, Math.floor(sorted.length / 10)));
-  const noise = low.length ? 10 * Math.log10(low.reduce((s, d) => s + Math.pow(10, d / 10), 0) / low.length) : -120;
-  const speech = pw(act);
-  return {frames: fr.length, active: act.length, peak: fr.reduce((m, f) => Math.max(m, f.pk), -120), speech: speech,
-    noise: noise, snr: act.length ? Math.min(60, speech - noise) : 0, limPct: act.length ? 100 * act.filter((f) => f.lim >= 0.5).length / act.length : 0,
-    limAvg: act.length ? act.reduce((s2, f) => s2 + f.lim, 0) / act.length : 0,
-    gatePct: act.length ? 100 * act.filter((f) => f.gate).length / act.length : 0};
-}
-
 function clampStep(x) { return Math.max(1, Math.min(12, Math.round(x))); }
-
-function micVerdict(a) {
-  if (a.active < 10) return {cls: 'err', text: 'Hardly anything was heard: check the microphone is allowed and not muted, and talk close to it.'};
-  const room = 24 - (Number(mic.gain) || 0);
-  if (a.peak > -1 || a.limPct > 30) {
-    const d = clampStep(Math.max(a.peak + 4, a.limPct > 30 ? a.limAvg + 3 : 0));
-    return {cls: 'warn', text: 'Too hot' + (a.limPct > 30 ? ' (the limiter worked ' + Math.round(a.limPct) + ' % of the time)' : '') + ': lower Mic gain by about ' + d + ' dB.', delta: -d};
-  }
-  if (a.speech < -30 || a.peak < -15) {
-    const d = clampStep(Math.min(-18 - a.speech, -4 - a.peak));
-    return {cls: 'warn', text: 'Quiet: raise Mic gain by about ' + Math.min(d, room) + ' dB' + (room < d ? ' (that is the most it goes; talk closer to the mic)' : '') + '.', delta: Math.min(d, room)};
-  }
-  if (a.snr < 15) return {cls: 'warn', text: 'Noisy: the background is only ' + Math.round(a.snr) + ' dB below your voice. Turn on Noise suppression or set Noise gate to Light, or move closer to the mic.'};
-  return {cls: 'ok', text: 'Good: speech ' + fmtDb(a.speech) + ', peaks ' + fmtDb(a.peak) + '.'};
-}
-
-function repNumbers(el, rows) {
-  el.innerHTML = '';
-  rows.forEach(([k, v]) => { const d = document.createElement('div'); d.textContent = k + ' '; const b = document.createElement('b'); b.textContent = v; d.appendChild(b); el.appendChild(d); });
-}
-
-function stripDraw(cv, fr, len) {
-  const r = window.devicePixelRatio || 1, w = Math.round(cv.clientWidth * r), h = Math.round(cv.clientHeight * r);
-  cv.width = w; cv.height = h;
-  const g = cv.getContext('2d'), y = (db) => h - vuPct(db) / 100 * h, n = Math.max(len || fr.length, 1);
-  g.fillStyle = '#0a1016'; g.fillRect(0, 0, w, h);
-  g.fillStyle = 'rgba(34,195,166,.16)'; g.fillRect(0, y(-3), w, y(-6) - y(-3));
-  g.fillStyle = '#243140';
-  [-6, -12, -24, -36, -48].forEach((db) => g.fillRect(0, Math.round(y(db)), w, Math.max(1, r)));
-  const bw = Math.max(1, w / n);
-  fr.forEach((f, i) => {
-    const x = i / n * w, v = Math.round(vuPct(f.db) / 100 * 255);
-    g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
-    g.fillRect(x, y(f.db), bw, h - y(f.db));
-  });
-  g.strokeStyle = '#f4c04e'; g.lineWidth = Math.max(1, r); g.beginPath();
-  fr.forEach((f, i) => { const x = i / n * w; if (i) g.lineTo(x, y(f.pk)); else g.moveTo(x, y(f.pk)); });
-  g.stroke();
-  g.fillStyle = '#f2545b'; g.fillRect(0, Math.max(0, Math.round(y(CLIP_DB)) - r), w, 2 * r);
-  g.font = Math.round(9 * r) + 'px ui-monospace,Menlo,Consolas,monospace';
-  g.textAlign = 'right'; g.textBaseline = 'middle';
-  [-6, -12, -24, -36, -48].forEach((db) => {
-    const label = String(db), tw = g.measureText(label).width + 4 * r, ty = y(db);
-    g.fillStyle = 'rgba(10,16,22,.75)'; g.fillRect(w - tw - 2 * r, ty - 6 * r, tw, 12 * r);
-    g.fillStyle = '#9fb0bf'; g.fillText(label, w - 4 * r, ty);
-  });
-}
-
-function playhead(strip, src, ac, secs) {
-  const head = strip.querySelector('.rep-head'), t0 = ac.currentTime;
-  head.style.display = 'block';
-  const loop = () => {
-    const p = Math.min(1, (ac.currentTime - t0) / secs);
-    head.style.left = (p * 100) + '%';
-    if (p < 1 && ac.state !== 'closed') requestAnimationFrame(loop); else head.style.display = 'none';
-  };
-  requestAnimationFrame(loop);
-}
-
-function lagOf(tx, rx) {
-  const e = (f) => Math.max(0, f.db + 60);
-  let best = 0, bestS = -1;
-  for (let L = 0; L < Math.min(150, rx.length); L++) {
-    let s = 0;
-    for (let i = 0; i < tx.length && i + L < rx.length; i++) s += e(tx[i]) * e(rx[i + L]);
-    if (s > bestS) { bestS = s; best = L; }
-  }
-  return best;
-}
 
 let rfss = 0, rfpk = 0, rfx1 = 0, rfx2 = 0, rfn = 0, rfprev = 0, rfprev2 = 0;
 
@@ -8738,13 +7963,6 @@ function chkSlot() {
   if (!chk.slots) chk.slots = [];
   while (chk.slots.length <= i) chk.slots.push(null);
   return chk.slots[i] || (chk.slots[i] = {a: 0, sp: 0, nz: 0, nzN: 0, ld: 0, ldN: 0, ldMax: 0, dr: 0});
-}
-
-// Runs saved before v2 have no slots. Add them so the run continues; earlier minutes show no trend.
-function chkMigrate(c) {
-  if (!c.slots) c.slots = [];
-  c.v = 2;
-  return c;
 }
 
 function chkMed(a) {
@@ -8815,7 +8033,7 @@ function chkWs(m) {
 }
 
 function chkMic(st) {
-  if (chk && chk.running && talking && keyed && !testing && !nodeTesting) accAdd(chk.tx, st);
+  if (chk && chk.running && talking && keyed) accAdd(chk.tx, st);
 }
 micTaps.push(chkMic);
 
@@ -8855,63 +8073,20 @@ function chkTick() {
   if (dt < 5000) chk.elapsed += dt; else chk.paused += dt;
   chk.last = now;
   const left = Math.max(0, chk.mins * 60000 - chk.elapsed);
-  const txt = fmtSecs(chk.elapsed / 1000);
-  sum('chk', 'Running ' + txt + ' / ' + chk.mins + ':00');
-  $('chk-run').textContent = 'Running: ' + txt + ' of ' + chk.mins + ' min. Heard ' + Math.round(chk.rx.act * 0.02) + ' s of audio, ' +
-    chk.txN + ' transmission(s) of yours.' + (chk.paused > 5000 ? ' Paused ' + fmtSecs(chk.paused / 1000) + ' (page closed or asleep).' : '');
-  if (chk.guide) $('chk-run').textContent += chkPromptText(chk.elapsed / 1000);
-  if (!chkWakeHeld()) $('chk-run').textContent += ' Screen may sleep: keep this page open.';
   if (Math.floor(chk.elapsed / 1000) % 10 === 0) chkSave();
   if (!left) chkStop();
 }
 
-function chkUi() {
-  const run = !!(chk && chk.running) || !!exp;
-  $('chk-start').classList.toggle('hidden', run);
-  $('chk-stop').classList.toggle('hidden', !run);
-  $('chk-mins').disabled = run;
-  $('chk-guide').disabled = run;
-  $('chk-run').classList.toggle('hidden', !run);
-}
-
-// Keep the screen awake during a check. The lock is released by the browser when the page is
-// hidden, so it is requested again when the page comes back.
-const CHK_PHRASE = 'This is a level check. One, two, three, four, five. The quick brown fox jumps over the lazy dog.';
-let chkWake = null;
-
-async function chkWakeOn() {
-  try {
-    if ('wakeLock' in navigator && document.visibilityState === 'visible') chkWake = await navigator.wakeLock.request('screen');
-  } catch (e) { chkWake = null; }
-}
-
-function chkWakeOff() {
-  try { if (chkWake) chkWake.release(); } catch (e) {}
-  chkWake = null;
-}
-
-function chkWakeHeld() { return !!(chkWake && !chkWake.released); }
-
 document.addEventListener('visibilitychange', () => {
-  if (chk && chk.running && document.visibilityState === 'visible' && !chkWakeHeld()) chkWakeOn();
   if (autoRun && document.visibilityState === 'visible' && !(autoRun.lock && !autoRun.lock.released)) autoWake(autoRun);
   if (document.visibilityState === 'visible') specKick();
 });
 
-// A prompt at 0:30 and every 2 minutes after, lasting 20 s.
-function chkPromptText(e) {
-  if (e < 30) return '';
-  return (e - 30) % 120 < 20 ? ' TALK NOW for 20 s at your normal voice: "' + CHK_PHRASE + '"' : '';
-}
-
 function chkStart(mins) {
-  chk = chkNew(typeof mins === 'number' ? mins : (Number($('chk-mins').value) || 5));
-  chk.guide = $('chk-guide').checked;
-  chkWakeOn();
+  chk = chkNew(mins);
   chk.nodeStart = null;
   api('/api/node/counters').then((d) => { if (chk) chk.nodeStart = d; });
-  chkSave(); chkUi(); chkTick();
-  note('chk-msg', '', '');
+  chkSave(); chkTick();
   appStats(true);
   if (!playing) startListen('system', 'balancer');
 }
@@ -8932,7 +8107,6 @@ function chkSummary(c) {
 }
 
 async function chkStop() {
-  chkWakeOff();
   if (!chk) return;
   const now = Date.now();
   if (now - chk.last < 5000) chk.elapsed += now - chk.last;
@@ -8940,72 +8114,16 @@ async function chkStop() {
   appStats(false);
   chk.nodeEnd = await api('/api/node/counters');
   const r = chkSummary(chk);
-  chk = null; chkSave(); chkUi();
-  sum('chk', '');
+  chk = null; chkSave();
   try {
     const prev = localStorage.getItem('nlCheckLast');
     if (prev) localStorage.setItem('nlCheckPrev', prev);
     localStorage.setItem('nlCheckLast', JSON.stringify(r));
   } catch (e) {}
-  await chkShow(r);
   if (autoRun && autoRun.wait) { const w = autoRun.wait; autoRun.wait = null; autoRun.window = false; w(r); }
-  if (exp && exp.liveDone) { const done = exp.liveDone; exp.liveDone = null; done(r); }
 }
 
 const db0 = (x) => (x == null || x <= -119 ? '-' : Math.round(x) + ' dBFS');
-
-function chkRows(r, p, side) {
-  const R = r[side], P = p ? p[side] : null;
-  const st = (ok, warn) => (ok ? 'st-ok' : warn ? 'st-warn' : 'st-bad');
-  const PI = r.pi || {samples: 0, tempMax: null, tempAvg: null, throttledSamples: 0, flags: []};
-  const rows = side === 'rx' ? [
-    ['Listened', Math.round(R.secs) + ' s', P && Math.round(P.secs) + ' s', '', 'st-ok'],
-    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -14', R.actSecs < CHK_MIN_SPEECH ? '' : st(R.speech >= -24 && R.speech <= -14, R.speech >= -30 && R.speech <= -10)],
-    ['Peak', db0(R.peak), P && db0(P.peak), 'below -1', st(R.peak < -1, R.peak < -0.2)],
-    ['Samples at full scale', R.clipPct.toFixed(1) + ' %', P && P.clipPct != null ? P.clipPct.toFixed(1) + ' %' : '-', 'under 1 %', st(R.clipPct < 1, R.clipPct < 3)],
-    ['Stations, quietest to loudest', R.spread == null ? '-' : Math.round(R.spread) + ' dB', P && (P.spread == null ? '-' : Math.round(P.spread) + ' dB'), 'under 8 dB', R.spread == null ? '' : st(R.spread < 8, R.spread < 14)],
-    ['Below 300 Hz (tones, hum)', R.hum == null ? '-' : Math.round(R.hum) + ' dB', P && (P.hum == null ? '-' : Math.round(P.hum) + ' dB'), 'under -25 dB', R.hum == null ? '' : st(R.hum < -25, R.hum < -15)],
-    ['Dropouts', R.drops + (R.drops ? ' (' + R.dropsMin.toFixed(1) + '/min): under 0.1 s ' + R.dropS + ', 0.1-0.5 s ' + R.dropM + ', over 0.5 s ' + R.dropL + ', silent ' + R.dropSil + ' s' : ''), P && String(P.drops), 'none', st(R.dropsMin < 0.5, R.dropsMin < 2)],
-    ['Buffer resets (queue overflow)', String(R.resets), P && String(P.resets || 0), 'none', st(R.resets === 0, R.resets < 3)],
-    ['Squelch tails heard', String(R.tails), P && String(P.tails), 'none', st(R.tails === 0, R.tails < 3)],
-    ['Pi load (avg / max)', R.load == null ? '-' : R.load.toFixed(1) + ' / ' + R.loadMax.toFixed(1) + ' %', P && (P.load == null ? '-' : P.load.toFixed(1) + ' %'), 'under 25 %', R.load == null ? '' : st(R.loadMax < 25, R.loadMax < 50)],
-    ['Pi temperature (max / avg)', PI.tempMax == null ? '-' : Math.round(PI.tempMax) + ' / ' + Math.round(PI.tempAvg) + ' C', '', 'under 70 C', PI.tempMax == null ? '' : st(PI.tempMax < 70, PI.tempMax < 80)],
-    ['Pi throttling or under-voltage', PI.samples ? (PI.flags.length ? PI.flags.join(', ') + ' (' + Math.round(100 * PI.throttledSamples / PI.samples) + ' % of samples)' : 'none') : '-', '', 'none', PI.samples ? st(!PI.flags.length, PI.throttledSamples / PI.samples < 0.05) : ''],
-    ['Headset unplugged / output lost', R.outDrops == null ? '-' : String(R.outDrops), P && (P.outDrops == null ? '-' : String(P.outDrops)), 'none', R.outDrops == null ? '' : st(R.outDrops === 0, R.outDrops < 2)],
-    ['Audio output', R.out || '-', P && (P.out || '-'), '', ''],
-  ] : [
-    ['Transmissions', R.nTx + (R.nTx ? ' (' + R.txSecs + ' s)' : ''), P && String(P.nTx), '', 'st-ok'],
-    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -12', R.actSecs < CHK_MIN_SPEECH ? '' : st(R.speech >= -24 && R.speech <= -12, R.speech >= -30 && R.speech <= -8)],
-    ['Peak', db0(R.peak), P && db0(P.peak), '-8 to -1', R.actSecs < 0.4 ? '' : st(R.peak <= -1 && R.peak >= -8, R.peak < -0.2)],
-    ['Samples at full scale', R.clipPct.toFixed(1) + ' %', P && P.clipPct != null ? P.clipPct.toFixed(1) + ' %' : '-', 'under 1 %', st(R.clipPct < 1, R.clipPct < 3)],
-    ['Voice above background', R.snr == null ? '-' : (R.snr >= 60 ? 'over 60' : Math.round(R.snr)) + ' dB', P && (P.snr == null ? '-' : Math.round(P.snr) + ' dB'), 'over 20 dB', R.snr == null ? '' : st(R.snr > 20, R.snr > 12)],
-    ['Limiter working', Math.round(R.limPct) + ' %', P && Math.round(P.limPct) + ' %', 'under 20 %', R.actSecs < 0.4 ? '' : st(R.limPct < 20, R.limPct < 40)],
-    ['Gate closed while talking', Math.round(R.gatePct) + ' %', P && Math.round(P.gatePct) + ' %', 'under 10 %', R.actSecs < 0.4 ? '' : st(R.gatePct < 10, R.gatePct < 20)],
-    ['Transmissions with gaps', R.srvN ? R.gapTx + ' of ' + R.srvN : '-', P && (P.srvN ? P.gapTx + ' of ' + P.srvN : '-'), 'none', R.srvN ? st(R.gapTx === 0, R.gapTx / R.srvN < 0.25) : ''],
-    ['Peak at the Pi (after TX gain)', db0(R.srvPeak), P && db0(P.srvPeak), 'below -1', R.srvPeak == null ? '' : st(R.srvPeak < -1, R.srvPeak < -0.2)],
-    ['Microphone', R.mic || '-', P && (P.mic || '-'), '', ''],
-    ['Headset-button transmissions', R.hsPtt == null ? '-' : String(R.hsPtt), P && (P.hsPtt == null ? '-' : String(P.hsPtt)), '', ''],
-    ['PTT round trip, phone to Pi and back (median)', r.pttRtt == null ? '-' : r.pttRtt + ' ms', '', 'under 200 ms', r.pttRtt == null ? '' : st(r.pttRtt < 200, r.pttRtt < 400)],
-    ['Pi key to first audio sent (median)', r.piAudio == null ? '-' : r.piAudio + ' ms', '', 'about 120 ms (TX buffer)', r.piAudio == null ? '' : st(r.piAudio <= 200, r.piAudio <= 300)],
-    ['Keyups at node (phone sent)', r.node && r.node.available ? r.node.nodeKeyups + ' (' + r.node.phoneKeyings + ')' : 'not readable', '', 'equal', r.node && r.node.available ? st(r.node.match, false) : ''],
-    ['Audio stopped / time-outs / refused', R.deadman + ' / ' + R.timeout + ' / ' + R.denied, P && (P.deadman + ' / ' + P.timeout + ' / ' + P.denied), '0 / 0 / 0', st(!R.deadman && !R.timeout && !R.denied, R.deadman < 2)],
-  ];
-  return rows;
-}
-
-function chkTable(id, rows, cmp) {
-  const tb = $(id);
-  tb.innerHTML = '';
-  rows.forEach(([k, now, last, target, cls]) => {
-    const tr = document.createElement('tr');
-    [k, now].concat(cmp ? [last == null ? '-' : last] : []).concat([target]).forEach((v, i) => {
-      const td = document.createElement(i ? 'td' : 'th'); td.textContent = v;
-      if (i === 1 && cls) td.className = cls;
-      tr.appendChild(td);
-    });
-    tb.appendChild(tr);
-  });
-}
 
 const JIT_STEPS = [150, 250, 500, 1000], TXB_STEPS = [60, 120, 200, 300];
 const nextStep = (steps, v) => steps.find((x) => x > Number(v)) || null;
@@ -9130,99 +8248,6 @@ function chkSuggest(r, cfg) {
   return items.map((it) => ({text: it.text, change: it.change}));
 }
 
-async function chkApply(i, s2, btn, undo) {
-  const ch = s2.change;
-  if (ch.app) {
-    if (!undo) chkUndo[i] = {app: {bufferMs: (appInfo() || {}).bufferMs}};
-    if (!appSet(undo ? chkUndo[i].app : ch.app)) { note('chk-msg', 'err', 'The app did not take the change.'); return; }
-  } else if (ch.mic) {
-    if (!undo) chkUndo[i] = {mic: Object.assign({}, mic)};
-    Object.assign(mic, undo ? chkUndo[i].mic : ch.mic);
-    try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
-    loadMicUi(); micSummary();
-  } else {
-    let body = {};
-    if (undo) body = chkUndo[i].cfg;
-    else {
-      const d = await api('/api/config');
-      chkUndo[i] = {cfg: {}};
-      body = d.config ? balBody(ch, d.config) : keys.reduce((o, k) => { o[k] = ch[k]; return o; }, {});
-      Object.keys(body).forEach((k) => { chkUndo[i].cfg[k] = d.config ? d.config[k] : undefined; });
-    }
-    const res = await post('/api/config', body);
-    if (!res.ok) { note('chk-msg', 'err', res.error || 'Could not save.'); return; }
-    loadConfig();
-  }
-  note('chk-msg', 'ok', undo ? 'Put back.' : 'Changed. Run another check to see the difference.');
-  btn.textContent = undo ? 'Apply' : 'Undo';
-  btn.onclick = () => chkApply(i, s2, btn, !undo);
-}
-
-let chkShown = null, chkCmp = false;
-const TEST_IDS = ['check', 'balance', 'tone_rx', 'tone_tx', 'mic', 'node', 'kerchunk'];
-let testsOff = [];
-
-function testOff(id) { return testsOff.includes(id); }
-
-function testsUi() {
-  TEST_IDS.forEach((k) => { $('test-on-' + k).checked = !testOff(k); });
-  const n = testsOff.length;
-  sum('chk', n ? n + ' test' + (n > 1 ? 's' : '') + ' off' : '');
-}
-
-async function testsSave(all) {
-  if (all === true) TEST_IDS.forEach((k) => { $('test-on-' + k).checked = true; });
-  const off = TEST_IDS.filter((k) => !$('test-on-' + k).checked);
-  const d = await post('/api/config', {tests_off: off.join(',')});
-  note('tests-msg', d.ok ? 'ok' : 'err', d.ok ? 'Saved for every phone.' : (d.error || 'Could not save.'));
-  if (!d.ok) return;
-  testsOff = off;
-  if (testOff('balance') && autoRun) autoStop(true);
-  testsUi();
-  availUi();
-}
-
-// ---- Tone test (Pi side, v0.9.3): start, poll, show the report ----
-let toneTimer = null, toneWasRunning = false, toneMode = 'rx';
-const TONE_STAGE = {keying: 'Keying the node', sending: 'Transmitting', analysing: 'Analyzing'};
-const toneFmt = (v, digits, signed) => (v == null ? '-' : ((signed && v > 0) ? '+' : '') + Number(v).toFixed(digits == null ? 1 : digits));
-
-function tonePre() { return toneMode === 'tx' ? 'tx-tone-' : 'tone-'; }
-
-function toneUi(running) {
-  $('tx-link-connect').disabled = running;
-  $('tx-link-disconnect').disabled = running;
-  ['tone-', 'tx-tone-'].forEach((q) => {
-    const act = q === tonePre() && running;
-    $(q + 'start').classList.toggle('hidden', running);
-    $(q + 'stop').classList.toggle('hidden', !act);
-    $(q + 'prog').classList.toggle('hidden', !act);
-    $(q + 'hz').disabled = running;
-    $(q + 'sec').disabled = running;
-  });
-}
-
-function toneRequest(mode) {
-  const p = mode === 'tx' ? 'tx-tone-' : 'tone-';
-  const raw = $(p + 'hz').value.trim();
-  return {tones: raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null, tone_sec: Number($(p + 'sec').value), mode: mode};
-}
-
-async function toneStart(mode) {
-  toneMode = mode;
-  const p = tonePre();
-  $(p + 'start').disabled = true;
-  note(p + 'msg', '', 'Starting...');
-  const d = await post('/api/tonetest/start', toneRequest(mode));
-  $(p + 'start').disabled = false;
-  if (!d.ok) { note(p + 'msg', 'err', d.error || 'Could not start the tone test.'); return; }
-  note(p + 'msg', '', '');
-  $(p + 'rep').classList.add('hidden');
-  toneWasRunning = true;
-  toneUi(true);
-  tonePoll();
-}
-
 async function setupCheck() {
   if ($('setup-dlg').open) return;
   const d = await api('/api/setup');
@@ -9251,172 +8276,12 @@ async function setupApply() {
   loadNode(); loadTx(); loadConfig();
 }
 
-async function txLink(action) {
-  const node = $('tx-link-node').value.trim();
-  note('tx-link-msg', '', action === 'connect' ? 'Connecting...' : 'Disconnecting...');
-  const d = await post('/api/tonetest/link', {action: action, node: node});
-  note('tx-link-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Could not change the link.'));
-}
-
-async function toneStop() {
-  const d = await post('/api/tonetest/stop', {});
-  if (!d.ok) note(tonePre() + 'msg', 'err', d.error || 'Could not stop the tone test.');
-}
-
-async function tonePoll() {
-  clearTimeout(toneTimer);
-  const s = await api('/api/tonetest/status');
-  if (!s.ok) { note(tonePre() + 'msg', 'err', s.error || 'Node Talker is not answering.'); toneUi(false); return; }
-  if (s.target && !$('tx-link-node').value) $('tx-link-node').value = s.target;
-  if (s.running) {
-    toneMode = s.mode || 'rx';
-    toneWasRunning = true;
-    toneUi(true);
-    $(tonePre() + 'prog').textContent = (TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %';
-    toneTimer = setTimeout(tonePoll, 1000);
-    return;
-  }
-  toneUi(false);
-  if (toneWasRunning && s.stage === 'failed') note(tonePre() + 'msg', 'err', s.error || 'The tone test failed.');
-  if (toneWasRunning && s.stage === 'done') note(tonePre() + 'msg', 'ok', 'Tone test finished.');
-  toneWasRunning = false;
-  if (s.report) { if (s.report.mode === 'tx') txToneShow(s.report); else toneShow(s.report); }
-}
-
-function txToneShow(r) {
-  $('tx-tone-rep').classList.remove('hidden');
-  $('tx-tone-sum').textContent = 'Sent ' + r.tones.join(', ') + ' Hz, ' + r.tone_sec + ' s each, ' + r.seconds + ' s in all, at '
-    + r.level_db + ' dBFS, through node ' + r.node + ' with ID ' + r.callsign + '. Third-party nodes measure what they receive.';
-}
-
-function toneShow(r) {
-  $('tone-rep').classList.remove('hidden');
-  const head = [
-    r.rx_detected ? 'Return heard, delay ' + r.latency_ms + ' ms' : 'No return signal',
-    r.band_low_hz != null ? 'usable from ' + r.band_low_hz + ' to ' + r.band_high_hz + ' Hz (within 6 dB of ' + (r.reference_hz ? '1 kHz' : 'the strongest tone') + ')' : null,
-    'node ' + r.node + ', ID ' + r.callsign,
-    'TX gain ' + fmtGain(r.tx_gain_db) + ', RX gain ' + fmtGain(r.rx_gain_db),
-    r.rx_detected ? 'raw noise floor ' + r.noise_raw_db + ' dBFS' : null,
-    r.agc_bypassed ? 'Automatic level was paused for the test' : null,
-    r.load && r.load.cpu_pct != null ? 'CPU peak ' + Math.round(r.load.cpu_pct) + ' %' : null,
-    r.load && r.load.mem_avail_mb != null ? 'lowest free memory ' + r.load.mem_avail_mb + ' MB' : null,
-  ].filter(Boolean);
-  $('tone-sum').textContent = head.join('. ') + '.';
-  const tb = $('tone-rows');
-  tb.innerHTML = '';
-  r.rows.forEach((row) => {
-    const tr = document.createElement('tr');
-    const cells = [
-      row.hz,
-      toneFmt(row.sent_db),
-      toneFmt(row.raw_db),
-      toneFmt(row.raw_resp_db, 1, true),
-      toneFmt(row.proc_db),
-      toneFmt(row.proc_minus_raw_db, 1, true),
-      toneFmt(row.raw_freq_err_hz, 1, true),
-      row.dropouts == null ? '-' : String(row.dropouts),
-    ];
-    cells.forEach((v, i) => { const td = document.createElement(i ? 'td' : 'th'); td.textContent = v; tr.appendChild(td); });
-    tb.appendChild(tr);
-  });
-  const wb = $('tone-warn');
-  wb.innerHTML = '';
-  (r.warnings || []).forEach((w) => {
-    const p = document.createElement('div');
-    p.className = 'msg warn';
-    p.textContent = w;
-    wb.appendChild(p);
-  });
-}
-
-// Per-minute strip: one bar per minute for each metric. Each metric has a fixed scale so
-// runs can be compared by eye; dropouts scale to the largest count in the run.
-const CHK_METRICS = [
-  {label: 'Speech dB', key: 'speech', lo: -40, hi: -5},
-  {label: 'Noise dB', key: 'noise', lo: -80, hi: -40},
-  {label: 'Pi load %', key: 'load', lo: 0, hi: 100},
-  {label: 'Dropouts', key: 'drops', lo: 0, hi: null},
-];
-
-function chkCellText(cls, text) {
-  const d = document.createElement('div');
-  d.className = cls;
-  d.textContent = text;
-  return d;
-}
-
-function chkBarCell(text, pct) {
-  const c = document.createElement('div');
-  c.className = 'cell';
-  const bar = document.createElement('div');
-  bar.className = 'bar';
-  const fill = document.createElement('div');
-  fill.className = 'fill';
-  fill.style.height = pct + '%';
-  bar.appendChild(fill);
-  c.appendChild(bar);
-  c.appendChild(chkCellText('val', text));
-  return c;
-}
-
-function chkMinutes(slots) {
-  const box = $('chk-min');
-  box.innerHTML = '';
-  if (!slots.length) { box.textContent = 'No per-minute data for this check.'; return; }
-  const n = slots.length;
-  box.style.setProperty('--n', n);
-  const maxDrops = Math.max(1, ...slots.map((x) => (x ? x.drops : 0)));
-  box.appendChild(chkCellText('lab', 'Minute'));
-  for (let i = 0; i < n; i++) box.appendChild(chkCellText('val', String(i + 1)));
-  CHK_METRICS.forEach((m) => {
-    box.appendChild(chkCellText('lab', m.label));
-    for (let i = 0; i < n; i++) {
-      const x = slots[i];
-      const v = x ? x[m.key] : null;
-      const hi = m.hi == null ? maxDrops : m.hi;
-      const pct = v == null ? 0 : Math.max(0, Math.min(100, 100 * (v - m.lo) / (hi - m.lo)));
-      const text = v == null ? '-' : (m.key === 'drops' ? String(v) : String(Math.round(v)));
-      box.appendChild(chkBarCell(text, pct));
-    }
-  });
-}
-
-// ---- Expanded test (v0.9.23): live check and node tone test, one after the other, optionally balanced ----
-// Balancing changes one setting at a time between runs and keeps the change only if the score does not get worse.
-const BAL_TONE_TARGET = -16, BAL_LIVE_TARGET = -19, BAL_KEEP_MARGIN = 0.5, BAL_TONE_STEP_MAX = 6, BAL_TONE_TOL = 1.5;
-const BAL_TONE_ROUNDS = 3, BAL_LIVE_ROUNDS = 3, BAL_QUIET_MS = 5000, BAL_QUIET_MAX_MS = 120000, BAL_WATCH_MS = 3000;
-let exp = null, expWatch = null;
-
-function balToneRow(r) {
-  const rows = (r.rows || []).filter((x) => x.proc_db != null);
-  return rows.find((x) => x.hz === 1000) || rows.sort((a, b) => b.proc_db - a.proc_db)[0] || null;
-}
-
-function balToneDiff(r) {
-  const row = balToneRow(r);
-  return row ? BAL_TONE_TARGET - row.proc_db : null;
-}
-
-function balToneListen(r, cfg) {
-  if (!(r.dropouts > 0)) return null;
-  return nextStep(JIT_STEPS, cfg && cfg.tune_enabled ? cfg.jitter_ms : 250);
-}
-
-function balToneScore(r) {
-  const d = balToneDiff(r);
-  return d == null ? null : Math.abs(d) + 0.5 * (r.dropouts || 0);
-}
-
-function balToneStep(r, rxGain) {
-  const d = balToneDiff(r), cur = Math.round(Number(rxGain) || 0);
-  if (d == null || Math.abs(d) <= BAL_TONE_TOL) return null;
-  const step = Math.max(-BAL_TONE_STEP_MAX, Math.min(BAL_TONE_STEP_MAX, Math.round(d)));
-  const next = Math.max(-12, Math.min(12, cur + step));
-  return next === cur ? null : next;
-}
-
+// ---- Balancer: changes one setting at a time between one-minute measurements and puts it back if the audio gets worse ----
+const BAL_LIVE_TARGET = -19, BAL_QUIET_MS = 5000, BAL_QUIET_MAX_MS = 120000, BAL_WATCH_MS = 3000;
+let balOff = false, balBoot = false;
+const BAL_ID = 'p' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36).slice(-6);
 function balAlive() {
-  return exp ? !exp.stopped : !!(autoRun && !autoRun.stop);
+  return !!(autoRun && !autoRun.stop);
 }
 
 // Each score counts only what its side's settings can change, so a kept or reverted trial reflects the change.
@@ -9441,10 +8306,6 @@ function balTxScore(r, cfg) {
   return s;
 }
 
-function balLiveScore(r, cfg) {
-  return balRxScore(r) + balTxScore(r, cfg);
-}
-
 // A gain change has a known effect on the level, so it is applied without a trial; a one-minute trial would mostly
 // measure which stations talked. Filters, the gate, Automatic level and the buffers are put on trial.
 const BAL_GAIN_KEYS = ['rx_gain_db', 'tx_gain_db', 'tune_enabled', 'node'];
@@ -9458,8 +8319,8 @@ const AUTO_WORSE = 2, AUTO_REJECT_MS = 1800000, AUTO_WATCH_SLOW_MS = 15000, POLL
 let autoRun = null;
 const autoUndo = {rx: null, tx: null}, autoPre = {rx: null, tx: null}, autoSig = {rx: '', tx: ''}, autoRejected = {rx: {}, tx: {}};
 
-function autoOn(side) { return !!$(side + '-auto').checked; }
-function autoWanted() { return autoOn('rx') || autoOn('tx'); }
+function autoOn(side) { return !balOff; }
+function autoWanted() { return authed && !balOff; }
 function autoKeys(side) { return side === 'rx' ? BAL_RX_KEYS : BAL_TX_KEYS; }
 function autoAwakeNote() {
   if (autoRun && autoRun.lock && !autoRun.lock.released) return '';
@@ -9470,7 +8331,7 @@ function autoAwakeNote() {
 
 function autoStatus(text) { const extra = autoAwakeNote(); ['rx', 'tx'].forEach((s) => { if (autoOn(s)) note(s + '-auto-msg', '', text + extra); }); }
 function autoSettled() { return !!autoRun && Date.now() - autoRun.started >= AUTO_SETTLE_MS; }
-function pollBusy() { return keyed || talking || testing || toneWasRunning || !!exp || !!(chk && chk.running); }
+function pollBusy() { return keyed || talking || !!(chk && chk.running); }
 
 function pollEvery(fn, fast, slow) {
   setTimeout(async () => {
@@ -9481,9 +8342,8 @@ function pollEvery(fn, fast, slow) {
 
 function autoBlock() {
   if (!authed) return 'log in to Node Talker';
-  if (keyed || talking || testing) return 'you are transmitting or testing the microphone';
-  if (toneWasRunning) return 'a tone test is running';
-  if (exp) return 'a balance run is going';
+  if (keyed || talking) return 'you are transmitting';
+  if (appAudio() && !appStatsOk()) return 'this app version cannot report its audio: update Node Talker Mobile, or switch the app to Page audio';
   if (chk && chk.running && !(autoRun && autoRun.window)) return 'a check is running';
   return '';
 }
@@ -9552,8 +8412,10 @@ async function autoStep(side, r, cfg) {
   const hit = balPick(r, cfg, autoKeys(side), autoRejected[side]);
   if (!hit) { note(msg, '', 'Nothing to change this minute.'); return; }
   if (!(await balQuiet())) return;
+  await balEnsureSnap(autoRun);
   const res = await balApply(hit.change);
   if (!res.ok) { note(msg, 'err', res.error || 'Could not save.'); return; }
+  balRefreshSnap();
   if (balIsGain(hit.change)) { note(msg, 'ok', new Date().toLocaleTimeString() + ': ' + hit.text + ' Applied; a gain change is not put on trial.'); return; }
   autoUndo[side] = res.undo;
   autoPre[side] = score;
@@ -9566,11 +8428,15 @@ async function autoLoop(run) {
     if (run.pause) { autoStatus('Paused: ' + run.pause + '. It resumes when the Pi settles.'); await autoSleep(run, 5000); continue; }
     const why = autoBlock();
     if (why) { autoStatus('Waiting: ' + why + '.'); await autoSleep(run, 3000); continue; }
+    const lease = await post('/api/balance/lease', {id: BAL_ID});
+    if (autoRun !== run) return;
+    if (lease.ok && !lease.owner) { autoStatus('Waiting: another phone is balancing this node.'); await autoSleep(run, 10000); continue; }
     autoStatus('Measuring for ' + AUTO_WINDOW_MIN + ' min...');
     const r = await autoWindow(run);
     if (autoRun !== run || !r || run.pause) continue;
     const cur = await api('/api/config');
     if (!cur.config) { autoStatus('Could not read the settings. Trying again.'); await autoSleep(run, 5000); continue; }
+    if (cur.config.balancer_off) { balOff = true; autoStop(); return; }
     if (autoOn('rx')) await autoStep('rx', r, cur.config);
     if (autoOn('tx') && autoRun === run) await autoStep('tx', r, cur.config);
     if (autoRun === run && autoSettled()) {
@@ -9587,42 +8453,66 @@ function autoStart() {
   run.watch = setInterval(() => autoWatchTick(run), BAL_WATCH_MS);
   autoWake(run);
   autoStatus('Starting...');
-  (async () => {
-    const s = await api('/api/balance');
-    if (autoRun === run && !(s.ok && s.snapshot)) { const sn = await post('/api/balance/snapshot', {}); if (sn.ok) balAppSave(); }
-  })();
+  balEnsureSnap(run);
   autoLoop(run);
 }
 
-function autoStop(untick) {
+async function balEnsureSnap(run) {
+  const s = await api('/api/balance');
+  if ((!run || autoRun === run) && s.ok && !s.snapshot) { const sn = await post('/api/balance/snapshot', {}); if (sn.ok) balAppSave(); }
+  balRefreshSnap();
+}
+
+function autoSync() {
+  if (autoWanted() && !autoRun) autoStart();
+  else if (!autoWanted() && autoRun) autoStop();
+}
+
+async function autoBootCheck() {
+  if (!authed || balBoot) return;
+  balBoot = true;
+  try {
+    const d = await api('/api/config');
+    if (d.config) { balOff = !!d.config.balancer_off; autoSync(); }
+  } finally { balBoot = false; }
+}
+
+async function balRefreshSnap() {
+  if (!authed) return;
+  const d = await api('/api/balance');
+  const open = !!(d.ok && d.snapshot);
+  $('exp-open').classList.toggle('hidden', !open);
+  if (open) $('exp-open-msg').textContent = 'The balancer changed settings (saved ' + new Date(d.snapshot.at * 1000).toLocaleString() + '). Restore the original settings, or keep the changes.';
+}
+
+function balInit() {
+  $('cd-chk').querySelector('.fold-btn').addEventListener('click', balRefreshSnap);
+  $('exp-restore').addEventListener('click', async () => {
+    const d = await post('/api/balance/restore', {});
+    if (d.ok) balAppRestore();
+    loadConfig();
+    note('exp-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Put back.') : (d.error || 'Could not restore.'));
+    balRefreshSnap();
+  });
+  $('exp-keep').addEventListener('click', async () => {
+    await post('/api/balance/keep', {});
+    balAppForget();
+    note('exp-msg', 'ok', 'Changes kept.');
+    balRefreshSnap();
+  });
+  setInterval(autoBootCheck, 60000);
+}
+
+function autoStop() {
   const run = autoRun;
   if (!run) return;
-  if (untick) { ['rx', 'tx'].forEach((s) => { $(s + '-auto').checked = false; }); saveAutoPrefs(); }
   autoRun = null;
   clearInterval(run.watch);
   try { if (run.lock) run.lock.release(); } catch (e) {}
   if (run.window && chk && chk.running) chkStop();
   if (run.wait) { const w = run.wait; run.wait = null; w(null); }
-  ['rx', 'tx'].forEach((s) => note(s + '-auto-msg', '', 'Stopped. Changes are kept; Restore original settings in the Tests card undoes them.'));
-}
-
-function autoPrefChanged() {
-  if (testOff('balance')) { ['rx', 'tx'].forEach((s) => { $(s + '-auto').checked = false; }); }
-  saveAutoPrefs();
-  if (autoWanted()) { if (!autoRun) autoStart(); }
-  else if (autoRun) autoStop(false);
-}
-
-function saveAutoPrefs() {
-  try { localStorage.setItem('nlAutoBal', JSON.stringify({rx: autoOn('rx'), tx: autoOn('tx')})); } catch (e) {}
-}
-
-function loadAutoPrefs() {
-  let p = {};
-  try { p = JSON.parse(localStorage.getItem('nlAutoBal') || '{}') || {}; } catch (e) {}
-  $('rx-auto').checked = !!p.rx;
-  $('tx-auto').checked = !!p.tx;
-  if (autoWanted() && !testOff('balance')) autoStart();
+  post('/api/balance/lease', {id: BAL_ID, release: true});
+  ['rx', 'tx'].forEach((s) => note(s + '-auto-msg', '', balOff ? 'The balancer is turned off in Setup. Changes are kept; Restore original settings in the Balancer card undoes them.' : 'Stopped. Changes are kept; Restore original settings in the Balancer card undoes them.'));
 }
 
 function balPick(r, cfg, keys, rejected) {
@@ -9675,29 +8565,12 @@ async function balQuiet() {
   let since = start;
   while (balAlive()) {
     const s = await api('/api/status');
-    if (keyed || testing || s.ok === false || s.audio_active || (s.tx && s.tx.keyed)) since = Date.now();
+    if (keyed || s.ok === false || s.audio_active || (s.tx && s.tx.keyed)) since = Date.now();
     if (Date.now() - since >= BAL_QUIET_MS) return true;
     if (Date.now() - start >= BAL_QUIET_MAX_MS) return false;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return false;
-}
-
-function expStage(text) {
-  $('exp-run').textContent = text;
-  $('exp-run').classList.toggle('hidden', !text);
-}
-
-function expFail(msg) {
-  if (exp) { exp.stopped = true; if (/protect the Pi/.test(msg)) exp.aborted = msg; }
-  note('exp-msg', 'err', msg);
-  return null;
-}
-
-function expUi(running) {
-  ['exp-tone', 'exp-bal'].forEach((id) => { $(id).disabled = running; });
-  chkUi();
-  if (!running) expStage('');
 }
 
 const BAL_APP_KEY = 'nlBalApp';
@@ -9718,281 +8591,7 @@ function balAppRestore() {
 }
 const BAL_RX_KEYS = ['rx_gain_db', 'rx_hpf', 'rx_agc', 'rx_gate', 'jitter_ms', 'app'], BAL_TX_KEYS = ['tx_gain_db', 'tx_buffer_ms'];
 
-function balNote(change, kind, text) {
-  const keys = Object.keys(change || {});
-  const rx = keys.some((k) => BAL_RX_KEYS.includes(k)), tx = keys.some((k) => BAL_TX_KEYS.includes(k));
-  note(rx && !tx ? 'rx-bal-msg' : tx && !rx ? 'tx-bal-msg' : 'exp-msg', kind, text);
-}
-
-function expLive(mins) {
-  return new Promise((resolve) => {
-    exp.liveDone = resolve;
-    chkStart(mins);
-  });
-}
-
-async function expTone() {
-  toneMode = 'rx';
-  const d = await post('/api/tonetest/start', toneRequest('rx'));
-  if (!d.ok) return expFail(d.error || 'The tone test did not start.');
-  toneUi(true);
-  let misses = 0;
-  for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    const s = await api('/api/tonetest/status');
-    if (!s.ok) {
-      if (++misses < 4) continue;
-      return expFail(s.error || 'Node Talker is not answering.');
-    }
-    misses = 0;
-    if (s.running) { expStage((TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %'); continue; }
-    toneUi(false);
-    if (s.report) toneShow(s.report);
-    if (s.stage !== 'done' || !s.report) return expFail(s.error || 'The tone test failed.');
-    return s.report;
-  }
-}
-
-async function expToneRounds() {
-  const rounds = exp.balance ? BAL_TONE_ROUNDS : 1;
-  let prev = null;
-  for (let i = 0; i < rounds && !exp.stopped; i++) {
-    expStage('Node tone test ' + (i + 1) + ' of ' + rounds);
-    const r = await expTone();
-    if (!r || exp.stopped || !exp.balance) return;
-    const score = balToneScore(r);
-    if (score == null) { exp.balance = false; note('rx-bal-msg', 'warn', 'No tone came back from the node, so there is nothing to balance. Balancing stopped.'); return; }
-    if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.lastTone) {
-      await balRevert(exp.lastTone);
-      exp.balance = false;
-      note('rx-bal-msg', 'warn', 'The last RX gain change made the tones worse, so it was put back. Balancing stopped.');
-      return;
-    }
-    prev = score;
-    if (i === rounds - 1) break;
-    const cur = await api('/api/config');
-    if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
-    const before = cur.config.tune_enabled ? Math.round(Number(cur.config.rx_gain_db) || 0) : 0;
-    const next = balToneStep(r, before);
-    const lb = next == null ? balToneListen(r, cur.config) : null;
-    if (next == null && lb == null) { note('rx-bal-msg', 'ok', 'Tone levels are within 1.5 dB of the target and no tone dropped out. Nothing to change.'); return; }
-    const change = next != null ? {tune_enabled: true, rx_gain_db: next} : {tune_enabled: true, jitter_ms: lb};
-    const res = await balApply(change);
-    if (!res.ok) return expFail(res.error || 'Could not save the setting.');
-    exp.lastTone = res.undo;
-    note('rx-bal-msg', '', next != null ? 'RX gain set to ' + fmtGain(next) + ' (was ' + fmtGain(before) + ').'
-      : 'Listen buffer set to ' + (lb / 1000) + ' s (tones dropped out).');
-  }
-}
-
-async function expLiveRounds() {
-  const rounds = exp.balance ? BAL_LIVE_ROUNDS : 1;
-  let prev = null;
-  for (let i = 0; i < rounds && !exp.stopped; i++) {
-    expStage('Live check ' + (i + 1) + ' of ' + rounds + '. Use the Listen tab as usual.');
-    const r = await expLive(exp.mins);
-    if (!r || exp.stopped || !exp.balance) return;
-    const cur = await api('/api/config');
-    if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
-    const score = balLiveScore(r, cur.config);
-    if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.undo) {
-      await balRevert(exp.undo);
-      exp.balance = false;
-      note('exp-msg', 'warn', 'The last change made the audio worse, so it was put back. Balancing stopped.');
-      return;
-    }
-    prev = score;
-    if (i === rounds - 1) break;
-    const hit = balPick(r, cur.config, null, null);
-    if (!hit) { note('exp-msg', 'ok', 'Nothing left to change in range.'); return; }
-    expStage('Waiting for a quiet channel before changing a setting.');
-    if (!(await balQuiet())) {
-      if (!exp.stopped) note('exp-msg', 'warn', 'The channel stayed busy, so balancing stopped.');
-      exp.balance = false;
-      return;
-    }
-    const res = await balApply(hit.change);
-    if (!res.ok) return expFail(res.error);
-    const gain = balIsGain(hit.change);
-    exp.undo = gain ? null : res.undo;
-    if (gain) prev = null;
-    balNote(hit.change, '', 'Changed live: ' + hit.text + (gain ? ' A gain change is not put on trial.' : ''));
-  }
-}
-
-async function expLoadCheck() {
-  if (!exp || exp.aborted) return;
-  const d = await api('/api/load');
-  if (!exp || exp.aborted || !d.ok || !d.breach) return;
-  exp.aborted = 'Stopped to protect the Pi: ' + d.breach + '.';
-  exp.stopped = true;
-  if (chk && chk.running) chkStop();
-  const done = exp.liveDone;
-  exp.liveDone = null;
-  if (done) done(null);
-  if (exp.tone) await post('/api/tonetest/stop', {});
-}
-
-async function expStop() {
-  if (!exp) return;
-  exp.stopped = true;
-  if (chk && chk.running) chkStop();
-  const done = exp.liveDone;
-  exp.liveDone = null;
-  if (done) done(null);
-  if (exp.tone) await post('/api/tonetest/stop', {});
-  note('exp-msg', 'warn', 'Stopped.');
-}
-
-async function expEnd() {
-  const e = exp || {};
-  if (e.aborted && e.snap) {
-    const r = await post('/api/balance/restore', {});
-    if (r.ok) balAppRestore();
-    loadConfig();
-    note('exp-msg', 'err', e.aborted + ' ' + (r.ok ? 'Original settings put back.' : (r.error || 'Could not put the settings back: use Restore.')));
-  }
-  exp = null;
-  expUi(false);
-  expRefreshSnap();
-}
-
-async function expRun(o) {
-  exp = {stopped: false, aborted: '', balance: o.balance, live: o.live, tone: o.tone, mins: o.mins, snap: false,
-    undo: null, lastTone: null, liveDone: null};
-  expUi(true);
-  if (exp.balance) {
-    const s = await post('/api/balance/snapshot', {});
-    if (!s.ok) { expFail(s.error || 'Could not save the settings.'); return expEnd(); }
-    balAppSave();
-    exp.snap = true;
-  }
-  expWatch = setInterval(expLoadCheck, BAL_WATCH_MS);
-  try {
-    if (exp.tone) await expToneRounds();
-    if (exp.live && !exp.stopped) await expLiveRounds();
-  } finally {
-    clearInterval(expWatch);
-    expWatch = null;
-  }
-  return expEnd();
-}
-
-function expStart() {
-  if (exp) return;
-  if (testOff('check')) { note('exp-msg', 'err', 'The Audio check is turned off under Tests on this node.'); return; }
-  if ($('exp-bal').checked && testOff('balance')) { note('exp-msg', 'err', 'Automatic balancing is turned off under Tests on this node.'); return; }
-  if (autoRun) { note('exp-msg', 'err', 'Automatic balancing is on: untick it under Automatic balancing first.'); return; }
-  const tone = $('exp-tone').checked && !testOff('tone_rx'), balance = $('exp-bal').checked;
-  if (appAudio() && !appStatsOk()) { note('exp-msg', 'err', 'This app version cannot report its audio to the live check: update Node Talker Mobile, or switch the app to Page audio in its Audio settings.'); return; }
-  if (chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
-  note('exp-msg', '', '');
-  note('rx-bal-msg', '', '');
-  note('tx-bal-msg', '', '');
-  expRun({live: true, tone: tone, balance: balance, mins: Number($('chk-mins').value) || 5});
-}
-
-function auditStop() {
-  if (autoRun) autoStop(true);
-  if (exp) expStop();
-  else if (chk && chk.running) chkStop();
-}
-
-async function expRefreshSnap() {
-  if (!authed) return;
-  const d = await api('/api/balance');
-  const open = !!(d.ok && d.snapshot);
-  $('exp-open').classList.toggle('hidden', !open);
-  if (open) $('exp-open-msg').textContent = 'A balance run changed settings (saved ' + new Date(d.snapshot.at * 1000).toLocaleString() + '). Restore the original settings, or keep the changes.';
-}
-
-function expInit() {
-  $('cd-chk').querySelector('.fold-btn').addEventListener('click', expRefreshSnap);
-  $('exp-restore').addEventListener('click', async () => {
-    const d = await post('/api/balance/restore', {});
-    if (d.ok) balAppRestore();
-    loadConfig();
-    note('exp-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Put back.') : (d.error || 'Could not restore.'));
-    expRefreshSnap();
-  });
-  $('exp-keep').addEventListener('click', async () => {
-    await post('/api/balance/keep', {});
-    balAppForget();
-    note('exp-msg', 'ok', 'Changes kept.');
-    expRefreshSnap();
-  });
-  expRefreshSnap();
-}
-
-// Export and import (v0.9.7). A report is downloaded to this phone as a file. Nothing is stored
-// on the Pi. Comparing with a saved report reads a file the user picks; it is not kept afterwards.
-let chkCompareWith = null;
-
 function chkPad(n) { return String(n).padStart(2, '0'); }
-
-async function chkCompareFile(file) {
-  let obj = null;
-  try { obj = JSON.parse(await file.text()); } catch (e) { obj = null; }
-  const sm = obj && obj.format === 'nodetalker-check' ? obj.summary
-    : obj && obj.format === 'nodetalker-data' && obj.check ? obj.check.summary : null;
-  if (!sm || !sm.rx || !sm.tx) {
-    note('chk-msg', 'err', 'That file is not a Node Talker Data file with a check in it.');
-    return;
-  }
-  chkCompareWith = sm;
-  chkCmp = true;
-  $('chk-cmp').textContent = 'Hide last check';
-  const when = obj.saved ? new Date(obj.saved).toLocaleString() : 'an unknown time';
-  note('chk-msg', 'ok', 'Comparing with the report saved ' + when + '.');
-  chkShow(chkShown);
-}
-
-function chkClearFile() {
-  chkCompareWith = null;
-  chkCmp = false;
-  $('chk-cmp').textContent = 'Compare with last check';
-  note('chk-msg', '', '');
-  chkShow(chkShown);
-}
-
-async function chkShow(r) {
-  chkShown = r;
-  if (!r) { $('chk-rep').classList.add('hidden'); $('chk-rx-box').classList.add('hidden'); $('chk-tx-box').classList.add('hidden'); return; }
-  let prev = chkCompareWith;
-  if (!prev) { try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {} }
-  $('chk-cmp').disabled = !prev || !!chkCompareWith;
-  $('chk-clear-file').classList.toggle('hidden', !chkCompareWith);
-  $('chk-prev-h1').textContent = chkCompareWith ? 'Saved' : 'Last';
-  $('chk-prev-h2').textContent = chkCompareWith ? 'Saved' : 'Last';
-  ['chk-prev-h1', 'chk-prev-h2'].forEach((id) => $(id).classList.toggle('hidden', !(chkCmp && prev)));
-  chkTable('chk-rx', chkRows(r, chkCmp && prev, 'rx'), chkCmp && !!prev);
-  chkTable('chk-tx', chkRows(r, chkCmp && prev, 'tx'), chkCmp && !!prev);
-  chkMinutes(r.minutes || []);
-  const cfgRes = authed ? await api('/api/config') : {};
-  chkCfg = cfgRes.config || null;
-  const sugs = chkSuggest(r, chkCfg), box = $('chk-sug');
-  box.innerHTML = ''; chkUndo = {};
-  if (!sugs.length) { const d = document.createElement('div'); d.className = 'sug'; d.textContent = 'Nothing to change: everything is in range.'; box.appendChild(d); }
-  sugs.forEach((s2, i) => {
-    const d = document.createElement('div'); d.className = 'sug';
-    const t = document.createElement('div'); t.className = 't';
-    t.textContent = s2.text + (s2.change && (s2.change.mic || s2.change.app) ? ' *' : ''); d.appendChild(t);
-    if (s2.change && (!s2.change.node || authed)) {
-      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.textContent = 'Apply';
-      b.onclick = () => chkApply(i, s2, b, false); d.appendChild(b);
-    }
-    box.appendChild(d);
-  });
-  if (sugs.some((x) => x.change && (x.change.mic || x.change.app))) {
-    const lg = document.createElement('div'); lg.className = 'muted small';
-    lg.textContent = '* You can change this on the phone.'; box.appendChild(lg);
-  }
-  const n = sugs.filter((x) => x.change).length;
-  sum('chk', 'Last check: ' + (n ? n + ' thing' + (n > 1 ? 's' : '') + ' to change' : 'all good'));
-  $('chk-rep').classList.remove('hidden');
-  $('chk-rx-box').classList.remove('hidden');
-  $('chk-tx-box').classList.remove('hidden');
-}
 
 // Settings Node Talker Mobile reports, when it provides NodeTalkerApp.audioInfo(). It returns JSON:
 // {output: 'earpiece'|'speaker', bufferMs, voiceMic, micRate, volume: {now, max}, batteryFree, keepScreenOn}.
@@ -10198,10 +8797,10 @@ async function dataDownload() {
   let ver = '';
   try { ver = window.NodeTalkerApp && typeof NodeTalkerApp.version === 'function' ? String(NodeTalkerApp.version() || '') : ''; } catch (e) {}
   const doc = {format: 'nodetalker-data', version: '__VERSION__', saved: new Date().toISOString(), mode: appAudio() ? 'app' : 'page',
-    page: {mic: mic, play: play, ptt: ptt, headset: hs, tests_off: testsOff, auto_balance: read('nlAutoBal')},
-    check: {format: 'nodetalker-check', summary: chkShown || read('nlCheckLast'), previous: read('nlCheckPrev'), running: chk && chk.running ? chk : null},
+    page: {mic: mic, play: play, ptt: ptt, headset: hs, balancer_off: balOff},
+    check: {format: 'nodetalker-check', summary: read('nlCheckLast'), previous: read('nlCheckPrev'), running: chk && chk.running ? chk : null},
     app: window.NodeTalkerApp ? {version: ver, info: appInfo()} : null, pi: {}};
-  const paths = {config: '/api/config', status: '/api/status', rxhealth: '/api/rxhealth?all=1', tonetest: '/api/tonetest/status',
+  const paths = {config: '/api/config', status: '/api/status', rxhealth: '/api/rxhealth?all=1',
     kerchunks: '/api/kerchunks', balance: '/api/balance', load: '/api/load', tx: '/api/tx', log: '/api/log'};
   for (const k of Object.keys(paths)) {
     try { doc.pi[k] = await api(paths[k]); } catch (e) { doc.pi[k] = {ok: false, error: String((e && e.message) || e)}; }
@@ -10236,44 +8835,17 @@ async function dataDownload() {
 }
 
 function chkInit() {
-  try { chk = JSON.parse(localStorage.getItem('nlCheck') || 'null'); } catch (e) { chk = null; }
-  if (chk && !chk.running) chk = null;
-  if (chk) chkMigrate(chk);
-  if (chk) {
-    const gap = Date.now() - chk.last;
-    chk.paused += gap; chk.last = Date.now();
-    if (chk.elapsed >= chk.mins * 60000) chkStop();
-    else appStats(true);
-  }
-  let last = null;
-  try { last = JSON.parse(localStorage.getItem('nlCheckLast') || 'null'); } catch (e) {}
-  if (!chk && last) chkShow(last);
-  chkUi();
+  try { localStorage.removeItem('nlCheck'); } catch (e) {}
+  chk = null;
   setInterval(chkTick, 1000);
-  $('chk-start').addEventListener('click', expStart);
-  $('tests-save').addEventListener('click', () => testsSave(false));
-  $('tests-all').addEventListener('click', () => testsSave(true));
   $('data-dl').addEventListener('click', dataDownload);
   $('log-copy').addEventListener('click', logCopy);
-  $('chk-stop').addEventListener('click', auditStop);
-  $('rx-auto').addEventListener('change', autoPrefChanged);
-  $('tx-auto').addEventListener('change', autoPrefChanged);
-  loadAutoPrefs();
   $('setup-ok').addEventListener('click', setupApply);
   $('setup-later').addEventListener('click', () => $('setup-dlg').close());
-  $('tone-start').addEventListener('click', () => toneStart('rx'));
-  $('tone-stop').addEventListener('click', toneStop);
-  $('tx-tone-start').addEventListener('click', () => toneStart('tx'));
-  $('tx-link-connect').addEventListener('click', () => txLink('connect'));
-  $('tx-link-disconnect').addEventListener('click', () => txLink('disconnect'));
-  $('tx-tone-stop').addEventListener('click', toneStop);
-  $('chk-file').addEventListener('click', () => $('chk-file-in').click());
-  $('chk-file-in').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) chkCompareFile(f); });
-  $('chk-clear-file').addEventListener('click', chkClearFile);
   $('fav-save').addEventListener('click', () => feSave());
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
-  $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
-  expInit();
+  balInit();
+  autoBootCheck();
 }
 
 function pushSample(v) {
@@ -10286,7 +8858,6 @@ function pushSample(v) {
     rfss = 0; rfpk = 0; rfx1 = 0; rfx2 = 0; rfn = 0;
   }
   pend[pendN++] = v;
-  if (otaRec) otaRec.push(v);
   const a = v < 0 ? -v : v;
   if (a > peakLocal) peakLocal = a;
   if (pendN >= 800) flush();
@@ -11156,7 +9727,7 @@ function feedMic(f32) {
 let micSeq = 0;
 async function startMic(sink) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser blocks the microphone here (use the https:// page).');
-  const mine = ++micSeq, live = () => mine === micSeq && (talking || testing);
+  const mine = ++micSeq, live = () => mine === micSeq && talking;
   if (!capCtx) capCtx = newAudioCtx();
   await capCtx.resume();
   const base = {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns, autoGainControl: !!mic.agc, channelCount: 1};
@@ -11214,16 +9785,13 @@ function whyNote(id, list) {
 
 function availUi() {
   const app = appAudio(), appT = appTalk(), md = navigator.mediaDevices;
-  const caps = (app && appInfo()) || {}, appMic = appT && !!caps.micOpts, statsOk = appStatsOk();
+  const caps = (app && appInfo()) || {}, appMic = appT && !!caps.micOpts;
   const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
   const noMic = !window.isSecureContext ? 'The microphone needs the https:// page.'
     : !(md && md.getUserMedia) ? 'This browser gives the page no microphone.' : '';
   const A_PLAY = 'App audio plays the node itself, so the page\'s playback options aren\'t used.';
   const A_MIC = 'This app version sends the mic with only Mic gain applied: update Node Talker Mobile to use these settings.';
   const A_OS = 'In app audio this is done by Android\'s voice microphone: turn on "Phone\'s echo and noise filter" in the app\'s Audio settings.';
-  const A_TEST = 'This test records and plays back with page audio; switch the app to Page audio in its Audio settings to run it.';
-  const A_STATS = 'This app version can\'t report its audio to the check: update Node Talker Mobile, or switch the app to Page audio.';
-  const OFF = (id) => (testOff(id) ? 'Turned off under Tests on this node.' : '');
   const playWhy = {
     'play-s16': app ? A_PLAY : '',
     'play-smooth': app ? A_PLAY : (ctx && ctx.sampleRate === 8000 ? 'This phone already plays at 8 kHz, so there is nothing to smooth.' : ''),
@@ -11232,7 +9800,7 @@ function availUi() {
   Object.keys(playWhy).forEach((id) => naSet(id, playWhy[id]));
   whyNote('why-play', Object.values(playWhy));
 
-  const jitWhy = app ? 'App audio uses the app\'s own receive buffer, set in the app\'s Audio settings (the check and the balancer change it there).' : '';
+  const jitWhy = app ? 'App audio uses the app\'s own receive buffer, set in the app\'s Audio settings (the balancer changes it there).' : '';
   naSet('tune-jit', jitWhy, !$('tune-on').checked);
   whyNote('why-lvl', [jitWhy]);
 
@@ -11250,12 +9818,7 @@ function availUi() {
     'mic-gain': appT ? '' : noMic,
   };
   Object.keys(micWhy).forEach((id) => naSet(id, micWhy[id]));
-  const micTestWhy = OFF('mic') || (app ? A_TEST : noMic);
-  naSet('mic-test', micTestWhy, testing);
-  whyNote('why-mic', Object.values(micWhy).concat([micTestWhy]));
-  const nodeWhy = OFF('node') || (app ? A_TEST : noMic);
-  naSet('node-test', nodeWhy, nodeTesting);
-  whyNote('why-node', [nodeWhy]);
+  whyNote('why-mic', Object.values(micWhy));
 
   const hsWhy = {
     'hs-out': app ? 'In app audio the app picks the output: use Sound through above.' : '',
@@ -11266,26 +9829,6 @@ function availUi() {
   naSet('hs-names', hsWhy['hs-mic']);
   whyNote('why-hs', Object.values(hsWhy));
 
-  const running = !!(chk && chk.running) || !!exp;
-  const noStats = app && !statsOk ? A_STATS : '';
-  const chkWhy = running ? '' : OFF('check') || noStats;
-  naSet('chk-start', chkWhy);
-  const balWhy = OFF('balance') || noStats;
-  naSet('exp-bal', balWhy, !!exp);
-  naSet('exp-tone', OFF('tone_rx'), !!exp);
-  whyNote('why-chk', [chkWhy, balWhy && balWhy !== chkWhy ? 'Balance automatically: ' + balWhy : '', OFF('tone_rx') ? 'RX tone test: ' + OFF('tone_rx') : '']);
-  if (OFF('balance') && autoRun) autoStop(true);
-  ['rx-auto', 'tx-auto'].forEach((id) => naSet(id, balWhy));
-  whyNote('why-bal', [balWhy]);
-  naSet('tone-start', OFF('tone_rx'));
-  whyNote('why-tone', [OFF('tone_rx')]);
-  naSet('tx-tone-start', OFF('tone_tx'));
-  naSet('tx-link-connect', OFF('tone_tx'), toneWasRunning);
-  whyNote('why-txtone', [OFF('tone_tx')]);
-  const kcOn = !!(kcLast && kcLast.test && kcLast.test.on), kcWhy = kcOn ? '' : OFF('kerchunk');
-  $('kc-test').disabled = !!kcWhy;
-  $('kc-test').classList.toggle('na', !!kcWhy);
-  $('kc-test').title = kcWhy;
 }
 
 function saveMic() {
@@ -11317,122 +9860,6 @@ function savePlay() {
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-async function nodeTest() {
-  const out = 'node-test-msg';
-  if (testing || talking || nodeTesting) return;
-  const tx = (lastStatus && lastStatus.tx) || {};
-  if (!tx.ready) { note(out, 'warn', 'Set up node 1921 first (Transmit card).'); return; }
-  if (!window.confirm('This transmits for 4 s through the node: it goes out over the air and to every linked node. Go ahead?')) return;
-  nodeTesting = true; $('node-test').disabled = true;
-  const pc = newAudioCtx();
-  try { pc.resume(); } catch (e) {}
-  const wasPlaying = playing;
-  try {
-    note(out, '', 'Connecting...');
-    if (!playing) startListen('system', 'node_test');
-    if (!wsReady) openTalk(true);
-    for (let i = 0; i < 40 && !(wsReady && playing && /^Listening/.test($('listen-msg').textContent)); i++) await sleep(100);
-    if (!wsReady) throw new Error('the talk channel did not open');
-    if (!/^Listening/.test($('listen-msg').textContent)) throw new Error('the listen stream did not start');
-    otaRec = [];
-    const rxT0 = performance.now();
-    let txT0 = 0;
-    const txF = [], tap = (st) => { if (!txT0) txT0 = performance.now(); txF.push(st); };
-    micTaps.push(tap);
-    vuHold = {db: -120, t: 0};
-    note(out, '', 'Transmitting 4 s: talk as you would on the air...');
-    await pttDown();
-    vuRun($('vu-mic'), () => nodeTesting && talking);
-    for (let i = 0; i < 30 && talking && !keyed; i++) await sleep(100);
-    if (!keyed) { const m = $('ptt-msg').textContent; if (talking) pttUp(); throw new Error(m || 'the node did not key'); }
-    await sleep(4000);
-    pttUp();
-    micTaps = micTaps.filter((f) => f !== tap);
-    $('vu-mic').classList.add('hidden');
-    note(out, '', 'Collecting what the node sent...');
-    await sleep(1500);
-    const rec = Float32Array.from(otaRec || []);
-    otaRec = null;
-    if (!wasPlaying) stopListen('system', 'node_test');
-    let pk = 0;
-    for (let i = 0; i < rec.length; i++) { const a = rec[i] < 0 ? -rec[i] : rec[i]; if (a > pk) pk = a; }
-    if (!rec.length || pk < 0.003) throw new Error('nothing came back from the node (is its audio feed set up?)');
-    const src = playBack(pc, rec);
-    const rxF = framesOf(rec), txA = analyze(txF), rxA = analyze(rxF);
-    const off = Math.round((txT0 - rxT0) / 20), lag = lagOf(txF, rxF.slice(Math.max(0, off)));
-    const delay = lag * 0.02, diff = rxA.speech - txA.speech, agcOn = $('rx-agc').checked;
-    $('rep-node').classList.remove('hidden');
-    const len = Math.max(txF.length, rxF.length);
-    stripDraw($('rep-node-tx'), txF, len);
-    stripDraw($('rep-node-rx'), rxF.slice(Math.max(0, off)), len);
-    repNumbers($('rep-node-n'), [['Sent', fmtDb(txA.speech)], ['Came back', fmtDb(rxA.speech)],
-      ['Difference', (diff >= 0 ? '+' : '') + diff.toFixed(1) + ' dB'], ['Round trip', '~' + delay.toFixed(1) + ' s'],
-      ['Came-back peak', fmtDb(rxA.peak)]]);
-    let v;
-    if (rxA.peak > -1) v = {cls: 'warn', text: 'What came back is clipping: lower TX gain (Audio levels) or the radio and DVSwitch levels (SysMon, Tune).'};
-    else if (!agcOn && diff < -6) v = {cls: 'warn', text: 'It came back ' + Math.round(-diff) + ' dB quieter than you sent it: raise TX gain (Audio levels) by about ' + clampStep(-diff - 2) + ' dB, or check the node\'s levels in SysMon, Tune.'};
-    else if (!agcOn && diff > 6) v = {cls: 'warn', text: 'It came back ' + Math.round(diff) + ' dB louder than you sent it: lower TX gain (Audio levels) by about ' + clampStep(diff - 2) + ' dB.'};
-    else v = {cls: 'ok', text: 'Good: it came back ' + (agcOn ? 'clean' : 'within ' + Math.round(Math.abs(diff)) + ' dB of what you sent') + ', about ' + delay.toFixed(1) + ' s later.'};
-    if (agcOn) v.text += ' (Automatic level is on, so what comes back is evened out; turn it off in Audio levels for an exact level comparison.)';
-    $('rep-node-v').className = 'rep-v ' + v.cls;
-    $('rep-node-v').textContent = v.text;
-    note(out, '', 'Playing back what the node sent out.');
-    playhead($('rep-node-rx').parentNode, src, pc, rec.length / 8000);
-    src.onended = () => { pc.close(); };
-  } catch (e) {
-    otaRec = null;
-    micTaps = micTaps.filter((f) => f === chkMic);
-    $('vu-mic').classList.add('hidden');
-    if (!wasPlaying && playing) stopListen('system', 'node_test');
-    note(out, 'err', 'Node test: ' + (e.message || e));
-    pc.close();
-  } finally {
-    nodeTesting = false; $('node-test').disabled = false;
-  }
-}
-
-async function micTest() {
-  if (testing || talking) return;
-  testing = true; testBuf = [];
-  const fr = [], tap = (st) => fr.push(st);
-  $('mic-test').disabled = true;
-  $('rep-mic').classList.add('hidden');
-  const pc = newAudioCtx();
-  try { pc.resume(); } catch (e) {}
-  note('mic-test-msg', '', 'Recording 20 s: talk as you would on the air...');
-  micTaps.push(tap);
-  vuHold = {db: -120, t: 0};
-  const done = () => { micTaps = micTaps.filter((f) => f !== tap); $('vu-mic').classList.add('hidden'); };
-  try {
-    await startMic((buf) => testBuf.push(new Int16Array(buf)));
-  } catch (e) {
-    testing = false; done(); $('mic-test').disabled = false; pc.close();
-    note('mic-test-msg', 'err', 'Microphone: ' + (e.message || e.name));
-    return;
-  }
-  vuRun($('vu-mic'), () => testing);
-  await sleep(20000);
-  stopMic(); testing = false; done();
-  const n = testBuf.reduce((x, y) => x + y.length, 0);
-  if (!n) { pc.close(); $('mic-test').disabled = false; note('mic-test-msg', '', 'Nothing was recorded.'); return; }
-  const ch = new Float32Array(n);
-  let o = 0;
-  testBuf.forEach((f) => { for (let i = 0; i < f.length; i++) ch[o++] = f[i] / 32768; });
-  const src = playBack(pc, ch);
-  const an = analyze(fr), v = micVerdict(an);
-  $('rep-mic').classList.remove('hidden');
-  stripDraw($('rep-mic-c'), fr, 200);
-  const rows = [['Peak', fmtDb(an.peak)], ['Speech', fmtDb(an.speech)], ['Background', an.noise < -90 ? 'silent' : fmtDb(an.noise)],
-    ['Voice above background', an.snr >= 60 ? 'over 60 dB' : Math.round(an.snr) + ' dB'], ['Limiter working', Math.round(an.limPct) + ' %']];
-  if (GATE[Number(mic.gate) || 0]) rows.push(['Gate closed while talking', Math.round(an.gatePct) + ' %']);
-  repNumbers($('rep-mic-n'), rows);
-  $('rep-mic-v').className = 'rep-v ' + v.cls;
-  $('rep-mic-v').textContent = v.text;
-  note('mic-test-msg', '', 'Playing back what the node would get.');
-  playhead($('rep-mic-c').parentNode, src, pc, n / 8000);
-  src.onended = () => { pc.close(); $('mic-test').disabled = false; };
-}
-
 function stopMic() {
   micSeq++;
   try { if (capSrc) capSrc.disconnect(); } catch (e) {}
@@ -11461,7 +9888,7 @@ function endTalk() {
 
 async function pttDown(ev) {
   if (ev) ev.preventDefault();
-  if (talking || testing) return;
+  if (talking) return;
   if (pttLocked) { note('ptt-msg', 'warn', 'PPT is Locked'); return; }
   if (performance.now() < tailUntil) { note('ptt-msg', 'warn', 'Finishing the last transmission...'); return; }
   const wait = gapLeft();
@@ -12133,7 +10560,7 @@ async function daStatus() {
 async function daGo() {
   if (!confirm('Disconnect All?\n\nStops any transmission or test, drops every link and restarts ' + (daList || 'the node services') +
                '. The node is off the air until they are back up, up to a minute or two.')) return;
-  if (exp) await expStop(); else if (chk && chk.running) await chkStop();
+  if (chk && chk.running) await chkStop();
   $('da-btn').disabled = true;
   const d = await post('/api/disconnect-all', {});
   if (!d.ok) { $('da-btn').disabled = false; note('da-msg', 'err', d.error || 'Could not start Disconnect All.'); return; }
@@ -12398,7 +10825,7 @@ async function ffUpload() {
   if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 
-const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https'];
+const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https', 'balancer_off'];
 const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms', 'phone_lead_ms'], AUDIO_BOOL = ['busy_lockout', 'phone_tones'];
 const AUDIO_TXT = ['phone_open', 'phone_close'];
 
@@ -12423,8 +10850,8 @@ async function loadConfig() {
   $('rx-gate').value = String(d.config.rx_gate);
   $('rx-notch').value = String(d.config.rx_notch_hz || 0);
   $('rx-notch-auto').checked = !!d.config.rx_notch_auto;
-  testsOff = String(d.config.tests_off || '').split(',').filter(Boolean);
-  testsUi();
+  balOff = !!d.config.balancer_off;
+  autoSync();
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
   if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
@@ -12595,8 +11022,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('freeze', () => listenPage('page_frozen', null, true));
   document.addEventListener('resume', () => { listenPage('page_resumed', {gap: dataGap()}); listenRevive(); });
   window.addEventListener('pagehide', (e) => listenPage('page_unload', {code: e.persisted ? 1 : 0}, true));
-  $('mic-test').addEventListener('click', micTest);
-  $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
   $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, $('dash-link').dataset.win || 'asl_dvs_dash'); });
   $('sys-reboot').addEventListener('click', doReboot);
@@ -12633,11 +11058,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(gapTick, 100);
   pollEvery(pollLog, 3000, 10000);
   setInterval(() => { if (authed && foldOpen('kc')) kcRefresh(); }, 10000);
-  setInterval(() => { if (authed && foldOpen('kc') && kcLast && kcLast.test && kcLast.test.on) $('kc-test-state').textContent = kcTestLine(kcLast.test); }, 1000);
   $('kc-reset').addEventListener('click', kcReset);
-  $('kc-test').addEventListener('click', kcTestToggle);
-  $('kc-mark').addEventListener('click', kcMark);
-  $('ptt-mark').addEventListener('click', pttMark);
   $('kc-show').addEventListener('click', kcToggleList);
 });
 """
@@ -12836,7 +11257,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="ptt" type="button" disabled aria-label="Push to talk: hold to transmit"><span id="ptt-label">Hold to talk</span><span id="ptt-time"></span></button>
 <div id="ptt-slide" class="ptt-slide" role="slider" tabindex="0" aria-label="PPT lock: hold, then slide right to lock or left to unlock" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" aria-valuetext="Unlocked"><span id="ptt-slide-ico" aria-hidden="true">&#128275;</span></div>
 </div>
-<button id="ptt-mark" type="button" class="hidden" aria-label="Mark the key-up that just ended as a kerchunk">Mark kerchunk</button>
 </div>
 <div class="ptt-line"><span id="ptt-msg" class="msg"></span><span id="ptt-info" class="muted">-</span></div>
 </div>
@@ -12870,6 +11290,8 @@ html[data-theme="light"] *{text-shadow:none!important}
 <label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label></div>
 <div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
+<div class="row"><label><input type="checkbox" id="cfg-balancer_off"> Turn off the balancer</label></div>
+<p class="muted small">The balancer runs by itself while a logged-in Node Talker page is open and the screen is on, and keeps the RX and TX levels right. Tick this to stop it on every phone.</p>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div id="cfg-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Tune card on this phone</h3>
@@ -13110,122 +11532,31 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="row"><label for="mic-gain" style="min-width:130px">Mic gain</label>
 <input type="range" id="mic-gain" min="-12" max="24" step="1" style="flex:1"><span id="mic-gain-v" class="mono small">0 dB</span></div>
 <p class="muted small">With automatic gain on, the browser undoes most of the mic gain; turn it off for a fixed level.</p>
-<div class="row"><button id="mic-test" class="btn" type="button">Test mic (20 s, plays back)</button></div>
-<div class="vu hidden" id="vu-mic" aria-live="off">
-<div class="vu-bar"><i class="vu-avg"></i><i class="vu-pk"></i><i class="vu-hold"></i></div>
-<div class="vu-scale"><span>-60</span><span>-40</span><span>-20</span><span>-6 · -3</span><span>0 dBFS</span></div>
-<div class="vu-gr" title="How much the leveler or limiter is turning you down"><i></i></div>
-<div class="vu-txt"><span class="vu-num">-</span><span class="vu-lim">-</span></div>
-</div>
-<div id="mic-test-msg" class="msg"></div>
-<div class="rep hidden" id="rep-mic">
-<h3>Mic test report</h3>
-<div class="rep-strip"><canvas id="rep-mic-c"></canvas><span class="rep-lbl">your level, 20 s</span><i class="rep-head"></i></div>
-<div class="rep-n" id="rep-mic-n"></div>
-<div class="rep-v" id="rep-mic-v"></div>
 </div>
 </div>
 </div>
 </div>
 
 <div class="card fold" id="cd-chk">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Tests</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Balancer</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-chk">
-<p class="muted small">Every test and the balancer are in this card; the RX and TX cards hold the settings. All the numbers are in the Data card download.</p>
-<h3 style="margin:6px 0 4px">Tests on this node</h3>
-<p class="muted small">A test that is off is grayed out on every phone, and the Pi refuses the ones it runs (tone tests, balancing, kerchunk test).</p>
-<div class="tests-sw"><label class="small"><input type="checkbox" id="test-on-check"> Audio check</label><label class="small"><input type="checkbox" id="test-on-balance"> Automatic balancing</label><label class="small"><input type="checkbox" id="test-on-tone_rx"> RX tone test</label><label class="small"><input type="checkbox" id="test-on-tone_tx"> TX tone test</label><label class="small"><input type="checkbox" id="test-on-mic"> Mic test</label><label class="small"><input type="checkbox" id="test-on-node"> Node test</label><label class="small"><input type="checkbox" id="test-on-kerchunk"> Kerchunk test</label></div>
-<div class="row"><button id="tests-save" class="btn primary" type="button">Save</button><button id="tests-all" class="btn" type="button">Turn all on</button></div>
-<div id="tests-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Audio check</h3>
-<p class="muted small">Start, go to the Listen tab and use the node as usual: listen, talk, listen. Come back for a report with averages and what to change. The results are below. Only numbers are kept, never audio, and only in this browser.</p>
-<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
-<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
-<button id="chk-start" class="btn primary" type="button">Start</button><button id="chk-stop" class="btn hidden" type="button">Stop</button></div>
-<p class="muted small why hidden" id="why-chk"></p>
-<div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test first (keys the node; tone length and tones are set under RX tone test below)</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs. Gain changes follow the measured level; a filter, gate or buffer change is put back if it makes things worse</label></div>
-<p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
-<div id="chk-run" class="chk-run hidden"></div>
-<div id="exp-run" class="chk-run hidden"></div>
-<div id="chk-rep" class="hidden">
-<h3 style="margin:10px 0 4px">Per minute</h3>
-<div id="chk-min" class="chk-min"></div>
-<h3 style="margin:12px 0 2px">What to change</h3>
-<div id="chk-sug"></div>
-<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
-<button id="chk-file" class="btn" type="button">Compare with a saved Data file</button>
-<button id="chk-clear-file" class="btn hidden" type="button">Stop comparing</button>
-<input id="chk-file-in" type="file" accept="application/json,.json" class="hidden"></div>
-<div id="chk-msg" class="msg"></div>
-</div>
+<p class="muted small">The balancer runs by itself: every few minutes it measures a minute of audio and changes one setting if that helps (gains and buffers, the 300 Hz cut, Automatic level, the squelch-tail gate). Gain changes are kept; any other change is put back if the audio gets worse. It runs while a logged-in Node Talker page is open and the screen is on, one phone at a time, and pauses while the Pi's CPU is high or you transmit. Turn it off under Setup.</p>
+<h3 style="margin:10px 0 4px">Receive</h3>
+<p class="muted small">RX gain, cleanup and the receive buffer.</p>
+<div id="rx-auto-msg" class="msg"></div>
+<h3 style="margin:10px 0 4px">Transmit</h3>
+<p class="muted small">TX gain and the TX buffer.</p>
+<div id="tx-auto-msg" class="msg"></div>
 <div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
 <div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
 <div id="exp-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Receive results</h3>
-<p class="muted small">From the last Audio check: what the node sent to this phone. Shown after a check.</p>
-<div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
-<div id="rx-bal-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Transmit results</h3>
-<p class="muted small">From the last Audio check: what this phone sent to the node. Shown after a check.</p>
-<div id="chk-tx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table></div>
-<div id="tx-bal-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Automatic balancing</h3>
-<p class="muted small why hidden" id="why-bal"></p>
-<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings (RX gain, cleanup and the receive buffer). Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
-<div id="rx-auto-msg" class="msg"></div>
-<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings (TX gain and TX buffer). Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
-<div id="tx-auto-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
-<p class="muted small why hidden" id="why-tone"></p>
-<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
-<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
-<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
-<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
-<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
-<div class="row"><button id="tone-start" class="btn primary" type="button">Run RX tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="tone-prog" class="chk-run hidden"></div>
-<div id="tone-rep" class="hidden">
-<div id="tone-sum" class="muted small"></div>
-<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
-<div id="tone-warn"></div>
-</div>
-<div id="tone-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">TX tone test (for third-party nodes)</h3>
-<p class="muted small why hidden" id="why-txtone"></p>
-<p class="muted small">Keys node 1921 and sends a station ID, a series of tones and the station ID again, so other stations can measure what they receive. Nothing is measured here. Like the RX test, it is refused while the node is linked or something is tuned.</p>
-<div class="row"><label for="tx-link-node" style="min-width:90px">Link to node</label>
-<input id="tx-link-node" type="text" inputmode="numeric" maxlength="7" placeholder="Third-party node" style="width:140px">
-<button id="tx-link-connect" class="btn" type="button">Connect</button><button id="tx-link-disconnect" class="btn" type="button">Disconnect</button></div>
-<div id="tx-link-msg" class="msg"></div>
-<div class="row"><label for="tx-tone-sec" style="min-width:90px">Tone length</label>
-<select id="tx-tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
-<div class="row"><label for="tx-tone-hz" style="min-width:90px">Tones (Hz)</label>
-<input id="tx-tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
-<div class="row"><button id="tx-tone-start" class="btn primary" type="button">Run TX tone test</button><button id="tx-tone-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="tx-tone-prog" class="chk-run hidden"></div>
-<div id="tx-tone-rep" class="hidden"><div id="tx-tone-sum" class="muted small"></div></div>
-<div id="tx-tone-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Node test</h3>
-<p class="muted small why hidden" id="why-node"></p>
-<div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
-<p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
-<div id="node-test-msg" class="msg"></div>
-<div class="rep hidden" id="rep-node">
-<h3>Node test report</h3>
-<div class="rep-strip"><canvas id="rep-node-tx"></canvas><span class="rep-lbl">sent (TX)</span></div>
-<div class="rep-strip"><canvas id="rep-node-rx"></canvas><span class="rep-lbl">came back from the node (RX)</span><i class="rep-head"></i></div>
-<div class="rep-n" id="rep-node-n"></div>
-<div class="rep-v" id="rep-node-v"></div>
-</div>
 </div>
 </div>
 
 <div class="card fold" id="cd-data">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-data"><span class="fold-t">Data</span><span class="fold-sum" id="sum-data"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-data">
-<p class="muted small">One file with every number Node Talker and this phone have: nothing is shown here and nothing goes through the clipboard, so nothing is cut short. It holds the last two Audio checks and what to change, the receive health field data (one row per minute), the last tone test, the kerchunk log, the settings on the Pi and on this phone, the phone details, the app details in Node Talker Mobile, the Pi's load and the recent log. It never holds audio or passwords.</p>
+<p class="muted small">One file with every number Node Talker and this phone have: nothing is shown here and nothing goes through the clipboard, so nothing is cut short. It holds the last two balancer measurements and what they suggested, the receive health field data (one row per minute), the kerchunk log, the settings on the Pi and on this phone, the phone details, the app details in Node Talker Mobile, the Pi's load and the recent log. It never holds audio or passwords.</p>
 <div class="row"><button id="data-dl" class="btn primary" type="button">Download all data</button></div>
 <div id="data-msg" class="msg"></div>
 </div>
@@ -13247,11 +11578,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small" id="kc-state">Open this card to read the burst log.</p>
 <div class="kc-actions">
 <button class="btn" type="button" id="kc-reset">Reset</button>
-<label class="small">Minutes <input type="number" id="kc-min" class="kc-min" min="1" max="60" value="15"></label>
-<button class="btn" type="button" id="kc-test">Start test</button>
-<button class="btn" type="button" id="kc-mark" disabled>Mark kerchunk</button>
 </div>
-<p class="muted small" id="kc-test-state"></p>
 <canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
 <p class="muted small">Each bar is one key-up (when Asterisk reports key-ups) or one burst of audio (when it doesn't), and its height is how long it lasted. Amber bars are kerchunks. With key-ups, a kerchunk is a key-up under 3 s with less audio than the cut-off. With audio only, bars below the dashed cut-off are kerchunks. Label a few (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
 <div class="kc-sub">
@@ -13340,9 +11667,6 @@ _POST_ACTIONS = {
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
     "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
-    "/api/tonetest/start": (lambda b: TONE.start(b), (ValueError,)),
-    "/api/tonetest/link": (lambda b: tone_link_set(b), (ValueError,)),
-    "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
     "/api/rxhealth/client": (rxh_client, (ValueError,)),
     "/api/listen/event": (listen_event, (ValueError,)),
     "/api/ptt/log": (ptt_log, (ValueError,)),
@@ -13350,11 +11674,9 @@ _POST_ACTIONS = {
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
+    "/api/balance/lease": (balance_lease, (ValueError,)),
     "/api/kerchunks/label": (kerchunk_label, ()),
-    "/api/kerchunks/test/start": (kerchunk_test_start, ()),
-    "/api/kerchunks/test/stop": (kerchunk_test_stop, ()),
     "/api/kerchunks/reset": (kerchunk_reset, ()),
-    "/api/kerchunks/test/mark": (kerchunk_mark, ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -13500,8 +11822,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, d)
             elif path == "/api/node/counters":
                 self._json(200, node_counters())
-            elif path == "/api/tonetest/status":
-                self._json(200, TONE.status())
             elif path == "/api/disconnect-all/status":
                 self._json(200, disconnect_all_status())
             elif path == "/api/kerchunks":
@@ -13701,8 +12021,6 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
             return
-        if path in ("/api/tonetest/start", "/api/tonetest/stop", "/api/tonetest/link") and self._wan():
-            self._json(403, {"ok": False, "error": "The tone test runs from the local network only."})
             return
         if path in _RECORDING_BLOCKED or (path == "/api/config" and _RECORDING_CFG_KEYS & set(body)):
             rec = recorder_busy()
