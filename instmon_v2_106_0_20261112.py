@@ -40,8 +40,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.105.0"
-DATE_STR ="2026-11-11"
+VERSION ="2.106.0"
+DATE_STR ="2026-11-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -12413,7 +12413,22 @@ _JS_NET = """const NET = {mult: 1, avg: 0, forced: '', active: Date.now()};
 ['pointerdown', 'keydown', 'touchstart'].forEach(function (name) {
   document.addEventListener(name, function () { NET.active = Date.now(); }, true);
 });
-try { NET.forced = localStorage.getItem('instmon_slowlink') || ''; } catch (e) {}
+NET.cookie = function (v) {
+  document.cookie = 'asl_slow=' + v + '; path=/; max-age=' + (v ? 31536000 : 0) + '; SameSite=Strict';
+};
+NET.read = function () {
+  let v = '';
+  try { const m = document.cookie.match(/(?:^|;\\s*)asl_slow=(on|off)(?:;|$)/); if (m) v = m[1]; } catch (e) {}
+  if (!v) {
+    try {
+      const old = localStorage.getItem('instmon_slowlink');
+      if (old === 'on' || old === 'off') { v = old; NET.cookie(v); }
+      localStorage.removeItem('instmon_slowlink');
+    } catch (e) {}
+  }
+  NET.forced = v;
+};
+NET.read();
 NET.show = function () {
   const el = document.getElementById('net-note');
   if (el) el.textContent = NET.mult > 1 ? 'polling ' + NET.mult + 'x slower' : '';
@@ -12422,6 +12437,7 @@ NET.show = function () {
   });
 };
 NET.sample = function (ms) {
+  NET.read();
   NET.avg = NET.avg ? NET.avg * 0.7 + ms * 0.3 : ms;
   let m = Math.max(1, Math.min(8, Math.ceil(NET.avg / 400)));
   if (NET.forced === 'on') m = Math.max(m, 6);
@@ -12431,7 +12447,7 @@ NET.sample = function (ms) {
 };
 NET.set = function (value) {
   NET.forced = value === 'auto' ? '' : value;
-  try { localStorage.setItem('instmon_slowlink', NET.forced); } catch (e) {}
+  NET.cookie(NET.forced);
   document.cookie = 'instmon_slow=' + (NET.forced === 'on' ? '1' : '') + '; path=/; max-age=' + (NET.forced === 'on' ? 31536000 : 0) + '; SameSite=Strict';
   if (NET.forced === 'on') NET.mult = Math.max(NET.mult, 6);
   if (NET.forced === 'off') { NET.mult = 1; NET.avg = 0; }
@@ -13624,7 +13640,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         return None 
 
     def _route_index (self ):
-        lite = ("instmon_slow=1" in self.headers.get("Cookie", "")
+        cookies = [c.strip() for c in self.headers.get("Cookie", "").split(";")]
+        lite = ("instmon_slow=1" in cookies or "asl_slow=on" in cookies
                 or self.headers.get("Save-Data", "").strip().lower() == "on")
         self ._send_html (200 ,render_page (lite ))
 

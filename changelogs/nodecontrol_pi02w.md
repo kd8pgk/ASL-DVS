@@ -1,6 +1,21 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_112_20261111.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_113_20261112.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.113-pi02w (2026-11-12)
+
+Slow link for the Dashboard, the same idea as instmon 2.95.0: less traffic on the node's Wi-Fi, which also carries the IAX links and the phone's audio. This is a release: server and page behaviour changed. Not yet measured on a node.
+
+- **Slow link switch (Auto, On, Off)** next to the theme switch. Auto times the status poll; when it takes longer than about 0.4 s the page polls less often (up to 8 times slower) and goes back to normal when the line recovers. On is always slow (at least 6 times), Off is always normal. A page nobody has touched for two minutes polls half as often again while the line is slow.
+- **The choice is shared with the other tools.** It is kept in the cookie `asl_slow` (`on` or `off`; no cookie means Auto), `Path=/`, `SameSite=Strict`, one year. A cookie is shared by every port on the same address, so the choice made here (or in instmon 2.106.0) applies to every tool that reads it. A node whose instmon is older still works: this page has its own switch and instmon simply does not write the cookie.
+- **A hidden tab does not poll.** The status, key-up and recording polls skip their turn while the tab is hidden and run at once when it is shown again.
+- **Slower polls on a slow link.** Status every 5 s (was 5 s), key-up every 1 s, recording every 3 s, each multiplied by the slow factor. The key-up indicator is never slowed by more than 4 times, and not at all while the node is keyed or a change is being made, so a call is not shown late.
+- **Unchanged replies cost almost nothing.** `/api/keyed` and `/api/recording` carry an ETag (as `/api/status` already did) and answer 304 when nothing changed. The page reuses its last reply on a 304, so a tab change still repaints. `Cache-Control: no-store` is unchanged.
+- **One connection for many polls.** The server speaks HTTP/1.1 keep-alive for GET replies that have a length (and 204/304). Any reply to a POST, any reply with no length, and every reply to an address that already holds more than half of the per-address connection cap (8 of 16) still closes the connection, so uploads, a tunnel with many browsers behind one address, and the connection caps behave as before.
+- **A light page on a slow link.** With the cookie set to `on`, or a browser that sends `Save-Data: on`, the page is sent without the embedded fonts (text uses the system font), about a quarter smaller on the wire. The page is otherwise the same.
+- Tests: new `ci/test_nodecontrol_slowlink.py` (keep-alive kept and closed, the per-address guard, ETag and 304 for both polls, a changed reply, a login-less 304 refused, the light page and its look-alike cookies, the poll rules in the page, and the shared helper run in Node: cookie, factor, cap, recovery, hidden tab, idle).
+- Nothing changed in the full build; this is a pi02w release only. The Slow link switch needs no other tool.
+- Common tool changed: instmon 2.106.0 writes the same cookie.
 
 ## 9.3.112-pi02w (2026-11-11)
 

@@ -172,12 +172,17 @@ class KeepAlive(Served):
 class LightPage(Served):
     def test_the_cookie_or_save_data_gives_a_page_without_the_fonts(self):
         full = self.get("/", {"Accept-Encoding": "gzip"})[1]
-        for hdr in ({"Cookie": "instmon_slow=1"}, {"Save-Data": "on"}):
+        for hdr in ({"Cookie": "instmon_slow=1"}, {"Cookie": "a=b; asl_slow=on"}, {"Save-Data": "on"}):
             r, body, _ = self.get("/", dict(hdr, **{"Accept-Encoding": "gzip"}))
             page = gzip.decompress(body)
             self.assertNotIn(b"@font-face", page)
             self.assertLess(len(body), len(full) * 0.8)
         self.assertIn(b"@font-face", gzip.decompress(full))
+
+    def test_off_or_look_alike_shared_cookies_keep_the_fonts(self):
+        for cookie in ("asl_slow=off", "asl_slow=", "xasl_slow=on"):
+            r, body, _ = self.get("/", {"Cookie": cookie, "Accept-Encoding": "gzip"})
+            self.assertIn(b"@font-face", gzip.decompress(body), cookie)
 
     def test_the_light_page_is_otherwise_the_same(self):
         a = im.render_page(False)
@@ -207,6 +212,8 @@ class PageScript(unittest.TestCase):
         self.assertIn('data-net-set="on"', im._THEME_ROW)
         self.assertIn('data-net-set="off"', im._THEME_ROW)
         self.assertIn("instmon_slow=", self.script)
+        self.assertIn("asl_slow=", self.script)
+        self.assertIn("NET.read()", self.script)
 
     def test_unchanged_status_and_preview_are_not_redone(self):
         self.assertIn("tag === _statusTag", self.script)
