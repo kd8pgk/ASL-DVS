@@ -1,5 +1,18 @@
 # Node Talker changelog
 
+## 0.10.43 (2026-11-12)
+
+Slow link for the Node Talker page, the same idea as Node Controller 9.3.113-pi02w and instmon 2.95.0: less traffic on the node's Wi-Fi, which also carries the audio. This is a release: server and page behaviour changed. Not yet measured on a node. The audio path, the key-up path, the Balancer and the receive-health report are not changed.
+
+- **The page is sent gzip-compressed** when the browser accepts it: 282 KB becomes 96 KB. The compressed page is made once and kept, so it costs the node nothing per load. JSON replies of 600 bytes or more are compressed too (level 5).
+- **Unchanged replies cost almost nothing.** Every JSON reply to a GET carries an ETag (the same with and without gzip) and answers 304 when it is unchanged. The page asks that way for the status, the host links and the burst log, and reuses its last reply on a 304. `Cache-Control: no-store` is unchanged; error replies carry no ETag.
+- **Slow link switch (Auto, On, Off)** next to the theme switch, in the cookie `asl_slow` shared with Node Controller and instmon. Auto times the status poll; over about 0.4 s the page polls less often (up to 8 times slower) and recovers when the line does. On is at least 6 times slower, Off is normal. A page nobody touched for two minutes polls half as often again while the line is slow.
+- **What slows down.** The status and log polls, the host links (30 s), the Services card (10 s) and the burst log (10 s). The existing rule that a settled node polls less often is kept; the slow factor multiplies it.
+- **What never slows down.** Polling at full rate while you are keyed, talking or running a check, and while the Balancer measures a window. While audio plays the factor is held to 4. The audio stream, the microphone path, the Balancer's 3 s watch, its boot check and the receive-health report are untouched.
+- **A light page on a slow link.** With the cookie `on` or a browser that sends `Save-Data: on`, the page is sent without the embedded fonts (71 KB compressed instead of 96 KB; text uses the system font).
+- **Compatible.** An older Node Controller or instmon does not write the cookie; this page's own switch works alone. A client that does not send `Accept-Encoding: gzip` (the Android app's connection library does, and decodes it) gets the same plain replies as before.
+- Tests: new `ci/test_nodetalker_slowlink.py` (gzip with and without the header and `q=0`, small and error replies, ETag and 304 in every form, same tag with and without gzip, the page packed and light, look-alike cookies, the session cookie still read, the poll rules in the page, the Balancer and health report not slowed, and the shared helper run in Node: cookie, factor, cap, recovery, busy, check window, playing, hidden tab, idle).
+
 ## 0.10.42 (2026-11-12)
 
 A Services card on the Setup tab. This is a release: the page and the server gained a feature.
@@ -199,7 +212,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_42_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_43_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

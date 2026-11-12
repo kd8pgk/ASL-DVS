@@ -1,6 +1,19 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_84_20261111.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_85_20261112.py`. Newest entries first.
+
+## 6.13.85-pi02w (2026-11-12)
+
+Slow link for the SysMon page, the same idea as Node Controller 9.3.113-pi02w, Node Talker 0.10.43 and instmon 2.95.0: less traffic on the node's Wi-Fi. This is a release: server and page behaviour changed. Not yet measured on a node.
+
+- **Slow link switch (Auto, On, Off)** next to the theme switch, in the cookie `asl_slow` shared with Node Controller, Node Talker and instmon. Auto times the status poll; over about 0.4 s the page polls less often (up to 8 times slower) and recovers when the line does. On is at least 6 times slower, Off is normal. A page nobody touched for two minutes polls half as often again while the line is slow.
+- **What slows down.** The status poll (5 s), the Services list (30 s), Ports (15 s), Registration (15 s) and the Phone live card (5 s). The status poll is held to 4 times, so a low-voltage or lost-network shutdown warning (which arrives with the status) is shown within 20 s at the slowest.
+- **What never slows down.** A running SD card test (1.5 s), and every button you press. The page already paused its polls on a hidden tab; that is unchanged.
+- **Unchanged replies cost almost nothing.** Every JSON GET reply carries an ETag and answers 304 when it is unchanged. The page asks that way for the Services list, Ports and the two Registration checks, and reuses its last reply on a 304. The status reply is not asked that way: it carries the uptime, which changes every second. `Cache-Control: no-store` is unchanged; error and POST replies carry no ETag.
+- **One connection for many polls.** The server speaks HTTP/1.1 keep-alive for GET replies that have a length (and 304). A reply to a POST, a reply with no length, and every reply to an address that already holds more than half of the per-address cap (6 of 12) still closes the connection, so the connection caps behave as before.
+- **A light page on a slow link.** With the cookie `on`, or a browser that sends `Save-Data: on`, the page is sent without the embedded fonts (88 KB compressed instead of 113 KB; text uses the system font).
+- Tests: new `ci/test_sysmon_slowlink.py` (keep-alive kept and closed, the half-cap rule, ETag and 304, gzip kept with the same tag, error and POST replies untagged, the light page and look-alike cookies, every timer behind the gate, and the shared helper run in Node: cookie, factor, cap, recovery, hidden tab, idle).
+- Nothing changed in the full build; this is a pi02w release only. Needs no other tool.
 
 ## 6.13.84-pi02w (2026-11-11)
 

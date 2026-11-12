@@ -6,6 +6,7 @@ import configparser
 import fcntl
 import glob
 import gzip
+import hashlib
 import hmac
 import io
 import ipaddress
@@ -38,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.84-pi02w"
-BUILD_DATE   = "20261028"
+VERSION      = "6.13.85-pi02w"
+BUILD_DATE   = "20261112"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -3941,7 +3942,7 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
-    <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
+    <div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
   </div>
 
 </div>
@@ -4307,7 +4308,7 @@ function stopTabPolling(tab) {
 function startStatusPolling() {
   if (_statusPollTimer) return;
   pollStatus();
-  _statusPollTimer = setInterval(pollStatus, 5000);
+  _statusPollTimer = setInterval(function () { if (!NET.gate("status", 5000, 4)) pollStatus(); }, 5000);
 }
 function stopStatusPolling() {
   if (_statusPollTimer) { clearInterval(_statusPollTimer); _statusPollTimer = null; }
@@ -4373,6 +4374,60 @@ function toast(msg, type, ms) {
   }, ms);
 }
 
+const NET = {mult: 1, avg: 0, forced: "", active: Date.now(), next: {}};
+["pointerdown", "keydown", "touchstart"].forEach(function (name) {
+  document.addEventListener(name, function () { NET.active = Date.now(); }, true);
+});
+NET.read = function () {
+  let v = "";
+  try { const m = document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/); if (m) v = m[1]; } catch (e) {}
+  NET.forced = v;
+};
+NET.read();
+NET.show = function () {
+  const el = document.getElementById("net-note");
+  if (el) el.textContent = NET.mult > 1 ? "polling " + NET.mult + "x slower" : "";
+  document.querySelectorAll("[data-net-set]").forEach(function (b) {
+    const v = b.getAttribute("data-net-set");
+    b.setAttribute("aria-pressed", String((v === "auto" ? "" : v) === NET.forced));
+  });
+};
+NET.sample = function (ms) {
+  NET.read();
+  NET.avg = NET.avg ? NET.avg * 0.7 + ms * 0.3 : ms;
+  let m = Math.max(1, Math.min(8, Math.ceil(NET.avg / 400)));
+  if (NET.forced === "on") m = Math.max(m, 6);
+  if (NET.forced === "off") m = 1;
+  NET.mult = m;
+  NET.show();
+};
+NET.set = function (value) {
+  NET.forced = value === "auto" ? "" : value;
+  document.cookie = "asl_slow=" + NET.forced + "; path=/; max-age=" + (NET.forced ? 31536000 : 0) + "; SameSite=Strict";
+  if (NET.forced === "on") NET.mult = Math.max(NET.mult, 6);
+  if (NET.forced === "off") { NET.mult = 1; NET.avg = 0; }
+  NET.show();
+};
+NET.idle = function () { return NET.mult > 1 && Date.now() - NET.active > 120000 ? 2 : 1; };
+NET.factor = function (cap) { return Math.min(NET.mult, cap || 8) * NET.idle(); };
+NET.gate = function (key, ms, cap) {
+  if (document.visibilityState === "hidden") return true;
+  const now = Date.now();
+  if (now < (NET.next[key] || 0)) return true;
+  NET.next[key] = now + ms * (NET.factor(cap) - 1);
+  return false;
+};
+document.addEventListener("click", function (ev) {
+  const b = ev.target && ev.target.closest ? ev.target.closest("[data-net-set]") : null;
+  if (b) NET.set(b.getAttribute("data-net-set"));
+});
+document.addEventListener("DOMContentLoaded", function () { NET.show(); });
+
+const _tags = {};
+function _isTagged(path) {
+  return path.indexOf("/api/services?") === 0 || path.indexOf("/api/ports?") === 0 ||
+         path === "/api/reg/http" || path === "/api/reg/iax";
+}
 async function api(path, method, body) {
   method = method || "GET";
   try {
@@ -4381,8 +4436,20 @@ async function api(path, method, body) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
+    const tagged = method === "GET" && _isTagged(path);
+    if (tagged && _tags[path]) opts.headers["If-None-Match"] = _tags[path].etag;
     const r = await fetch(path, opts);
     document.body.classList.remove("offline");
+    if (tagged) {
+      if (r.status === 304 && _tags[path]) return JSON.parse(_tags[path].text);
+      const text = await r.text();
+      const etag = r.headers.get("ETag");
+      if (etag && r.status === 200) {
+        if (Object.keys(_tags).length > 24) { Object.keys(_tags).forEach(function (k) { delete _tags[k]; }); }
+        _tags[path] = {etag: etag, text: text};
+      }
+      return JSON.parse(text);
+    }
     return await r.json();
   } catch(e) {
     document.body.classList.add("offline");
@@ -4404,8 +4471,10 @@ function showWfmShutdown(state) {
 }
 
 async function pollStatus() {
+  const t0 = performance.now();
   const d = await api("/api/status");
   if (!d) return;
+  if (document.visibilityState !== "hidden") NET.sample(performance.now() - t0);
 
   if (d.wifimon_shutdown && d.wifimon_shutdown.active) showWfmShutdown(d.wifimon_shutdown);
 
@@ -4773,7 +4842,7 @@ window.loadTab_services = function() {
   if (!_enabledTabSet.has("services")) return;
   clearInterval(_s3RefreshTimer);
   loadGeneralList();
-  _s3RefreshTimer = setInterval(loadGeneralList, 30_000);
+  _s3RefreshTimer = setInterval(function () { if (!NET.gate("svc", 30000)) loadGeneralList(); }, 30_000);
 }
 
 
@@ -5115,7 +5184,7 @@ window.loadTab_ports = function() {
   if (!_enabledTabSet.has("ports")) return;
   clearInterval(_ptRefreshTimer);
   loadPorts();
-  _ptRefreshTimer = setInterval(loadPorts, 15_000);
+  _ptRefreshTimer = setInterval(function () { if (!NET.gate("ports", 15000)) loadPorts(); }, 15_000);
 };
 
 let _jpUnit  = "";
@@ -5907,7 +5976,7 @@ const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "re
 window.loadTab_reg = async function() {
   if (!_enabledTabSet.has("reg")) return;
   if (!_regRefreshTimer) _regRefreshTimer = setInterval(() => {
-    if (document.visibilityState === "visible" && !_pausedByNavigation) loadTab_reg();
+    if (document.visibilityState === "visible" && !_pausedByNavigation && !NET.gate("reg", 15000)) loadTab_reg();
   }, 15000);
   const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
 
@@ -6034,7 +6103,7 @@ window.loadTab_phone = async function() {
   _phData = d;
   phRenderAll();
   if (_phRefreshTimer) clearInterval(_phRefreshTimer);
-  _phRefreshTimer = setInterval(phPollLive, 5000);
+  _phRefreshTimer = setInterval(function () { if (!NET.gate("phone", 5000)) phPollLive(); }, 5000);
 };
 
 
@@ -11215,6 +11284,8 @@ _HTML_SRC   = (_HTML.replace("__VERSION__", VERSION)
                     .replace("__SVC_LEGEND__", _SVC_LEGEND_HTML))
 _HTML_BYTES = _HTML_SRC.encode("utf-8")
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
+_HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
+_HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
 
 _AUTH_ACCOUNT        = "root"
 _SESSION_TTL_SEC     = 12 * 3600
@@ -11466,6 +11537,7 @@ class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         _log(f"WARN — unhandled server error from {client_address}: {exc}")
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
 
     timeout = 20
 
@@ -11476,15 +11548,56 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(self.timeout)
 
+    def send_response(self, code, message=None):
+        self._sent_length = code in (204, 304)
+        super().send_response(code, message)
+
+    def send_header(self, keyword, value):
+        if keyword.lower() in ("content-length", "transfer-encoding"):
+            self._sent_length = True
+        super().send_header(keyword, value)
+
+    def _keep_alive_ok(self) -> bool:
+        try:
+            with self.server._per_ip_lock:
+                held = self.server._per_ip.get(self.client_address[0], 0)
+        except AttributeError:
+            return True
+        return held <= _MAX_CONNS_PER_IP // 2
+
+    def end_headers(self):
+        if not (getattr(self, "_sent_length", False) and self.command == "GET" and self._keep_alive_ok()):
+            self.send_header("Connection", "close")
+        super().end_headers()
+
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")
 
+    def _wants_lite_page(self) -> bool:
+        if self.headers.get("Save-Data", "").strip().lower() == "on":
+            return True
+        for part in self.headers.get("Cookie", "").split(";"):
+            if part.strip() == "asl_slow=on":
+                return True
+        return False
+
     def send_json(self, data: dict, status: int = 200, extra_headers: dict = None) -> None:
         raw = json.dumps(data, separators=(",", ":")).encode()
+        etag = ""
+        if self.command == "GET" and status == 200:
+            etag = '"' + hashlib.md5(raw).hexdigest() + '"'
+            if self.headers.get("If-None-Match", "") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
         self.send_response(status)
         self.send_header("Content-Type",          "application/json")
         self.send_header("Cache-Control",          "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if etag:
+            self.send_header("ETag", etag)
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
@@ -11512,11 +11625,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type",          "text/html; charset=utf-8")
         self.send_header("Cache-Control",          "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        lite = self._wants_lite_page()
         if self._accepts_gzip():
-            body = _HTML_GZIP
+            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
             self.send_header("Content-Encoding", "gzip")
         else:
-            body = _HTML_BYTES
+            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

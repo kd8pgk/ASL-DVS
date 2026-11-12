@@ -48,7 +48,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_96_20261111.py` | `sysmon_pi02w_v6_13_84_20261111.py` | `instmon_v2_106_0_20261112.py` |
+| File name | `sysmon_v6_13_96_20261111.py` | `sysmon_pi02w_v6_13_85_20261112.py` | `instmon_v2_106_0_20261112.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -153,7 +153,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_10_42_20261112.py --install
+  sudo python3 nodetalker_v0_10_43_20261112.py --install
   ```
 
 Then:
@@ -525,11 +525,11 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_v9_3_108_20261111.py` | Dashboard, full (current) |
 | `nodecontrol_pi02w_v9_3_113_20261112.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_96_20261111.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_84_20261111.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_pi02w_v6_13_85_20261112.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_106_0_20261112.py` | common |
 | `wifimon_v5_53_0_20261111.py` | common |
 | `44helper_v0_1_22_20261112.py` | common |
-| `nodetalker_v0_10_42_20261112.py` | common |
+| `nodetalker_v0_10_43_20261112.py` | common |
 | `noderecorder_v0_15_0_20261110.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
