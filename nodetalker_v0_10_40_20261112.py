@@ -7657,7 +7657,7 @@ async function whoami() {
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
   autoListen();
-  if (authed) { pttFromPi(false); setupCheck(); }
+  if (authed) { pttFromPi(false); setupCheck(); autoBootCheck(); }
 }
 
 function hostLinks(d) {
@@ -7707,7 +7707,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); pollHostLinks(); setupCheck(); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); pollHostLinks(); setupCheck(); autoBootCheck(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -7720,6 +7720,7 @@ async function logout() {
   if (ws) { try { ws.close(); } catch (e) {} }
   await post('/api/logout');
   authed = false;
+  autoSync();
   stopListen('system', 'logout');
   render();
 }
@@ -8444,6 +8445,7 @@ async function autoLoop(run) {
       await autoSleep(run, AUTO_GAP_MS);
     }
   }
+  if (autoRun === run) autoStop();
 }
 
 function autoStart() {
@@ -10895,7 +10897,7 @@ async function saveConfig() {
   CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   const d = await post('/api/config', body);
   setMsg('cfg-msg', d);
-  if (d.ok) { publicListen = body.public_listen; loadNode(); }
+  if (d.ok) { publicListen = body.public_listen; balOff = !!body.balancer_off; autoSync(); loadNode(); }
 }
 
 async function logCopy() {
