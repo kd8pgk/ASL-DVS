@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.41 (2026-11-12)
+
+- **Listen tab: the link status shows at once.** The line below the push-to-talk button (the connected node or talkgroup) is read as soon as the page has logged in, instead of after the first 1.5 s poll.
+- **No "PPT is Locked" notice under the button.** The notice hid the link status while the lock was on. The button already says "PPT locked" and the slider shows the lock, so the line now keeps showing the link status.
+- Page JavaScript logic changed (the first status read), so this is a release, not a cosmetic build.
+
 ## 0.10.40 (2026-11-12)
 
 The testing phase is done. The tests are gone and the balancer runs by itself.
@@ -182,7 +188,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_40_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_41_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.40"
+VERSION = "0.10.41"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -9451,7 +9451,7 @@ function pttSlidePos(locked) {
 function applyPttLock(locked) {
   pttLocked = !!locked;
   pttSlidePos(pttLocked);
-  pttUi(wsReady ? 'ready' : 'off', pttLocked ? 'PPT is Locked' : '', pttLocked ? 'warn' : '');
+  pttUi(wsReady ? 'ready' : 'off', '', '');
 }
 
 async function setPttLock(locked) {
@@ -9551,7 +9551,7 @@ function talkMsg(m) {
       'not-ready': 'Node 1921 is not set up yet (Setup tab).',
       locked: 'PPT is Locked',
       'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
-    endTalk(); pttUi('ready', why, 'warn');
+    endTalk(); pttUi('ready', m.why === 'locked' ? '' : why, 'warn');
   } else if (m.ev === 'unkeyed') {
     if (tailUntil) ownUnkeyAt = performance.now();
     tailUntil = 0;
@@ -9891,7 +9891,7 @@ function endTalk() {
 async function pttDown(ev) {
   if (ev) ev.preventDefault();
   if (talking) return;
-  if (pttLocked) { note('ptt-msg', 'warn', 'PPT is Locked'); return; }
+  if (pttLocked) return;
   if (performance.now() < tailUntil) { note('ptt-msg', 'warn', 'Finishing the last transmission...'); return; }
   const wait = gapLeft();
   if (wait > 0) {
@@ -11053,7 +11053,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hsDevices().then((l) => { devCount = l.length; });
   pttUi('off', '');
   pttSlideInit();
-  whoami().then(() => { if (authed) loadFavs(); });
+  whoami().then(() => { if (authed) loadFavs(); pollStatus(); });
   availUi();
   setInterval(availUi, 2000);
   pollEvery(pollStatus, 1500, 5000);
