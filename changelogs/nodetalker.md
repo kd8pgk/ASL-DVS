@@ -1,5 +1,16 @@
 # Node Talker changelog
 
+## 0.10.39 (2026-11-12)
+
+Checks Node Talker against the Node Controller functions it shares (pi02w 9.3.112 / full 9.3.108) and mirrors the differences.
+
+- **The connect check follows Node Controller.** After a connect Node Talker now waits up to 10 seconds (was 15), asking Asterisk every half second. It fails at once when the node appears and then drops out of the link list, and after 5 seconds when the node never appears. A node still connecting after 10 seconds is reported as still trying, as before.
+- **A tune is not confirmed while Analog_Bridge is stopped.** The status file Analog_Bridge leaves behind could show the right talkgroup after the service stopped. The tuned line now counts the bridge service as well, and a talkgroup that was confirmed and is no longer reported is written to the log.
+- **Same sound conversion code.** `_ulaw_byte` is now the same text as in Node Controller. A test checks every sample gives the same byte as before.
+- Left as they are on purpose: the login session store (Node Controller shares its file with other tools), the Node Recorder lookups and the service helpers, which take different inputs here.
+- More cases in `ci/test_nodetalker_links.py`.
+- This is a release, not a cosmetic build.
+
 ## 0.10.38 (2026-11-11)
 
 - **The page passes the Quick Key Guard setting to Node Talker Mobile.** When the page runs inside the app, the key-up options it hands the app now include `qk`, so the app (0.10.38 and later) sends it with the key-up instead of the server falling back to the copy saved on the Pi. In a browser nothing changes.
@@ -158,7 +169,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_38_20261111.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_39_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

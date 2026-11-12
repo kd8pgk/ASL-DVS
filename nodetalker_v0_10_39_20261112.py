@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.38"
+VERSION = "0.10.39"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -868,14 +868,12 @@ def _schedule_restart():
 
 def _ulaw_byte(s):
     sign = 0x80 if s < 0 else 0
-    if s < 0:
-        s = -s
-    if s > 32635:
-        s = 32635
-    s += 0x84
-    exponent = min(7, max(0, s.bit_length() - 8))
-    mantissa = (s >> (exponent + 3)) & 0x0F
-    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+    s = min(-s if s < 0 else s, 32635) + 0x84
+    exp, mask = 7, 0x4000
+    while exp > 0 and not (s & mask):
+        exp -= 1
+        mask >>= 1
+    return ~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0F)) & 0xFF
 
 
 ULAW_TABLE = bytes(_ulaw_byte(i - 65536 if i >= 32768 else i) for i in range(65536))
@@ -3674,6 +3672,7 @@ AB_INI = os.environ.get("NODETALKER_AB_INI", "/opt/Analog_Bridge/Analog_Bridge.i
 M17_INI = os.environ.get("NODETALKER_M17_INI", "/opt/USRP2M17/USRP2M17.ini")
 M17_HOSTS = os.environ.get("NODETALKER_M17_HOSTS", "/var/lib/mmdvm/M17Hosts.json")
 M17_SERVICE = "usrp2m17"
+AB_SERVICE = "analog_bridge"
 M17_NET_PORTS = (17010, 17000)
 M17_USRP_PORTS = (32008, 34008)
 M17_GAIN_DB = 3
@@ -3712,7 +3711,9 @@ _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 _CALL_TRIM = re.compile(r"[\x00-\x1f\x7f]")
 _M17_REF_RE = re.compile(r"[A-Z0-9][A-Z0-9-]{0,15}")
 M17_STATUS_TTL = 5.0
-LINK_WAIT_SEC = 15
+LINK_WAIT_SEC = 10
+LINK_WAIT_STEP_SEC = 0.5
+LINK_WAIT_MIN_STEPS = 10
 
 
 def iax_bindport():
@@ -4711,10 +4712,13 @@ def solo_tune_state():
         ok = _m17_tuned(_solo["tune"])
     else:
         last = _abinfo_last_tune()
-        ok = last is not None and _norm_tune(last) == _norm_tune(_solo["tune"])
+        ok = (last is not None and _norm_tune(last) == _norm_tune(_solo["tune"])
+              and _svc_active(AB_SERVICE))
     age = now - _solo_at["t"] if _solo_at["t"] is not None else TUNE_GRACE_SEC
     v = ("confirmed" if ok else "pending" if age < TUNE_GRACE_SEC
          else "sent" if _solo["mode"] == "DSTAR" else "unconfirmed")
+    if c["key"] == key and c["v"] == "confirmed" and v in ("unconfirmed", "sent"):
+        log_event(f"{_solo['name']} is no longer what the bridge reports", "warn")
     c.update(t=now, key=key, v=v)
     return v
 
@@ -5340,15 +5344,21 @@ def m17_connect(f, node):
 
 
 def wait_link(node, target, wait=LINK_WAIT_SEC):
-    deadline = time.monotonic() + wait
-    while True:
+    seen = answered = False
+    for i in range(int(wait / LINK_WAIT_STEP_SEC)):
+        time.sleep(LINK_WAIT_STEP_SEC)
         ok, links = rpt_links(node, max_age=0)
+        if not ok:
+            continue
+        answered = True
         hit = next((l for l in links if l["node"] == target), None)
-        if hit is not None and hit["state"].upper() in ("", "ESTABLISHED"):
-            return "up"
-        if time.monotonic() >= deadline:
-            return "unknown" if not ok else "connecting" if hit else "down"
-        time.sleep(1)
+        if hit is not None:
+            if hit["state"].upper() in ("", "ESTABLISHED"):
+                return "up"
+            seen = True
+        elif seen or i + 1 >= LINK_WAIT_MIN_STEPS:
+            return "down"
+    return "connecting" if answered else "unknown"
 
 
 def _link_outcome(f, node, via):

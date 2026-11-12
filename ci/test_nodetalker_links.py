@@ -216,8 +216,12 @@ class Links(unittest.TestCase):
         self.last_tune = None
         self.nc_status = None
         self.m17_now = ""
+        self.ab_active = True
+        self.logged = []
+        self.states = []
         self.saved = {}
         fakes = {
+            "_svc_active": lambda svc: self.ab_active,
             "dvs": self.fake_dvs,
             "ilink": self.fake_ilink,
             "rpt_links": self.fake_links,
@@ -233,7 +237,7 @@ class Links(unittest.TestCase):
             "perm_links": lambda node: frozenset(),
             "nets_load": lambda: [],
             "fav_load": lambda: [],
-            "log_event": lambda *a, **k: None,
+            "log_event": lambda msg, kind="info": self.logged.append(msg),
             "_m17_present": lambda: True,
             "callsign_now": lambda: ("N0CALL", "set"),
             "m17_lookup": lambda ref, module: ("1.2.3.4", ""),
@@ -430,6 +434,82 @@ class Links(unittest.TestCase):
             self.assertEqual(nt.solo_tune_state(), "unconfirmed")
         finally:
             nt.M17_INI, nt._svc_active = real_ini, real_active
+
+    def test_solo_tune_is_not_confirmed_while_analog_bridge_is_stopped(self):
+        self.assertTrue(nt.solo_dvs(fav("P25", "10200"), NODE)["ok"])
+        self.last_tune = "10200"
+        self.ab_active = False
+        self.late()
+        self.assertEqual(nt.solo_tune_state(), "unconfirmed")
+
+    def test_a_lost_confirmation_is_logged(self):
+        self.assertTrue(nt.solo_dvs(fav("P25", "10200"), NODE)["ok"])
+        self.last_tune = "10200"
+        self.fresh()
+        self.assertEqual(nt.solo_tune_state(), "confirmed")
+        self.last_tune = "other"
+        self.late()
+        self.assertEqual(nt.solo_tune_state(), "unconfirmed")
+        self.assertTrue(any("no longer what the bridge reports" in m for m in self.logged))
+
+    def link_script(self, steps):
+        seq = iter(steps)
+        last = [steps[-1]]
+
+        def links(node, max_age=2.0):
+            try:
+                last[0] = next(seq)
+            except StopIteration:
+                pass
+            ok, state = last[0]
+            return ok, ([] if state is None else [{"node": "55555", "dir": "OUT", "time": "", "state": state}])
+        nt.rpt_links = links
+
+    def test_link_wait_is_up_as_soon_as_the_node_is_established(self):
+        self.link_script([(True, None), (True, "CONNECTING"), (True, "ESTABLISHED")])
+        self.assertEqual(nt.wait_link(NODE, "55555"), "up")
+
+    def test_link_wait_fails_early_when_a_connecting_node_drops(self):
+        calls = [0]
+        script = [(True, "CONNECTING"), (True, None)]
+        self.link_script(script)
+        real = nt.rpt_links
+
+        def counted(node, max_age=2.0):
+            calls[0] += 1
+            return real(node, max_age)
+        nt.rpt_links = counted
+        self.assertEqual(nt.wait_link(NODE, "55555"), "down")
+        self.assertEqual(calls[0], 2)
+
+    def test_link_wait_gives_up_on_an_absent_node_after_five_seconds(self):
+        calls = [0]
+
+        def absent(node, max_age=2.0):
+            calls[0] += 1
+            return True, []
+        nt.rpt_links = absent
+        self.assertEqual(nt.wait_link(NODE, "55555"), "down")
+        self.assertEqual(calls[0], nt.LINK_WAIT_MIN_STEPS)
+
+    def test_link_wait_keeps_trying_while_the_node_is_connecting(self):
+        self.link_script([(True, "CONNECTING")])
+        self.assertEqual(nt.wait_link(NODE, "55555"), "connecting")
+
+    def test_link_wait_is_unknown_when_asterisk_never_answers(self):
+        self.link_script([(False, None)])
+        self.assertEqual(nt.wait_link(NODE, "55555"), "unknown")
+
+    def test_ulaw_matches_node_controller_for_every_sample(self):
+        def reference(s):
+            sign = 0x80 if s < 0 else 0
+            if s < 0:
+                s = -s
+            s = min(s, 32635) + 0x84
+            exponent = min(7, max(0, s.bit_length() - 8))
+            return ~(sign | (exponent << 4) | ((s >> (exponent + 3)) & 0x0F)) & 0xFF
+        for i in range(-32768, 32768):
+            self.assertEqual(nt._ulaw_byte(i), reference(i))
 
     def test_state_saved_by_an_older_version_has_no_verdict(self):
         nt._solo.update(mode="P25", target="P25:10200", name="P25 10200", bridge=BRIDGE, tune="")
