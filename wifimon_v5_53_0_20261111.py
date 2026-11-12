@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.51.0"
+APP_VERSION = "5.53.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -886,34 +886,20 @@ def _prompt_manual_networks(start_priority: int = 1) -> List[Dict[str, object]]:
 
 def _discover_nmcli_networks() -> List[Dict[str, object]]:
     found: List[Dict[str, object]] = []
-    try:
-        out = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return found
-
-    seen_ssids = set()
-    for line in out.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) < 2 or parts[1] != "802-11-wireless":
+    seen = set()
+    for prof in _nm_wifi_profiles():
+        ssid = str(prof["ssid"])
+        if ssid in seen:
             continue
-        name = parts[0]
-        if name in seen_ssids:
-            continue
-        seen_ssids.add(name)
-        psk = ""
-        try:
-            sec = subprocess.run(
-                ["nmcli", "-s", "-g", "802-11-wireless-security.psk",
-                 "connection", "show", name],
-                capture_output=True, text=True, timeout=10,
-            )
-            psk = sec.stdout.strip()
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        found.append({"ssid": name, "psk": psk, "found_pw": bool(psk)})
+        seen.add(ssid)
+        psk = _run_text(["nmcli", "-s", "--escape", "no", "-g", "802-11-wireless-security.psk",
+                         "connection", "show", "uuid", str(prof["uuid"])], timeout=10).rstrip("\n")
+        net: Dict[str, object] = {"ssid": ssid, "psk": psk, "found_pw": bool(psk)}
+        if prof.get("hidden"):
+            net["hidden"] = True
+        if prof.get("name") and prof["name"] != ssid:
+            net["profile"] = prof["name"]
+        found.append(net)
     return found
 
 def _discover_wpa_supplicant_networks() -> List[Dict[str, object]]:
@@ -963,7 +949,8 @@ def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
         pw_note = "password saved" if n.get("found_pw") else "no password found"
         if n.get("hashed"):
             pw_note += ", pre-hashed key (wpa_cli-only)"
-        print(f"    {i}) {n['ssid']}  [{pw_note}]")
+        prof = f" (profile {n['profile']})" if n.get("profile") else ""
+        print(f"    {i}) {n['ssid']}{prof}  [{pw_note}]")
 
     choice = input("Import all? [Y/n], or enter numbers (e.g. 1,3): ").strip().lower()
     if choice in ("", "y", "yes"):
@@ -982,7 +969,10 @@ def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
     for i, n in enumerate(selected, start=start_priority):
         if n.get("hashed"):
             log.info("Imported %s as a pre-hashed key (wpa_cli-only)", n["ssid"])
-        networks.append({"ssid": n["ssid"], "psk": n.get("psk", ""), "priority": i})
+        net = {"ssid": n["ssid"], "psk": n.get("psk", ""), "priority": i}
+        if n.get("hidden"):
+            net["hidden"] = True
+        networks.append(net)
     return networks
 
 def run_wifi_setup() -> None:
@@ -1371,14 +1361,20 @@ def _current_ssid() -> Optional[str]:
     except (subprocess.SubprocessError, FileNotFoundError):
         pass
 
-    try:
-        r = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "device", "wifi"],
-                            capture_output=True, text=True, timeout=5)
-        for line in r.stdout.splitlines():
-            if line.startswith("yes:"):
-                return line.split(":", 1)[1]
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    ssid = _parse_iw_link(_run_text(["iw", "dev", INTERFACE, "link"])).get("ssid_iw")
+    if ssid:
+        return str(ssid)
+
+    if _wpa_socket(INTERFACE):
+        wpa_state, ssid = _wpa_status(INTERFACE)
+        if wpa_state == "connected" and ssid:
+            return ssid
+
+    for f in (_nmcli_split(line) for line in _run_text(
+            ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi", "list", "ifname", INTERFACE,
+             "--rescan", "no"]).splitlines()):
+        if len(f) >= 2 and f[0] == "yes" and f[1]:
+            return f[1]
 
     return None
 
@@ -6719,14 +6715,14 @@ class _Handler(BaseHTTPRequestHandler):
             log.info("Dashboard: %s set to %s by %s", name, word, self.client_address[0])
             _grace_start(f"{name} set to {word} from the dashboard")
             p = _begin_change("device_mode", f"{name} set to {word}", undo)
-            _set_dev_mode(key, name, str(mode))
             ok, msg = _nmcli_ok(["device", "set", name, "autoconnect", "no" if mode == "off" else "yes"])
-            if ok:
-                _devmode_applied.add(key)
             if ok and mode == "off" and state.startswith("connect"):
                 ok, msg = _nmcli_ok(["device", "disconnect", name])
-            if not ok:
-                _set_dev_mode(key, name, prev)
+            if ok:
+                _set_dev_mode(key, name, str(mode))
+                _devmode_applied.add(key)
+            else:
+                _nmcli_ok(["device", "set", name, "autoconnect", "no" if prev == "off" else "yes"])
             done = f"{name} set to {word}."
             if mode == "on" and wired and not _connected_state(state):
                 done += " wifimon will bring it up in a few seconds if a cable is plugged in."
@@ -7672,8 +7668,15 @@ header .grow{flex:1}
 
 .banner{max-width:1100px;margin:16px auto 0;padding:12px 16px;border-radius:8px;
   background:rgba(255,61,90,.14);border:1px solid var(--red);color:var(--red);font-weight:600}
-main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
-  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+main{max-width:1100px;margin:0 auto;padding:16px}
+.tabp{display:grid;gap:16px;align-items:start;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.tabp[hidden]{display:none}
+#tabs{max-width:1100px;margin:16px auto 0;padding:0 16px;display:flex;gap:6px;overflow-x:auto;
+  border-bottom:1px solid var(--border2)}
+#tabs .tab-btn{flex:0 0 auto;position:relative;border-radius:6px 6px 0 0;border-bottom:0;opacity:.75;white-space:nowrap}
+#tabs .tab-btn[aria-selected="true"]{opacity:1;border-color:var(--amber);color:var(--amber);background:var(--surface)}
+#tabs .tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:6px;vertical-align:middle}
+#tabs .tab-dot[hidden]{display:none}
 .card{background:var(--surface);border:1px solid var(--border2);border-radius:6px;padding:16px 18px;min-width:0}
 .card h2{margin:0 0 12px;font-size:var(--fs-lg);color:var(--amber)}
 #card-status{grid-column:1/-1}
@@ -7737,7 +7740,7 @@ main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
 .note{margin:0 0 10px;padding:8px 10px;border-radius:6px;border:1px solid var(--border2);
   background:var(--bg);color:var(--muted);font-size:var(--fs-md)}
 .wide{grid-column:1/-1}
-@media(min-width:964px){#card-log{grid-column:span 2}}
+#card-log{grid-column:1/-1}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .card-head h2{margin:0;flex:1}
 .net{padding:10px 0;border-top:1px solid var(--border2)}
@@ -7852,7 +7855,15 @@ a.btnlink:hover{border-color:var(--blue)}
     <button type="button" id="btn-undo">Undo now</button>
   </div>
 
+  <nav id="tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="tab-btn" role="tab" id="tab-status" aria-controls="tabp-status" data-tab="status" aria-selected="true">Status<span class="tab-dot" hidden></span></button>
+    <button type="button" class="tab-btn" role="tab" id="tab-networks" aria-controls="tabp-networks" data-tab="networks" aria-selected="false">Networks<span class="tab-dot" hidden></span></button>
+    <button type="button" class="tab-btn" role="tab" id="tab-devices" aria-controls="tabp-devices" data-tab="devices" aria-selected="false">Devices<span class="tab-dot" hidden></span></button>
+    <button type="button" class="tab-btn" role="tab" id="tab-watchdogs" aria-controls="tabp-watchdogs" data-tab="watchdogs" aria-selected="false">Watchdogs<span class="tab-dot" hidden></span></button>
+    <button type="button" class="tab-btn" role="tab" id="tab-system" aria-controls="tabp-system" data-tab="system" aria-selected="false">System &amp; log<span class="tab-dot" hidden></span></button>
+  </nav>
   <main>
+    <div class="tabp" id="tabp-status" data-tab="status" role="tabpanel" aria-label="Status">
     <section class="card" id="card-status" aria-labelledby="st-h">
       <h2 id="st-h">Status</h2>
       <div class="ssid" id="s-ssid">Loading…</div>
@@ -7883,22 +7894,9 @@ a.btnlink:hover{border-color:var(--blue)}
         <button type="button" id="btn-reconnect">Reconnect now</button>
       </div>
       <div class="details" id="details" hidden></div>
-      <div id="cc-box" hidden style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border2)">
-        <h3 style="margin:0 0 6px;font-size:var(--fs-md);color:var(--blue)">WiFi country code</h3>
-        <div class="radio-row"><span class="v" id="cc-now">n/a</span><button type="button" id="cc-change">Change</button></div>
-        <form class="form" id="cc-form" hidden autocomplete="off" style="margin-top:10px">
-          <div class="row"><label for="cc-sel">Country</label><select id="cc-sel"></select></div>
-          <p class="muted" style="margin:0;font-size:var(--fs-base)">Sets which WiFi channels and power levels are allowed. Use the country the node is in.</p>
-          <div class="actions"><button type="button" id="cc-set">Set</button><button type="button" id="cc-cancel">Cancel</button></div>
-        </form>
-      </div>
-      <div id="roam-box" hidden style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border2)">
-        <h3 style="margin:0 0 6px;font-size:var(--fs-md);color:var(--blue)">WiFi chip roaming</h3>
-        <div class="radio-row"><span class="v" id="roam-now">n/a</span><button type="button" id="roam-toggle">Stop chip roaming</button></div>
-        <p class="muted" style="margin:6px 0 0;font-size:var(--fs-base)">The Pi's WiFi chip keeps looking for a better access point by itself. With one router that only causes short dropouts, so stopping it can help. Takes effect after a reboot.</p>
-      </div>
     </section>
-
+    </div>
+    <div class="tabp" id="tabp-networks" data-tab="networks" role="tabpanel" aria-label="Networks">
     <section class="card wide" id="card-saved" aria-labelledby="sn-h">
       <div class="card-head">
         <h2 id="sn-h">Saved networks</h2>
@@ -7949,7 +7947,6 @@ a.btnlink:hover{border-color:var(--blue)}
       <div id="n-list"><p class="muted">Loading…</p></div>
       <p class="rules" id="n-rules"></p>
     </section>
-
     <section class="card" id="card-scan" aria-labelledby="sc-h">
       <div class="card-head">
         <h2 id="sc-h">Nearby networks</h2>
@@ -7958,21 +7955,28 @@ a.btnlink:hover{border-color:var(--blue)}
       <p class="rules" id="sc-age"></p>
       <div id="sc-list"><p class="muted">Loading…</p></div>
     </section>
-
+    </div>
+    <div class="tabp" id="tabp-devices" data-tab="devices" role="tabpanel" aria-label="Devices">
     <section class="card" id="card-radio" aria-labelledby="rd-h">
-      <h2 id="rd-h">Radio &amp; device</h2>
+      <h2 id="rd-h">Radio</h2>
       <p class="note" id="r-note" hidden></p>
       <div class="radio-row">
         <span>WiFi radio</span>
         <span class="v" id="r-radio">n/a</span>
         <button type="button" id="btn-radio" disabled>Turn off</button>
       </div>
-      <h3>WiFi devices</h3>
+    </section>
+    <section class="card" id="card-wifidevs" aria-labelledby="wd2-h">
+      <h2 id="wd2-h">WiFi devices</h2>
       <div id="r-devs"><p class="muted">Loading…</p></div>
-      <h3>Wired (Ethernet)</h3>
-      <div id="r-eth"><p class="muted">Loading…</p></div>
       <p class="rules" id="r-rules"></p>
-      <h3>Emergency hotspot</h3>
+    </section>
+    <section class="card" id="card-wired" aria-labelledby="eth-h">
+      <h2 id="eth-h">Wired (Ethernet)</h2>
+      <div id="r-eth"><p class="muted">Loading…</p></div>
+    </section>
+    <section class="card" id="card-hotspot" aria-labelledby="hs-h">
+      <h2 id="hs-h">Emergency hotspot</h2>
       <p class="note" id="h-note" hidden></p>
       <div id="h-off">
         <p class="muted" style="margin:0 0 8px">The node makes its own WiFi so a phone can reach this page, for example to add a hotel network. It leaves its current WiFi while the hotspot is on.</p>
@@ -7994,7 +7998,25 @@ a.btnlink:hover{border-color:var(--blue)}
         <button type="button" class="danger" id="hs-stop">Stop hotspot</button>
       </div>
     </section>
-
+    <section class="card" id="card-country" aria-labelledby="cr-h">
+      <h2 id="cr-h">Country &amp; roaming</h2>
+      <div id="cc-box">
+        <h3 style="margin:0 0 6px;font-size:var(--fs-md);color:var(--blue)">WiFi country code</h3>
+        <div class="radio-row"><span class="v" id="cc-now">n/a</span><button type="button" id="cc-change">Change</button></div>
+        <form class="form" id="cc-form" hidden autocomplete="off" style="margin-top:10px">
+          <div class="row"><label for="cc-sel">Country</label><select id="cc-sel"></select></div>
+          <p class="muted" style="margin:0;font-size:var(--fs-base)">Sets which WiFi channels and power levels are allowed. Use the country the node is in.</p>
+          <div class="actions"><button type="button" id="cc-set">Set</button><button type="button" id="cc-cancel">Cancel</button></div>
+        </form>
+      </div>
+      <div id="roam-box" hidden style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border2)">
+        <h3 style="margin:0 0 6px;font-size:var(--fs-md);color:var(--blue)">WiFi chip roaming</h3>
+        <div class="radio-row"><span class="v" id="roam-now">n/a</span><button type="button" id="roam-toggle">Stop chip roaming</button></div>
+        <p class="muted" style="margin:6px 0 0;font-size:var(--fs-base)">The Pi's WiFi chip keeps looking for a better access point by itself. With one router that only causes short dropouts, so stopping it can help. Takes effect after a reboot.</p>
+      </div>
+    </section>
+    </div>
+    <div class="tabp" id="tabp-watchdogs" data-tab="watchdogs" role="tabpanel" aria-label="Watchdogs">
     <section class="card" id="card-watchdog" aria-labelledby="wd-h">
       <h2 id="wd-h">Watchdog</h2>
       <div class="wd-sw"><span>WiFi watchdog<span class="st" id="wd-wifi-st"></span></span>
@@ -8043,7 +8065,25 @@ a.btnlink:hover{border-color:var(--blue)}
         </div>
       </form>
     </section>
-
+    <section class="card" id="card-tunnel" aria-labelledby="tg-h">
+      <h2 id="tg-h">Tunnel watchdog</h2>
+      <p id="tg-state" style="margin:0 0 8px">…</p>
+      <dl class="kv" id="tg-kv"></dl>
+      <div class="actions"><button type="button" id="btn-tg">Settings</button></div>
+      <form class="form" id="tg-form" hidden autocomplete="off" style="margin-top:12px">
+        <h3>Tunnel watchdog settings</h3>
+        <div class="row"><label class="check"><input type="checkbox" id="tg-on"> Watch the 44Net tunnel</label>
+          <span class="hint">Every minute, checks that the tunnel set up by 44helper (wg0) has a handshake. After the failed checks below it re-adds the tunnel server's route if it loops into wg0, restarts the tunnel, and once the handshake is back restarts the DVSwitch services. Backs off (10 min, 30 min, then hourly), at most 6 tries per boot. It never reboots and never edits wg0.conf. A tunnel you stopped is left alone.</span></div>
+        <div class="row"><label for="tg-bad">Failed checks before acting</label>
+          <input type="number" id="tg-bad" min="2" max="10" step="1"><span class="hint">2 to 10, one a minute. Default 3.</span></div>
+        <div class="row"><label for="tg-delay">Wait after boot (seconds)</label>
+          <input type="number" id="tg-delay" min="60" max="1800" step="30"><span class="hint">Gives the boot order and the tunnel's own retry time first. Default 300.</span></div>
+        <div class="row"><label class="check"><input type="checkbox" id="tg-dv"> Restart the DVSwitch services after the tunnel is back</label>
+          <span class="hint">netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), so services that started without the tunnel reconnect.</span></div>
+        <p class="err" id="tg-err" role="alert"></p>
+        <div class="actions"><button type="button" id="tg-save">Save</button><button type="button" id="tg-cancel">Cancel</button></div>
+      </form>
+    </section>
     <section class="card" id="card-alerts" aria-labelledby="al-h">
       <h2 id="al-h">Alerts</h2>
       <p id="al-state" style="margin:0 0 8px">…</p>
@@ -8065,27 +8105,8 @@ a.btnlink:hover{border-color:var(--blue)}
         <div class="actions"><button type="button" id="al-save">Save</button><button type="button" id="al-cancel">Cancel</button></div>
       </form>
     </section>
-
-    <section class="card" id="card-tunnel" aria-labelledby="tg-h">
-      <h2 id="tg-h">Tunnel watchdog</h2>
-      <p id="tg-state" style="margin:0 0 8px">…</p>
-      <dl class="kv" id="tg-kv"></dl>
-      <div class="actions"><button type="button" id="btn-tg">Settings</button></div>
-      <form class="form" id="tg-form" hidden autocomplete="off" style="margin-top:12px">
-        <h3>Tunnel watchdog settings</h3>
-        <div class="row"><label class="check"><input type="checkbox" id="tg-on"> Watch the 44Net tunnel</label>
-          <span class="hint">Every minute, checks that the tunnel set up by 44helper (wg0) has a handshake. After the failed checks below it re-adds the tunnel server's route if it loops into wg0, restarts the tunnel, and once the handshake is back restarts the DVSwitch services. Backs off (10 min, 30 min, then hourly), at most 6 tries per boot. It never reboots and never edits wg0.conf. A tunnel you stopped is left alone.</span></div>
-        <div class="row"><label for="tg-bad">Failed checks before acting</label>
-          <input type="number" id="tg-bad" min="2" max="10" step="1"><span class="hint">2 to 10, one a minute. Default 3.</span></div>
-        <div class="row"><label for="tg-delay">Wait after boot (seconds)</label>
-          <input type="number" id="tg-delay" min="60" max="1800" step="30"><span class="hint">Gives the boot order and the tunnel's own retry time first. Default 300.</span></div>
-        <div class="row"><label class="check"><input type="checkbox" id="tg-dv"> Restart the DVSwitch services after the tunnel is back</label>
-          <span class="hint">netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), so services that started without the tunnel reconnect.</span></div>
-        <p class="err" id="tg-err" role="alert"></p>
-        <div class="actions"><button type="button" id="tg-save">Save</button><button type="button" id="tg-cancel">Cancel</button></div>
-      </form>
-    </section>
-
+    </div>
+    <div class="tabp" id="tabp-system" data-tab="system" role="tabpanel" aria-label="System and log">
     <section class="card" id="card-service" aria-labelledby="sv-h">
       <h2 id="sv-h">Service</h2>
       <dl class="kv" id="v-kv"></dl>
@@ -8094,7 +8115,6 @@ a.btnlink:hover{border-color:var(--blue)}
         <button type="button" id="btn-logout">Log Out</button>
       </div>
     </section>
-
     <section class="card wide" id="card-install" aria-labelledby="in-h">
       <div class="card-head">
         <h2 id="in-h">System tools</h2>
@@ -8107,7 +8127,6 @@ a.btnlink:hover{border-color:var(--blue)}
       <p class="muted" id="in-state"></p>
       <pre class="pre" id="in-out" role="log" aria-live="polite"></pre>
     </section>
-
     <section class="card wide" id="card-log" aria-labelledby="lg-h">
       <div class="card-head">
         <h2 id="lg-h">Activity log</h2>
@@ -8131,6 +8150,7 @@ a.btnlink:hover{border-color:var(--blue)}
       </div>
       <p class="rules">A report is saved every time wifimon shuts the node down, and after a stop that wasn't clean (power lost or a crash). The newest ones are kept.</p>
     </section>
+    </div>
     <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
   </main>
 </div>
@@ -8463,7 +8483,7 @@ a.btnlink:hover{border-color:var(--blue)}
   }
   $("cc-change").addEventListener("click", openCountry);
   $("btn-cc-fix").addEventListener("click", () => {
-    setDetails(true);
+    showTab("devices");
     openCountry();
     if ($("cc-box").scrollIntoView) $("cc-box").scrollIntoView({ block: "nearest" });
   });
@@ -8485,9 +8505,6 @@ a.btnlink:hover{border-color:var(--blue)}
     $("btn-details").textContent = open ? "Fewer details" : "More details";
     try { localStorage.setItem("wifimon.details", open ? "open" : "closed"); } catch (e) {}
     if (open && lastData) renderDetails(lastData);
-    $("cc-box").hidden = !open;
-    const rm = ((lastData || {}).health || {}).roam || {};
-    $("roam-box").hidden = !open || rm.driver !== "brcmfmac";
   }
   $("btn-details").addEventListener("click", () => setDetails(!detailsOpen));
 
@@ -8519,14 +8536,13 @@ a.btnlink:hover{border-color:var(--blue)}
     $("s-today").textContent = tl;
     $("s-today").hidden = !tl;
     const rmx = (d.health || {}).roam || {};
-    $("roam-box").hidden = !detailsOpen || rmx.driver !== "brcmfmac";
+    $("roam-box").hidden = rmx.driver !== "brcmfmac";
     if (rmx.driver === "brcmfmac") {
       $("roam-now").textContent = roamText(rmx);
       $("roam-toggle").textContent = rmx.roam_off_next_boot ? "Allow chip roaming" : "Stop chip roaming";
     }
     $("roam-toggle").disabled = locked(d);
     // v5.15: country code block + Fix warning
-    $("cc-box").hidden = !detailsOpen;
     $("cc-now").textContent = !has(w.country) ? NA : w.country === "00" ? "Not set" : w.country + (COUNTRY[w.country] ? " (" + COUNTRY[w.country] + ")" : "");
     $("s-cc").hidden = w.country !== "00";
     $("cc-change").disabled = locked(d);
@@ -9616,7 +9632,7 @@ a.btnlink:hover{border-color:var(--blue)}
       box.hidden = true;
     }
   }
-  $("rep-banner-view").addEventListener("click", () => { if (bannerReport) viewReport(bannerReport); });
+  $("rep-banner-view").addEventListener("click", () => { if (bannerReport) { showTab("system"); viewReport(bannerReport); } });
   $("rep-banner-close").addEventListener("click", () => {
     if (bannerReport) { try { localStorage.setItem("wifimon.seenReport", bannerReport.name); } catch (e) {} }
     $("rep-banner").hidden = true;
@@ -9690,6 +9706,49 @@ a.btnlink:hover{border-color:var(--blue)}
     post("/api/hotspot/stop", { confirm: true, connect_to: to || null });
   });
 
+  const TABS = ["status", "networks", "devices", "watchdogs", "system"];
+  let curTab = "status";
+  try {
+    const saved = localStorage.getItem("wifimon.tab");
+    if (TABS.indexOf(saved) >= 0) curTab = saved;
+  } catch (e) {}
+  function tabOn(name) { return curTab === name; }
+  function showTab(name) {
+    if (TABS.indexOf(name) < 0) name = "status";
+    curTab = name;
+    document.querySelectorAll("#tabs [data-tab]").forEach((b) => {
+      const on = b.getAttribute("data-tab") === name;
+      b.setAttribute("aria-selected", String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+    document.querySelectorAll(".tabp").forEach((p) => { p.hidden = p.getAttribute("data-tab") !== name; });
+    try { localStorage.setItem("wifimon.tab", name); } catch (e) {}
+    if (lastData) render(lastData);
+    if (name === "system" && lastInstall && lastInstall.tools) renderInstall(lastInstall);
+  }
+  document.querySelectorAll("#tabs [data-tab]").forEach((b) => {
+    b.addEventListener("click", () => showTab(b.getAttribute("data-tab")));
+  });
+  $("tabs").addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    const i = TABS.indexOf(curTab) + (ev.key === "ArrowRight" ? 1 : -1);
+    showTab(TABS[(i + TABS.length) % TABS.length]);
+    $("tab-" + curTab).focus();
+    ev.preventDefault();
+  });
+  function setDot(name, on) {
+    const dot = document.querySelector("#tab-" + name + " .tab-dot");
+    if (dot) dot.hidden = !on;
+  }
+  function renderDots(d) {
+    const wd = d.watchdog || {}, tg = d.tunnel_guard || {}, w = d.wifi || {}, h = d.hotspot || {};
+    setDot("watchdogs", has(wd.no_conn_remaining) || has(wd.lowv_remaining)
+      || ["acting", "backing off", "gave up"].indexOf(tg.state) >= 0);
+    setDot("devices", w.radio === false || !!h.active || w.country === "00");
+    setDot("system", ((lastInstall || {}).tools || []).some((t) => t.level === "bad")
+      || !$("rep-banner").hidden || (d.service || {}).root_pw === "none");
+  }
+
   function render(d) {
     lastData = d;
     syncLog(d.log_seq);
@@ -9698,15 +9757,13 @@ a.btnlink:hover{border-color:var(--blue)}
     renderBanner(d);
     renderJob(d);
     renderStatus(d);
-    renderSaved(d);
-    renderScan(d);
-    renderRadio(d);
+    if (tabOn("networks")) { renderSaved(d); renderScan(d); }
+    if (tabOn("devices")) renderRadio(d);
     renderHotspot(d);
-    renderWatchdog(d);
+    if (tabOn("watchdogs")) { renderWatchdog(d); renderAlerts(d); renderTunnelGuard(d); }
     renderWatchdogSwitches(d);
     renderService(d);
-    renderAlerts(d);
-    renderTunnelGuard(d);
+    renderDots(d);
     handleControl(d);
   }
 
@@ -9881,7 +9938,11 @@ a.btnlink:hover{border-color:var(--blue)}
     let r = null;
     try {
       r = await api("/api/install/status", {});
-      if (r.status === 200) renderInstall(r.data);
+      if (r.status === 200) {
+        if (tabOn("system")) renderInstall(r.data);
+        else lastInstall = r.data;
+        if (lastData) renderDots(lastData);
+      }
     } catch (e) {
       // Not reachable right now; try again on the next tick.
     } finally {
@@ -9892,6 +9953,7 @@ a.btnlink:hover{border-color:var(--blue)}
   pollInstall();
 
   setDetails(detailsOpen);
+  showTab(curTab);
   api("/api/whoami")
     .then((r) => { if (r.data.auth) showApp(); else showLogin(""); })
     .catch(() => showLogin("Can't reach wifimon."));
