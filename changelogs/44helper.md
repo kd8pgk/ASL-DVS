@@ -1,6 +1,33 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_19_20261108.py`. Newest entries first.
+Current file: `44helper_v0_1_21_20261111.py`. Newest entries first.
+
+## 0.1.21 (2026-11-11)
+
+Second of three tunnel releases: the Verify button and the Health card.
+
+- **Verify knows the tunnel type.** It reads the type from wg0.conf (full, split or half), not from the tab. On a full tunnel the internet (1.1.1.1) must go through wg0 and the public address must be a 44Net address; on a split or half tunnel the internet must keep the normal route, and a home address is reported as expected. Every line now starts with ok, FAIL or note, the public-address line included.
+- **New MTU check in Verify.** It pings the tunnel server on the normal route (using the tunnel's own packet mark) with a full-size, don't-fragment packet. If that doesn't fit, it tries smaller sizes and names the MTU to set on the DNS & MTU card. This catches "ping works, downloads stall". If the server doesn't answer ping, the line says the MTU was not tested.
+- **The public-address test uses the real 44Net ranges** (`44.0.0.0/9`, `44.128.0.0/10`). Before, anything starting with `44.` passed, which includes the part of 44/8 that is no longer 44Net.
+- **"No handshake" names the likely cause.** In order: no Endpoint line; the Endpoint name doesn't resolve; the tunnel server routes back into wg0; the clock isn't synchronised; packets sent but nothing received (tunnel not approved, wrong key, or outgoing UDP blocked, with the port); nothing sent yet.
+- **Status is quicker when DNS is down.** The tunnel server's name is only looked up when the answer matters (not on a full tunnel or with the split routing block), and the result is kept for 30 s. Re-check and every Health fix clear it. An old tunnel-server route line is still removed from a config that no longer needs it.
+- **Wording.** The netcheck card and scan say what really happens on a full tunnel: an internet probe fails until the tunnel has a handshake, while the LAN and the router stay reachable. "Fix the tunnel-server route" says what it writes (the split routing lines, or the route lines when the config has its own Table or FwMark).
+- **Tested here:** 8 new unit tests in `ci/test_ci.py` (Verify by tunnel type, the MTU steps, the ping mark, each handshake cause, the lookup cache, the public-address ranges) with the system calls mocked. **Not yet tested on a node:** the MTU ping against a real tunnel server, and `ping -m` on the node's ping.
+- This is a release, not a cosmetic build.
+
+## 0.1.20 (2026-11-11)
+
+First of three tunnel releases: the check a WireGuard config gets before it is written, and the write itself.
+
+- **`::/0` is removed from AllowedIPs when the tunnel has no IPv6 address.** The portal's config carries `0.0.0.0/0, ::/0`. With no IPv6 address on wg0, wg-quick still routes all IPv6 into the tunnel, where it is dropped, so hosts with IPv6 addresses hang on a network that has IPv6. The paste check now lists the removal before writing, and any later 44helper write of wg0.conf does the same. A config with an IPv6 address under `Address` is left alone.
+- **The Full Tunnel tab checks AllowedIPs properly.** Any range without `0.0.0.0/0` (for example `44.0.0.0/8`) is now stopped with the same rewrite-or-stop choice the Split tab has. Before, only the exact split set was noticed, so such a config was written with split routing and recorded as a full tunnel.
+- **A lower-case `allowedips` key no longer skips the tab check.**
+- **A section header with a comment (`[Interface] # text`) is read as a header.** Before, such a config was refused with a message about the private key, and the line editors (AllowedIPs, keepalive, Address) did not find its sections.
+- **A write that changes the tunnel's routing stops the tunnel first.** When wg0 is up and the new file switches between full-tunnel and split-tunnel routing (the 4b AllowedIPs repair, or Replace the config with the other shape), the tunnel is stopped with the old file, the file is written, and the tunnel is started again. Before, the restart took the tunnel down with the new file, which left wg-quick's table 51820 rules (or the split rule for table 4445) loaded until a reboot; half-tunnel step 2 then failed with "came up as a full tunnel". If the tunnel will not stop, nothing is written. If the write fails, the tunnel is started again with the old file. Works with `wg-quick@wg0` and with the `44net-tunnel.service` fallback unit.
+- **Leftover routing rules are cleared.** Before a tunnel start (step 6, the stop-write-start above, half-tunnel step 2), rules pointing at table 51820 or 4445 and wg-quick's `suppress_prefixlength 0` rule are removed, but only while no WireGuard interface exists at all, so another tunnel's rules are never touched.
+- **Page text.** The 4b repair card and its confirm box say that a running tunnel is stopped and started, and to do it from the LAN.
+- **Tested here:** 14 new unit tests in `ci/test_ci.py` (sample configs through the paste check; the stop-write-start order, its failure paths and the rule clean-up with the system calls mocked). **Not yet tested on a node:** the stop-write-start and the rule clean-up against a real wg-quick; run the 4b repair on a full tunnel and check `ip rule` afterwards.
+- This is a release, not a cosmetic build.
 
 ## 0.1.19 (2026-11-08)
 

@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.95"
+VERSION      = "6.13.96"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -862,11 +862,72 @@ _IAX_CONF  = Path("/etc/asterisk/iax.conf")
 _RPT_CONF  = Path("/etc/asterisk/rpt.conf")
 _AB_CFG    = Path("/etc/dvswitch/analog_bridge.cfg")
 
-_IAX_SECTION_RE = re.compile(r'^\s*\[([^\]]+)\]\s*(?:;.*)?$')
+_IAX_SECTION_RE = re.compile(r'^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?\s*(?:;.*)?$')
+_IAX_INCLUDE_RE = re.compile(r'^\s*#(?:try)?include\s+"?([^"\s;]+)"?', re.IGNORECASE)
+_IAX_INCLUDE_DEPTH = 3
+
+def _iax_expand_includes(content: str, depth: int = 0) -> str:
+    if depth >= _IAX_INCLUDE_DEPTH:
+        return content
+    root = os.path.realpath(str(_IAX_CONF.parent))
+    out: list = []
+    for line in content.splitlines():
+        m = _IAX_INCLUDE_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        pat = m.group(1)
+        if not pat.startswith("/"):
+            pat = os.path.join(root, pat)
+        for hit in sorted(glob.glob(pat)):
+            real = os.path.realpath(hit)
+            if not real.startswith(root + os.sep):
+                continue
+            text, err = read_path_file(Path(real))
+            if not err:
+                out.append(_iax_expand_includes(text, depth + 1))
+    return "\n".join(out)
 
 def _iax_parse_sections(content: str) -> "dict[str, dict]":
-    return _ini_sections(content, _IAX_SECTION_RE, _RPT_KV_RE,
-                         comment_re=_RPT_COMMENT_RE, lower_keys=True)
+    content = _iax_expand_includes(content)
+    sections: "dict[str, dict]" = {}
+    templates: "dict[str, dict]" = {}
+    cur = None
+    cur_spec = ""
+    kv: "dict[str, str]" = {}
+
+    def close() -> None:
+        if cur is None:
+            return
+        parts = [p.strip() for p in cur_spec.split(",") if p.strip()]
+        merged: "dict[str, str]" = {}
+        for p in parts:
+            if p in ("!", "+"):
+                continue
+            merged.update(templates.get(p.lower(), sections.get(p, {})))
+        if "+" in parts and cur in sections:
+            merged = dict(sections[cur])
+        merged.update(kv)
+        if "!" in parts:
+            templates[cur.lower()] = merged
+        else:
+            sections[cur] = merged
+
+    for line in content.splitlines():
+        if _RPT_COMMENT_RE.match(line):
+            continue
+        sm = _IAX_SECTION_RE.match(line)
+        if sm:
+            close()
+            cur = sm.group(1).strip()
+            cur_spec = sm.group(2) or ""
+            kv = {}
+            continue
+        m = _RPT_KV_RE.match(line)
+        if m:
+            kv[m.group(1).lower()] = m.group(2).strip()
+    close()
+    return sections
 
 def _iax_collect_iaxrpt_candidates(sections: "dict[str, dict]") -> list:
     _IAX_SYSTEM = frozenset({
@@ -889,6 +950,7 @@ def _iax_collect_iaxrpt_candidates(sections: "dict[str, dict]") -> list:
             "name":     sname,
             "secret":   sec_val,
             "callerid": cid,
+            "requirecalltoken": kv.get("requirecalltoken", "").strip(),
         })
     return candidates
 
@@ -3182,10 +3244,12 @@ body.tab-edit #zone-content{
         <div class="fw-manual-inner">
           <h4>Which backend am I running?</h4>
           <p>sysmon auto-detects whichever firewall is installed and shows it in the
-          <b>Backend</b> field above. <code>ufw</code> is Debian/Raspberry Pi OS's
-          default frontend to <code>iptables</code>/<code>nftables</code>.
-          <code>firewalld</code> is the default on RHEL-family systems
-          (Rocky, Alma, Fedora) and is zone-based rather than rule-list-based.
+          <b>Backend</b> field above. <code>ufw</code> is a simple frontend to
+          <code>iptables</code>/<code>nftables</code>. It is Ubuntu's default and is
+          not installed on Debian or Raspberry Pi OS until you add it.
+          <code>firewalld</code> is what the AllStarLink 3 Pi appliance image uses
+          (managed in Cockpit) and the default on RHEL-family systems
+          (Rocky, Alma, Fedora); it is zone-based rather than rule-list-based.
           Only one is normally active at a time — running both causes
           conflicting rule sets.</p>
 
@@ -3230,21 +3294,22 @@ body.tab-edit #zone-content{
 
           <h4>AllStarLink 3 default posture</h4>
           <ul>
-            <li>A stock ASL3 image ships with the firewall largely open on
-            the LAN side (or firewalld absent/disabled on some images) —
-            it does <b>not</b> lock down IAX2 (<code>4569/udp</code>) or the
-            RPT/HTTP registration ports by default. Treat "detected: none"
-            or "inactive" above as the out-of-box state, not a bug.</li>
+            <li>The ASL3 Pi appliance image runs <code>firewalld</code> with
+            its own <code>allstarlink</code> zone on every interface, managed in
+            Cockpit → Networking → Firewall. It already allows IAX2
+            (UDP <code>4560-4580</code>). ASL3 installed with <code>apt</code> on
+            plain Debian or Raspberry Pi OS has <b>no</b> firewall until you add
+            one, so "detected: none" there is the out-of-box state, not a bug.</li>
             <li>If you enable a firewall on an ASL3 node, the ports that
-            matter most are IAX2 <code>4569/udp</code> (node-to-node/hub
-            registration), and whatever the local dashboard/API is bound to
+            matter most are IAX2 <code>4569/udp</code> (links between nodes;
+            registration goes out over HTTPS and needs no open port), and whatever the local dashboard/API is bound to
             (this tool, DVSwitch web UIs, etc). USRP audio bridging between
             Asterisk and Analog_Bridge is typically loopback-only and
             doesn't need to cross the firewall.</li>
             <li>On a home/NAT install, most nodes rely on router port
             forwarding rather than a host firewall — enabling ufw/firewalld
             here adds a second layer, so double-check the port list below
-            matches what's forwarded upstream or registration/keying will
+            matches what's forwarded upstream or incoming links will
             silently fail.</li>
           </ul>
 
@@ -4568,8 +4633,9 @@ body.tab-edit #zone-content{
 
     <div class="sec-scope-note">
       Passive checks only &mdash; every result above comes from config files,
-      /sys, /proc, <span class="sec-cmd">ss -tlnpu</span> and
-      systemd state. This tab never connects to AMI, M17, USRP or the
+      /sys, /proc, <span class="sec-cmd">ss -tlnpu</span>,
+      systemd state, and the local <span class="sec-cmd">asterisk -rx</span> and
+      <span class="sec-cmd">fail2ban-client</span> commands. This tab never connects to AMI, M17, USRP or the
       dashboard, so running it cannot pollute security.log or trip fail2ban.
       Checks that read credentials report booleans only; no secret value is
       sent to this page.
@@ -5754,7 +5820,8 @@ const TAB_RGB = {
   firewall:"255,170,34", journal:"212,102,255", asldvs:"255,61,90",
   reg:"120,180,255", phone:"0,255,176",
   tune:"255,68,204", hardware:"0,200,120", net:"64,224,208", dvsm:"255,170,34",
-  stfu:"0,191,255", zello:"255,140,0", sdcard:"180,140,255", edit:"255,208,64"
+  stfu:"0,191,255", m17:"124,255,60", zello:"255,140,0", sdcard:"180,140,255",
+  security:"255,90,120", console:"120,255,140", edit:"255,208,64"
 };
 
 function dpUnit() { return _dpUnit; }
@@ -6090,7 +6157,6 @@ let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
 
-window.loadTab_journal = function() { loadJournalList(); };
 window.loadTab_journal = function() { loadJournalList(); dvlLoad(); };
 
 let _dvlSources = [];
@@ -10001,7 +10067,7 @@ function _renderAlsaView(data) {
   const note = document.createElement("div");
   note.className   = "hw-diag-note";
   note.textContent = _hwAlsaView === "playback"
-    ? "Playback devices — set devusb = hw:CARD,0 in chan_simpleusb.conf (e.g. devusb = hw:1,0)"
+    ? "Playback devices as ALSA numbers them. chan_simpleusb finds its card by USB port (devstr in simpleusb.conf), not by these hw: numbers"
     : "Capture devices — microphone/line-in paths for the same card index";
   body.appendChild(note);
 
@@ -11045,9 +11111,9 @@ function _stfuRenderInstall(bodyId, badgeId, inst) {
   _renderInstallTable(bodyId, badgeId, inst, {
     binDefault: "/opt/STFU/STFU",
     binLabel:   "Binary present and executable",
-    binFix:     "Download STFU.armhf from DVSwitch GitHub → copy to /opt/STFU/STFU → chmod +x",
+    binFix:     "Install the stfu package from the DVSwitch repository: sudo apt install stfu",
     unit:       "stfu",
-    unitFix:    "Copy stfu.service to /lib/systemd/system/ → systemctl daemon-reload",
+    unitFix:    "Comes with the stfu package: sudo apt install --reinstall stfu",
   });
 }
 
@@ -14581,6 +14647,7 @@ _SEC_SSHD_CONFIG_DIR = Path("/etc/ssh/sshd_config.d")
 _SEC_ASTERISK_DIR    = _AST_DIR
 _SEC_ASTERISK_EXPECTED_MODE  = 0o750
 _SEC_ASTERISK_EXPECTED_GROUP = "asterisk"
+_SEC_ASTERISK_EXPECTED_OWNERS = ("root", "asterisk")
 _SEC_ASTERISK_SECRET_FILES   = ("iax.conf", "manager.conf", "rpt.conf")
 
 def _sec_read_mmdvm_bridge() -> dict:
@@ -14692,6 +14759,23 @@ def _check_m17_port_exposure() -> dict:
                       "(bridge not pointed at a reflector)")
     return _check_result(status, binds=rows, notes=notes, vpn=_sec_vpn_summary())
 
+_SEC_AST_VER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+def _sec_asterisk_version_note() -> str:
+    out, ran = _sec_run(["asterisk", "-V"], timeout=3)
+    m = _SEC_AST_VER_RE.search(out or "")
+    if not ran or not m:
+        return "Asterisk version not readable -- CVE-2024-42365 not assessed"
+    ver = tuple(int(x) for x in m.groups())
+    txt = ".".join(m.groups())
+    if ver[0] >= 22:
+        return f"Asterisk {txt} is newer than the releases CVE-2024-42365 affects"
+    if ver[0] == 20 and ver <= (20, 9, 1):
+        return f"Asterisk {txt} is in the range CVE-2024-42365 affects -- update it"
+    if ver[0] == 20:
+        return f"Asterisk {txt} is past the 20.x releases CVE-2024-42365 affects"
+    return f"Asterisk {txt} -- CVE-2024-42365 not assessed for this release line"
+
 def _check_ami_port_exposure() -> dict:
     mgr = _sec_read_manager_conf()
     if not mgr.get("raw_ok"):
@@ -14724,6 +14808,7 @@ def _check_ami_port_exposure() -> dict:
 
     notes.append("bind address only -- manager.conf permit=/deny= ACL lines "
                   "are NOT evaluated by this check (v1 limitation)")
+    notes.append(_sec_asterisk_version_note())
 
     return _check_result(
         status, binds=rows, notes=notes, enabled=True,
@@ -15358,7 +15443,7 @@ def _check_asterisk_perms() -> dict:
     notes  = [f"{_SEC_ASTERISK_DIR}: mode {oct(perm)}"
               f"{' +setgid' if setgid else ''} owner {owner}:{group} "
               f"(expected {oct(_SEC_ASTERISK_EXPECTED_MODE)} "
-              f"root:{_SEC_ASTERISK_EXPECTED_GROUP})"]
+              f"owner root or asterisk, group {_SEC_ASTERISK_EXPECTED_GROUP})"]
     status = CHK_PASS
 
     if perm & 0o007:
@@ -15373,9 +15458,9 @@ def _check_asterisk_perms() -> dict:
         notes.append(f"mode {oct(perm)} is stricter than the expected "
                       f"{oct(_SEC_ASTERISK_EXPECTED_MODE)} -- fine, noted only")
 
-    if owner != "root":
+    if owner not in _SEC_ASTERISK_EXPECTED_OWNERS:
         status = _sec_worst([status, CHK_WARN])
-        notes.append(f"owner is {owner}, expected root")
+        notes.append(f"owner is {owner}, expected root or asterisk")
     if group != _SEC_ASTERISK_EXPECTED_GROUP and (perm & 0o070):
         status = _sec_worst([status, CHK_WARN])
         notes.append(f"group {group} has access but "
@@ -15476,7 +15561,9 @@ SECURITY_CHECKS = [
                      "the whole distance between 'local only' and 'anyone'."),
         "remediation": ("Bind both ends to 127.0.0.1. In USRP2M17.ini the USRP "
                          "address belongs on loopback; in rpt.conf the rxchannel line "
-                         "should read USRP/127.0.0.1:<local>:<dst>.\n\n"
+                         "should read USRP/127.0.0.1:<bridge port>:<Asterisk port>, for "
+                         "example USRP/127.0.0.1:34001:32001 (the bridge listens on "
+                         "34001, Asterisk on 32001).\n\n"
                          "If you genuinely bridge between two hosts, do it inside "
                          "WireGuard or Tailscale and bind to that interface's "
                          "address rather than 0.0.0.0 -- then this check passes while "
@@ -15551,9 +15638,10 @@ SECURITY_CHECKS = [
         "label":    "Asterisk Manager Interface (AMI) port exposure",
         "severity": "high",
         "source":   "manager.conf [general] enabled=/bindaddr=/port=, cross-referenced "
-                    "against a passive `ss -tlnpu` snapshot. Asterisk's shipped sample "
-                    "has enabled=yes, port=5038 and bindaddr=0.0.0.0, so an untouched "
-                    "manager.conf is an exposed one.",
+                    "against a passive `ss -tlnpu` snapshot. ASL3 ships "
+                    "enabled=yes, port=5038 and bindaddr=127.0.0.1. Asterisk's own "
+                    "sample has bindaddr=0.0.0.0 (with enabled=no), so a manager.conf "
+                    "copied from it and switched on is an exposed one.",
         "meaning":  ("Where the Asterisk Manager Interface is listening.\n\n"
                      "PASS -- AMI is disabled, or bound to loopback, or bound to a "
                      "VPN address whose interface is up.\n"
@@ -15579,8 +15667,9 @@ SECURITY_CHECKS = [
                      "low-privilege setting -- could chain the FILE()/CURL() dialplan "
                      "functions to write into /etc/asterisk, reload, and execute "
                      "arbitrary commands. It affects Asterisk up to and including "
-                     "20.9.1, which is the version family ASL3 is built on, and it "
-                     "works regardless of the live_dangerously setting. Separately, "
+                     "20.9.1. ASL3 was built on Asterisk 20 until March 2025 and on "
+                     "Asterisk 22 since, so only a node that has not been updated "
+                     "is still affected. It works regardless of the live_dangerously setting. Separately, "
                      "an account with the `command` class can run any Asterisk CLI "
                      "command by design.\n\n"
                      "AMI has no built-in lockout or rate limiting either, so an "
@@ -15588,7 +15677,9 @@ SECURITY_CHECKS = [
         "remediation": ("Set bindaddr=127.0.0.1 in manager.conf [general] -- or "
                          "enabled=no if nothing on this node uses AMI. Allmon3 and "
                          "similar tools run locally and are happy on loopback.\n\n"
-                         "Patch Asterisk to 20.9.2 or later for CVE-2024-42365.\n\n"
+                         "For CVE-2024-42365 run Asterisk 20.9.2 or later. A current "
+                        "ASL3 (Asterisk 22) has the fix: `sudo apt update && sudo "
+                        "apt upgrade`.\n\n"
                          "Regardless of bind address, write an explicit ACL: "
                          "deny=0.0.0.0/0.0.0.0 first, then permit only the addresses "
                          "that need it. Give each consumer its own account with the "
@@ -15647,7 +15738,7 @@ SECURITY_CHECKS = [
                          "account per consuming application, each with the narrowest "
                          "read=/write= classes it actually needs.\n\n"
                          "manager.conf holds that secret in cleartext, so keep it at "
-                         "mode 640 owned root:asterisk (the /etc/asterisk permissions "
+                         "mode 640 with group asterisk (the /etc/asterisk permissions "
                          "check on this page covers that), and prefer loopback-only "
                          "AMI over any credential strength."),
         "references": [
@@ -15804,10 +15895,11 @@ SECURITY_CHECKS = [
                      "was unreachable and modules.conf does not noload it.\n"
                      "FAIL -- loaded with configured peers.\n\n"
                      "Version context matters here: chan_sip was deprecated in "
-                     "Asterisk 17 and removed outright in Asterisk 21. ASL3 runs on "
-                     "Asterisk 20, which is the last family that still has it -- so "
-                     "on this node it is genuinely possible to be carrying an "
-                     "unmaintained SIP stack, which is exactly why the check exists. "
+                     "Asterisk 17 and removed outright in Asterisk 21. ASL3 was built "
+                     "on Asterisk 20, the last family that still has it, until March "
+                     "2025, and on Asterisk 22 since, where it no longer exists. So "
+                     "only a node that has not been updated can still be carrying an "
+                     "unmaintained SIP stack, which is why the check exists. "
                      "It is rated low severity because a default ASL3 node does not "
                      "load it."),
         "risk":     ("A loaded chan_sip binds UDP 5060 and answers anything that asks "
@@ -15825,8 +15917,8 @@ SECURITY_CHECKS = [
                          "If you do want a SIP phone on the node, use chan_pjsip -- "
                          "that is what the ASL3 manual documents, and Asterisk ships "
                          "contrib/scripts/sip_to_pjsip/sip_to_pjsip.py to convert an "
-                         "existing sip.conf. Doing this now also means Asterisk 21+ "
-                         "will not break the node when it removes chan_sip entirely."),
+                         "existing sip.conf. Asterisk 21 and later have no chan_sip at all, "
+                        "so updating ASL3 removes it either way."),
         "references": [
             {"label": "Asterisk -- chan_sip removal in Asterisk 21 (deprecated in 17)",
              "url":   "https://www.asterisk.org/asterisk-21-module-removal-chan_sip/"},
@@ -16020,7 +16112,8 @@ SECURITY_CHECKS = [
                      "FAIL -- the installed build carries no session-auth markers at "
                      "all.\n\n"
                      "This check reads the dashboard's source. It never connects to "
-                     "port 8989 -- no check on this page opens a socket, which is "
+                     "port 8989 -- no check on this page opens a network "
+                     "connection, which is "
                      "what keeps running the tab from writing entries into the very "
                      "logs an operator is trying to read."),
         "risk":     ("sysmon and the dashboard deliberately share one session table "
@@ -16062,11 +16155,12 @@ SECURITY_CHECKS = [
                     "rpt.conf inside it.",
         "meaning":  ("Whether the directory holding this node's cleartext secrets is "
                      "readable by accounts that should not have them. Expected: mode "
-                     "0750, owner root:asterisk.\n\n"
+                     "0750, owned by root or asterisk, group asterisk.\n\n"
                      "FAIL -- the directory is world-accessible, or a secret-bearing "
                      "config file is world-readable.\n"
                      "WARN -- the mode is LOOSER than expected (group-writable, say), "
-                     "the owner is not root, or a different group has access.\n"
+                     "the owner is neither root nor asterisk, or a different group "
+                     "has access.\n"
                      "PASS -- as expected, or stricter.\n\n"
                      "Two things this check is careful about. A mode tighter than "
                      "0750, such as 0700, is better than the expectation and is "
@@ -16086,9 +16180,12 @@ SECURITY_CHECKS = [
                      "CVE-2024-42365. This is rated low severity only because it "
                      "needs a foothold on the box first; given one, it is the step "
                      "that makes the foothold matter."),
-        "remediation": ("`chown root:asterisk /etc/asterisk` and `chmod 750 "
-                         "/etc/asterisk`, then `chmod 640` the config files inside "
-                         "it. Keeping the setgid bit (2750) is fine.\n\n"
+        "remediation": ("`chmod 750 /etc/asterisk` and `chmod 640` the config files "
+                        "inside it, with the group set to asterisk (`chgrp "
+                        "asterisk`). Leave the owner as ASL3 set it: Asterisk runs "
+                        "as the asterisk user there and saves tune settings into "
+                        "this folder itself, so taking its write access away "
+                        "breaks that. Keeping the setgid bit (2750) is fine.\n\n"
                          "If you edit these files as a normal user or copy them "
                          "around, re-check afterwards -- a restored backup or an "
                          "editor writing a new file is the usual way a 644 appears "
@@ -16115,8 +16212,9 @@ SECURITY_CHECKS = [
                      "PASS -- it drops privileges, or it is one of the documented "
                      "exemptions.\n\n"
                      "Four exemptions pass with a note rather than warning. Asterisk "
-                     "needs root on ASL3: app_rpt wants realtime scheduling and direct "
-                     "DAHDI/USB access, and that is how upstream ships it. fail2ban "
+                     "is started by systemd as root and then drops to the asterisk "
+                     "user by itself on ASL3, so its unit has no User= line and would "
+                     "be misread as root here. fail2ban "
                      "needs root because its entire job is rewriting firewall rules. "
                      "sshd must be root to authenticate and then setuid to the user "
                      "logging in. Cockpit's privileged side is the point of Cockpit.\n\n"
@@ -23575,7 +23673,7 @@ def _hc_clock() -> dict:
             ["Time sync", "on" if ntp else "off"], ["Synced", "yes" if synced else "no"]]
     if synced:
         return _hc("clock", "Clock", "pass", "Clock is in sync", rows)
-    note = ("The Pi Zero 2 W has no clock battery, so after a power cut its time is wrong until it syncs. "
+    note = ("A Raspberry Pi has no clock battery unless one is added, so after a power cut its time is wrong until it syncs. "
             "A wrong clock breaks HTTPS (GitHub updates), AllStarLink registration and some digital-mode logins. "
             + ("Turn sync on: sudo timedatectl set-ntp true" if not ntp
                else "Sync is on but hasn't worked: check the internet and that UDP port 123 isn't blocked."))
@@ -24760,6 +24858,7 @@ def _dvsm_resolve_shared(iax: dict, rpt: dict) -> dict:
     iaxrpt_ok     = _sel is not None
     iaxrpt_secret = _sel["secret"] if _sel else ""
     iaxrpt_name   = _sel["name"]   if _sel else ""
+    iaxrpt_rct    = _sel.get("requirecalltoken", "") if _sel else ""
 
     return {
         "callsign": callsign, "bindport": bindport,
@@ -24767,7 +24866,7 @@ def _dvsm_resolve_shared(iax: dict, rpt: dict) -> dict:
         "reg_node": reg_node, "reg_pass": reg_pass, "reg_host": reg_host,
         "reg_source": reg_source, "node_mode_ok": node_mode_ok,
         "iaxrpt_ok": iaxrpt_ok, "iaxrpt_secret": iaxrpt_secret,
-        "iaxrpt_name": iaxrpt_name,
+        "iaxrpt_name": iaxrpt_name, "iaxrpt_rct": iaxrpt_rct,
     }
 
 def _dvsm_account_direct_iax2(sh: dict, iax: dict, node_ip: str, wan_ip: str) -> dict:
@@ -24846,7 +24945,8 @@ def _dvsm_account_iaxrpt(sh: dict, iax: dict, node_ip: str, wan_ip: str) -> dict
     }
 
 def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
-    status = "pass" if sh["node_mode_ok"] else ("warn" if iax["raw_ok"] else "fail")
+    own = sh["reg_node"] if sh["reg_node"] and sh["reg_node"] != "—" else ""
+    not_own = f" Not {own}: that is this node, and two registrations for one number fight." if own else ""
     fields = [
         {"label": "Protocol",   "value": "IAX2",
          "masked": False, "secret": None, "note": "Fixed value — not read from config"},
@@ -24854,13 +24954,13 @@ def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
          "masked": False, "secret": None, "note": "Fixed value — always register.allstarlink.org"},
         {"label": "Port",       "value": "4569",
          "masked": False, "secret": None, "note": "Fixed value — AllStarLink registration port"},
-        {"label": "Username",   "value": sh["reg_node"],
+        {"label": "Username",   "value": None,
          "masked": False, "secret": None,
-         "note": "Source: first public register=> node number in iax.conf"},
+         "note": ("A node number of yours that is not running anywhere else, from "
+                  "allstarlink.org → Portal → Node Settings." + not_own)},
         {"label": "Password",   "value": None,  "masked": True,
-         "secret": sh["reg_pass"],
-         "note": (f"From {sh['reg_source'] or 'iax.conf'} — register=>{sh['reg_node']}:●●@{sh['reg_host']}"
-                  if sh["reg_pass"] else "No register=> line found for a public node (>1999)")},
+         "secret": "",
+         "note": "The password of that unused node, from the same Portal page. This node's own password is not shown here"},
         {"label": "CallerID",   "value": sh["callsign"],
          "masked": False, "secret": None,
          "note": "Source: rpt.conf callsign → iax.conf CallerID → sysmon.conf [identity] (first match wins)"},
@@ -24875,7 +24975,7 @@ def _dvsm_account_node_mode(sh: dict, iax: dict) -> dict:
         "Auto Connect — UNCHECK",
     ]
     return {
-        "status": status, "fields": fields, "notes": notes,
+        "status": "info", "fields": fields, "notes": notes,
         "error": "" if iax["raw_ok"] else iax["error"],
     }
 
@@ -24889,7 +24989,7 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
          "masked": False, "secret": None, "note": "Fixed value — not read from config"},
         {"label": "Host (local)", "value": _ab_addr,
          "masked": False, "secret": None,
-         "note": "Use when DVSM runs on this node (loopback) — Source: analog_bridge.cfg [USRP] address"},
+         "note": "Where Analog_Bridge sends its audio — Source: Analog_Bridge.ini [USRP] address. On 127.0.0.1 that is Asterisk on this node, not a phone"},
         {"label": "Host (LAN)",  "value": node_ip,
          "masked": False, "secret": None,
          "note": "Use when DVSM is on the same network (detected live, not from a config file)"},
@@ -24899,10 +24999,10 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   if wan_ip else "Could not detect — check router WAN address")},
         {"label": "DVSM TX→",   "value": ab["rx_port"] or "—",
          "masked": False, "secret": None,
-         "note": "Source: analog_bridge.cfg [USRP] rxPort — DVSM sends audio here"},
+         "note": "Source: Analog_Bridge.ini [USRP] rxPort — DVSM sends audio here"},
         {"label": "DVSM RX←",  "value": ab["tx_port"] or "—",
          "masked": False, "secret": None,
-         "note": "Source: analog_bridge.cfg [USRP] txPort — DVSM receives audio here"},
+         "note": "Source: Analog_Bridge.ini [USRP] txPort — DVSM receives audio here"},
         {"label": "Callsign",   "value": sh["callsign"],
          "masked": False, "secret": None,
          "note": "Source: rpt.conf callsign → iax.conf CallerID → sysmon.conf [identity] (first match wins)"},
@@ -24912,7 +25012,7 @@ def _dvsm_account_usrp(sh: dict, ab: dict, node_ip: str, wan_ip: str) -> dict:
                   else "Not set — check MMDVM_Bridge.ini [General] Id")},
     ]
     notes = [
-        "Ports shown from ASL perspective. DVSM TX → ASL rxPort; DVSM RX ← ASL txPort.",
+        "These are Analog_Bridge's ports, not Asterisk's. DVSM TX → Analog_Bridge rxPort; DVSM RX ← Analog_Bridge txPort.",
     ]
     if ab.get("source"):
         notes.append(f"Source: {ab['source']}")
@@ -24957,14 +25057,9 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
         compat += [
             _opt("propagate_dtmf", "DTMF commands from DVSM",
                  n["propagate_dtmf"], "propagate_dtmf = yes"),
-            _risky("propagate_phonedtmf", "Phone DTMF (HamVoIP nodes)",
+            _risky("propagate_phonedtmf", "Phone DTMF passed to linked nodes",
                    n["propagate_phonedtmf"],
                    "phone callers' tones (like *99 and #) are passed to every linked node, bridges included."),
-            _risky("remote_dtmf_allowed", "DTMF from remote connections",
-                   n["remote_dtmf_allowed"],
-                   "any linked node can send commands to this node."),
-            _opt("phonesendlinks", "DVSM Status tab — linked-node list",
-                 n["phonesendlinks"], "phonesendlinks = 1"),
         ]
     else:
         compat.append({
@@ -24976,12 +25071,22 @@ def _dvsm_compat_checks(sh: dict, iax: dict, rpt: dict) -> list:
 
     rct_val = iax.get("requirecalltoken", "").lower()
     cto_val = iax.get("calltokenopt",     "").lower()
-    if not rct_val and not cto_val:
+    user_rct = (sh.get("iaxrpt_rct") or "").lower()
+    if user_rct:
+        compat.append({
+            "key":     "requirecalltoken",
+            "source":  "iax.conf",
+            "enables": f"Call tokens for [{sh['iaxrpt_name']}] (DVSM, IAXRpt)",
+            "status":  "pass" if user_rct in ("no", "0", "false") else "info",
+            "value":   f"[{sh['iaxrpt_name']}] {user_rct}",
+            "fix":     None,
+        })
+    elif not rct_val and not cto_val:
         compat.append(_compat(
             "requirecalltoken", "iax.conf",
-            "Call token enforcement (DVSM handles automatically)",
+            "Call token enforcement",
             True, None,
-            info_msg="Not set — default behavior. DVSM handles call tokens automatically.",
+            info_msg="Not set in [general] or in the user section — Asterisk's default (yes) applies.",
         ))
     else:
         rct_relaxed = rct_val in ("no", "0", "false")
@@ -25069,31 +25174,19 @@ def _stfu_sample_stanza(cfg: dict) -> str:
     lines = [
         "[STFU]",
         f"BMAddress={_placeholder(cfg['bm_address'],    'BM server address')}",
-        f"BMPort={cfg['bm_port'] or '62031'}",
+        f"BMPort={cfg['bm_port'] or '54006'}",
         "BMPassword=<your BM hotspot password>",
-        f"UserID={_placeholder(cfg['dmr_id'],           'your DMR ID')}",
         f"Address={cfg['address'] or '127.0.0.1'}",
-        f"RXPort={_placeholder(cfg['rx_port'],           'rx port')}",
-        f"TXPort={_placeholder(cfg['tx_port'],           'tx port')}",
+        f"txPort={cfg['tx_port'] or '36100'}",
+        f"rxPort={cfg['rx_port'] or '36103'}",
+        f"UserID={_placeholder(cfg['dmr_id'],           'your DMR ID')}",
+        f"TalkerAlias={_placeholder(cfg['talker_alias'], 'CALLSIGN Name City')}",
         f"StartTG={_placeholder(cfg['start_tg'],         'starting talkgroup')}",
-        f"subscriberFile={_placeholder(cfg['subscriber_file'], '/opt/STFU/subscriber_ids.csv')}",
-        f"TalkerAlias={cfg['talker_alias'] or '1'}",
-        f"LogLevel={cfg['log_level'] or '1'}",
+        f"LogLevel={cfg['log_level'] or '3'}",
     ]
     return "\n".join(lines)
 
 def _stfu_build_fields(cfg: dict) -> list:
-    sub_val  = cfg["subscriber_file"] or "—"
-    sub_note = None
-    if cfg["subscriber_ok"] and cfg["subscriber_rows"] > 0:
-        sub_note = f"Found — {cfg['subscriber_rows']:,} IDs"
-    elif cfg["subscriber_ok"]:
-        sub_note = "Found (row count unavailable)"
-    elif cfg["subscriber_file"]:
-        sub_note = "File not found on disk"
-    else:
-        sub_note = "Not configured — download from radioid.net"
-
     dmr_note = (f"From {cfg['dmr_id_source']}"
                 if cfg["dmr_id_source"] else "Not found in any config file")
 
@@ -25105,7 +25198,8 @@ def _stfu_build_fields(cfg: dict) -> list:
          "note": "Regional servers at brandmeister.network — see master server page"
                  if cfg["bm_address"] else "Not set — enter BM server address"},
         {"label": "BM Port",     "value": cfg["bm_port"],
-         "masked": False, "secret": None, "note": "Default 62031"},
+         "masked": False, "secret": None,
+         "note": "Default 54006, BrandMeister's Open DMR Terminal port (62031 is the MMDVM hotspot port, not this one)"},
         {"label": "BM Password", "value": None,
          "masked": True,  "secret": cfg["bm_password"],
          "note": ("brandmeister.network → Self Care → Hotspot Security"
@@ -25116,9 +25210,9 @@ def _stfu_build_fields(cfg: dict) -> list:
         {"label": "DMR ID", "value": cfg["dmr_id"] or None,
          "masked": False, "secret": None, "note": dmr_note},
 
-        {"group": "USRP Bridge Ports"},
+        {"group": "AMBE Ports (Analog_Bridge)"},
         {"label": "Address", "value": cfg["address"],
-         "masked": False, "secret": None, "note": "Local address for USRP bridge"},
+         "masked": False, "secret": None, "note": "Where STFU sends AMBE frames (Analog_Bridge)"},
         {"label": "RX Port", "value": cfg["rx_port"] or None,
          "masked": False, "secret": None, "note": "STFU listens here"},
         {"label": "TX Port", "value": cfg["tx_port"] or None,
@@ -25127,12 +25221,11 @@ def _stfu_build_fields(cfg: dict) -> list:
         {"group": "Startup & Logging"},
         {"label": "Start TG",        "value": cfg["start_tg"] or None,
          "masked": False, "secret": None, "note": "Talkgroup to join on service start"},
-        {"label": "Subscriber File", "value": sub_val,
-         "masked": False, "secret": None, "note": sub_note},
-        {"label": "Talker Alias",    "value": cfg["talker_alias"] or "1",
-         "masked": False, "secret": None, "note": "1 = send name with transmission"},
-        {"label": "Log Level",       "value": cfg["log_level"] or "1",
-         "masked": False, "secret": None, "note": "1 = normal, 2 = debug"},
+        {"label": "Talker Alias",    "value": cfg["talker_alias"] or None,
+         "masked": False, "secret": None, "note": "Text sent with each transmission, 27 characters at most"},
+        {"label": "Log Level",       "value": cfg["log_level"] or "3",
+         "masked": False, "secret": None,
+         "note": "0 = none, 1 = debug, 2 = message, 3 = info, 4 = warning, 5 = error"},
     ]
 
 def _stfu_build_compat(cfg: dict, inst: dict) -> list:
@@ -25158,18 +25251,22 @@ def _stfu_build_compat(cfg: dict, inst: dict) -> list:
          "status": "pass" if id_ok else "fail",
          "value":  cfg["dmr_id"] or "not set",
          "fix":    "Set UserID in DVSwitch.ini [STFU]" if not id_ok else None},
+        {"key": "BMPort is the BrandMeister port",
+         "enables": "STFU reaches BrandMeister",
+         "status": "warn" if cfg["bm_port"] in ("62030", "62031") else "pass",
+         "value":  cfg["bm_port"],
+         "fix":    ("62030 and 62031 are MMDVM hotspot ports; STFU uses BrandMeister's "
+                    "Open DMR Terminal port, 54006" if cfg["bm_port"] in ("62030", "62031") else None)},
         {"key": "Ports configured",
          "enables": "RX and TX ports set",
          "status": "pass" if port_ok else "warn",
          "value":  f"RX={cfg['rx_port'] or '—'} TX={cfg['tx_port'] or '—'}",
-         "fix":    "Set RXPort and TXPort in DVSwitch.ini [STFU]" if not port_ok else None},
-        {"key": "Subscriber file found",
-         "enables": "DMR ID → callsign lookup",
-         "status": "pass" if cfg["subscriber_ok"] else "warn",
-         "value":  (f"{cfg['subscriber_rows']:,} IDs"
-                    if cfg["subscriber_ok"] and cfg["subscriber_rows"] > 0
-                    else ("found" if cfg["subscriber_ok"] else "not found")),
-         "fix":    "Download from radioid.net and set subscriberFile path" if not cfg["subscriber_ok"] else None},
+         "fix":    "Set rxPort and txPort in DVSwitch.ini [STFU]" if not port_ok else None},
+        {"key": "TalkerAlias length",
+         "enables": "Alias fits what DVSwitch allows",
+         "status": "warn" if len(cfg["talker_alias"]) > 27 else "pass",
+         "value":  f"{len(cfg['talker_alias'])} characters" if cfg["talker_alias"] else "not set",
+         "fix":    "DVSwitch allows 27 characters at most in TalkerAlias" if len(cfg["talker_alias"]) > 27 else None},
         {"key": "Service running",
          "enables": "STFU active",
          "status": ("pass" if inst["service_active"] else
@@ -25177,7 +25274,7 @@ def _stfu_build_compat(cfg: dict, inst: dict) -> list:
          "value":  ("active"    if inst["service_active"]    else
                     "installed" if inst["service_installed"]  else "not installed"),
          "fix":    ("systemctl start stfu" if inst["service_installed"] and not inst["service_active"]
-                    else "Install stfu.service — see DVSwitch GitHub" if not inst["service_installed"]
+                    else "Install the stfu package: sudo apt install stfu" if not inst["service_installed"]
                     else None)},
     ]
 
@@ -26104,7 +26201,7 @@ def _zello_build_fields(cfg: dict) -> list:
          "masked": False, "secret": None,
          "note": "Case-sensitive, must match exactly" if env["ZELLO_CHANNEL"] else "Not set"},
 
-        {"group": "Free Auth"},
+        {"group": "Zello Free only" if cfg.get("mode") != "work" else "Zello Free only (not used in Work mode)"},
         {"label": "Private Key Path", "value": env["ZELLO_PRIVATE_KEY"] or None,
          "masked": False, "secret": None,
          "note": ("Issuer/Key from developers.zello.com" if env["ZELLO_PRIVATE_KEY"]
@@ -26112,7 +26209,7 @@ def _zello_build_fields(cfg: dict) -> list:
         {"label": "Issuer", "value": env["ZELLO_ISSUER"] or None,
          "masked": False, "secret": None,
          "note": None if env["ZELLO_ISSUER"] else "Not set"},
-        {"label": "WS Endpoint", "value": env["ZELLO_WS_ENDPOINT"] or "wss://zello.io/ws",
+        {"label": "WS Endpoint", "value": env["ZELLO_WS_ENDPOINT"] or (None if cfg.get("mode") == "work" else "wss://zello.io/ws"),
          "masked": False, "secret": None, "note": None},
 
         {"group": "USRP Bridge Ports"},
@@ -26154,6 +26251,7 @@ def _zello_build_compat(cfg: dict, inst: dict) -> list:
             log.debug("_zello_build_compat key check: %s", e)
             key_val = f"{key_path} (error checking)"
     issuer_ok = bool(env["ZELLO_ISSUER"])
+    work      = cfg.get("mode") == "work"
 
     ports_ok  = (env["USRP_RXPORT"] == _ZELLO_EXPECT_USRP_RXPORT and
                  env["USRP_TXPORT"] == _ZELLO_EXPECT_USRP_TXPORT)
@@ -26173,15 +26271,15 @@ def _zello_build_compat(cfg: dict, inst: dict) -> list:
          "fix":    "Set ZELLO_CHANNEL (must match the Zello channel name exactly)" if not chan_ok else None},
         {"key": "Private key readable",
          "enables": "Zello Free token signing",
-         "status": "pass" if key_ok else "fail",
-         "value":  key_val,
+         "status": "pass" if (key_ok or work) else "fail",
+         "value":  key_val if not work or key_path else "not needed for Zello Work",
          "fix":    ("Point ZELLO_PRIVATE_KEY at the .key file saved from developers.zello.com"
-                    if not key_ok else None)},
+                    if not (key_ok or work) else None)},
         {"key": "Issuer set",
          "enables": "Zello Free token signing",
-         "status": "pass" if issuer_ok else "fail",
-         "value":  env["ZELLO_ISSUER"] or "not set",
-         "fix":    "Set ZELLO_ISSUER from developers.zello.com → Keys" if not issuer_ok else None},
+         "status": "pass" if (issuer_ok or work) else "fail",
+         "value":  env["ZELLO_ISSUER"] or ("not needed for Zello Work" if work else "not set"),
+         "fix":    "Set ZELLO_ISSUER from developers.zello.com → Keys" if not (issuer_ok or work) else None},
         {"key": "USRP ports match scheme",
          "enables": f"RXPORT={_ZELLO_EXPECT_USRP_RXPORT} / TXPORT={_ZELLO_EXPECT_USRP_TXPORT}",
          "status": "pass" if ports_ok else "fail",
@@ -34278,33 +34376,6 @@ _STFU_DVS_CANDIDATES = [
     Path("/etc/dvswitch/DVSwitch.ini"),
 ]
 
-def _stfu_check_subscriber_file(sub_file: str) -> "tuple[str, bool, int]":
-    sub_ok   = False
-    sub_rows = -1
-    if sub_file:
-        sub_path = Path(sub_file)
-        sub_ok   = sub_path.exists() and sub_path.is_file()
-        if sub_ok:
-            try:
-
-                with open(sub_path, "rb") as fh:
-                    sub_rows = sum(1 for _ in fh)
-            except Exception as e:
-                log.debug("_stfu_check_subscriber_file: %s", e)
-                sub_rows = -1
-    elif _STFU_BINARY.parent.joinpath("subscriber_ids.csv").exists():
-
-        default_sub = _STFU_BINARY.parent / "subscriber_ids.csv"
-        sub_file    = str(default_sub)
-        sub_ok      = True
-        try:
-            with open(default_sub, "rb") as fh:
-                sub_rows = sum(1 for _ in fh)
-        except Exception as e:
-            log.debug("_stfu_check_subscriber_file: %s", e)
-            sub_rows = -1
-    return sub_file, sub_ok, sub_rows
-
 def _stfu_read_config() -> dict:
 
     dvs_path = ""
@@ -34320,10 +34391,9 @@ def _stfu_read_config() -> dict:
         return {
             "raw_ok": False, "dvs_path": "", "error": "DVSwitch.ini not found",
             "stfu_present": False,
-            "bm_address": "", "bm_port": "62031", "bm_password": "",
+            "bm_address": "", "bm_port": "54006", "bm_password": "",
             "dmr_id": "", "dmr_id_source": "", "address": "127.0.0.1",
             "rx_port": "", "tx_port": "", "start_tg": "",
-            "subscriber_file": "", "subscriber_ok": False, "subscriber_rows": -1,
             "talker_alias": "", "log_level": "",
         }
 
@@ -34332,7 +34402,7 @@ def _stfu_read_config() -> dict:
     stfu_present  = bool(stfu)
 
     bm_address    = stfu.get("BMAddress",     "").strip()
-    bm_port       = stfu.get("BMPort",        "").strip() or "62031"
+    bm_port       = stfu.get("BMPort",        "").strip() or "54006"
     bm_password   = stfu.get("BMPassword",    "").strip()
     dmr_id        = stfu.get("UserID",        "").strip()
     address       = stfu.get("Address",       "").strip() or "127.0.0.1"
@@ -34340,12 +34410,10 @@ def _stfu_read_config() -> dict:
     rx_port       = (stfu.get("rxPort") or stfu.get("RXPort") or "").strip()
     tx_port       = (stfu.get("txPort") or stfu.get("TXPort") or "").strip()
     start_tg      = stfu.get("StartTG",       "").strip()
-    sub_file      = stfu.get("subscriberFile","").strip()
     talker_alias  = stfu.get("TalkerAlias",   "").strip()
     log_level     = stfu.get("LogLevel",      "").strip()
 
     dmr_id, dmr_id_source = _resolve_node_dmr_id(dmr_id)
-    sub_file, sub_ok, sub_rows = _stfu_check_subscriber_file(sub_file)
 
     return {
         "raw_ok":          True,
@@ -34361,9 +34429,6 @@ def _stfu_read_config() -> dict:
         "rx_port":         rx_port,
         "tx_port":         tx_port,
         "start_tg":        start_tg,
-        "subscriber_file": sub_file,
-        "subscriber_ok":   sub_ok,
-        "subscriber_rows": sub_rows,
         "talker_alias":    talker_alias,
         "log_level":       log_level,
     }

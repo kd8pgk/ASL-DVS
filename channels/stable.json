@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "43577fb4159ae0fdeef9ce414cca0341b01ccc72",
-   "commit": "b0165c03e77c5361b1858d7825bfca229f948cb0",
-   "file": "44helper_v0_1_15_20261103.py",
-   "landed": "2026-11-03T05:46:23Z",
-   "promoted": "2026-11-08T22:17:48Z",
+   "blob": "c27ac7422e63c182a8e1659fed307de8d4e94c4f",
+   "commit": "c54ba6df65114193efedaa026a0058c9fd1af2b3",
+   "file": "44helper_v0_1_16_20261103.py",
+   "landed": "2026-11-03T05:57:07Z",
+   "promoted": "2026-11-11T22:44:49Z",
    "reason": "count",
-   "version": "0.1.15"
+   "version": "0.1.16"
   },
   "amp_nodetalker": {
    "blob": "3fcda70a6f1a3066afd678087e3a1ca1552b0c5b",
@@ -56,40 +56,40 @@
    "version": "2.92.0"
   },
   "nodecontrol": {
-   "blob": "300755808a7fcd393e232ed04dbf913a8121d49c",
-   "commit": "8e205c5a0f168dd26a102160fa0709c60956b99b",
-   "file": "nodecontrol_v9_3_102_20261102.py",
-   "landed": "2026-11-02T16:09:53Z",
-   "promoted": "2026-11-10T23:49:45Z",
+   "blob": "c06dc046dbedc066d62764da528acc495f1ead49",
+   "commit": "1e8951565c72f6c8ba5234b4c2a41aff74bf8839",
+   "file": "nodecontrol_v9_3_104_20261108.py",
+   "landed": "2026-11-08T22:17:48Z",
+   "promoted": "2026-11-11T22:17:48Z",
    "reason": "count",
-   "version": "9.3.102"
+   "version": "9.3.104"
   },
   "nodecontrol_pi02w": {
-   "blob": "5bfa98a7b967f1a0b4ad1fcbfb3a4985837a6c29",
-   "commit": "411a58ec3d4383845fe8f715518bf13c173d4c4c",
-   "file": "nodecontrol_pi02w_v9_3_107_20261102.py",
-   "landed": "2026-11-02T14:53:37Z",
-   "promoted": "2026-11-11T00:12:41Z",
+   "blob": "dd32cecde8c5c9f144af7457206d0640f5120bdb",
+   "commit": "7fff7b1c6aa4a6a0f9ddaded874f9a09c0e169b6",
+   "file": "nodecontrol_pi02w_v9_3_108_20261108.py",
+   "landed": "2026-11-08T22:44:07Z",
+   "promoted": "2026-11-11T22:44:07Z",
    "reason": "count",
-   "version": "9.3.107-pi02w"
+   "version": "9.3.108-pi02w"
   },
   "noderecorder": {
-   "blob": "9614bc55cae11f5106ef488f180bac9446d23c82",
-   "commit": "01fb8916cd99bad8c6effcb6c0a73d61a9ac388b",
-   "file": "noderecorder_v0_5_14_20261107.py",
-   "landed": "2026-11-07T23:00:43Z",
-   "promoted": "2026-11-10T23:00:43Z",
+   "blob": "9bdc6a259aef3399fe5aa5f83a52970f5453f039",
+   "commit": "c362cc1724d65d81188063580d22ca5794b7ab60",
+   "file": "noderecorder_v0_10_0_20261108.py",
+   "landed": "2026-11-08T21:55:07Z",
+   "promoted": "2026-11-11T21:55:07Z",
    "reason": "count",
-   "version": "0.5.14"
+   "version": "0.10.0"
   },
   "nodetalker": {
-   "blob": "b6c62acb4fb890f989489a2361f50542d3ea47fc",
-   "commit": "b43d11b2f739ca215d6b97f5b1fbd6800bb00ef2",
-   "file": "nodetalker_v0_10_25_20261108.py",
-   "landed": "2026-11-08T12:55:58Z",
-   "promoted": "2026-11-11T12:55:58Z",
+   "blob": "b4bb24d3a41eef767f8fa8eeabe0e2035fa70e7d",
+   "commit": "c362cc1724d65d81188063580d22ca5794b7ab60",
+   "file": "nodetalker_v0_10_26_20261108.py",
+   "landed": "2026-11-08T21:55:07Z",
+   "promoted": "2026-11-11T21:55:07Z",
    "reason": "count",
-   "version": "0.10.25"
+   "version": "0.10.26"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
@@ -101,22 +101,22 @@
    "version": "0.15.0"
   },
   "sysmon": {
-   "blob": "37b00dd480654b9d66dcda615cc7d92e40dac61e",
-   "commit": "63ac8b2bb4237c8d634bce81aa520cc4e0c5f6f0",
-   "file": "sysmon_v6_13_91_20261027.py",
-   "landed": "2026-10-27T12:23:37Z",
-   "promoted": "2026-10-30T12:23:37Z",
-   "reason": "count",
-   "version": "6.13.91"
+   "blob": "04343e160c28f43cfe414977edeccf31f7c10979",
+   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
+   "file": "sysmon_v6_13_95_20261028.py",
+   "landed": "2026-10-28T18:44:35Z",
+   "promoted": "2026-11-11T18:44:35Z",
+   "reason": "age",
+   "version": "6.13.95"
   },
   "sysmon_pi02w": {
-   "blob": "31a6c97ed28b936d174038ba51c1f07bd7a2daa6",
-   "commit": "63ac8b2bb4237c8d634bce81aa520cc4e0c5f6f0",
-   "file": "sysmon_pi02w_v6_13_79_20261027.py",
-   "landed": "2026-10-27T12:23:37Z",
-   "promoted": "2026-10-30T12:23:37Z",
-   "reason": "count",
-   "version": "6.13.79-pi02w"
+   "blob": "2c00a9654dc8f99b6360b73e47129d7090f4a5a8",
+   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
+   "file": "sysmon_pi02w_v6_13_83_20261028.py",
+   "landed": "2026-10-28T18:44:35Z",
+   "promoted": "2026-11-11T18:44:35Z",
+   "reason": "age",
+   "version": "6.13.83-pi02w"
   },
   "uninstall_all": {
    "blob": "16cd391501762ad0b7b851dd02c1cff26ea7adf3",
