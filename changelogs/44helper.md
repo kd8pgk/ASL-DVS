@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_21_20261111.py`. Newest entries first.
+Current file: `44helper_v0_1_22_20261112.py`. Newest entries first.
+
+## 0.1.22 (2026-11-12)
+
+Third of three tunnel releases: purge, the fallback unit, the page.
+
+- **Purge has two more steps.** "Remove the outbound reflector rules" and "Remove the boot order" (which also turns `net.ipv4.ip_nonlocal_bind` back off if 44helper set it). Before, these stayed behind after a purge.
+- **The fallback unit is handled in more places.** Restart tunnel and the split routing action use whichever unit is running (`wg-quick@wg0` or `44net-tunnel.service`). On a node with only the fallback unit, the boot order enables that unit, gives it the retry drop-in and makes the wait-for-network script look at it. Nodes on `wg-quick@wg0` get the same boot files as before, so their boot order stays "Set". The half tunnel and full tunnel with exceptions still need `wg-quick@wg0`.
+- **Convert can use the current config.** Step 1 has a "Use the current config" box: only the AllowedIPs line changes, the key and tunnel server stay, and the old file is saved as wg0.conf.pre-replace. It is refused for a config with more than one peer or its own Table or FwMark line.
+- **Convert keeps the pasted config.** The text box was emptied when a later step redrew the list, so step 3 asked for the paste again.
+- **DNS the tunnel can't reach is switched off on a write.** When a write leaves the DNS servers outside AllowedIPs (for example full to split with public DNS servers set), the DNS setting is removed and the result says so. Before, lookups would have gone into wg0 and been dropped.
+- **The outbound reflector ports card moved.** It is now a collapsed troubleshooting block after the netcheck one on the Full Tunnel tab, without the step number 4b, and says it only matters when the Pi filters outbound traffic. Split Tunnel step 4b is unchanged.
+- **Tested here:** 6 new unit tests in `ci/test_ci.py`, and the new page functions run in Node against a stub page (Convert box, the moved card, the five purge steps). **Not yet tested on a node:** boot order on a node that uses the fallback unit, and the page in a browser.
+- This is a release, not a cosmetic build.
 
 ## 0.1.21 (2026-11-11)
 

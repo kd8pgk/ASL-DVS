@@ -5452,5 +5452,116 @@ class Helper44TunnelVerifyTests(unittest.TestCase):
         self.assertEqual(h._wg_apply_endpoint_pin(own), (own, ""))
 
 
+class Helper44TunnelHousekeepingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.h = load_helper44()
+
+    def patch(self, **kw):
+        missing = object()
+        saved = {n: getattr(self.h, n, missing) for n in kw}
+        for n, v in kw.items():
+            setattr(self.h, n, v)
+
+        def undo():
+            for n, v in saved.items():
+                if v is missing:
+                    delattr(self.h, n)
+                else:
+                    setattr(self.h, n, v)
+
+        self.addCleanup(undo)
+
+    def with_dns(self, text, line):
+        h = self.h
+        return h._wg_insert_in_interface(text, [h._WG_DNS_BEGIN, line, "PreDown = resolvectl revert %i || true", h._WG_DNS_END])
+
+    def test_dns_the_tunnel_cannot_reach_is_switched_off(self):
+        h = self.h
+        public = "PostUp = resolvectl dns %i 1.1.1.1 9.9.9.9; resolvectl domain %i ~."
+        full = self.with_dns(wg_conf("0.0.0.0/0"), public)
+        self.assertEqual(h._wg_drop_unreachable_dns(full), (full, ""))
+        split = self.with_dns(wg_conf("44.0.0.0/9, 44.128.0.0/10"), public)
+        text, note = h._wg_drop_unreachable_dns(split)
+        self.assertNotIn("resolvectl", text)
+        self.assertNotIn(h._WG_DNS_BEGIN, text)
+        self.assertIn("1.1.1.1", note)
+        ampr = self.with_dns(wg_conf("44.0.0.0/9, 44.128.0.0/10"),
+                             "PostUp = resolvectl dns %i 44.0.0.1; resolvectl domain %i ~ampr.org")
+        self.assertEqual(h._wg_drop_unreachable_dns(ampr), (ampr, ""))
+        raw = wg_conf("44.0.0.0/9, 44.128.0.0/10", extra="DNS = 1.1.1.1")
+        self.assertNotIn("DNS =", h._wg_drop_unreachable_dns(raw)[0])
+
+    def convert(self, conf, target, refusal=None):
+        h = self.h
+        written = []
+        saved_kind = {}
+
+        def write(text, backup_to_library=True):
+            written.append(text)
+            return ["wg0.conf updated, permissions set to 600."]
+
+        def shape():
+            given = {p.strip() for p in h._wg_conf_field(h._parse_wg_conf_text(written[-1])["peers"][0], "AllowedIPs").split(",")}
+            return {"shape": "full" if "0.0.0.0/0" in given else ("split" if given == h._PI_SPLIT_ALLOWED_IPS else "other")}
+
+        self.patch(_require_root=lambda: None, _wg_conf_replace_refusal=lambda: refusal, _hl_read_conf=lambda: conf,
+                   _wg_write_conf=write, _compare_before_write=lambda path, data: (True, "written"),
+                   status_wg_allowed_ips=shape, save_config=lambda cfg: saved_kind.update(kind=cfg["tunnels"]["tunnel.pi.kind"]),
+                   _cfg={"tunnels": {}})
+        return h.action_convert_current(target), written, saved_kind
+
+    def test_convert_from_the_current_config(self):
+        h = self.h
+        res, written, saved = self.convert(wg_conf("0.0.0.0/0"), "split")
+        self.assertTrue(res["success"], res)
+        self.assertIn("AllowedIPs = 44.0.0.0/9, 44.128.0.0/10", written[0])
+        self.assertIn(f"PrivateKey = {WG_KEY}", written[0])
+        self.assertEqual(saved, {"kind": "split"})
+        split = h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10"), "split", {})["text"]
+        res, written, saved = self.convert(split, "full")
+        self.assertTrue(res["success"], res)
+        self.assertIn("AllowedIPs = 0.0.0.0/0", written[0])
+        self.assertEqual(saved, {"kind": "full"})
+
+    def test_convert_refusals(self):
+        res, written, _ = self.convert(wg_conf("0.0.0.0/0", extra="Table = off"), "split")
+        self.assertFalse(res["success"])
+        self.assertEqual(written, [])
+        two = wg_conf("0.0.0.0/0") + f"[Peer]\nPublicKey = {WG_KEY}\nAllowedIPs = 10.0.0.0/8\n"
+        self.assertFalse(self.convert(two, "split")[0]["success"])
+        self.assertFalse(self.convert(wg_conf("0.0.0.0/0"), "weird")[0]["success"])
+        self.assertFalse(self.convert(None, "split")[0]["success"])
+        refused = {"success": False, "verified": False, "output": "Refused"}
+        self.assertEqual(self.convert(wg_conf("0.0.0.0/0"), "split", refusal=refused)[0], refused)
+
+    def test_tunnel_unit_choice(self):
+        h = self.h
+        self.patch(_systemctl_is_active=lambda u: u == "44net-tunnel.service", _wg_quick_template_available=lambda: True)
+        self.assertEqual(h._wg_unit(), "44net-tunnel.service")
+        self.patch(_systemctl_is_active=lambda u: False)
+        self.assertEqual(h._wg_unit(), "wg-quick@wg0")
+        self.patch(_wg_quick_template_available=lambda: False)
+        self.assertEqual(h._wg_unit(), "44net-tunnel.service")
+
+    def test_boot_files_follow_the_fallback_unit(self):
+        h = self.h
+        self.patch(_boot_wg_unit=lambda: h._BOOT_WG_UNIT)
+        self.assertEqual(h._boot_script_text(), h._BOOT_SCRIPT)
+        self.assertEqual(h._boot_unit_text(), h._BOOT_UNIT_TEXT)
+        self.patch(_boot_wg_unit=lambda: h._BOOT_FALLBACK_UNIT)
+        self.assertIn("is-enabled --quiet 44net-tunnel.service", h._boot_script_text())
+        self.assertNotIn("is-enabled --quiet wg-quick@wg0", h._boot_script_text())
+        self.assertIn("After=network-online.target 44net-tunnel.service", h._boot_unit_text())
+
+    def test_purge_steps_are_wired(self):
+        h = self.h
+        for step in ("purge_reflector_egress", "purge_boot_order"):
+            self.assertIn(step, h._PI_INSTALL_SIMPLE_ACTIONS)
+            self.assertIn(step, h._PI_INSTALL_JOB_STEPS)
+            self.assertIn("id: '" + step + "'", h._JS_PI_INSTALL)
+        self.assertIn("convert_current", h._PI_INSTALL_SIMPLE_ACTIONS)
+
+
 if __name__ == "__main__":
     unittest.main()
