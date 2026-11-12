@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.103.0"
+VERSION ="2.104.0"
 DATE_STR ="2026-11-11"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -9397,8 +9397,6 @@ input[type=file]{color:var(--muted);font-size:var(--fs-base);max-width:100%}
 .fu-banner.ok{border-color:var(--green-dim);background:rgba(0,255,176,.06);color:var(--grn)}
 .fu-banner.err{border-color:var(--red-dim);background:rgba(255,61,90,.08);color:var(--red)}
 .fu-banner ul{margin:.2rem 0 0 1.1rem;color:var(--fg)}
-.fu-table{width:100%;border-collapse:collapse;margin-top:.45rem;font-size:var(--fs-base)}
-.fu-table td{padding:.22rem .4rem;border-top:1px solid var(--border)}
 #fu-progress{font-family:var(--sans);font-size:var(--fs-base);color:var(--cyn);margin-top:.35rem}
 """
 
@@ -9418,12 +9416,18 @@ html{scroll-padding-top:7rem;scroll-padding-bottom:4rem}
 .tabp>.hdr:first-child{margin-top:.4rem}
 .wrap{padding-bottom:4.5rem}
 body.log-open .wrap{padding-bottom:calc(45vh + 4.5rem)}
-.home-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:.2rem .6rem;align-items:center;
-  width:100%;text-align:left;padding:.3rem .4rem;margin:0;border:0;border-bottom:1px solid var(--border);
+.home-ent{display:block;width:100%;text-align:left;text-transform:none;padding:.4rem .4rem;margin:0;border:0;border-bottom:1px solid var(--border);
   border-radius:0;background:none;font-weight:400;letter-spacing:0;cursor:pointer}
-.home-row:last-child{border-bottom:0}
-.home-row:hover{background:rgba(255,255,255,.04)}
-.home-row b{color:var(--text-bright);overflow-wrap:anywhere}
+.home-ent:last-child{border-bottom:0}
+.home-ent:hover{background:rgba(255,255,255,.04)}
+.home-ent.plain{cursor:default}
+.he-top,.he-bot{display:flex;align-items:center;gap:.2rem .6rem;min-width:0}
+.he-top b{color:var(--text-bright);overflow-wrap:anywhere}
+.he-ver{font-family:var(--mono);font-size:var(--fs-sm);color:var(--muted)}
+.he-top .gh-tag{margin-left:auto;text-align:right}
+.he-bot{margin-top:.15rem;justify-content:space-between}
+.he-file{font-family:var(--mono);font-size:var(--fs-sm);color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.he-bot .badge{flex:none}
 #home-sum{margin-bottom:.3rem}
 #logdock{position:fixed;left:0;right:0;bottom:0;z-index:90;background:#0b111a;
   border-top:2px solid var(--amber);box-shadow:0 -6px 24px rgba(0,0,0,.6)}
@@ -9879,16 +9883,8 @@ function renderQuietFullUpdate(quiet, fu) {
   _fuWaitWhat = running && fu.wait_left > 0 ? (fu.wait_what || '') : '';
   _fuWaitEnd = _fuWaitWhat ? Date.now() + fu.wait_left * 1000 : 0;
   _fuProgTick();
-  const planEl = document.getElementById('fu-plan');
   const plan = fu && fu.plan;
-  if (planEl) {
-    planEl.innerHTML = !plan ? '' : '<table class="fu-table">' + plan.components.map(c =>
-      `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' || c.status === 'switch' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
-      `<td>${escHtml(c.note)}</td><td class="muted">${escHtml(c.file)}</td></tr>`).join('') +
-      plan.scripts.map(n => `<tr><td>Script</td><td><span class="gh-tag gh-upd">NEW</span></td><td>goes to the Scripts library (not run)</td><td class="muted">${escHtml(n)}</td></tr>`).join('') +
-      (plan.manuals || []).map(d => `<tr><td>Manual</td><td><span class="gh-tag gh-upd">${d.why === 'changed' ? 'CHANGED' : 'NEW'}</span></td><td>goes to the Manuals card</td><td class="muted">${escHtml(d.name)}</td></tr>`).join('') +
-      '</table>';
-  }
+  homeTools();
   const stopBtn = document.getElementById('fu-stop-btn');
   if (stopBtn) {
     const canStop = running && !['instmon', 'recovering'].includes(fu.phase);
@@ -12483,36 +12479,91 @@ function showTab(name, quiet) {
   if (name === 'system' && typeof slPoll === 'function') slPoll(true);
 }
 function homeTools() {
-  const box = document.getElementById('home-tools'), sum = document.getElementById('home-sum');
+  const box = document.getElementById('home-comps'), sum = document.getElementById('home-sum');
   if (!box) return;
   const cards = Array.from(document.querySelectorAll('#components .card, #cg-holder .card')).filter(function (c) {
     return c.querySelector(':scope > .comp-row') && !c.closest('.libgrp-nested');
   });
+  const plan = _fuState && _fuState.plan;
+  const byName = {}, shown = {};
+  (plan ? plan.components : []).forEach(function (c) { byName[c.name.toLowerCase()] = c; });
   let down = 0, services = 0;
   box.replaceChildren();
+  function span(cls, text) {
+    const e = document.createElement('span');
+    e.className = cls;
+    e.textContent = text;
+    return e;
+  }
+  function entry(name, ver, status, file, badge, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'home-ent' + (onClick ? '' : ' plain');
+    const top = document.createElement('span'), bot = document.createElement('span');
+    top.className = 'he-top';
+    bot.className = 'he-bot';
+    const n = document.createElement('b');
+    n.textContent = name;
+    top.append(n, span('he-ver', ver));
+    if (status) top.append(status);
+    bot.append(span('he-file', file));
+    if (badge) bot.append(badge);
+    b.append(top, bot);
+    if (onClick) b.addEventListener('click', onClick);
+    box.appendChild(b);
+  }
+  function tag(c) {
+    const t = document.createElement('span');
+    if (!plan) { t.className = 'gh-tag'; t.textContent = 'NOT CHECKED'; return t; }
+    if (!c) return null;
+    const word = _FU_STATUS[c.status] || String(c.status).toUpperCase();
+    const newer = (c.status === 'update' || c.status === 'switch') && c.version ? ' \u2192 ' + c.version : '';
+    t.className = 'gh-tag' + (newer ? ' gh-upd' : c.status === 'error' ? ' gh-err' : '');
+    t.textContent = word + newer;
+    t.title = c.note || '';
+    return t;
+  }
   cards.forEach(function (card) {
     const row = card.querySelector(':scope > .comp-row');
     const name = row.querySelector('b'), ver = row.querySelector('.ver'), badge = row.querySelector('.badge');
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'home-row';
-    const n = document.createElement('b');
-    n.textContent = name ? name.textContent : '';
-    const v = document.createElement('span');
-    v.className = 'small muted';
-    v.textContent = ver ? ver.textContent : '';
-    b.append(n, v, badge ? badge.cloneNode(true) : document.createElement('span'));
+    const label = name ? name.textContent : '';
+    const c = byName[label.toLowerCase()];
+    if (c) shown[label.toLowerCase()] = true;
     const state = badge ? badge.textContent.trim() : '';
     if (['RUNNING', 'STOPPED', 'FAILED', 'UNKNOWN'].includes(state)) {
       services++;
       if (state !== 'RUNNING') down++;
     }
-    b.addEventListener('click', function () {
-      showTab(card.closest('#cg-holder') ? 'files' : 'tools');
-      card.scrollIntoView({block: 'center'});
-    });
-    box.appendChild(b);
+    entry(label, ver ? ver.textContent : (c && c.installed_version ? 'v' + c.installed_version : '-'), tag(c),
+      c && c.file ? c.file : '-', badge ? badge.cloneNode(true) : null, function () {
+        showTab(card.closest('#cg-holder') ? 'files' : 'tools');
+        card.scrollIntoView({block: 'center'});
+      });
   });
+  (plan ? plan.components : []).forEach(function (c) {
+    if (shown[c.name.toLowerCase()]) return;
+    entry(c.name, c.installed_version ? 'v' + c.installed_version : '-', tag(c), c.file || '-', null, function () {
+      showTab('tools');
+      const av = document.getElementById('available-card');
+      if (av) av.scrollIntoView({block: 'center'});
+    });
+  });
+  if (plan) {
+    plan.scripts.forEach(function (n) {
+      const t = document.createElement('span');
+      t.className = 'gh-tag gh-upd';
+      t.textContent = 'NEW';
+      t.title = 'goes to the Scripts library (not run)';
+      entry('Script', '-', t, n, null, null);
+    });
+    (plan.manuals || []).forEach(function (d) {
+      const t = document.createElement('span');
+      t.className = 'gh-tag gh-upd';
+      t.textContent = d.why === 'changed' ? 'CHANGED' : 'NEW';
+      t.title = 'goes to the Manuals card';
+      entry('Manual', '-', t, d.name, null, null);
+    });
+  }
   if (sum) {
     sum.textContent = !services ? '' : down ? down + ' of ' + services + ' tools are not running.' : 'All ' + services + ' tools are running.';
     sum.className = 'small ' + (down ? 'log-warn' : 'log-ok');
@@ -12767,7 +12818,6 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div id="home-sum" class="small"></div>
   {updates_html}
   {disk_html}
-  <div id="home-tools"></div>
 </div>
 
 <div class="hdr">Quick Links</div>
@@ -12789,7 +12839,6 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <input type="checkbox" id="autocheck-cb"{autocheck_checked}> Check GitHub once a day (versions only, nothing is downloaded)</label>
   <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress" style="font-size:1.15rem"></div>
-  <div id="fu-plan"></div>
   <div class="row" style="margin-top:.6rem">
     <button id="gh-notes-btn" onclick="ghNotesToggle()">Show</button>
     <span class="small muted">About Full Update</span>
@@ -12801,6 +12850,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     Stop Full Update puts the tool it is on back to the version it had and skips the rest.
     Quiet System is on the System tab.</div>
 </div>
+
+<div class="hdr">Components</div>
+<div class="card" id="home-comps"></div>
 </div>
 
 <div class="tabp" id="tabp-tools" hidden>

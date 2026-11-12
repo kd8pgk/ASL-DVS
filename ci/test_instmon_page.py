@@ -27,7 +27,7 @@ spec.loader.exec_module(im)
 
 TABS = ("home", "tools", "files", "disk", "system")
 WHERE = {
-    "home": ('id="home-tools"', 'data-action="gh_check"', 'id="fu-btn"', "Quick Links"),
+    "home": ('id="home-comps"', 'data-action="gh_check"', 'id="fu-btn"', "Quick Links"),
     "tools": ('id="components"', 'class="no-confirm-banner"'),
     "files": ('id="cg-holder"', 'id="confputter-card"', 'id="usbimp-card"', 'id="library"', 'id="docs-card"', 'id="backup-btn"'),
     "disk": ('data-diskimg-key="format"', 'data-diskimg-key="backup"', 'data-diskimg-key="clone"', 'data-diskimg-key="restore"'),
@@ -72,6 +72,22 @@ class Page(unittest.TestCase):
         for n in ("function showTab(name, quiet)", "function placeCards()", "function homeTools()", "function logDock(open)",
                   "tabsInit();", "placeCards();", "instmon_tab"):
             self.assertIn(n, self.html)
+
+    def test_one_components_chart_sits_below_github_updates(self):
+        home = self.panels["home"]
+        for gone in ('id="home-tools"', 'id="fu-plan"', "fu-table", "home-row"):
+            self.assertNotIn(gone, self.html, gone)
+        self.assertEqual(self.html.count('id="home-comps"'), 1)
+        self.assertLess(home.index("GitHub Updates"), home.index('<div class="hdr">Components</div>'))
+        self.assertLess(home.index('id="gh-notes"'), home.index('id="home-comps"'))
+        self.assertLess(home.index('id="home-sum"'), home.index("Quick Links"))
+
+    def test_chart_rows_are_two_lines_with_the_agreed_cells(self):
+        js = self.html[self.html.index("function homeTools()"):self.html.index("function placeCards()")]
+        for n in ("he-top", "he-bot", "he-ver", "he-file", "NOT CHECKED", "_FU_STATUS", "plan.scripts", "plan.manuals",
+                  "newer", "c.version"):
+            self.assertIn(n, js, n)
+        self.assertIn("homeTools();", self.html[self.html.index("function renderQuietFullUpdate"):self.html.index("const stopBtn")])
 
     def test_uninstall_asks_and_start_stop_do_not(self):
         self.assertIn("if (!confirm(`Uninstall ${btn.dataset.name}?", self.html)
