@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.21"
+APP_VERSION = "0.1.22"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2196,7 +2196,7 @@ def action_health_restart_tunnel() -> dict:
             gate += _wg_write_conf(cur)
         except OSError as e:
             return _hl_done({"success": False, "verified": False, "output": "\n".join(gate + [f"Write failed: {e}"])})
-    unit = "wg-quick@wg0" if _wg_quick_template_available() else "44net-tunnel.service"
+    unit = _wg_unit()
     t0 = int(time.time())
     r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
     lines = gate + ([r["output"]] if r["output"] else [])
@@ -7357,6 +7357,51 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     swap_ok = not any(ln.startswith("FAIL") for ln in swap)
     return {"success": swap_ok, "verified": status["done"] and swap_ok, "output": "\n".join(output_lines)}
 
+def action_convert_current(target_kind: str) -> dict:
+    err = _require_root() or _wg_conf_replace_refusal()
+    if err:
+        return err
+    if target_kind not in _PI_TAB_ALLOWED_IPS:
+        return {"success": False, "verified": False, "output": f"Unknown tunnel type '{target_kind}'."}
+    text = _hl_read_conf()
+    if text is None:
+        return {"success": False, "verified": False, "output": "No wg0.conf to convert; paste a config instead."}
+    want = _PI_TAB_ALLOWED_IPS[target_kind]
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    if len(parsed["peers"]) != 1:
+        return {"success": False, "verified": False,
+                "output": f"wg0.conf has {len(parsed['peers'])} [Peer] sections; this only converts a config with one. "
+                          "Paste the new config instead."}
+    if _wg_user_routing(text):
+        return {"success": False, "verified": False,
+                "output": "wg0.conf has its own Table or FwMark line, so 44helper won't change its routing. Remove that "
+                          "line, or paste the new config instead."}
+    cur = _wg_conf_field(parsed["peers"][0], "AllowedIPs")
+    new = _wg_set_allowed_ips(text, want)
+    if new is None:
+        return {"success": False, "verified": False,
+                "output": "wg0.conf has no AllowedIPs line under [Peer]. Paste the new config instead."}
+    try:
+        _compare_before_write(WG0_CONF_PATH + ".pre-replace", text.encode("utf-8"))
+        os.chmod(WG0_CONF_PATH + ".pre-replace", 0o600)
+        out = ["Previous config saved as wg0.conf.pre-replace."]
+    except OSError:
+        out = []
+    try:
+        out += _wg_write_conf(new)
+    except OSError as e:
+        return {"success": False, "verified": False, "output": "\n".join(out + [f"Write failed: {e}"])}
+    out.append(f"AllowedIPs changed from {cur or '(none)'} to {want}. The key, the Endpoint and the other settings are "
+               "the same.")
+    after = status_wg_allowed_ips()
+    ok = after["shape"] == target_kind and not any(ln.startswith("FAIL") for ln in out)
+    if ok:
+        if "tunnels" not in _cfg:
+            _cfg["tunnels"] = {}
+        _cfg["tunnels"]["tunnel.pi.kind"] = target_kind
+        save_config(_cfg)
+    return {"success": ok, "verified": ok, "output": "\n".join(out)}
+
 def action_load_wg_from_library() -> dict:
     err = _require_root()
     if err:
@@ -7803,6 +7848,12 @@ def _wg_atomic_write(text: str) -> None:
 _WG_UNITS = ("wg-quick@wg0", "44net-tunnel.service")
 _WG_SWAP_NOTE = "tunnel started again with the new config"
 
+def _wg_unit() -> str:
+    for u in _WG_UNITS:
+        if _systemctl_is_active(u):
+            return u
+    return _WG_UNITS[0] if _wg_quick_template_available() else _WG_UNITS[1]
+
 def _wg_route_kind(text: str | None) -> str:
     if not text:
         return "other"
@@ -7899,6 +7950,9 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     new_text, v6 = _wg_drop_v6_default(new_text)
     if v6:
         out.append(_WG_V6_NOTE.format(", ".join(v6)))
+    new_text, dns_note = _wg_drop_unreachable_dns(new_text)
+    if dns_note:
+        out.append(dns_note)
     _wg_swap_write(new_text, out)
     out.append("wg0.conf updated, permissions set to 600.")
     if backup_to_library:
@@ -7928,6 +7982,26 @@ def _wg_dns_outside_tunnel(text: str, servers: list[str]) -> list[str]:
         if not any(a.version == n.version and a in n for n in nets):
             out.append(srv)
     return out
+
+def _wg_drop_unreachable_dns(text: str) -> tuple[str, str]:
+    if not _wg_peer_allowed_nets(text):
+        return text, ""
+    has_block = any(ln.strip() == _WG_DNS_BEGIN for ln in text.splitlines())
+    servers = []
+    if has_block:
+        servers += [x for x in re.split(r"[,\s]+", _wg_dns_servers_of(_wg_extract_block(text, _WG_DNS_BEGIN, _WG_DNS_END))) if x]
+    base = _wg_block_remove(text, _WG_DNS_BEGIN, _WG_DNS_END) if has_block else text
+    for m in re.finditer(r"(?im)^\s*dns\s*=\s*(.+)$", base):
+        servers += [x.strip() for x in m.group(1).split(",") if x.strip()]
+    outside = _wg_dns_outside_tunnel(text, servers)
+    if not outside:
+        return text, ""
+    new, _removed = _wg_drop_dns_lines(base)
+    if new == text:
+        return text, ""
+    return new, (f"DNS setting removed: {', '.join(outside)} isn't inside this tunnel's AllowedIPs, so lookups sent to it "
+                 "over wg0 would be dropped and names would stop resolving. The Pi keeps its own resolver; set 44Net DNS "
+                 "on the DNS card (4a) if you want it.")
 
 def _wg_legacy_fix(text: str) -> tuple[str, bool]:
     lines = text.splitlines(keepends=True)
@@ -8145,7 +8219,7 @@ def action_split_routing() -> dict:
         out += _wg_write_conf(text)
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
-    unit = "wg-quick@wg0"
+    unit = _wg_unit()
     if _systemctl_is_active(unit):
         r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
         out.append(("ok    " if r["success"] else "FAIL  ") + "tunnel restarted" + ("" if r["success"] else ": " + r["output"]))
@@ -8683,6 +8757,23 @@ Restart=on-failure
 RestartSec=30
 """
 
+_BOOT_FALLBACK_UNIT = "44net-tunnel.service"
+
+def _boot_wg_unit() -> str:
+    if os.path.exists(_ARDC_FALLBACK_UNIT_PATH) and not _wg_quick_template_available():
+        return _BOOT_FALLBACK_UNIT
+    return _BOOT_WG_UNIT
+
+def _boot_script_text() -> str:
+    if _boot_wg_unit() == _BOOT_FALLBACK_UNIT:
+        return _BOOT_SCRIPT.replace("is-enabled --quiet wg-quick@wg0", "is-enabled --quiet " + _BOOT_FALLBACK_UNIT)
+    return _BOOT_SCRIPT
+
+def _boot_unit_text() -> str:
+    if _boot_wg_unit() == _BOOT_FALLBACK_UNIT:
+        return _BOOT_UNIT_TEXT.replace(_BOOT_WG_UNIT, _BOOT_FALLBACK_UNIT)
+    return _BOOT_UNIT_TEXT
+
 def _boot_dropin_path(unit: str) -> str:
     return f"/etc/systemd/system/{unit}.d/{_BOOT_DROPIN_NAME}"
 
@@ -8735,17 +8826,18 @@ def _wg_conf_has_pin() -> bool:
 def status_boot_order() -> dict:
     units = _boot_dv_units()
     conf = os.path.exists(WG0_CONF_PATH)
-    wg_enabled = _sc_is_enabled(_BOOT_WG_UNIT) if conf else ""
+    wg_unit = _boot_wg_unit()
+    wg_enabled = _sc_is_enabled(wg_unit) if conf else ""
     backend = _network_backend()
     missing = []
-    if not _boot_file_is(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT) or not _boot_file_is(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT):
+    if not _boot_file_is(_BOOT_SCRIPT_PATH, _boot_script_text()) or not _boot_file_is(_BOOT_UNIT_PATH, _boot_unit_text()):
         missing.append("the wait-for-network unit")
     if conf and not _boot_file_is(_BOOT_TIME_SCRIPT_PATH, _BOOT_TIME_SCRIPT):
         missing.append("wait for the clock")
     req = _boot_netcheck_required_by(units)
     if req:
         missing.append("a failed netcheck can stop " + ", ".join(u.replace(".service", "") for u in req))
-    if conf and not _boot_file_is(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN):
+    if conf and not _boot_file_is(_boot_dropin_path(wg_unit), _BOOT_WG_DROPIN):
         missing.append("tunnel retry")
     if conf and wg_enabled not in ("enabled", "enabled-runtime"):
         missing.append("tunnel enabled at boot")
@@ -8772,7 +8864,7 @@ def status_boot_order() -> dict:
             "last_boot": last, "last_boot_now": last_now,
             "wg_enabled": wg_enabled, "wait_unit": backend["wait_unit"], "wait_enabled": backend["wait_enabled"],
             "any_applied": os.path.exists(_BOOT_UNIT_PATH) or os.path.exists(_BOOT_SCRIPT_PATH)
-                           or any(os.path.exists(_boot_dropin_path(u)) for u in (_BOOT_WG_UNIT,) + tuple(units))}
+                           or any(os.path.exists(_boot_dropin_path(u)) for u in (_BOOT_WG_UNIT, _BOOT_FALLBACK_UNIT) + tuple(units))}
 
 def _boot_write(path: str, text: str, mode: int) -> None:
     os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
@@ -8793,13 +8885,14 @@ def action_boot_order_apply() -> dict:
         out += ["  " + ln for ln in r.get("output", "").splitlines()]
         ok = ok and bool(r.get("success"))
     try:
-        _boot_write(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT, 0o755)
-        _boot_write(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT, 0o644)
+        wg_unit = _boot_wg_unit()
+        _boot_write(_BOOT_SCRIPT_PATH, _boot_script_text(), 0o755)
+        _boot_write(_BOOT_UNIT_PATH, _boot_unit_text(), 0o644)
         out.append(f"ok    {_BOOT_UNIT}: waits up to {_BOOT_LIMIT} s at boot for the network, the tunnel handshake and DNS")
         if os.path.exists(WG0_CONF_PATH):
             _boot_write(_BOOT_TIME_SCRIPT_PATH, _BOOT_TIME_SCRIPT, 0o755)
-            _boot_write(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN, 0o644)
-            out.append("ok    wg-quick@wg0 retries every 20 s if it fails to start (for example DNS not ready yet)")
+            _boot_write(_boot_dropin_path(wg_unit), _BOOT_WG_DROPIN, 0o644)
+            out.append(f"ok    {wg_unit.replace('.service', '')} retries every 20 s if it fails to start (for example DNS not ready yet)")
             out.append(f"ok    at boot the tunnel first waits up to {_BOOT_TIME_WAIT} s for the clock to sync (no real-time "
                        "clock: a clock that is behind makes the server drop the handshake)")
             if _wg_routing_outdated() or _wg_pin_outdated():
@@ -8844,9 +8937,10 @@ def action_boot_order_apply() -> dict:
     if not rl["success"]:
         ok = False
         out.append("FAIL  systemctl daemon-reload: " + rl["output"])
-    if os.path.exists(WG0_CONF_PATH) and _sc_is_enabled(_BOOT_WG_UNIT) not in ("enabled", "enabled-runtime"):
-        r = _run_argv(["systemctl", "enable", _BOOT_WG_UNIT])
-        good = _sc_is_enabled(_BOOT_WG_UNIT) in ("enabled", "enabled-runtime")
+    wg_unit = _boot_wg_unit()
+    if os.path.exists(WG0_CONF_PATH) and _sc_is_enabled(wg_unit) not in ("enabled", "enabled-runtime"):
+        r = _run_argv(["systemctl", "enable", wg_unit])
+        good = _sc_is_enabled(wg_unit) in ("enabled", "enabled-runtime")
         ok = ok and good
         out.append(("ok    " if good else "FAIL  ") + "tunnel enabled at boot" + ("" if good else ": " + r["output"]))
     backend = _network_backend()
@@ -8894,7 +8988,7 @@ def action_boot_order_revert() -> dict:
         _run_argv(["sysctl", "-q", "-w", "net.ipv4.ip_nonlocal_bind=0"])
     for path in ([_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH, _BOOT_NONLOCAL_PATH,
                   _netcheck_nonfatal_path()]
-                 + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS + _BOOT_ASL_UNITS]):
+                 + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _BOOT_FALLBACK_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS + _BOOT_ASL_UNITS]):
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -20132,11 +20226,16 @@ function renderPiInstall(kind, data) {
     var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
     html += '<div class="' + consoleCls + '" id="pi-out-' + kind + '-' + meta.id + '">' + consoleTxt + '</div>';
     if (meta.id === 'paste_config') {
-      var subCards = _piDnsCardHtml(kind, data.dns || {}) + (kind === 'split' ? _piAllowedIpsCardHtml(kind, data.allowed_ips || {}) : '') +
-        (kind === 'full' ? _piReflectorPortsCardHtml(kind, data.reflector_egress || {}) : '');
+      var subCards = _piDnsCardHtml(kind, data.dns || {}) + (kind === 'split' ? _piAllowedIpsCardHtml(kind, data.allowed_ips || {}) : '');
       html += locked ? '<fieldset disabled style="border:0;padding:0;margin:0;min-width:0">' + subCards + '</fieldset>' : subCards;
     }
-    if (meta.id === 'enable_tunnel') { html += _piBootCardHtml(kind, data.boot_order || {}) + _piNetcheckCardHtml(kind); }
+    if (meta.id === 'enable_tunnel') {
+      html += _piBootCardHtml(kind, data.boot_order || {}) + _piNetcheckCardHtml(kind);
+      if (kind === 'full') {
+        var reflCard = _piReflectorPortsCardHtml(kind, data.reflector_egress || {});
+        html += locked ? '<fieldset disabled style="border:0;padding:0;margin:0;min-width:0">' + reflCard + '</fieldset>' : reflCard;
+      }
+    }
     html += '</div>';
   });
   var _rpBox = document.getElementById('pi-replace-' + kind), _rpTa = document.getElementById('pi-wg-paste-' + kind);
@@ -20334,8 +20433,8 @@ function _piReflectorPortsCardHtml(kind, refl) {
   else if (total > 0 && applied === total) { pill = 'All applied'; pillCls = 'done'; }
   else { pill = applied + '/' + total + ' applied'; pillCls = 'attempted_unconfirmed'; }
   var html = '<div class="step-card" id="pi-refl-card-' + kind + '">';
-  html += '<div class="step-head"><div class="step-title"><span class="step-num">4b.</span>Outbound reflector ports (egress)</div>';
-  html += '<span class="step-pill ' + pillCls + '">' + pill + '</span></div>';
+  html += '<details' + (window._piReflOpen ? ' open' : '') + ' ontoggle="window._piReflOpen=this.open"><summary style="cursor:pointer;font-family:var(--sans);color:var(--amber)">Troubleshooting: outbound reflector ports (egress) <span class="step-pill ' + pillCls + '">' + pill + '</span></summary>';
+  html += '<div class="step-body" style="margin-top:.4rem">Only needed if this Pi filters outbound traffic. A default firewalld does not, and then these rules change nothing.</div>';
   html += '<div class="step-body">Under a full tunnel (AllowedIPs 0.0.0.0/0) every outbound connection -- including your digital-voice reflector links -- rides wg0. These build firewalld egress ALLOW rules on the OUTPUT chain scoped to -o wg0 (not inbound zone openings). They matter only if outbound is being filtered; on a default firewalld they are harmless no-ops. Pick the networks you actually bridge.</div>';
   if (refl && refl.available === false) {
     html += renderStepWarn('firewall-cmd is not available or not readable here, so current egress-rule state cannot be shown. The buttons still post; run 44helper as root on the Pi.');
@@ -20368,7 +20467,7 @@ function _piReflectorPortsCardHtml(kind, refl) {
   var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-refl-out-' + kind + '">' + consoleTxt + '</div>';
-  html += '</div>';
+  html += '</details></div>';
   return html;
 }
 
@@ -20715,7 +20814,13 @@ var PI_PURGE_STEP_META = [
    cmd: 'rm -f /etc/wireguard/wg0.conf'},
   {id: 'purge_delete_zone', title: 'Delete the 44NetConnect firewall zone',
    cmd: 'firewall-cmd --permanent --delete-zone=44NetConnect && firewall-cmd --reload  ' +
-        '(this also drops the wg0 interface attachment and any services/ports added to this zone \u2014 no separate step needed for those)'}
+        '(this also drops the wg0 interface attachment and any services/ports added to this zone \u2014 no separate step needed for those)'},
+  {id: 'purge_reflector_egress', title: 'Remove the outbound reflector rules',
+   cmd: 'firewall-cmd --permanent --direct --remove-rule ipv4 filter OUTPUT 0 -o wg0 -p udp --dport <port> -j ACCEPT  ' +
+        '(each rule the Outbound reflector ports card added; nothing happens if there are none)'},
+  {id: 'purge_boot_order', title: 'Remove the boot order',
+   cmd: 'rm the 44helper-netready unit and script, the clock wait, the network-change hook and the 44helper-boot.conf drop-ins; systemctl daemon-reload  ' +
+        '(same as Remove on the Boot order card; also turns net.ipv4.ip_nonlocal_bind back off if 44helper set it)'}
 ];
 
 function piPurgeCardHtml(meta, kind) {
@@ -20735,7 +20840,7 @@ function piPurgeCardHtml(meta, kind) {
 
 function renderPiPurgeStepList(kind) {
   var html = renderStepWarn('Each step below runs independently \u2014 click Run on the ones you want. ' +
-    'Together they stop/disable the tunnel, delete wg0.conf, and delete the 44NetConnect firewall zone. Run them in order: ' +
+    'Together they stop/disable the tunnel, delete wg0.conf, delete the 44NetConnect firewall zone, and remove the outbound reflector rules and the boot order. Run them in order: ' +
     'wg0.conf can only be removed once the tunnel is stopped. wg0.conf is copied to the instmon library first, so ' +
     'step 4\\'s Load from instmon library can bring it back; the zone is not restored automatically. ' +
     'firewalld/systemd-resolved themselves are deliberately left installed (they\\'re generic system packages).');
@@ -20779,7 +20884,7 @@ function piTogglePurge(kind) {
     return;
   }
   if (!confirm('This will let you undo the tunnel steps: stop/disable the WireGuard tunnel, delete ' +
-    'wg0.conf, and delete the 44NetConnect firewall zone. Continue?')) return;
+    'wg0.conf, delete the 44NetConnect firewall zone, and remove the outbound reflector rules and the boot order. Continue?')) return;
   if (!confirm('Are you sure? These steps are destructive; only wg0.conf can be loaded back (from the instmon library). Confirm again ' +
     'to show them.')) return;
   document.getElementById('pi-purge-steps-' + kind).innerHTML = renderPiPurgeStepList(kind);
@@ -20853,8 +20958,9 @@ function renderPiConvertStepList(kind, targetKind) {
     'of them.');
 
   html += '<div class="step-card"><div class="step-head"><div class="step-title"><span class="step-num">1.</span>' +
-    'Paste the new ' + targetLabel + ' config</div></div>';
-  html += '<textarea class="wg-paste" id="pi-convert-wg-paste-' + kind + '" placeholder="Paste the ' + targetLabel + ' WireGuard config block here..."></textarea>';
+    'The ' + targetLabel + ' config</div></div>';
+  html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);margin:.3rem 0"><input type="checkbox" id="pi-convert-current-' + kind + '"' + (local.useCurrent ? ' checked' : '') + (local.written ? ' disabled' : '') + ' onchange="piConvertUseCurrent(\\'' + kind + '\\',\\'' + targetKind + '\\',this.checked)"> Use the current config: same key and tunnel server, only AllowedIPs changes to <code>' + (targetKind === 'full' ? '0.0.0.0/0' : '44.0.0.0/9, 44.128.0.0/10') + '</code></label>';
+  html += '<textarea class="wg-paste" id="pi-convert-wg-paste-' + kind + '" placeholder="Paste the ' + targetLabel + ' WireGuard config block here..."' + (local.useCurrent ? ' style="display:none"' : '') + '></textarea>';
   html += '</div>';
   html += '<div id="pi-convert-preview-' + kind + '"></div>';
 
@@ -20905,7 +21011,16 @@ function renderPiConvertStepList(kind, targetKind) {
 
 function piConvertRerender(kind, targetKind) {
   var el = document.getElementById('pi-convert-steps-' + kind);
+  var ta = document.getElementById('pi-convert-wg-paste-' + kind);
+  var pasted = ta ? ta.value : '';
   if (el) el.innerHTML = renderPiConvertStepList(kind, targetKind);
+  var ta2 = document.getElementById('pi-convert-wg-paste-' + kind);
+  if (ta2 && pasted) { ta2.value = pasted; }
+}
+
+function piConvertUseCurrent(kind, targetKind, on) {
+  piConvertLocal(kind).useCurrent = !!on;
+  piConvertRerender(kind, targetKind);
 }
 
 function piToggleConvert(kind, targetKind) {
@@ -20939,9 +21054,21 @@ function piConvertStop(kind, targetKind) {
 
 function piConvertWrite(kind, targetKind) {
   var local = piConvertLocal(kind);
+  if (local.useCurrent) {
+    _piConvertPost('convert_current',
+      'Change AllowedIPs in /etc/wireguard/wg0.conf to the ' + (targetKind === 'full' ? 'Full Tunnel' : 'Split Tunnel') +
+      ' range? The key and the tunnel server stay the same; the old file is saved as wg0.conf.pre-replace.',
+      {target_kind: targetKind}, 'pi-convert-out-write-' + kind, function(result) {
+      if (result.success !== false) { local.written = true; }
+      piConvertRerender(kind, targetKind);
+      refreshPiInstall('full');
+      refreshPiInstall('split');
+    });
+    return;
+  }
   var ta = document.getElementById('pi-convert-wg-paste-' + kind);
   var text = ta ? ta.value : '';
-  if (!text.trim()) { alert('Paste the new config first (step 1).'); return; }
+  if (!text.trim()) { alert('Paste the new config first (step 1), or tick Use the current config.'); return; }
   piPastePreview(text, targetKind, 'pi-convert-preview-' + kind, function(opts) {
     _piConvertPost('paste_config',
       'Write this to /etc/wireguard/wg0.conf (mode 600), replacing the current config? The private key is ' +
@@ -28289,6 +28416,9 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "dv_boot_ready": lambda p: action_dv_boot_ready(),
     "dv_boot_undo": lambda p: action_dv_boot_undo(),
     "load_wg_from_library": lambda p: action_load_wg_from_library(),
+    "convert_current": lambda p: action_convert_current(p.get("target_kind", "")),
+    "purge_reflector_egress": lambda p: action_wg_remove_reflector_egress(None),
+    "purge_boot_order": lambda p: action_boot_order_revert(),
     "set_dns": lambda p: action_wg_set_dns(p.get("dns_mode", ""), p.get("dns_servers", "")),
     "set_mtu": lambda p: action_wg_set_mtu(p.get("mtu", "")),
     "repair_allowed_ips": lambda p: action_wg_repair_allowed_ips(),
@@ -28313,7 +28443,8 @@ _PI_INSTALL_SERVICE_PORTS_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "add_port": lambda p: action_add_port(p.get("port", ""), p.get("dvswitch_mobile", False)),
 }
 _PI_INSTALL_JOB_STEPS = {"firewalld_prereq", "resolved_prereq", "create_zone", "attach_interface", "enable_tunnel",
-                         "purge_disable_tunnel", "purge_remove_wg0_conf", "purge_delete_zone", "convert_prune"}
+                         "purge_disable_tunnel", "purge_remove_wg0_conf", "purge_delete_zone", "convert_prune",
+                         "purge_reflector_egress", "purge_boot_order"}
 
 def _dispatch_guarded(fn, payload: dict) -> dict:
     try:
