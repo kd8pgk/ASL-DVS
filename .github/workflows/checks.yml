@@ -56,6 +56,8 @@ jobs:
         run: python3 ci/test_nodecontrol_slowlink.py
       - name: Node Talker slow-link tests (gzip, revalidation, shared cookie, light page, polling)
         run: python3 ci/test_nodetalker_slowlink.py
+      - name: SysMon slow-link tests (keep-alive, revalidation, shared cookie, light page, polling)
+        run: python3 ci/test_sysmon_slowlink.py
       - name: instmon download tests (gzip, resume, header peek, slow-line rules)
         run: python3 ci/test_instmon_downloads.py
       - name: instmon page layout tests (tabs, docked log)
