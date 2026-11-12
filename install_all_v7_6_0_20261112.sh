@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.5.0  (2026-11-10)
+# install_all.sh  v7.6.0  (2026-11-12)
 
 set -euo pipefail
 
@@ -22,11 +22,16 @@ DOWNLOAD=true
 SUITE=false
 DOWNLOAD_ONLY=false
 STRICT_STABLE=false
+CORE=false
+AUTO_PICK=false
+GIT_DECLINED=false
+APT_UPDATED=false
 for _arg in "$@"; do
     case "${_arg}" in
         --non-interactive|--auto|-y) NONINTERACTIVE=true ;;
         --offline|--no-download) DOWNLOAD=false ;;
         --suite) SUITE=true ;;
+        --core) CORE=true ;;
         --with-termon) INSTALL_TERMON=1 ;;
         --download-only) DOWNLOAD_ONLY=true ;;
     esac
@@ -203,6 +208,11 @@ stage_and_select() {
         ok "Non-interactive: auto-selected newest ${label} — $(basename "${CHOSEN}")"
         return 0
     fi
+    if [[ "${AUTO_PICK}" == "true" ]]; then
+        CHOSEN="${SORTED[0]}"
+        ok "Full install: newest ${label} — $(basename "${CHOSEN}")"
+        return 0
+    fi
 
     hdr "${label} — version selection"
     echo
@@ -288,19 +298,105 @@ name_matches() {
     return 1
 }
 
+apt_install() {
+    if ! command -v apt-get &>/dev/null; then
+        return 1
+    fi
+    if [[ "${APT_UPDATED}" != "true" ]]; then
+        apt-get update -qq || return 1
+        APT_UPDATED=true
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+}
+
 ensure_git() {
+    local ans
     command -v git &>/dev/null && return 0
-    info "git is not installed — installing it to download from GitHub…"
+    if [[ "${GIT_DECLINED}" == "true" ]]; then
+        return 1
+    fi
     if ! command -v apt-get &>/dev/null; then
         warn "apt-get not found — install git by hand, or copy the files onto the Pi"
         return 1
     fi
-    if apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git; then
+    if [[ "${NONINTERACTIVE}" == "true" ]]; then
+        info "git is not installed — installing it to download from GitHub…"
+    else
+        read -r -p "  git is needed to download from GitHub and is not installed. Install it with apt? [Y/n]: " ans </dev/tty
+        case "${ans,,}" in
+            n|no)
+                GIT_DECLINED=true
+                info "git not installed — only the files on this Pi are used"
+                return 1
+                ;;
+        esac
+    fi
+    if apt_install git && command -v git &>/dev/null; then
         ok "git installed: $(git --version 2>&1)"
         return 0
     fi
     warn "Could not install git (no network?)"
     return 1
+}
+
+check_prereqs() {
+    local rows=() row cmd pkg why ans
+    local missing=() pkgs=()
+    if [[ "${DOWNLOAD}" == "true" ]]; then
+        rows+=("git|git|downloads from GitHub")
+    fi
+    if [[ "${DOWNLOAD_ONLY}" != "true" ]]; then
+        rows+=("ss|iproute2|the port checks")
+        rows+=("openssl|openssl|the HTTPS pages of Node Talker, Node Recorder and Terminal Monitor")
+    fi
+    for row in "${rows[@]}"; do
+        IFS='|' read -r cmd pkg why <<< "${row}"
+        if command -v "${cmd}" &>/dev/null; then
+            continue
+        fi
+        if [[ "${NONINTERACTIVE}" == "true" ]]; then
+            if [[ "${cmd}" != "git" ]]; then
+                warn "${cmd} is not installed (needed for ${why}) — install it with: apt install ${pkg}"
+            fi
+            continue
+        fi
+        missing+=("${cmd} — needed for ${why}")
+        pkgs+=("${pkg}")
+    done
+    if [[ ${#pkgs[@]} -eq 0 ]]; then
+        if [[ "${NONINTERACTIVE}" != "true" ]]; then
+            ok "Needed programs are installed"
+        fi
+        return 0
+    fi
+    echo
+    echo "  ${BLD}Not installed on this Pi:${RST}"
+    for row in "${missing[@]}"; do
+        echo "    ${row}"
+    done
+    echo
+    if ! command -v apt-get &>/dev/null; then
+        warn "apt-get not found — install by hand: ${pkgs[*]}"
+        return 0
+    fi
+    read -r -p "  Install ${pkgs[*]} with apt? [Y/n]: " ans </dev/tty
+    case "${ans,,}" in
+        n|no)
+            for pkg in "${pkgs[@]}"; do
+                if [[ "${pkg}" == "git" ]]; then
+                    GIT_DECLINED=true
+                fi
+            done
+            warn "Not installed: ${pkgs[*]} — carrying on without"
+            return 0
+            ;;
+    esac
+    if apt_install "${pkgs[@]}"; then
+        ok "Installed: ${pkgs[*]}"
+    else
+        warn "Could not install ${pkgs[*]} (no network?) — carrying on without"
+    fi
+    return 0
 }
 
 open_repo() {
@@ -790,7 +886,15 @@ fi
 ok "Running as root"
 
 if ! command -v python3 &>/dev/null; then
-    die "python3 not found.  Install with: apt install python3"
+    if [[ "${NONINTERACTIVE}" == "true" ]] || ! command -v apt-get &>/dev/null; then
+        die "python3 not found.  Install with: apt install python3"
+    fi
+    read -r -p "  python3 is needed and is not installed. Install it with apt? [Y/n]: " _py_ans </dev/tty
+    case "${_py_ans,,}" in
+        n|no) die "python3 not found.  Install with: apt install python3" ;;
+    esac
+    apt_install python3 || true
+    command -v python3 &>/dev/null || die "Could not install python3 (no network?)"
 fi
 ok "Python: $(python3 --version 2>&1)"
 
@@ -798,6 +902,8 @@ if ! command -v systemctl &>/dev/null; then
     die "systemctl not found — this installer requires systemd"
 fi
 ok "systemd available"
+
+check_prereqs
 
 if [[ "${DOWNLOAD_ONLY}" == "true" ]]; then
     hdr "Download only"
@@ -873,10 +979,16 @@ systemctl is-active --quiet nodelisten           2>/dev/null && _nodelisten_exis
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
 [[ -f "${HELPER_BIN}"   ]] && _helper_exists=true
 [[ -f "${NODELISTEN_BIN}" ]] && _nodelisten_exists=true
+_opt_exists=false
+for _k in "${OPT_KEYS[@]}"; do
+    if opt_is_installed "${_k}"; then
+        _opt_exists=true
+    fi
+done
 
 if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
       || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
-      || "${_nodelisten_exists}" == "true" ]]; then
+      || "${_nodelisten_exists}" == "true" || "${_opt_exists}" == "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
@@ -884,6 +996,11 @@ if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
     [[ "${_nodelisten_exists}" == "true" ]] && echo "  ${GRN}  ✔${RST}  Node Talker    (${NODELISTEN_BIN})"
+    for _k in "${OPT_KEYS[@]}"; do
+        if opt_is_installed "${_k}"; then
+            echo "  ${GRN}  ✔${RST}  ${OPT_LABEL[${_k}]}  (${OPT_BIN[${_k}]})"
+        fi
+    done
     echo
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
         MODE="update"
@@ -908,6 +1025,40 @@ if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
 else
     info "No existing installation found — proceeding with fresh install"
     MODE="install"
+    _suite_list="Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary"
+    if [[ "${CORE}" == "true" ]]; then
+        SUITE=false
+        info "--core: the Dashboard, SysMon, wifimon and 44helper; the optional tools only when asked for"
+    elif [[ "${SUITE}" == "true" ]]; then
+        info "--suite: installing the whole suite (${_suite_list})"
+    elif [[ "${NONINTERACTIVE}" == "true" ]]; then
+        SUITE=true
+        info "Fresh node: installing the whole suite (${_suite_list}); --core installs only the core tools"
+    else
+        echo
+        echo "  ${BLD}Nothing is installed on this node yet.${RST}"
+        echo "  The whole suite: ${_suite_list}."
+        if [[ "${DOWNLOAD}" == "true" ]]; then
+            echo "  Files that are not on this Pi are downloaded from GitHub (${GH_CHANNEL} channel)."
+        else
+            echo "  Offline: only the files on this Pi are used."
+        fi
+        echo "  Terminal Monitor is asked about on its own."
+        echo
+        echo "  ${BLD}[y]${RST}  Install the whole suite  ${CYN}(default)${RST}"
+        echo "  ${BLD}[c]${RST}  Choose tool by tool"
+        echo "  ${BLD}[n]${RST}  Quit"
+        echo
+        while true; do
+            read -r -p "  Install the whole suite? [Y/n/c]: " _fresh_ans </dev/tty
+            case "${_fresh_ans,,}" in
+                ""|y|yes) SUITE=true; AUTO_PICK=true; break ;;
+                c|choose) info "Choosing tool by tool"; break ;;
+                n|no|q|quit) echo; info "Aborted by user."; exit 0 ;;
+                *) warn "Enter 'y' for the whole suite, 'c' to choose, or 'n' to quit" ;;
+            esac
+        done
+    fi
 fi
 
 ok "Mode: ${MODE}"

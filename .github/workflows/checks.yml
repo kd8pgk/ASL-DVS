@@ -94,5 +94,5 @@ jobs:
         run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_authed.py
       - name: Install and uninstall tests (every pi02w and common tool)
         run: sudo env PATH="$PATH" ASL_TEST_INSTALL=1 python3 ci/test_install.py
-      - name: Installer and uninstaller tests (optional tools, suite, download only, stopped services)
+      - name: Installer and uninstaller tests (optional tools, suite, fresh install, bootstrap, download only, stopped services)
         run: sudo env PATH="$PATH" ASL_TEST_INSTALL=1 python3 ci/test_installers.py

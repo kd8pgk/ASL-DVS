@@ -48,6 +48,9 @@
   stable. A tool still on an old four-part number from before this rule
   (`9.3.71.18-pi02w`) moves to the next release (`9.3.72-pi02w`). A tool on
   two parts adds `.0` (`5.30` -> `5.31.0`). No letter suffix (such as `x`).
+- **`bootstrap.sh` keeps its file name.** The one-line install in the README
+  points at it, so it is never renamed. A change moves the version in its title
+  line and adds an entry to `changelogs/bootstrap.md`.
 - **Tools stay compatible across versions.** Each tool goes to stable on its
   own schedule, so a node can run any mix of stable and testing versions. A
   tool that uses something only a newer version of another tool provides
