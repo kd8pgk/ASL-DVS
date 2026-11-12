@@ -1,5 +1,16 @@
 # Node Talker changelog
 
+## 0.10.42 (2026-11-12)
+
+A Services card on the Setup tab. This is a release: the page and the server gained a feature.
+
+- **New Services card under Links, open when the Setup tab opens.** A registration row on top, then Asterisk, Analog Bridge, MMDVM Bridge, STFU and USRP2M17. Each has a light in SysMon's style (a glowing dot): green running, amber starting, restarting or needing a look, red stopped or failed, grey not installed. Under it is a line saying what is wrong ("Failed: exit code 1", "Restarting often: 4 restarts") or how long it has been running. The card title carries a summary ("all good", "2 need attention"); tap the title to fold the card.
+- **AllStarLink registration.** The main node's state from `rpt show registrations`: green registered, red not registered, amber not known (Asterisk down or not answering, or the request still being sent), grey for a private node (1000-1999 never registers) or when no node number is set. It reads the State column, so the host name `register.allstarlink.org` can no longer make a half-finished sign-in look registered.
+- **Restart button on each service that is installed.** It asks first. Asterisk keeps its own warning that links drop. If a recording is running, you get the same question as for the other restarts, naming the service. A service that is not installed shows no button. Only these five can be restarted (`POST /api/services/restart`); the same service cannot be restarted twice at once.
+- **Needs nothing else.** Node Talker asks systemd and Asterisk itself every 10 s while the Setup tab and the card are open, so it works with Node Controller and SysMon stopped. The card says "Source: Node Talker". A later Node Controller release can hand its own answer over (not in this version).
+- **STFU started by hand** (no service unit, but `/opt/STFU/STFU` is running) shows green without a button, as Node Controller counts it.
+- Tests: new `ci/test_nodetalker_services.py` (33 tests: the light for every service state, the registration parser on real column layouts, status and caching, the restart whitelist, units, failures, busy lock and recording question, and the page wiring).
+
 ## 0.10.41 (2026-11-12)
 
 - **Listen tab: the link status shows at once.** The line below the push-to-talk button (the connected node or talkgroup) is read as soon as the page has logged in, instead of after the first 1.5 s poll.
@@ -188,7 +199,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_41_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_42_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
