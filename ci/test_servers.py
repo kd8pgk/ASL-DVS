@@ -36,7 +36,7 @@ SERVERS = {
                 "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
                 "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",
                               "INSTMON_RECORDER_STATUS_URL": None}},
-    "wifimon": {"file": "wifimon_v5_51_0_20261111.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
+    "wifimon": {"file": "wifimon_v5_53_0_20261111.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
                 "health_expect": b'"version"', "error_keys": ("error",)},
     "44helper": {"file": "44helper_v0_1_22_20261112.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
