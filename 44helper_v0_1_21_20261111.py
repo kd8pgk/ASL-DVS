@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.20"
+APP_VERSION = "0.1.21"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1486,6 +1486,47 @@ def _ov_q(argv: list[str], timeout: int = 6) -> tuple[int, str]:
         return -1, ""
     return r.returncode, r.stdout or ""
 
+def _ov_clock_synced() -> bool | None:
+    rc, out = _ov_q(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+    if rc != 0 or out.strip() not in ("yes", "no"):
+        return None
+    return out.strip() == "yes"
+
+def _ov_wg_transfer() -> tuple[int, int] | None:
+    rc, out = _ov_q(["wg", "show", "wg0", "transfer"])
+    nums = [int(t) for ln in out.splitlines()[:1] for t in ln.split()[1:] if t.isdigit()] if rc == 0 else []
+    return (nums[0], nums[1]) if len(nums) == 2 else None
+
+def _ov_handshake_cause(text: str) -> str:
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    ep = _wg_conf_field(parsed["peers"][0], "Endpoint") if parsed["peers"] else ""
+    host = ep.rsplit(":", 1)[0].strip("[]") if ":" in ep else ep
+    port = ep.rsplit(":", 1)[1] if ":" in ep else ""
+    live_ip = _wg_live_endpoint()[0]
+    if not ep:
+        return "Likely cause: wg0.conf has no Endpoint under [Peer]. Paste the config from the portal again."
+    literal = bool(re.fullmatch(r"[0-9.]+", host))
+    if not literal and not live_ip and not _wg_resolve_endpoint(host):
+        return (f"Likely cause: the Endpoint name {host} doesn't resolve, so wg0 has no server address. Check that "
+                "names resolve on this Pi (Verify, step 6), then restart the tunnel.")
+    if live_ip and _wg_endpoint_loop_live(live_ip):
+        return (f"Likely cause: the tunnel server {live_ip} routes back into wg0 (a routing loop). Use the fix on the "
+                "tunnel-server line of this card.")
+    if _ov_clock_synced() is False:
+        return ("Likely cause: this Pi's clock isn't synchronised. It has no real-time clock, and the server ignores a "
+                "handshake stamped older than the last one it saw. Check timedatectl; the handshake follows once the "
+                "clock is right.")
+    tr = _ov_wg_transfer()
+    if tr and tr[1] > 0 and tr[0] == 0:
+        return (f"wg0 has sent {tr[1]} bytes and received nothing, so the server isn't answering. Check, in this "
+                "order: the tunnel is approved and active on the 44Net Connect portal; the PrivateKey in wg0.conf is "
+                "the one the portal made for this tunnel (paste the config again if unsure); and your router or "
+                f"provider doesn't block outgoing UDP{' to port ' + port if port else ''}.")
+    if tr and tr[1] == 0:
+        return ("wg0 hasn't sent anything yet. Restart the tunnel; if it stays at zero, check the Endpoint line in "
+                "wg0.conf.")
+    return "Check the key and the Endpoint against the portal, then restart the tunnel."
+
 def _ov_handshake_finding(text: str | None) -> dict | None:
     if text is None or not _wg0_interface_present():
         return None
@@ -1499,8 +1540,7 @@ def _ov_handshake_finding(text: str | None) -> dict | None:
         return {"id": "handshake", "fix": [] if keepalive else ["keepalive"],
                 "level": "danger" if keepalive else "warn",
                 "msg": ("wg0 is up but has never completed a handshake with the 44Net server, so the tunnel carries nothing "
-                        "(the 44Net Connect dashboard shows idle). Check the key and Endpoint, and that the tunnel server "
-                        "doesn't route into wg0 (ip -4 route get <endpoint>).")}
+                        "(the 44Net Connect dashboard shows idle). " + _ov_handshake_cause(text))}
     age = int(time.time() - max(stamps))
     if age <= _OV_HANDSHAKE_MAX:
         return {"id": "handshake", "fix": [], "level": "ok", "msg": "Tunnel handshake is recent (under 3 minutes)."}
@@ -1508,8 +1548,7 @@ def _ov_handshake_finding(text: str | None) -> dict | None:
     if keepalive:
         return {"id": "handshake", "fix": [], "level": "danger",
                 "msg": (f"Last tunnel handshake {nice} ago, although a keepalive is set: the tunnel isn't reaching the 44Net "
-                        "server (the dashboard shows idle). Check ip -4 route get <endpoint> doesn't say wg0, and the key "
-                        "and Endpoint.")}
+                        "server (the dashboard shows idle). " + _ov_handshake_cause(text))}
     return {"id": "handshake", "fix": ["keepalive"], "level": "warn",
             "msg": (f"Last tunnel handshake {nice} ago. With no PersistentKeepalive a quiet tunnel goes idle, and stations "
                     "on 44Net can't reach this node until it sends something. Add PersistentKeepalive = 25 under [Peer].")}
@@ -1756,6 +1795,7 @@ def _hl_done(res: dict) -> dict:
     _OV_HEALTH_CACHE["at"] = 0.0
     _OV_EP_CACHE["at"] = 0.0
     _RS_ANSWER_CACHE["at"] = 0.0
+    _WG_EP_CACHE.clear()
     return res
 
 def action_health_start_services() -> dict:
@@ -7462,9 +7502,25 @@ def _wg_routing_outdated() -> bool:
         return False
     return bool(_wg_apply_split_routing(text)[1])
 
+_WG_EP_CACHE: dict[str, tuple[str, float]] = {}
+_WG_EP_TTL = 30.0
+
+def _wg_resolve_endpoint(host: str) -> str:
+    hit = _WG_EP_CACHE.get(host)
+    if hit and time.time() - hit[1] < _WG_EP_TTL:
+        return hit[0]
+    try:
+        r = subprocess.run(["getent", "ahostsv4", host], capture_output=True, text=True, timeout=6)
+        first = (r.stdout or "").split()
+        ip = first[0] if r.returncode == 0 and first else ""
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        ip = ""
+    _WG_EP_CACHE[host] = (ip, time.time())
+    return ip
+
 def _wg_endpoint_info(text: str) -> dict:
     parsed = _parse_wg_conf_text(text or "", mask_private_key=True)
-    info = {"host": "", "ip": "", "literal": False, "needed": False, "pinned": False}
+    info = {"host": "", "ip": "", "literal": False, "needed": False, "pinned": False, "lookup_failed": False}
     info["pinned"] = any(ln.strip() == _WG_EPPIN_BEGIN for ln in (text or "").splitlines())
     if not parsed["peers"]:
         return info
@@ -7480,14 +7536,7 @@ def _wg_endpoint_info(text: str) -> dict:
             return info
         info["ip"], info["literal"] = host, True
     except ValueError:
-        try:
-            r = subprocess.run(["getent", "ahostsv4", host], capture_output=True, text=True, timeout=6)
-            first = (r.stdout or "").split()
-            info["ip"] = first[0] if r.returncode == 0 and first else ""
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            info["ip"] = ""
-    if not info["ip"]:
-        return info
+        pass
     nets = []
     for part in _wg_conf_field(peer, "AllowedIPs").split(","):
         try:
@@ -7500,9 +7549,19 @@ def _wg_endpoint_info(text: str) -> dict:
               if re.match(r"^\s*table\s*=", ln, re.I)]
     if any(n.prefixlen == 0 for n in nets) or any(t not in ("auto", "main") for t in tables):
         return info
+    if not info["literal"]:
+        info["ip"] = _wg_resolve_endpoint(host)
+        info["lookup_failed"] = not info["ip"]
+    if not info["ip"]:
+        return info
     ip = ipaddress.ip_address(info["ip"])
     info["needed"] = any(ip in n for n in nets)
     return info
+
+def _wg_live_endpoint() -> tuple[str, str]:
+    rc, eps = _ov_q(["wg", "show", "wg0", "endpoints"])
+    m = re.search(r"\s(\d+\.\d+\.\d+\.\d+):(\d+)", eps) if rc == 0 else None
+    return (m.group(1), m.group(2)) if m else ("", "")
 
 def _wg_endpoint_pin_lines(info: dict) -> list[str]:
     if info["literal"]:
@@ -7520,7 +7579,7 @@ def _wg_endpoint_pin_lines(info: dict) -> list[str]:
 
 def _wg_apply_endpoint_pin(text: str) -> tuple[str, str]:
     info = _wg_endpoint_info(text)
-    if info["pinned"] and info["host"] and not info["literal"] and not info["ip"]:
+    if info["pinned"] and info["lookup_failed"]:
         return text, ""
     current = _wg_extract_block(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END) if info["pinned"] else None
     if info["needed"]:
@@ -8455,6 +8514,7 @@ def _pi_after_start() -> list[str]:
             ip = _wg_endpoint_info(f.read())["ip"]
     except OSError:
         ip = ""
+    ip = ip or _wg_live_endpoint()[0]
     if ip and _wg_endpoint_loop_live(ip):
         r = _wg_pin_live(ip)
         out.append(("ok    " if r["success"] else "FAIL  ") + f"tunnel server {ip} was routed into wg0; "
@@ -8960,7 +9020,7 @@ def check_myip() -> dict:
             ip = str(data.get("ip", "")).strip()
     except ValueError:
         pass
-    is_44 = ip.startswith("44.")
+    is_44 = _half_in_44net(ip)
     return {"success": is_44, "ip": ip, "output": f"connect.44net.cloud/myip reports: {ip}"}
 
 _ASL_REG_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
@@ -9230,8 +9290,9 @@ def scan_netcheck() -> dict:
             verdict.append({"level": "info", "message":
                 f"netcheck probes '{script['target']}'"
                 + (f" (timeout {script['timeout']}s)" if script["timeout"] else "")
-                + ". Under a full tunnel a local/gateway target can become unreachable once wg0 "
-                  "takes the default route -- may need repointing at a target reachable through the tunnel."})
+                + ". Under a full tunnel an internet target is only reachable once the tunnel has a handshake, "
+                  "so this probe can fail at boot; a LAN target such as your router stays reachable. The boot "
+                  "order (6b) makes netcheck wait for the tunnel."})
         elif script["readable"]:
             verdict.append({"level": "info", "message":
                 "Could not identify netcheck's probe target automatically -- check the script by hand "
@@ -20207,7 +20268,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
   } else if (aip.endpoint_loop_live || aip.endpoint_pin_missing) {
     html += '<div class="ov-banner lvl-danger">The tunnel server <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code> is a 44Net address inside AllowedIPs' +
             (aip.endpoint_loop_live ? ', and it routes back into wg0 right now: the tunnel can\u2019t reach it, so it never handshakes (the 44Net Connect dashboard shows idle).' : '. The next tunnel start will route it back into wg0.') + '</div>';
-    html += '<div class="step-body">The fix keeps the tunnel server on your normal route: two lines between endpoint-pin markers in wg0.conf, and the route added now.</div>';
+    html += '<div class="step-body">The fix keeps the tunnel server on your normal route. On a plain split tunnel it writes the policy routing lines (Table 4445, FwMark 0x4445 and a routing rule), used from the next tunnel restart; with your own Table or FwMark line it writes two lines between endpoint-pin markers instead. Either way the route is added now.</div>';
     html += '<div class="step-actions"><button class="btn-run" onclick="piRepairAllowedIps(\\'pin\\')">Fix the tunnel-server route</button></div>';
   } else if (shape === 'split') {
     html += '<div class="step-body">AllowedIPs is already the split-tunnel set (<code>' + asl3EscapeAttr(current) + '</code>). Nothing to repair.</div>';
@@ -20247,7 +20308,7 @@ function piSplitRouting() {
 function piRepairAllowedIps(what) {
   var kind = 'split';
   if (what === 'pin') {
-    if (!confirm('Keep the tunnel server on the normal route? This adds two lines to wg0.conf (the library backup is updated too) and adds the route now.')) return;
+    if (!confirm('Keep the tunnel server on the normal route? wg0.conf gets the split-tunnel routing lines (or the tunnel-server route lines, when it has its own Table or FwMark); the library backup is updated too, and the route is added now.')) return;
   } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that line changes, plus the usual SaveConfig and endpoint-pin tidy-up; the library backup is updated after the write. A running tunnel is stopped first and started again afterwards, so do this from the LAN.')) return;
   var out = document.getElementById('pi-aip-out-' + kind);
   if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
@@ -20397,7 +20458,7 @@ function piBootOrder(what, kind) {
 function _piNetcheckCardHtml(kind) {
   var intro;
   if (kind === 'full') {
-    intro = 'On a full tunnel this is the usual culprit when Analog_Bridge / MMDVM_Bridge / STFU will not start: netcheck.service fails at boot (its probe or readiness signaling breaks once wg0 takes the default route) and drags the bridges down with it. Scan reads the units and script read-only and reports what it finds -- no changes are made here.';
+    intro = 'On a full tunnel this is the usual culprit when Analog_Bridge / MMDVM_Bridge / STFU will not start: netcheck.service runs at boot before the tunnel has a handshake, so its probe of an internet address fails (the LAN and your router stay reachable; everything else waits for the tunnel), or its readiness signaling fails, and it drags the bridges down with it. Scan reads the units and script read-only and reports what it finds -- no changes are made here.';
   } else {
     intro = 'A split tunnel usually does NOT hit this -- only 44Net addresses are routed into wg0, so netcheck\\'s probe keeps the normal route and keeps working. Only run this if the DVSwitch bridges have actually failed to start. Scan is read-only and changes nothing.';
   }
@@ -21008,8 +21069,8 @@ function piVerify(kind) {
   fetch('/api/pi_install/verify').then(function(r){ return r.json(); }).then(function(result){
     var out2 = document.getElementById('pi-verify-out-' + kind);
     if (out2) {
-      var lines = (result.tunnel || []).map(function(c) { return (c.ok ? 'ok    ' : 'FAIL  ') + c.text; });
-      lines.push('public address (connect.44net.cloud/myip): ' + (result.myip.output || '?'));
+      var lines = (result.tunnel || []).map(function(c) { return (c.info ? 'note  ' : (c.ok ? 'ok    ' : 'FAIL  ')) + c.text; });
+      if (!(result.myip && result.myip.in_list)) { lines.push('public address (connect.44net.cloud/myip): ' + ((result.myip || {}).output || '?')); }
       out2.style.whiteSpace = 'pre-wrap';
       out2.textContent = lines.join('\\n');
     }
@@ -26262,7 +26323,7 @@ var _HL_FIX = {
   dns_off: ['Set DNS to Off', 'Take the DNS setting out of wg0.conf (44helper\u2019s DNS lines and any DNS = line)? The Pi keeps its own resolver. Restart the tunnel afterwards.'],
   boot_order: ['Set the boot order', 'Make the tunnel start at boot and retry if it fails, and make netcheck, the bridges and the gateways wait (up to 3 minutes) for the network, the tunnel and DNS? Takes effect at the next boot; nothing running is restarted. Remove is on the boot-order card under step 6.'],
   dns_predown: ['Move to PreDown', 'Change the DNS revert line in wg0.conf from PostDown to PreDown? Nothing else changes and the tunnel is not restarted.'],
-  endpoint_pin: ['Fix the tunnel-server route', 'Keep the tunnel server on the normal route? This adds two lines to wg0.conf and adds the route now.']
+  endpoint_pin: ['Fix the tunnel-server route', 'Keep the tunnel server on the normal route? wg0.conf gets the split-tunnel routing lines (or the tunnel-server route lines, when it has its own Table or FwMark), and the route is added now.']
 };
 function hlEsc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -27975,6 +28036,48 @@ def _route_nodes_edit_snippet(query: dict) -> tuple[int, str, bytes]:
     scope = query.get("scope", [""])[0]
     return 200, "application/json", json.dumps(build_node_snippet(_cfg, scope)).encode("utf-8")
 
+def _pi_tunnel_mode() -> str:
+    if _half_mode() != "off":
+        return "half"
+    return "full" if _wg_route_kind(_hl_read_conf()) == "full" else "split"
+
+def _pi_ping_df(ip: str, size: int, mark: str) -> bool:
+    argv = ["ping", "-4", "-n", "-c", "1", "-W", "2", "-M", "do", "-s", str(size)] + (["-m", str(int(mark, 0))] if mark else []) + [ip]
+    return _ov_q(argv, timeout=5)[0] == 0
+
+def _pi_verify_mtu(ep_ip: str) -> dict:
+    try:
+        with open("/sys/class/net/wg0/mtu") as fh:
+            mtu = int(fh.read().strip())
+    except (OSError, ValueError):
+        return {"ok": True, "info": True, "text": "MTU not tested: couldn't read wg0's MTU"}
+    mark = _wg_fwmark()
+    if not _pi_ping_df(ep_ip, 56, mark):
+        return {"ok": True, "info": True, "text": f"MTU not tested: the tunnel server doesn't answer ping (wg0 MTU {mtu})"}
+    if _pi_ping_df(ep_ip, mtu + 60 - 28, mark):
+        return {"ok": True, "text": f"MTU {mtu} fits: a full-size tunnel packet ({mtu + 60} bytes) reaches the tunnel server in one piece"}
+    for cand in (1400, 1380, 1360, 1340, 1320, 1300, 1280):
+        if cand < mtu and _pi_ping_df(ep_ip, cand + 60 - 28, mark):
+            return {"ok": False, "text": f"MTU {mtu} is too big for your internet link: full-size tunnel packets "
+                                         f"({mtu + 60} bytes) don't get through, which stalls downloads while ping works. "
+                                         f"Set MTU to {cand} on the DNS & MTU card (4a) and restart the tunnel"}
+    return {"ok": False, "text": f"MTU {mtu} is too big for your internet link, and even 1280 doesn't fit. "
+                                 "Check the internet link itself"}
+
+def _pi_verify_myip(mode: str) -> dict:
+    res = check_myip()
+    ip = res.get("ip")
+    if not ip:
+        return {"ok": mode != "full", "info": mode != "full", "text": res.get("output", "myip check failed")}
+    if mode == "full":
+        return {"ok": bool(res["success"]), "text": f"public address is {ip}: " + (
+            "your 44Net address, so the internet goes out through the tunnel" if res["success"]
+            else "NOT a 44Net address, so this Pi's internet traffic is not using the tunnel")}
+    if res["success"]:
+        return {"ok": True, "info": True, "text": f"public address is {ip}, a 44Net address"}
+    return {"ok": True, "info": True, "text": f"public address is {ip}: your home address, as expected on a {mode} tunnel "
+                                              "(only 44Net traffic uses wg0)"}
+
 def _pi_verify_tunnel() -> list[dict]:
     out: list[dict] = []
     if not _wg0_interface_present():
@@ -27988,11 +28091,23 @@ def _pi_verify_tunnel() -> list[dict]:
     out.append({"ok": bool(m), "text": ("wg0 has " + m.group(1)) if m else "wg0 has no IPv4 address"})
     rc, r44 = _ov_q(["ip", "-4", "route", "get", "44.0.0.1"])
     out.append({"ok": " dev wg0" in r44, "text": "44Net (44.0.0.1) goes " + ("through wg0" if " dev wg0" in r44 else "NOT through wg0")})
-    rc, eps = _ov_q(["wg", "show", "wg0", "endpoints"])
-    me = re.search(r"\s(\d+\.\d+\.\d+\.\d+):\d+", eps)
-    if me:
-        loop = _wg_endpoint_loop_live(me.group(1))
-        out.append({"ok": not loop, "text": f"tunnel server {me.group(1)} " + ("routed into wg0: routing loop" if loop else "on the normal route")})
+    mode = _pi_tunnel_mode()
+    rc, rnet = _ov_q(["ip", "-4", "route", "get", "1.1.1.1"])
+    if rc == 0 and rnet.strip():
+        via_wg = " dev wg0" in rnet
+        if mode == "full":
+            out.append({"ok": via_wg, "text": "full tunnel: the internet (1.1.1.1) goes "
+                        + ("through wg0" if via_wg else "NOT through wg0; wg-quick's routing rules aren't loaded, restart the tunnel")})
+        else:
+            out.append({"ok": not via_wg, "text": f"{mode} tunnel: the internet (1.1.1.1) "
+                        + ("goes through wg0, but only 44Net should; check AllowedIPs (step 4b)" if via_wg
+                           else "keeps the normal route")})
+    ep_ip = _wg_live_endpoint()[0]
+    if ep_ip:
+        loop = _wg_endpoint_loop_live(ep_ip)
+        out.append({"ok": not loop, "text": f"tunnel server {ep_ip} " + ("routed into wg0: routing loop" if loop else "on the normal route")})
+        if not loop:
+            out.append(_pi_verify_mtu(ep_ip))
     try:
         r = subprocess.run(["getent", "ahostsv4", "deb.debian.org"], capture_output=True, text=True, timeout=6)
         out.append({"ok": r.returncode == 0, "text": "names resolve" if r.returncode == 0 else "names do NOT resolve"})
@@ -28005,7 +28120,13 @@ def _pi_verify_tunnel() -> list[dict]:
     return out
 
 def _route_pi_install_verify(query: dict) -> tuple[int, str, bytes]:
-    result = {"myip": check_myip(), "rpt": check_rpt_registrations(), "tunnel": _pi_verify_tunnel()}
+    tunnel = _pi_verify_tunnel()
+    wg_up = _wg0_interface_present()
+    myip = _pi_verify_myip(_pi_tunnel_mode()) if wg_up else None
+    if myip:
+        tunnel.append(myip)
+    result = {"myip": {"output": myip["text"] if myip else "not checked: wg0 is not up", "in_list": True},
+              "rpt": check_rpt_registrations(), "tunnel": tunnel, "mode": _pi_tunnel_mode() if wg_up else ""}
     return 200, "application/json", json.dumps(result).encode("utf-8")
 
 def _route_router_status(query: dict) -> tuple[int, str, bytes]:

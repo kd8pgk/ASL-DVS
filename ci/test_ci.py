@@ -5133,5 +5133,188 @@ class Helper44TunnelSwapTests(unittest.TestCase):
         self.assertFalse([c for c in calls if c.startswith("ip ")])
 
 
+class Helper44TunnelVerifyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.h = load_helper44()
+
+    def patch(self, **kw):
+        missing = object()
+        saved = {n: getattr(self.h, n, missing) for n in kw}
+        for n, v in kw.items():
+            setattr(self.h, n, v)
+
+        def undo():
+            for n, v in saved.items():
+                if v is missing:
+                    delattr(self.h, n)
+                else:
+                    setattr(self.h, n, v)
+
+        self.addCleanup(undo)
+
+    def test_myip_range(self):
+        h = self.h
+
+        class Resp:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self):
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        for ip, want in (("44.27.1.5", True), ("44.130.9.9", True), ("44.200.1.1", False), ("203.0.113.9", False)):
+            self.patch(urllib=type("U", (), {"request": type("R", (), {
+                "Request": staticmethod(lambda url, headers=None: url),
+                "urlopen": staticmethod(lambda req, timeout=8, ip=ip: Resp(ip.encode()))}), "error": h.urllib.error}))
+            self.assertEqual(h.check_myip()["success"], want, ip)
+
+    def test_myip_line_depends_on_the_tunnel_type(self):
+        h = self.h
+        self.patch(check_myip=lambda: {"success": False, "ip": "203.0.113.9", "output": ""})
+        full = h._pi_verify_myip("full")
+        self.assertFalse(full["ok"])
+        self.assertIn("NOT a 44Net address", full["text"])
+        split = h._pi_verify_myip("split")
+        self.assertTrue(split["ok"] and split["info"])
+        self.assertIn("as expected on a split tunnel", split["text"])
+        self.patch(check_myip=lambda: {"success": True, "ip": "44.27.1.5", "output": ""})
+        self.assertTrue(h._pi_verify_myip("full")["ok"])
+        self.patch(check_myip=lambda: {"success": False, "ip": None, "output": "myip check failed: x"})
+        self.assertFalse(h._pi_verify_myip("full")["ok"])
+        self.assertTrue(h._pi_verify_myip("split")["ok"])
+
+    def verify(self, mode, internet_dev):
+        h = self.h
+
+        def ov_q(argv, timeout=6):
+            if argv[:4] == ["wg", "show", "wg0", "latest-handshakes"]:
+                return 0, f"KEY\t{int(h.time.time()) - 20}\n"
+            if argv[:2] == ["ip", "-4"] and "addr" in argv:
+                return 0, "5: wg0    inet 44.27.1.5/32 scope global wg0\n"
+            if argv[:4] == ["ip", "-4", "route", "get"]:
+                return 0, f"{argv[4]} dev {'wg0' if argv[4].startswith('44.') else internet_dev} src 1.2.3.4\n"
+            if argv[:4] == ["wg", "show", "wg0", "endpoints"]:
+                return 0, "KEY\t198.51.100.7:51820\n"
+            return 1, ""
+
+        self.patch(_wg0_interface_present=lambda: True, _ov_q=ov_q, _pi_tunnel_mode=lambda: mode,
+                   _wg_endpoint_loop_live=lambda ip: False,
+                   _pi_verify_mtu=lambda ip: {"ok": True, "text": "MTU fits"},
+                   subprocess=type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"returncode": 0})()),
+                                             "TimeoutExpired": h.subprocess.TimeoutExpired}),
+                   shutil=type("W", (), {"which": staticmethod(lambda n: None)}))
+        return h._pi_verify_tunnel()
+
+    def test_verify_default_route_by_tunnel_type(self):
+        line = [c for c in self.verify("full", "wg0") if "1.1.1.1" in c["text"]][0]
+        self.assertTrue(line["ok"])
+        line = [c for c in self.verify("full", "eth0") if "1.1.1.1" in c["text"]][0]
+        self.assertFalse(line["ok"])
+        line = [c for c in self.verify("split", "eth0") if "1.1.1.1" in c["text"]][0]
+        self.assertTrue(line["ok"])
+        line = [c for c in self.verify("split", "wg0") if "1.1.1.1" in c["text"]][0]
+        self.assertFalse(line["ok"])
+        got = self.verify("half", "eth0")
+        self.assertTrue(any(c["text"] == "MTU fits" for c in got), got)
+
+    def mtu(self, passes, answers=True):
+        h = self.h
+        sizes = []
+
+        def ping(ip, size, mark):
+            sizes.append(size)
+            if size == 56:
+                return answers
+            return size <= passes
+
+        self.patch(_pi_ping_df=ping, _wg_fwmark=lambda: "0xca6c",
+                   open=lambda *a, **k: __import__("io").StringIO("1420\n"))
+        return h._pi_verify_mtu("198.51.100.7"), sizes
+
+    def test_mtu_check(self):
+        res, sizes = self.mtu(passes=1452)
+        self.assertTrue(res["ok"])
+        self.assertEqual(sizes, [56, 1452])
+        res, _ = self.mtu(passes=1412)
+        self.assertFalse(res["ok"])
+        self.assertIn("Set MTU to 1380", res["text"])
+        res, _ = self.mtu(passes=100)
+        self.assertFalse(res["ok"])
+        self.assertIn("even 1280", res["text"])
+        res, sizes = self.mtu(passes=9999, answers=False)
+        self.assertTrue(res["ok"] and res["info"])
+        self.assertEqual(sizes, [56])
+
+    def test_ping_uses_the_tunnel_mark(self):
+        seen = []
+        self.patch(_ov_q=lambda argv, timeout=6: (seen.append(argv), (0, ""))[1])
+        self.assertTrue(self.h._pi_ping_df("198.51.100.7", 1452, "0xca6c"))
+        self.assertEqual(seen[0][seen[0].index("-m") + 1], "51820")
+        self.assertIn("do", seen[0])
+        self.h._pi_ping_df("198.51.100.7", 56, "")
+        self.assertNotIn("-m", seen[1])
+
+    def cause(self, conf, live="198.51.100.7", resolves=True, loop=False, clock=True, transfer=(0, 148)):
+        self.patch(_wg_live_endpoint=lambda: (live, "51820" if live else ""),
+                   _wg_resolve_endpoint=lambda host: "198.51.100.7" if resolves else "",
+                   _wg_endpoint_loop_live=lambda ip: loop, _ov_clock_synced=lambda: clock,
+                   _ov_wg_transfer=lambda: transfer)
+        return self.h._ov_handshake_cause(conf)
+
+    def test_handshake_causes(self):
+        named = wg_conf("0.0.0.0/0", endpoint="connect.example.net:51820")
+        self.assertIn("doesn't resolve", self.cause(named, live="", resolves=False))
+        self.assertIn("routing loop", self.cause(wg_conf("0.0.0.0/0"), loop=True))
+        self.assertIn("clock isn't synchronised", self.cause(wg_conf("0.0.0.0/0"), clock=False))
+        msg = self.cause(wg_conf("0.0.0.0/0"))
+        self.assertIn("sent 148 bytes and received nothing", msg)
+        self.assertIn("UDP to port 51820", msg)
+        self.assertIn("hasn't sent anything", self.cause(wg_conf("0.0.0.0/0"), transfer=(0, 0)))
+        self.assertIn("Check the key", self.cause(wg_conf("0.0.0.0/0"), transfer=None, clock=None))
+        self.assertIn("no Endpoint", self.cause(wg_conf("0.0.0.0/0").replace("Endpoint", "#Endpoint")))
+
+    def test_endpoint_lookup_only_when_needed_and_cached(self):
+        h = self.h
+        runs = []
+
+        def run(argv, **kw):
+            runs.append(argv)
+            return type("R", (), {"returncode": 0, "stdout": "44.1.2.3 STREAM x\n"})()
+
+        self.patch(subprocess=type("S", (), {"run": staticmethod(run), "TimeoutExpired": h.subprocess.TimeoutExpired}))
+        h._WG_EP_CACHE.clear()
+        full = wg_conf("0.0.0.0/0", endpoint="gw.example.net:51820")
+        self.assertFalse(h._wg_endpoint_info(full)["needed"])
+        policy = h._wg_normalize(wg_conf("44.0.0.0/9, 44.128.0.0/10", endpoint="gw.example.net:51820"), "split", {})["text"]
+        self.assertEqual(runs, [])
+        self.assertFalse(h._wg_endpoint_info(policy)["needed"])
+        self.assertEqual(runs, [])
+        own = wg_conf("44.0.0.0/9, 44.128.0.0/10", endpoint="gw.example.net:51820", extra="FwMark = 0x1")
+        self.assertTrue(h._wg_endpoint_info(own)["needed"])
+        self.assertTrue(h._wg_endpoint_info(own)["needed"])
+        self.assertEqual(len(runs), 1)
+        h._WG_EP_CACHE.clear()
+
+    def test_pin_is_removed_from_a_full_tunnel_with_a_named_endpoint(self):
+        h = self.h
+        self.patch(_wg_resolve_endpoint=lambda host: "")
+        pinned = h._wg_insert_in_interface(wg_conf("0.0.0.0/0", endpoint="gw.example.net:51820"),
+                                           [h._WG_EPPIN_BEGIN, "PreUp = true", "PostDown = true", h._WG_EPPIN_END])
+        text, note = h._wg_apply_endpoint_pin(pinned)
+        self.assertNotIn(h._WG_EPPIN_BEGIN, text)
+        self.assertTrue(note)
+        own = h._wg_insert_in_interface(wg_conf("44.0.0.0/9, 44.128.0.0/10", endpoint="gw.example.net:51820",
+                                                extra="FwMark = 0x1"),
+                                        [h._WG_EPPIN_BEGIN, "PreUp = true", "PostDown = true", h._WG_EPPIN_END])
+        self.assertEqual(h._wg_apply_endpoint_pin(own), (own, ""))
+
+
 if __name__ == "__main__":
     unittest.main()

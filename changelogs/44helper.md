@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_20_20261111.py`. Newest entries first.
+Current file: `44helper_v0_1_21_20261111.py`. Newest entries first.
+
+## 0.1.21 (2026-11-11)
+
+Second of three tunnel releases: the Verify button and the Health card.
+
+- **Verify knows the tunnel type.** It reads the type from wg0.conf (full, split or half), not from the tab. On a full tunnel the internet (1.1.1.1) must go through wg0 and the public address must be a 44Net address; on a split or half tunnel the internet must keep the normal route, and a home address is reported as expected. Every line now starts with ok, FAIL or note, the public-address line included.
+- **New MTU check in Verify.** It pings the tunnel server on the normal route (using the tunnel's own packet mark) with a full-size, don't-fragment packet. If that doesn't fit, it tries smaller sizes and names the MTU to set on the DNS & MTU card. This catches "ping works, downloads stall". If the server doesn't answer ping, the line says the MTU was not tested.
+- **The public-address test uses the real 44Net ranges** (`44.0.0.0/9`, `44.128.0.0/10`). Before, anything starting with `44.` passed, which includes the part of 44/8 that is no longer 44Net.
+- **"No handshake" names the likely cause.** In order: no Endpoint line; the Endpoint name doesn't resolve; the tunnel server routes back into wg0; the clock isn't synchronised; packets sent but nothing received (tunnel not approved, wrong key, or outgoing UDP blocked, with the port); nothing sent yet.
+- **Status is quicker when DNS is down.** The tunnel server's name is only looked up when the answer matters (not on a full tunnel or with the split routing block), and the result is kept for 30 s. Re-check and every Health fix clear it. An old tunnel-server route line is still removed from a config that no longer needs it.
+- **Wording.** The netcheck card and scan say what really happens on a full tunnel: an internet probe fails until the tunnel has a handshake, while the LAN and the router stay reachable. "Fix the tunnel-server route" says what it writes (the split routing lines, or the route lines when the config has its own Table or FwMark).
+- **Tested here:** 8 new unit tests in `ci/test_ci.py` (Verify by tunnel type, the MTU steps, the ping mark, each handshake cause, the lookup cache, the public-address ranges) with the system calls mocked. **Not yet tested on a node:** the MTU ping against a real tunnel server, and `ping -m` on the node's ping.
+- This is a release, not a cosmetic build.
 
 ## 0.1.20 (2026-11-11)
 
