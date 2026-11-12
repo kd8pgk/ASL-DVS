@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = tempfile.mkdtemp(prefix="instmon_page_")
@@ -88,6 +89,34 @@ class Page(unittest.TestCase):
                   "newer", "c.version"):
             self.assertIn(n, js, n)
         self.assertIn("homeTools();", self.html[self.html.index("function renderQuietFullUpdate"):self.html.index("const stopBtn")])
+
+    def test_quick_links_second_row_is_the_github_repo(self):
+        home = self.panels["home"]
+        card = home[home.index("Quick Links"):home.index("GitHub Updates")]
+        rows = re.findall(r'<div class="row"[^>]*>(.*?)</div>', card, re.S)
+        self.assertEqual(len(rows), 2)
+        for label in ("Allmon3", "DVSwitch", "Cockpit", "USRP2M17"):
+            self.assertIn(label, rows[0])
+            self.assertNotIn(label, rows[1])
+        self.assertEqual(re.findall(r"<a [^>]*>(.*?)</a>", rows[1]), ["GitHub"])
+        link = re.search(r"<a [^>]*>", rows[1]).group(0)
+        self.assertIn(f'href="https://github.com/{im.GITHUB_REPO}"', link)
+        self.assertIn('target="_blank"', link)
+        self.assertIn("noopener", link)
+        self.assertIn("noreferrer", link)
+        self.assertEqual(self.html.count("https://github.com/" + im.GITHUB_REPO + '"'), 1)
+
+    def test_github_link_follows_the_repo_setting_and_refuses_odd_values(self):
+        with unittest.mock.patch.object(im, "GITHUB_REPO", "someone/Node-Controller"):
+            self.assertIn('href="https://github.com/someone/Node-Controller"', im.render_quicklinks_ext_html())
+        for bad in ('x"><script>', "a/b/c", "", "a b/c"):
+            with unittest.mock.patch.object(im, "GITHUB_REPO", bad):
+                out = im.render_quicklinks_ext_html()
+                self.assertIn('href="https://github.com/kd8pgk/ASL-DVS"', out)
+                self.assertNotIn("<script>", out)
+
+    def test_github_link_looks_like_the_other_quick_links(self):
+        self.assertIn("button.b-go,a.btn.b-go{", self.html)
 
     def test_uninstall_asks_and_start_stop_do_not(self):
         self.assertIn("if (!confirm(`Uninstall ${btn.dataset.name}?", self.html)

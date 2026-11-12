@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.104.0"
+VERSION ="2.105.0"
 DATE_STR ="2026-11-11"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -9224,6 +9224,11 @@ def render_quicklinks_html ():
         )
     return "".join (btns )
 
+def render_quicklinks_ext_html ():
+    repo =GITHUB_REPO if _GH_REPO_RE .match (GITHUB_REPO )else "kd8pgk/ASL-DVS"
+    return (f'<a class="btn b-go" href="https://github.com/{esc (repo )}" target="_blank" '
+    f'rel="noopener noreferrer" title="{esc (repo )} on GitHub">GitHub</a>')
+
 def render_library_html (library ):
     return "".join (
     render_library_group_html (title ,category ,library [category ],action_label )
@@ -9314,7 +9319,7 @@ button.b-danger{color:var(--red);border-color:var(--red2);background:rgba(255,61
   text-shadow:0 0 8px rgba(255,61,90,.5)}
 button.b-comms{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,208,64,.08);
   text-shadow:0 0 8px rgba(255,208,64,.4)}
-button.b-go{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,61,90,.15);
+button.b-go,a.btn.b-go{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,61,90,.15);
   text-shadow:0 0 8px rgba(255,208,64,.4)}
 button.b-self-locked{text-decoration:line-through}
 button.rec-locked{opacity:.45;cursor:not-allowed}
@@ -12728,6 +12733,7 @@ _FONT_FACE_RE = re.compile(r"@font-face\{[^}]*\}\n?")
 def render_page (lite =False ):
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
+    quicklinks_ext_html =render_quicklinks_ext_html ()
     components_html =render_components_section (status )
     library_html =render_library_html (status ["library"])
     log_html ="-- System ready --\n"+f"instmon v{VERSION } ({DATE_STR }) backend online, {len (status ['components'])} component(s) tracked."
@@ -12740,6 +12746,7 @@ def render_page (lite =False ):
     theme_row =_THEME_ROW ,
     script =_JS ,
     quicklinks_html =quicklinks_html ,
+    quicklinks_ext_html =quicklinks_ext_html ,
     components_html =components_html ,
     library_html =library_html ,
     github_html =_gh_summary_html (),
@@ -12823,6 +12830,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="hdr">Quick Links</div>
 <div class="card">
   <div class="row" style="justify-content:center">{quicklinks_html}
+  </div>
+  <div class="row" style="justify-content:center;margin-top:.5rem">{quicklinks_ext_html}
   </div>
 </div>
 
