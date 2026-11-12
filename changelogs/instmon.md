@@ -1,5 +1,17 @@
 # instmon changelog
 
+## 2.104.0 (2026-11-12)
+
+The Home tab has one components chart instead of two. This is a release: page JavaScript changed.
+
+- **New Components card below GitHub Updates.** Every tool is one entry of two lines. Top line: the component name, the installed version, and the status on the right (CURRENT, UPDATE -> the newer version, SWITCH -> the other build's version, NOT INSTALLED, NOT ON GITHUB, ERROR, or NOT CHECKED before the first GitHub check). Second line: the file name on the left and whether it is running on the right. Hover the status for the plan's longer note.
+- **The other two charts are gone.** The tools list in the Tools card and the Full Update plan table in the GitHub Updates card. The summary, updates and disk lines stay in the Tools card.
+- New scripts and manuals in the plan are entries of the same chart (NEW or CHANGED, with the file name).
+- A tool's entry still jumps to its card on the Tools tab; a tool that is not installed jumps to Available, not installed.
+- The file name comes from the Full Update plan, so it is filled in after Check GitHub; before that it shows a dash.
+- The Full Update button still reads the plan, not the chart. Nothing changed on the server.
+- Tests: `ci/test_instmon_page.py` checks the one chart, its place and its two-line entries.
+
 ## 2.103.0 (2026-11-11)
 
 Last of four steps that reorganize the page: a daily version check you can turn on, and two security and policy items. This is a release: Python and page behaviour changed.
@@ -146,7 +158,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_103_0_20261111.py`. Newest entries first.
+Current file: `instmon_v2_104_0_20261112.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
