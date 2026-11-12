@@ -24,7 +24,8 @@ By KD8PGK, written with Claude (Anthropic).
 
 Scripts:
 
-- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker, Node Recorder, Pibrary and Terminal Monitor when you ask for them (`INSTALL_NODETALKER=1`, `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, `INSTALL_TERMON=1` or `--with-termon`; `--suite` asks for all of them except Terminal Monitor, which is a root shell and always needs its own yes). It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi. `--download-only` fetches the files of tools that are not installed into the library and installs nothing. A service you stopped yourself (Stop in instmon, or disabled) is updated but left stopped.
+- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker, Node Recorder, Pibrary and Terminal Monitor when you ask for them (`INSTALL_NODETALKER=1`, `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, `INSTALL_TERMON=1` or `--with-termon`; `--suite` asks for all of them except Terminal Monitor, which is a root shell and always needs its own yes). On a node with none of these tools installed (7.6.0 and later) the whole suite is the default: one question, Enter for yes, and `--core` keeps it to the Dashboard, SysMon, wifimon and 44helper. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi. `--download-only` fetches the files of tools that are not installed into the library and installs nothing. A service you stopped yourself (Stop in instmon, or disabled) is updated but left stopped.
+- `bootstrap.sh`: the one-line install. It downloads the installer (the stable one, or the newest when the stable one is older than 7.6.0 or `ASL_DVS_CHANNEL=testing` is set), checks it and runs it. Its file name never changes, so the line below always works.
 - `uninstall_all_v*.sh`: removes the Dashboard, SysMon, wifimon, 44helper, Node Talker and Terminal Monitor (and the Config getter and putter links), and leaves instmon and configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
@@ -88,6 +89,16 @@ Node Talker manual (PDF, 45 pages): the RX and TX chain end to end with the priv
 
 To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (needs Playwright with Chromium; set `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` if they aren't found by default).
 
+**One line, on a new Pi:**
+
+```
+curl -fsSL https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh | sudo bash
+```
+
+This downloads the installer and runs it. On a node with nothing installed, the installer offers the whole suite (Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary, plus instmon), downloads it and installs it; Terminal Monitor is asked about on its own. Options go after `bash -s --`, for example `| sudo bash -s -- --with-termon`. For the testing channel: `| sudo ASL_DVS_CHANNEL=testing bash`.
+
+**By hand:**
+
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
@@ -96,9 +107,11 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_5_0_20261110.sh
+   sudo bash install_all_v7_6_0_20261112.sh
    ```
-   - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`), and git is installed first if it is missing. It also installs instmon when it isn't installed.
+   - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`). It also installs instmon when it isn't installed.
+   - **Fresh node (7.6.0 and later):** when none of the tools is installed (instmon alone does not count), it asks once: Enter installs the whole suite, `c` chooses tool by tool, `n` quits. Without a terminal the whole suite is installed; `--core` keeps it to the Dashboard, SysMon, wifimon and 44helper. Terminal Monitor is never part of this: it has its own question (default no), `--with-termon` or `INSTALL_TERMON=1`.
+   - **Needed programs (7.6.0 and later):** if git (for downloads), openssl (for the HTTPS pages) or iproute2 (for the port checks) is missing, it lists them and offers to install them with apt in one question, and it offers python3 the same way. Saying no to git carries on with the files on the Pi. Without a terminal, git is installed when a download needs it and the others get a warning.
    - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it, and ask again before installing a download older than the installed version. Use `--offline` (or `--no-download`) to use only the files on the Pi.
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -521,7 +534,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_1_20261104.py` | common |
 | `termon_v0_2_4_20261109.py` | common (stands alone for now) |
-| `install_all_v7_5_0_20261110.sh` | common |
+| `install_all_v7_6_0_20261112.sh` | common |
 | `uninstall_all_v1_10_0_20261110.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |

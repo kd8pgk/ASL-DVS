@@ -1,6 +1,20 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_5_0_20261110.sh`. Newest entries first.
+Current file: `install_all_v7_6_0_20261112.sh`. Newest entries first.
+
+## 7.6.0 (2026-11-12)
+
+A fresh node gets the whole suite. This is a release: the installer's behaviour changed.
+
+- **Fresh node: the whole suite is the default.** When none of the Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary or Terminal Monitor is installed (instmon alone does not count), the installer asks once: "Install the whole suite? [Y/n/c]". Enter or `y` installs the Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary (and instmon when it is missing), downloading what is not on the Pi, with no version questions: the newest file of each is used. `c` goes tool by tool as before. `n` quits.
+- **Without a terminal** (`--non-interactive`, or run from another program) a fresh node also gets the whole suite. **`--core`** keeps a fresh install to the Dashboard, SysMon, wifimon and 44helper, with the optional tools only when asked for (`INSTALL_*=1`), as 7.5.0 did.
+- **Terminal Monitor is unchanged:** never part of the suite. It keeps its own question (default no), `--with-termon` or `INSTALL_TERMON=1`.
+- **Needed programs are offered, not just installed.** Preflight lists what is missing of git (downloads), openssl (the HTTPS pages of Node Talker, Node Recorder and Terminal Monitor) and iproute2 (the port checks) and asks once: "Install … with apt? [Y/n]". No to git carries on with the files on the Pi and does not ask again. A missing python3 gets the same offer instead of stopping. Without a terminal nothing changed: git is installed when a download needs it, and the others get a warning naming the package.
+- **"Existing installation" sees every tool.** A node with only Node Recorder, Pibrary or Terminal Monitor is no longer called a fresh install, and the list shows them.
+- **`bootstrap.sh`** (new, see its changelog) is the one-line install: `curl -fsSL https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh | sudo bash`.
+- Compatible: on a node that has any tool installed the run is as before. The one change for scripted runs is on a fresh node, where the optional tools are now installed unless `--core` is given.
+
+Tests: `ci/test_installers.py` (47 tests). New: a fresh node with and without a terminal, `--core`, Enter, `c` and `n` at the question, yes to Terminal Monitor, a node with only an optional tool, a fresh download from the stable list; git missing with yes and with no, several missing programs in one question, a run without a terminal; and nine for `bootstrap.sh`. The question tests run the installer on a pseudo-terminal with a stand-in `apt-get`.
 
 ## 7.5.0 (2026-11-10)
 
