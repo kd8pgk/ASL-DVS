@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.41"
+VERSION = "0.10.42"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3110,6 +3110,203 @@ def restart_asterisk():
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
 
 
+SVC_UNITS = (("asterisk", "Asterisk", "asterisk"), ("ab", "Analog Bridge", "analog_bridge"),
+             ("mmdvm", "MMDVM Bridge", "mmdvm_bridge"), ("stfu", "STFU", "stfu"), ("m17", "USRP2M17", "usrp2m17"))
+SVC_CACHE_SEC = 4.0
+SVC_REG_SEC = 10.0
+SVC_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+SVC_REG_COLS = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+SVC_FLAP_RESTARTS = 3
+SVC_FLAP_SEC = 600.0
+SVC_RESTART_SEC = 90
+STFU_BINARY = "/opt/STFU/STFU"
+_svc_lock = threading.Lock()
+_svc_cache = {"t": -1e9, "v": None}
+_svc_busy = {}
+_reg_cache = {"t": -1e9, "node": "", "state": "unknown", "detail": "", "since": None}
+
+
+def svc_uptime_text(sec):
+    sec = int(max(0, sec))
+    if sec < 60:
+        return "Running"
+    if sec < 3600:
+        return f"Running {sec // 60} min"
+    if sec < 86400:
+        return f"Running {sec // 3600} h {sec % 3600 // 60} min"
+    return f"Running {sec // 86400} d {sec % 86400 // 3600} h"
+
+
+def svc_unit_info(units):
+    r = _systemctl("show", "-p", "Id,LoadState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,ActiveEnterTimestampMonotonic",
+                   *units, timeout=15)
+    out = {}
+    for block in (r.stdout or "").split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("Id"):
+            out[kv["Id"]] = kv
+    return out
+
+
+def svc_classify(kv, now_mono):
+    if not kv:
+        return "warn", "Could not read the service state", True
+    if kv.get("LoadState") == "not-found":
+        return "off", "Not installed", False
+    active, sub = kv.get("ActiveState", ""), kv.get("SubState", "")
+    try:
+        restarts = int(kv.get("NRestarts") or 0)
+    except ValueError:
+        restarts = 0
+    if active == "active":
+        try:
+            began = int(kv.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+        except ValueError:
+            began = 0.0
+        up = now_mono - began if began > 0 else None
+        if restarts >= SVC_FLAP_RESTARTS and up is not None and up < SVC_FLAP_SEC:
+            return "warn", f"Restarting often: {restarts} restarts", True
+        return "on", svc_uptime_text(up) if up is not None else "Running", True
+    if active == "activating":
+        if sub == "auto-restart":
+            return "warn", "Restarting after a stop" + (f" ({restarts} restarts)" if restarts else ""), True
+        return "warn", "Starting...", True
+    if active == "reloading":
+        return "warn", "Reloading...", True
+    if active == "deactivating":
+        return "warn", "Stopping...", True
+    if active == "failed":
+        code = kv.get("ExecMainStatus", "")
+        why = f"exit code {code}" if code not in ("", "0") else (kv.get("Result") or "failed")
+        return "fail", f"Failed: {why}", True
+    if active == "inactive":
+        return "fail", "Stopped", True
+    return "warn", f"State: {active or 'unknown'}", True
+
+
+def svc_stfu_by_hand():
+    if not os.path.isfile(STFU_BINARY):
+        return None
+    try:
+        r = subprocess.run(["pgrep", "-x", "STFU"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.returncode == 0
+
+
+def reg_parse(out, node):
+    if not out.strip() or not node:
+        return "unknown"
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        cols = SVC_REG_COLS.match(line)
+        if cols and cols.group(2) == node:
+            text = cols.group(5).lower()
+        elif pat.search(line):
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        else:
+            continue
+        if any(w in text for w in SVC_REG_BAD_WORDS):
+            return "unregistered"
+        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
+    return state
+
+
+def svc_registration(asterisk_on):
+    node = str(main_node() or "").strip()
+    now = time.monotonic()
+    if not node.isdigit():
+        return {"state": "none", "node": node, "detail": "No node number found", "since": None}
+    if 1000 <= int(node) <= 1999:
+        return {"state": "private", "node": node, "detail": "Private node: it never registers with AllStarLink", "since": None}
+    if not asterisk_on:
+        return {"state": "unknown", "node": node, "detail": "Asterisk is not running", "since": None}
+    with _svc_lock:
+        c = _reg_cache
+        if c["node"] == node and now - c["t"] < SVC_REG_SEC:
+            return {"state": c["state"], "node": node, "detail": c["detail"], "since": c["since"]}
+    ok, out = ast_cli("rpt show registrations", timeout=4)
+    if not ok:
+        state, detail = "unknown", "Asterisk did not answer"
+    else:
+        state = reg_parse(out, node)
+        detail = {"registered": "Registered", "unregistered": "Not registered", "unknown": "Not known yet"}[state]
+    with _svc_lock:
+        c = _reg_cache
+        if c["node"] == node and c["state"] != state and c["t"] > -1e8:
+            c["since"] = time.time()
+        elif c["node"] != node:
+            c["since"] = None
+        c.update(t=now, node=node, state=state, detail=detail)
+        return {"state": state, "node": node, "detail": detail, "since": c["since"]}
+
+
+def svc_status(_body=None):
+    now = time.monotonic()
+    with _svc_lock:
+        if _svc_cache["v"] is not None and now - _svc_cache["t"] < SVC_CACHE_SEC:
+            return dict(_svc_cache["v"])
+    info = svc_unit_info([u + ".service" for _k, _l, u in SVC_UNITS])
+    rows = []
+    for key, label, unit in SVC_UNITS:
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed:
+            by_hand = svc_stfu_by_hand()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    reg = svc_registration(rows[0]["light"] == "on")
+    v = {"ok": True, "source": "nodetalker", "checked_at": time.time(), "reg": reg, "services": rows}
+    with _svc_lock:
+        _svc_cache.update(t=now, v=v)
+    return dict(v)
+
+
+def svc_label(key):
+    return next((label for k, label, _u in SVC_UNITS if k == key), "the service")
+
+
+def svc_restart(body):
+    key = str((body or {}).get("key", ""))
+    row = next((x for x in SVC_UNITS if x[0] == key), None)
+    if row is None:
+        return {"ok": False, "error": "Unknown service."}
+    if os.geteuid() != 0:
+        return {"ok": False, "error": "root required to restart the services"}
+    _k, label, unit = row
+    unit += ".service"
+    if service_states([unit]).get(unit) == "missing":
+        return {"ok": False, "error": f"{label} is not installed."}
+    with _svc_lock:
+        if key in _svc_busy:
+            return {"ok": False, "error": f"{label} is already restarting."}
+        _svc_busy[key] = time.monotonic()
+    try:
+        if key == "asterisk":
+            result = restart_asterisk()
+        else:
+            r = _systemctl("restart", unit, timeout=SVC_RESTART_SEC)
+            if r.returncode == 0:
+                log_event(f"{label} restarted from Node Talker", "ok")
+                result = {"ok": True, "message": f"{label} restarted."}
+            else:
+                why = (r.stderr or r.stdout).strip() or f"exit {r.returncode}"
+                log_event(f"{label} did not restart: {why}", "err")
+                result = {"ok": False, "error": why}
+    finally:
+        with _svc_lock:
+            _svc_busy.pop(key, None)
+            _svc_cache["t"] = -1e9
+            _reg_cache["t"] = -1e9
+    if key == "asterisk":
+        _lstats_invalidate()
+        _links_cache["t"] = -1e9
+    return result
+
+
 RESET_UNITS = (("md380-emu", "md380-emu"), ("Analog_Bridge", "analog_bridge"), ("MMDVM_Bridge", "mmdvm_bridge"),
                ("USRP2M17", "usrp2m17"), ("Asterisk", "asterisk"))
 RESET_DISCONNECT_SEC = 5.0
@@ -3386,7 +3583,8 @@ _RECORDING_BLOCKED = frozenset((
     "/api/disconnect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/tune/disconnect",
     "/api/digital"))
 _RECORDING_CFG_KEYS = frozenset(("port", "udp_port", "https", "node"))
-_RECORDING_POWER = frozenset(("/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/setup/apply"))
+_RECORDING_POWER = frozenset(("/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/setup/apply",
+                              "/api/services/restart"))
 _RECORDING_BRIDGE = frozenset(("/api/tune", "/api/tune/disconnect"))
 _RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
@@ -3460,6 +3658,8 @@ def rec_confirm_needed(path, body):
         return None
     if path in _RECORDING_POWER:
         what = {"/api/system/reboot": "Rebooting", "/api/system/shutdown": "Shutting down"}.get(path, "Restarting Asterisk")
+        if path == "/api/services/restart":
+            what = "Restarting " + svc_label(str((body or {}).get("key", "")))
         return {"kind": "power", "message": f"A recording is in progress: {_rec_names(recs)}. {what} now cuts it short; "
                                             "what was recorded so far is saved as a partial file."}
     bridges = [b for b in ((info or {}).get("bridges") or []) if isinstance(b, dict)]
@@ -6973,6 +7173,20 @@ table.links{font-size:calc(clamp(10.5px,3.1vw,14px) + var(--sett-font) - 15px);f
 #cd-links .small{font-size:calc(13px + var(--sett-font) - 15px)}
 table.links td,table.links th{padding:6px 3px;white-space:nowrap;overflow-wrap:normal}
 table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
+.sv-dot{width:10px;height:10px;border-radius:50%;flex:none;display:inline-block;background:#4a6a88;box-shadow:0 0 4px rgba(74,106,136,.8)}
+.sv-dot.sv-on{background:var(--accent);box-shadow:0 0 8px var(--accent),0 0 16px rgba(0,255,176,.5)}
+.sv-dot.sv-warn{background:var(--amber);box-shadow:0 0 8px var(--amber),0 0 12px rgba(255,208,64,.4)}
+.sv-dot.sv-fail{background:var(--red);box-shadow:0 0 8px var(--red),0 0 12px rgba(255,61,90,.4)}
+.sv-reg{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;background:var(--card2);margin:0 0 8px}
+.sv-reg.sv-b-on{border-color:rgba(0,255,176,.5)}.sv-reg.sv-b-fail{border-color:var(--red)}.sv-reg.sv-b-warn{border-color:var(--amber)}
+.sv-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.sv-row:first-child{border-top:0}
+.sv-name{flex:1;min-width:0}.sv-name b{display:block}
+.sv-det{display:block;font-size:.85em;color:var(--muted);overflow-wrap:anywhere}
+.sv-det.sv-bad{color:var(--red)}.sv-det.sv-warnt{color:var(--amber)}
+.sv-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.85em;color:var(--muted);margin-top:8px}
+.sv-legend span{display:inline-flex;align-items:center;gap:6px}
+.sv-src{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
 .listen-row{flex-wrap:nowrap}
 .listen-row .btn.big{min-width:112px;flex:none}
 .listen-row input[type=range]{flex:1;min-width:0}
@@ -7134,7 +7348,7 @@ const REC_LOCK_IDS = ['c-connect', 'c-disc', 't-go', 't-disc', 'da-btn', 'nd-ena
   'dig-save'];
 const REC_PATHS = ['/api/node/enable', '/api/node/disable', '/api/tx/enable', '/api/tx/disable', '/api/connect', '/api/disconnect',
   '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/digital'];
-const REC_ASK_PATHS = ['/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot', '/api/system/shutdown', '/api/setup/apply'];
+const REC_ASK_PATHS = ['/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot', '/api/system/shutdown', '/api/setup/apply', '/api/services/restart'];
 let recInfo = null;
 const REC_CFG_KEYS = ['port', 'udp_port', 'https', 'node'];
 
@@ -7571,7 +7785,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'data', 'phone', 'kc', 'log'];
+const FOLDS = ['svc', 'setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'data', 'phone', 'kc', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -7585,6 +7799,7 @@ function foldSet(k, open) {
   if (k === 'dig') loadDigital();
   if (k === 'log') pollLog();
   if (k === 'hs') hsDevices();
+  if (k === 'svc') svcPoll();
 }
 
 function sum(k, text) { const el = $('sum-' + k); if (el) el.textContent = text; }
@@ -7617,7 +7832,7 @@ function showTab(name) {
   if (name === 'connect') loadFavs();
   if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); }
   if (name === 'listen') openTalk();
-  if (name === 'setup') { loadDashFavs(); loadDigital(); }
+  if (name === 'setup') { loadDashFavs(); loadDigital(); svcPoll(); }
   if (name === 'connect') connectTabEnter();
   document.querySelector('main').classList.toggle('fit', name === 'listen' || name === 'connect');
   specKick();
@@ -10619,6 +10834,83 @@ async function nodeDisable() {
   loadNode();
 }
 
+let svcBusy = false, svcLast = null, svcRestarting = {};
+const SVC_DOT = {on: 'sv-on', warn: 'sv-warn', fail: 'sv-fail', off: 'sv-off'};
+const SVC_REG_LIGHT = {registered: 'on', unregistered: 'fail', unknown: 'warn', private: 'off', none: 'off'};
+function svcHm(t) {
+  const d = new Date(t * 1000);
+  return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
+function svcTick() {
+  if (!authed || tab !== 'setup' || document.visibilityState !== 'visible' || !foldOpen('svc')) return;
+  svcPoll();
+}
+async function svcPoll() {
+  if (svcBusy || !authed) return;
+  svcBusy = true;
+  try { svcRender(await api('/api/services')); } finally { svcBusy = false; }
+}
+function svcRender(d) {
+  svcLast = d;
+  if (!d || !d.ok) {
+    $('sv-reg-txt').textContent = (d && d.error) || 'Could not read the services.';
+    sum('svc', 'unavailable');
+    return;
+  }
+  const r = d.reg || {};
+  $('sv-reg-dot').className = 'sv-dot ' + SVC_DOT[SVC_REG_LIGHT[r.state] || 'warn'];
+  $('sv-reg').className = 'sv-reg sv-b-' + (SVC_REG_LIGHT[r.state] || 'warn');
+  $('sv-reg-txt').textContent = (r.detail || '') + (r.node && r.state !== 'none' ? ' - node ' + r.node : '') + (r.since ? ' - since ' + svcHm(r.since) : '');
+  const box = $('sv-list');
+  box.innerHTML = '';
+  let bad = SVC_REG_LIGHT[r.state] === 'fail' ? 1 : 0, warn = SVC_REG_LIGHT[r.state] === 'warn' ? 1 : 0;
+  (d.services || []).forEach((s) => {
+    const light = svcRestarting[s.key] ? 'warn' : s.light;
+    const detail = svcRestarting[s.key] ? 'Restarting...' : s.detail;
+    if (light === 'fail') bad++;
+    if (light === 'warn') warn++;
+    const row = document.createElement('div');
+    row.className = 'sv-row';
+    const dot = document.createElement('span');
+    dot.className = 'sv-dot ' + SVC_DOT[light];
+    const name = document.createElement('div');
+    name.className = 'sv-name';
+    const b = document.createElement('b');
+    b.textContent = s.label;
+    const det = document.createElement('span');
+    det.className = 'sv-det' + (light === 'fail' ? ' sv-bad' : light === 'warn' ? ' sv-warnt' : '');
+    det.textContent = detail;
+    name.appendChild(b);
+    name.appendChild(det);
+    row.appendChild(dot);
+    row.appendChild(name);
+    if (s.restartable) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn' + (s.key === 'asterisk' ? ' danger' : '');
+      btn.textContent = 'Restart';
+      btn.disabled = !!svcRestarting[s.key];
+      btn.addEventListener('click', () => svcRestart(s.key, s.label));
+      row.appendChild(btn);
+    }
+    box.appendChild(row);
+  });
+  sum('svc', bad ? bad + ' need attention' : warn ? warn + ' to check' : 'all good');
+  $('sv-src').textContent = d.source === 'nodetalker' ? 'Node Talker' : String(d.source || '');
+}
+async function svcRestart(key, label) {
+  const ask = key === 'asterisk' ? 'Restart Asterisk now? Every link on this node drops and reconnects.' : 'Restart ' + label + '?';
+  if (!confirm(ask)) return;
+  svcRestarting[key] = true;
+  svcRender(svcLast);
+  note('sv-msg', '', 'Restarting ' + label + '...');
+  const d = await post('/api/services/restart', {key: key});
+  delete svcRestarting[key];
+  setMsg('sv-msg', d);
+  svcPoll();
+  setTimeout(svcPoll, 4000);
+}
+
 async function astRestart(msgId) {
   if (!confirm('Restart Asterisk now? Every link on this node drops and reconnects.')) return;
   note(msgId, '', 'Restarting Asterisk...');
@@ -11029,6 +11321,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sys-reboot').addEventListener('click', doReboot);
   $('sys-shutdown').addEventListener('click', doShutdown);
   setInterval(pollHostLinks, 30000);
+  setInterval(svcTick, 10000);
   $('tune-reset').addEventListener('click', tuneReset);
   $('da-btn').addEventListener('click', daGo);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => {
@@ -11282,6 +11575,16 @@ html[data-theme="light"] *{text-shadow:none!important}
 <table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
+</div>
+<div class="card fold" id="cd-svc">
+<h2><button class="fold-btn" type="button" aria-expanded="true" aria-controls="cb-svc"><span class="fold-t">Services</span><span class="fold-sum" id="sum-svc"></span><span class="fold-i" aria-hidden="true">&#9662;</span></button></h2>
+<div class="fold-body" id="cb-svc">
+<div class="sv-reg sv-b-warn" id="sv-reg"><span class="sv-dot sv-warn" id="sv-reg-dot"></span><div class="sv-name"><b>AllStarLink registration</b><span class="sv-det" id="sv-reg-txt">Checking...</span></div></div>
+<div id="sv-list"></div>
+<div class="sv-legend"><span><i class="sv-dot sv-on"></i>Running</span><span><i class="sv-dot sv-warn"></i>Starting, restarting or needs a look</span><span><i class="sv-dot sv-fail"></i>Stopped or failed</span><span><i class="sv-dot"></i>Not installed</span></div>
+<div id="sv-msg" class="msg"></div>
+<div class="sv-src muted small">Source: <b id="sv-src">Node Talker</b>, checked every 10 s while this tab is open.</div>
+</div>
 </div>
 <div class="card fold" id="cd-setup">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-setup"><span class="fold-t">Setup</span><span class="fold-sum" id="sum-setup"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
@@ -11662,6 +11965,7 @@ _POST_ACTIONS = {
     "/api/tune/save": (tune_save, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
+    "/api/services/restart": (svc_restart, ()),
     "/api/disconnect-all": (disconnect_all, ()),
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
@@ -11826,6 +12130,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, node_counters())
             elif path == "/api/disconnect-all/status":
                 self._json(200, disconnect_all_status())
+            elif path == "/api/services":
+                self._json(200, svc_status())
             elif path == "/api/kerchunks":
                 self._json(200, kerchunk_status())
             elif path == "/api/load":

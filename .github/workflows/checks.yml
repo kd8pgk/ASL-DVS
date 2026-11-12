@@ -48,6 +48,8 @@ jobs:
         run: python3 ci/test_nodecontrol_links.py
       - name: Link, tune and transmit tests (Node Talker)
         run: python3 ci/test_nodetalker_links.py
+      - name: Services card tests (Node Talker)
+        run: python3 ci/test_nodetalker_services.py
       - name: instmon slow-link tests (compression, revalidation, keep-alive, polling)
         run: python3 ci/test_instmon_slowlink.py
       - name: instmon download tests (gzip, resume, header peek, slow-line rules)
