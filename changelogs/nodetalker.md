@@ -1,5 +1,18 @@
 # Node Talker changelog
 
+## 0.10.40 (2026-11-12)
+
+The testing phase is done. The tests are gone and the balancer runs by itself.
+
+- **The balancer starts by itself.** Any logged-in Node Talker page that is open (with the screen on) measures a minute of audio and changes RX and TX settings exactly as before: gains are applied directly, and a filter, gate, Automatic level or buffer change is put on trial and put back if the audio gets worse. The two "Run automatically" checkboxes are gone.
+- **New Setup checkbox: Turn off the balancer.** It is saved on the Pi (`balancer_off`, default off) and applies to every phone. A node that had Automatic balancing switched off under Tests starts with the balancer off.
+- **One page balances at a time.** The Pi hands the balancer to one page (`/api/balance/lease`); other open pages wait and say so. A page that closes gives it up within 7 minutes.
+- **The Tests card is now the Balancer card.** It shows the RX and TX status lines and the Restore original settings and Keep changes buttons. Restore and Keep work as before.
+- **Removed:** the Audio check and its results, the balance run, the RX and TX tone tests (and the TX tone test's link to a third-party node), Mic test, Node test, the Kerchunk test and the Mark kerchunk button, and the "Tests on this node" switches (`tests_off`). Kerchunk counting and labels, and the receive health verdict, stay.
+- The routes `/api/tonetest/*` and `/api/kerchunks/test/*` are gone. The tone test no longer holds back Automatic level or the link list.
+- A phone that stays on the Setup or any other tab while the balancer runs takes one listener slot, as it did with Run automatically on.
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.39 (2026-11-12)
 
 Checks Node Talker against the Node Controller functions it shares (pi02w 9.3.112 / full 9.3.108) and mirrors the differences.
@@ -169,7 +182,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_39_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_40_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

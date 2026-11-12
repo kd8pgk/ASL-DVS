@@ -1269,16 +1269,12 @@ class ConfgetterTests(unittest.TestCase):
 
 class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
-        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
+        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
                   "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
-                  "hs-mic", "hs-btn", "mic-gain", "mic-test", "tx-add", "tune-save"],
-        "cd-chk": ["test-on-check", "test-on-balance", "test-on-tone_rx", "test-on-tone_tx", "test-on-mic", "test-on-node",
-                   "test-on-kerchunk", "tests-save", "chk-start", "chk-stop", "chk-mins", "exp-tone", "exp-bal",
-                   "chk-rx", "rx-bal-msg", "chk-tx", "tx-bal-msg", "rx-auto", "rx-auto-msg", "tx-auto", "tx-auto-msg",
-                   "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg", "tx-tone-start", "tx-tone-hz", "tx-tone-sec",
-                   "tx-tone-rep", "tx-link-node", "tx-link-connect", "tx-link-disconnect", "node-test"],
+                  "hs-mic", "hs-btn", "mic-gain", "tx-add", "tune-save"],
+        "cd-chk": ["rx-auto-msg", "tx-auto-msg", "exp-open", "exp-restore", "exp-keep", "exp-msg"],
         "cd-data": ["data-dl", "data-msg"],
     }
 
@@ -1298,14 +1294,20 @@ class NodeTalkerCardTests(unittest.TestCase):
             for element_id in ids:
                 self.assertEqual(self.owner(element_id), card, element_id)
 
-    def test_audio_check_and_expanded_test_share_one_start(self):
-        self.assertNotIn('id="cd-exp"', self.text)
-        self.assertNotIn('id="exp-start"', self.text)
-        self.assertEqual(self.owner("chk-start"), "cd-chk")
+    def test_no_test_controls_are_left(self):
+        for gone in ('id="chk-start"', 'id="exp-start"', 'id="tone-start"', 'id="tx-tone-start"', 'id="mic-test"',
+                     'id="node-test"', 'id="kc-test"', 'id="kc-mark"', 'id="ptt-mark"', 'id="tests-save"', 'id="cd-exp"'):
+            self.assertNotIn(gone, self.text)
+        for gone in ("/api/tonetest", "/api/kerchunks/test", "tone test", "Audio check"):
+            self.assertNotIn(gone, self.text)
 
-    def test_tone_link_route_is_writable_only_locally(self):
-        self.assertIn('"/api/tonetest/link"', self.text)
-        self.assertIn('"/api/tonetest/stop", "/api/tonetest/link") and self._wan()', self.text)
+    def test_balancer_starts_by_itself_and_has_one_off_switch(self):
+        self.assertIn("function autoWanted() { return authed && !balOff; }", self.text)
+        self.assertIn("autoBootCheck();", self.text)
+        self.assertIn("CFG_BOOL = ['public_listen', 'https', 'balancer_off']", self.text)
+        self.assertEqual(self.owner("cfg-balancer_off"), "cd-setup")
+        self.assertNotIn('id="rx-auto"', self.text)
+        self.assertNotIn('id="tx-auto"', self.text)
 
     def test_status_polling_slows_down_only_when_settled(self):
         self.assertIn("pollEvery(pollStatus, 1500, 5000);", self.text)
@@ -1322,10 +1324,6 @@ class NodeTalkerCardTests(unittest.TestCase):
                      "function addCopyAll", "function copyCard", "function kcCopy"):
             self.assertNotIn(gone, self.text)
         self.assertIn("async function dataDownload()", self.text)
-
-    def test_mic_test_records_20_seconds(self):
-        self.assertIn("Test mic (20 s, plays back)", self.text)
-        self.assertIn("Recording 20 s", self.text)
 
 
 def load_nodetalker():
@@ -1401,8 +1399,6 @@ class NodeTalkerBehaviourTests(unittest.TestCase):
         p = mock.patch.object(nt.TALKER, "state", lambda: {"keyed": False})
         p.start()
         self.addCleanup(p.stop)
-        nt.TONE_LINK["node"] = ""
-        self.addCleanup(lambda: nt.TONE_LINK.update(node=""))
 
     def test_setup_lists_missing_steps_and_apply_runs_them(self):
         nt = self.nt
@@ -1435,23 +1431,6 @@ class NodeTalkerBehaviourTests(unittest.TestCase):
         with mock.patch.object(nt, "tx_state", side_effect=AssertionError("read while not pending")):
             self.assertFalse(nt.setup_plan()["pending"])
 
-    def test_tone_link_connect_takes_node_numbers_only(self):
-        nt = self.nt
-        for bad in ("12a", "12345678", "1921", "1999", "", "45001 x"):
-            self.assertFalse(nt.tone_link_set({"action": "connect", "node": bad})["ok"], bad)
-        self.assertTrue(nt.tone_link_set({"action": "connect", "node": "45001"})["ok"])
-        self.assertEqual(nt.TONE_LINK["node"], "45001")
-        self.assertIn(("ilink", 3, "45001"), self.calls)
-
-    def test_tone_link_disconnect_only_drops_a_linked_node(self):
-        nt = self.nt
-        self.assertFalse(nt.tone_link_set({"action": "disconnect", "node": "45001"})["ok"])
-        self.assertFalse(nt.tone_link_set({"action": "disconnect", "node": "4500; x"})["ok"])
-        self.assertEqual(self.calls, [])
-        self.state["links"] = ["45001"]
-        self.assertTrue(nt.tone_link_set({"action": "disconnect", "node": "45001"})["ok"])
-        self.assertEqual(self.calls, [("ilink", 1, "45001")])
-
     def test_transmit_node_comment_old_and_new_are_recognised(self):
         nt = self.nt
         for note, ours in [(nt.TX_NOTES[0], True), (nt.TX_NOTES[1], True), ("; someone else's node", False)]:
@@ -1470,16 +1449,6 @@ class NodeTalkerBehaviourTests(unittest.TestCase):
             self.assertTrue(changed)
             self.assertEqual([ln for ln in left if ln.strip()], ["[1999]", "duplex = 1"], note)
         self.assertIn("Node Talker", nt.HOOK_NOTE)
-
-    def test_tone_link_guard_allows_only_the_target_for_tx(self):
-        nt = self.nt
-        nt.TONE_LINK["node"] = "45001"
-        self.state["links"] = ["1921", "45001"]
-        self.assertEqual(nt.tone_link_block(tx=True), "")
-        self.assertNotEqual(nt.tone_link_block(tx=False), "")
-        self.state["links"] = ["1921", "45001", "77777"]
-        self.assertIn("77777", nt.tone_link_block(tx=True))
-
 
 NETSTATS_SAMPLE = """                               -------- LOCAL ---------------------  -------- REMOTE --------------------
 Channel               RTT  Jit  Del  Lost   %  Drop  OOO  Kbytes  Jit  Del  Lost   %  Drop  OOO  Kbytes
@@ -4274,6 +4243,65 @@ class InstmonSuiteInstallTests(unittest.TestCase):
         self.assertIn("'install_suite'", src.split("const REC_API")[1].split("]")[0])
 
 
+class NodeTalkerBalancerSwitchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def load(self, text):
+        nt = self.nt
+        path = os.path.join(tempfile.mkdtemp(), "nodetalker.conf")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        p = mock.patch.object(nt, "CONFIG_PATH", path)
+        p.start()
+        self.addCleanup(p.stop)
+        old = dict(nt._config)
+        self.addCleanup(lambda: (nt._config.clear(), nt._config.update(old)))
+        return nt.load_config()
+
+    def test_the_balancer_is_on_by_default(self):
+        self.assertIs(self.nt.DEFAULT_CONFIG["balancer_off"], False)
+        self.assertNotIn("tests_off", self.nt.DEFAULT_CONFIG)
+        self.assertIs(self.load("")["balancer_off"], False)
+
+    def test_the_switch_is_read_from_the_config(self):
+        sec = self.nt.CONFIG_SECTION
+        self.assertIs(self.load("[%s]\nbalancer_off = true\n" % sec)["balancer_off"], True)
+
+    def test_a_node_that_had_balancing_off_under_tests_keeps_it_off(self):
+        sec = self.nt.CONFIG_SECTION
+        self.assertIs(self.load("[%s]\ntests_off = check,balance\n" % sec)["balancer_off"], True)
+        self.assertIs(self.load("[%s]\ntests_off = tone_rx,kerchunk\n" % sec)["balancer_off"], False)
+        self.assertIs(self.load("[%s]\ntests_off = balance\nbalancer_off = false\n" % sec)["balancer_off"], False)
+
+    def test_only_one_page_balances_at_a_time(self):
+        nt = self.nt
+        clock = [1000.0]
+        with mock.patch.object(nt.time, "monotonic", lambda: clock[0]):
+            nt._balance_lease.update(id="", until=0.0)
+            self.assertTrue(nt.balance_lease({"id": "phone-one-1"})["owner"])
+            self.assertFalse(nt.balance_lease({"id": "phone-two-2"})["owner"])
+            self.assertTrue(nt.balance_lease({"id": "phone-one-1"})["owner"])
+            clock[0] += nt.BALANCE_LEASE_SEC + 1
+            self.assertTrue(nt.balance_lease({"id": "phone-two-2"})["owner"])
+            self.assertFalse(nt.balance_lease({"id": "phone-one-1"})["owner"])
+
+    def test_a_page_can_hand_the_balancer_back(self):
+        nt = self.nt
+        nt._balance_lease.update(id="", until=0.0)
+        nt.balance_lease({"id": "phone-one-1"})
+        self.assertFalse(nt.balance_lease({"id": "phone-two-2", "release": True})["owner"])
+        self.assertFalse(nt.balance_lease({"id": "phone-two-2"})["owner"])
+        nt.balance_lease({"id": "phone-one-1", "release": True})
+        self.assertTrue(nt.balance_lease({"id": "phone-two-2"})["owner"])
+
+    def test_a_bad_page_id_is_refused(self):
+        for bad in ("", "short", "x" * 41, "has space 123", None):
+            with self.assertRaises(ValueError):
+                self.nt.balance_lease({"id": bad})
+
+
 class NodeTalkerBalancerFixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -4282,7 +4310,7 @@ class NodeTalkerBalancerFixTests(unittest.TestCase):
         path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        a, b = text.index("const JIT_STEPS ="), text.index("async function chkApply")
+        a, b = text.index("const JIT_STEPS ="), text.index("// ---- Balancer:")
         cls.js = text[a:b]
 
     def suggest(self, rx, cfg, tx=None):
@@ -4327,31 +4355,6 @@ class NodeTalkerBalancerFixTests(unittest.TestCase):
     def test_tx_gain_is_lowered_from_the_favorite_gain_in_effect(self):
         got = self.suggest({}, {"tune_enabled": False, "tx_gain_db": 0, "tx_gain_fav": 6}, {"srvPeak": 0})
         self.assertTrue([x for x in got if "favorite with its own gain" in x["text"] and "lower TX gain" in x["text"]])
-
-    def test_automatic_level_is_paused_for_the_rx_tone_test(self):
-        import array
-        import math
-        nt = self.nt
-        amp = 32768 * 10 ** (-30 / 20) * math.sqrt(2)
-
-        def settle(recording):
-            old = dict(nt._config)
-            nt._config.update(rx_hpf=False, rx_agc=True, rx_gate=0, rx_notch_hz=0.0)
-            nt.TONE.recording = recording
-            try:
-                c = nt.RxClean()
-                for k in range(100):
-                    fr = array.array("h", [int(amp * math.sin(2 * math.pi * 1000 * (k * 160 + i) / 8000)) for i in range(160)]).tobytes()
-                    out = c.process(fr, 0, nt.frame_db(fr))
-                return nt.frame_db(out)
-            finally:
-                nt.TONE.recording = False
-                nt._config.clear()
-                nt._config.update(old)
-
-        self.assertAlmostEqual(settle(True), -30.0, delta=0.5)
-        self.assertGreater(settle(False), -24.0)
-
 
 class NodeTalkerRxFilterTests(unittest.TestCase):
     @classmethod
@@ -4630,6 +4633,7 @@ class NodeTalkerBalancerScoreTests(unittest.TestCase):
             "async function balQuiet() { return true; }\n"
             "async function balApply() { return {ok: true, undo: {was: 1}}; }\n"
             "async function balRevert() {}\n"
+            "const autoRun = null; async function balEnsureSnap() {} function balRefreshSnap() {}\n"
             "function autoSigOf(c) { return JSON.stringify(c); }\n")
         body = ("const CHANGE = %s;\n" % json.dumps(change) + prelude +
                 "autoStep('rx', {rx: {actSecs: 30, clipPct: 0, dropsMin: 0, speech: -30}, tx: {}}, {}).then(() => "

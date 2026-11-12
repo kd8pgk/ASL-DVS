@@ -168,8 +168,9 @@
   `stable.json` update). Never edit `channels/stable.json` by hand.
 - **Real node before Stable.** Before lifting a hold or adding a hotfix in
   `channels/overrides.json`, run the release on a Pi Zero 2 W: link and unlink
-  each mode, a Node Talker tone test, a tunnel restart, a reboot, and read the
-  boot report and the Node Talker health verdict. Note the result in the pull
+  each mode, a tunnel restart, a reboot, and read the boot report, the
+  Node Talker health verdict and the Node Talker Balancer card (it starts by
+  itself and reports each minute). Note the result in the pull
   request.
 - **Unused code.** A page function that `check_repo.py` reports as never named
   is removed in that tool's next release (today: `_ovLevelLabel` and
