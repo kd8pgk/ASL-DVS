@@ -1,5 +1,15 @@
 # instmon changelog
 
+## 2.106.0 (2026-11-12)
+
+The Slow link choice is shared with Node Controller. This is a release: the page script and the way the page is served changed.
+
+- **The choice is kept in the cookie `asl_slow`** (`on` or `off`; no cookie means Auto), `Path=/`, `SameSite=Strict`, one year. Every tool on the node's address reads the same cookie, so setting Slow link in instmon sets it in Node Controller (pi02w, 9.3.113 and later) and the other way round. The page re-reads the cookie at each status poll, so a change made in another tab or tool takes effect without a reload.
+- **The old setting moves once.** A browser that had `instmon_slowlink` in its local storage has it copied into the cookie, then removed. The `instmon_slow=1` cookie still is written (an older page reads it).
+- **The light page** (no embedded fonts) is also sent when the cookie `asl_slow` is `on`, as before for `instmon_slow=1` and `Save-Data: on`.
+- Tests: `ci/test_instmon_slowlink.py` (the shared cookie gives the light page, `off` and look-alike cookies do not, the page reads and writes the cookie).
+- Works with any Node Controller: with an older one the cookie is simply not read.
+
 ## 2.105.0 (2026-11-12)
 
 A GitHub link on the Home tab. This is a release: the page gained a link that was not there.
@@ -167,7 +177,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_105_0_20261112.py`. Newest entries first.
+Current file: `instmon_v2_106_0_20261112.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

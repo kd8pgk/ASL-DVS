@@ -41,8 +41,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.112-pi02w"
-BUILD_DATE   = "2026-11-11"
+VERSION      = "9.3.113-pi02w"
+BUILD_DATE   = "2026-11-12"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -10176,7 +10176,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
             <button class="btn btn-teal"  onclick="edSave()">Save</button>
             <button class="btn btn-muted" onclick="edReload()">Reload</button>
           </div>
-          <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
+          <div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
         </div>
       </div>
     </div>
@@ -10276,6 +10276,54 @@ let _pendingTune=null; // {tg,mode,name,at} while awaiting ABInfo confirmation; 
 // Never touched by Edit → Back navigation (showPage preserves the flag as-is).
 let _dmrNetSelectMode=false;
 let _lastEtag='';  // ETag from last /api/status 200 — sent as If-None-Match on next poll
+const NET={mult:1,avg:0,forced:'',active:Date.now(),next:{}};
+['pointerdown','keydown','touchstart'].forEach(function(name){
+  document.addEventListener(name,function(){NET.active=Date.now()},true);
+});
+NET.read=function(){
+  let v='';
+  try{const m=document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/);if(m)v=m[1];}catch(e){}
+  NET.forced=v;
+};
+NET.read();
+NET.show=function(){
+  const el=document.getElementById('net-note');
+  if(el)el.textContent=NET.mult>1?'polling '+NET.mult+'x slower':'';
+  document.querySelectorAll('[data-net-set]').forEach(function(b){
+    const v=b.getAttribute('data-net-set');
+    b.setAttribute('aria-pressed',String((v==='auto'?'':v)===NET.forced));
+  });
+};
+NET.sample=function(ms){
+  NET.read();
+  NET.avg=NET.avg?NET.avg*0.7+ms*0.3:ms;
+  let m=Math.max(1,Math.min(8,Math.ceil(NET.avg/400)));
+  if(NET.forced==='on')m=Math.max(m,6);
+  if(NET.forced==='off')m=1;
+  NET.mult=m;
+  NET.show();
+};
+NET.set=function(value){
+  NET.forced=value==='auto'?'':value;
+  document.cookie='asl_slow='+NET.forced+'; path=/; max-age='+(NET.forced?31536000:0)+'; SameSite=Strict';
+  if(NET.forced==='on')NET.mult=Math.max(NET.mult,6);
+  if(NET.forced==='off'){NET.mult=1;NET.avg=0;}
+  NET.show();
+};
+NET.idle=function(){return NET.mult>1&&Date.now()-NET.active>120000?2:1};
+NET.delay=function(ms){return ms*NET.mult*NET.idle()};
+NET.gate=function(key,ms){
+  if(document.hidden)return true;
+  const now=Date.now();
+  if(now<(NET.next[key]||0))return true;
+  NET.next[key]=now+ms*(NET.mult*NET.idle()-1);
+  return false;
+};
+document.addEventListener('click',function(ev){
+  const b=ev.target&&ev.target.closest?ev.target.closest('[data-net-set]'):null;
+  if(b)NET.set(b.getAttribute('data-net-set'));
+});
+document.addEventListener('DOMContentLoaded',function(){NET.show()});
 let _tgDataLoaded=false; // true once loadTgData() has completed at least one successful fetch
 // FCS browse card state (v8.4.2) — see the fcsCard* block near openLast().
 let _fcs={loaded:false,loading:false,saving:false,at:0,tried:0,byId:{},sig:'',tuned:'',applied:null};
@@ -10371,11 +10419,19 @@ function recBanner(){
   b.textContent=recBusy.override?'Recording in progress: override is on, so changes go through. It ends with the recording.'
     :'Recording in progress: '+(recBusy.entry||'Node Recorder')+'. Links, settings and restarts are locked until it ends.';
 }
+let _recEtag='',_recData=null;
 async function recPoll(){
+  if(NET.gate('rec',3000))return;
   try{
-    const r=await fetch('/api/recording');
-    if(!r.ok)return;
-    const d=await r.json();
+    const r=await fetch('/api/recording',{headers:_recEtag?{'If-None-Match':_recEtag}:{}});
+    let d;
+    if(r.status===304&&_recData)d=_recData;
+    else{
+      if(!r.ok)return;
+      d=await r.json();
+      _recData=d;
+      _recEtag=r.headers.get('ETag')||'';
+    }
     recBusy=d.recording||null;
     recInfo=d||{};
     recBanner();
@@ -12673,8 +12729,10 @@ async function refresh(){
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),5000);
     const hdrs=_lastEtag?{'If-None-Match':_lastEtag}:{};
+    const t0=performance.now();
     const r=await fetch('/api/status',{headers:hdrs,signal:ctrl.signal});
     clearTimeout(tid);
+    if(!document.hidden)NET.sample(performance.now()-t0);
     if(r.status===304){
       _failCount=0;document.body.classList.remove('offline');
       return;
@@ -13937,17 +13995,26 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
+  _pollTimer=setTimeout(async()=>{try{if(!document.hidden)await refresh()}finally{schedulePoll()}},busy?1000:NET.delay(5000));  // Pi02w: idle was 3000
 }
-let _keyedTimer=null;
+let _keyedTimer=null,_keyedBusy=false,_keyedEtag='',_keyedData=null;
 let _lastLinkKnown=true;
 async function pollKeyed(){
+  if(_keyedBusy)return;
+  if(document.hidden){_keyedTimer=setTimeout(pollKeyed,2000);return}
+  _keyedBusy=true;
   try{
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),2000);
-    const r=await fetch('/api/keyed',{signal:ctrl.signal});
+    const r=await fetch('/api/keyed',{headers:_keyedEtag?{'If-None-Match':_keyedEtag}:{},signal:ctrl.signal});
     clearTimeout(tid);
-    const d=await r.json();
+    let d;
+    if(r.status===304&&_keyedData)d=_keyedData;
+    else{
+      d=await r.json();
+      _keyedData=d;
+      _keyedEtag=r.headers.get('ETag')||'';
+    }
     const keyed      =!!d.keyed;
     const linkedNode =d.linked_node||null;
     const onPermLink  =!!d.on_perm_link;
@@ -14020,8 +14087,16 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
+  _keyedBusy=false;
+  _keyedTimer=setTimeout(pollKeyed,(_lastKeyed||busy)?1000:1000*Math.min(NET.mult,4));  // Pi02w: was 500 (the server updates every 2 s)
 }
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden||!_appStarted)return;
+  clearTimeout(_pollTimer);
+  refresh().finally(schedulePoll);
+  if(!_keyedBusy){clearTimeout(_keyedTimer);pollKeyed();}
+  recPoll();
+});
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 // The server compares the tuned talkgroup with what Analog_Bridge reports and
 // sends the verdict (tune_state) in /api/status and /api/abinfo.  While a tune
@@ -14258,6 +14333,8 @@ _HTML_BYTES = (HTML
                .replace("__BUILD_DATE__", BUILD_DATE)
                .encode())
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
+_HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
+_HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
 
 _AUTH_ACCOUNT        = "root"
 _SESSION_TTL_SEC     = 12 * 3600
@@ -14463,17 +14540,54 @@ _PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X
                   "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     timeout = 30
 
     def log_message(self, fmt, *args):
         pass
+
+    def send_response(self, code, message=None):
+        self._sent_length = code in (204, 304)
+        super().send_response(code, message)
+
+    def send_header(self, keyword, value):
+        if keyword.lower() in ("content-length", "transfer-encoding"):
+            self._sent_length = True
+        super().send_header(keyword, value)
+
+    def _keep_alive_ok(self) -> bool:
+        try:
+            with self.server._per_ip_lock:
+                held = self.server._per_ip_count.get(self.client_address[0], 0)
+        except AttributeError:
+            return True
+        return held <= _MAX_CONCURRENT_CONNECTIONS_PER_IP // 2
+
+    def end_headers(self):
+        if not (getattr(self, "_sent_length", False) and self.command == "GET" and self._keep_alive_ok()):
+            self.send_header("Connection", "close")
+        super().end_headers()
 
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")
 
     def send_json(self, data: dict, status: int = 200,
                   extra_headers: Optional[Dict[str, str]] = None) -> None:
+        self._send_raw_json(json.dumps(data, separators=(",", ":")).encode(), status, extra_headers)
+
+    def send_json_tagged(self, data: dict) -> None:
         raw = json.dumps(data, separators=(",", ":")).encode()
+        etag = '"' + hashlib.md5(raw).hexdigest() + '"'
+        if self.headers.get("If-None-Match", "") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self._send_raw_json(raw, 200, {"ETag": etag})
+
+    def _send_raw_json(self, raw: bytes, status: int,
+                       extra_headers: Optional[Dict[str, str]]) -> None:
         self.send_response(status)
         self.send_header("Content-Type",          "application/json")
         self.send_header("Cache-Control",          "no-store")
@@ -14500,6 +14614,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _wants_lite_page(self) -> bool:
+        if self.headers.get("Save-Data", "").strip().lower() == "on":
+            return True
+        for part in self.headers.get("Cookie", "").split(";"):
+            if part.strip() == "asl_slow=on":
+                return True
+        return False
+
     def send_html(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type",          "text/html; charset=utf-8")
@@ -14510,11 +14632,12 @@ class Handler(BaseHTTPRequestHandler):
                          "script-src 'unsafe-inline'; connect-src 'self'; "
                          "frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
+        lite = self._wants_lite_page()
         if self._accepts_gzip():
-            body = _HTML_GZIP
+            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
             self.send_header("Content-Encoding", "gzip")
         else:
-            body = _HTML_BYTES
+            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -15305,8 +15428,8 @@ _GET_ROUTES: dict = {
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
-    "/api/recording":  lambda h: h.send_json(recording_view()),
-    "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
+    "/api/recording":  lambda h: h.send_json_tagged(recording_view()),
+    "/api/keyed":      lambda h: h.send_json_tagged(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
     "/api/asl-nodes":      lambda h: h.send_json(action_get_asl_nodes()),
     "/api/echo-nodes":     lambda h: h.send_json(action_get_echo_nodes()),
