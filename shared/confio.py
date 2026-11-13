@@ -45,14 +45,14 @@ USED_BY = {
     "lock_ok": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon"),
     "login_ui_html": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
     "login_ui_inject": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
-    "tls_lan_ips": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_ensure_cert": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_set_aside": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_context": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_redirect": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_finish_request": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_start": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
-    "tls_secure": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w"),
+    "tls_lan_ips": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_ensure_cert": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_set_aside": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_context": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_redirect": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_finish_request": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_start": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "tls_secure": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
 }
 
 
