@@ -1,5 +1,16 @@
 # instmon changelog
 
+## 2.109.0 (2026-11-13)
+
+Login sessions and lockout follow the common model (`shared/confio.py`, the same code as the other tools will use). This is a release: the server's session rules changed.
+
+- **Tier: strict.** A session ends after 2 hours without use and never lasts more than 12 hours in all. The cookie is renewed about once an hour while in use. A Full Update still holds every session until it ends (the idle time and the 12-hour cap stand still), and everyone is signed out when it finishes.
+- **Any Log Out ends every session.** There is no separate "log out everywhere"; the one Log Out button signs out all browsers.
+- **A root password change ends every session.** The page asks for the new password.
+- **Safer cookie.** Only a hash of each session's key is kept in memory (at most 50 sessions); on an https page the cookie is unchanged in name (instmon is served over plain http).
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s; a login that works clears it. Many failures from the internet in 10 minutes also pause internet logins.
+- **Nothing else changes.** Same password, same login request.
+
 ## 2.108.0 (2026-11-13)
 
 The sign-in is held during a Full Update and ends when it finishes, and the login screen is the same as in the other tools with an eye button on the password field. This is a release: the server's session rules and the page script changed.
@@ -186,7 +197,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_108_0_20261113.py`. Newest entries first.
+Current file: `instmon_v2_109_0_20261113.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 
