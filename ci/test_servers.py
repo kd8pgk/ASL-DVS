@@ -27,7 +27,7 @@ SERVERS = {
     "sysmon": {"file": "sysmon_v6_13_97_20261113.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_86_20261113.py", "port": 9999, "scheme": "http"},
     "nodetalker": {"file": "nodetalker_v0_10_45_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "amp_nodetalker": {"file": "amp_nodetalker_v0_3_8_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_17_1_20261113.py", "port": 8995, "scheme": "https", "health": "/api/health"},
     "pibrary": {"file": "pibrary_v0_17_1_20261113.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},

@@ -291,7 +291,7 @@ Talker for a node that runs the
   or use it.
 
 ```
-sudo python3 amp_nodetalker_v0_3_8_20261113.py --install
+sudo python3 amp_nodetalker_v0_3_7_20261101.py --install
 ```
 
 1. Open `http://<pi-address>:8993`. It moves you to `https://`.
@@ -531,7 +531,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `44helper_v0_1_23_20261113.py` | common |
 | `nodetalker_v0_10_45_20261113.py` | common |
 | `noderecorder_v0_17_1_20261113.py` | common |
-| `amp_nodetalker_v0_3_8_20261113.py` | AMP nodes only (stands alone) |
+| `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_1_20261113.py` | common |
 | `termon_v0_2_4_20261109.py` | common (stands alone for now) |
 | `install_all_v7_6_0_20261112.sh` | common |

@@ -10,7 +10,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = {
-    "nodetalker": "pw", "noderecorder": "pw", "amp_nodetalker": "pw", "instmon": "login-pw",
+    "nodetalker": "pw", "noderecorder": "pw", "instmon": "login-pw",
     "nodecontrol": "login-pw", "nodecontrol_pi02w": "login-pw", "sysmon": "login-pw", "sysmon_pi02w": "login-pw", "pibrary": "login-pw",
     "wifimon": "login-pw", "44helper": "login-pw",
 }

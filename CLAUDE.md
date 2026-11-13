@@ -10,6 +10,15 @@
   the uninstaller) serve both builds. When a pi02w change needs one of them,
   say so before changing it.
 
+## Archived: Node Talker for AMP
+
+- **`amp_nodetalker_v*.py` is archived (2026-11-13).** No development until the
+  owner says so: no new version, no fixes, no shared-look or shared-login
+  changes, and it is left out of work that covers "every tool".
+- Its file, changelog, tests and stable-channel entry stay as they are. If a
+  shared function it copies (`shared/confio.py`) has to change, say so and ask
+  before touching the AMP file.
+
 ## Naming: "Node Controller"
 
 - **System names stay.** Paths, file names, service and unit names, markers and
