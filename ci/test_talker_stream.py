@@ -353,6 +353,7 @@ class AuthAndEventTests(unittest.TestCase):
         s = Stream(cookie, timeout=5)
         self.assertEqual(s.status, 401)
         s.close()
+        type(self).cookie = login()
 
     def test_event_post_needs_login(self):
         st, _, _ = http_json("POST", "/api/listen/event", {"events": []})
