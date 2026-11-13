@@ -22,9 +22,9 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_109_20261113.py", "port": 8989, "scheme": "http"},
+    "nodecontrol": {"file": "nodecontrol_v9_3_110_20261113.py", "port": 8989, "scheme": "http"},
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_115_20261113.py", "port": 8989, "scheme": "http"},
-    "sysmon": {"file": "sysmon_v6_13_96_20261111.py", "port": 9999, "scheme": "http"},
+    "sysmon": {"file": "sysmon_v6_13_97_20261113.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_86_20261113.py", "port": 9999, "scheme": "http"},
     "nodetalker": {"file": "nodetalker_v0_10_45_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_8_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
@@ -40,7 +40,7 @@ SERVERS = {
                 "health_expect": b'"version"', "error_keys": ("error",)},
     "44helper": {"file": "44helper_v0_1_23_20261113.py", "port": 9997, "scheme": "http",
                  "error_keys": ("output",)},
-    "termon": {"file": "termon_v0_2_5_20261113.py", "port": 7878, "scheme": "https", "health": "/api/health",
+    "termon": {"file": "termon_v0_2_4_20261109.py", "port": 7878, "scheme": "https", "health": "/api/health",
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},

@@ -43,8 +43,8 @@ USED_BY = {
     "lock_wait": (),
     "lock_fail": (),
     "lock_ok": (),
-    "login_ui_html": ("nodetalker", "noderecorder", "amp_nodetalker", "instmon", "nodecontrol_pi02w", "sysmon_pi02w", "pibrary", "wifimon", "44helper", "termon"),
-    "login_ui_inject": ("nodetalker", "noderecorder", "amp_nodetalker", "instmon", "nodecontrol_pi02w", "sysmon_pi02w", "pibrary", "wifimon", "44helper", "termon"),
+    "login_ui_html": ("nodetalker", "noderecorder", "amp_nodetalker", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
+    "login_ui_inject": ("nodetalker", "noderecorder", "amp_nodetalker", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
 }
 
 

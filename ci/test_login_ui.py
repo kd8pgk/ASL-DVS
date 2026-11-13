@@ -11,8 +11,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = {
     "nodetalker": "pw", "noderecorder": "pw", "amp_nodetalker": "pw", "instmon": "login-pw",
-    "nodecontrol_pi02w": "login-pw", "sysmon_pi02w": "login-pw", "pibrary": "login-pw",
-    "wifimon": "login-pw", "44helper": "login-pw", "termon": "pw",
+    "nodecontrol": "login-pw", "nodecontrol_pi02w": "login-pw", "sysmon": "login-pw", "sysmon_pi02w": "login-pw", "pibrary": "login-pw",
+    "wifimon": "login-pw", "44helper": "login-pw",
 }
 
 
@@ -91,14 +91,8 @@ class EveryToolUsesIt(unittest.TestCase):
                 self.assertIn("def login_ui_html(", src)
                 self.assertIn("def login_ui_inject(", src)
                 self.assertRegex(src, r'login_ui_inject\s*\([^\n]*"%s"|login_ui_inject\s*\(\s*(?:HTML|_HTML_SRC)' % re.escape(field)
-                                 if key != "nodecontrol_pi02w" else r'"login-pw"\)\.encode')
+                                 if key not in ("nodecontrol", "nodecontrol_pi02w") else r'"login-pw"\)\.encode')
                 self.assertIn('id="%s"' % field, src)
-
-    def test_full_builds_untouched(self):
-        for key in ("nodecontrol", "sysmon"):
-            for path in glob.glob(os.path.join(ROOT, key + "_v*.py")):
-                with open(path, encoding="utf-8") as f:
-                    self.assertNotIn("login_ui_", f.read())
 
 
 if __name__ == "__main__":
