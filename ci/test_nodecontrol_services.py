@@ -33,6 +33,7 @@ def load(name, path):
 
 
 ncp = load("ncp_services_under_test", newest("nodecontrol_pi02w_v[0-9]*.py"))
+ncf = load("ncf_services_under_test", newest("nodecontrol_v[0-9]*.py"))
 nt = load("nt_services_for_nc", newest("nodetalker_v[0-9]*.py"))
 
 NOW = 1000000.0
@@ -54,33 +55,33 @@ def systemd(**over):
     return "\n".join(out).strip()
 
 
-class Writer(unittest.TestCase):
+class WriterTests:
     def setUp(self):
         self.path = os.path.join(WORK, "run", "services.json")
         self.text = systemd()
         self.reg_out = "register.allstarlink.org 27342 44.1.2.3:4569 180 Registered\n"
         patches = [
-            mock.patch.object(ncp, "SVC_STATUS_FILE", self.path),
-            mock.patch.object(ncp, "run", lambda cmd, timeout=10: (self.text, 0)),
-            mock.patch.object(ncp.time, "monotonic", lambda: NOW),
-            mock.patch.object(ncp._cfg, "asl_node", "27342", create=True),
+            mock.patch.object(self.mod, "SVC_STATUS_FILE", self.path),
+            mock.patch.object(self.mod, "run", lambda cmd, timeout=10: (self.text, 0)),
+            mock.patch.object(self.mod.time, "monotonic", lambda: NOW),
+            mock.patch.object(self.mod._cfg, "asl_node", "27342", create=True),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        with ncp._asl_reg_lock:
-            ncp._asl_reg_info.update(state="registered", node="27342", at=NOW - 5, since=NOW - 5)
-            ncp._asl_reg_info.pop("changed", None)
+        with self.mod._asl_reg_lock:
+            self.mod._asl_reg_info.update(state="registered", node="27342", at=NOW - 5, since=NOW - 5)
+            self.mod._asl_reg_info.pop("changed", None)
 
     def write(self):
-        ncp._svc_file_write()
+        self.mod._svc_file_write()
         with open(self.path, encoding="utf-8") as fh:
             return json.load(fh)
 
     def test_file_has_the_agreed_shape(self):
         d = self.write()
-        self.assertEqual((d["version"], d["source"], d["host_version"]), (1, "nodecontrol", ncp.VERSION))
-        self.assertEqual(d["next_check_secs"], ncp._SVC_CHECK_SEC)
+        self.assertEqual((d["version"], d["source"], d["host_version"]), (1, "nodecontrol", self.mod.VERSION))
+        self.assertEqual(d["next_check_secs"], self.mod._SVC_CHECK_SEC)
         self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17"])
         self.assertTrue(all(r["light"] == "on" for r in d["services"]))
         self.assertEqual(d["reg"]["state"], "registered")
@@ -100,59 +101,59 @@ class Writer(unittest.TestCase):
         self.assertEqual((ab["light"], ab["unit"]), ("fail", "Analog_Bridge.service"))
 
     def test_registration_follows_the_node_and_asterisk(self):
-        with mock.patch.object(ncp._cfg, "asl_node", "1921", create=True):
+        with mock.patch.object(self.mod._cfg, "asl_node", "1921", create=True):
             self.assertEqual(self.write()["reg"]["state"], "private")
-        with mock.patch.object(ncp._cfg, "asl_node", "", create=True):
+        with mock.patch.object(self.mod._cfg, "asl_node", "", create=True):
             self.assertEqual(self.write()["reg"]["state"], "none")
         self.text = systemd(asterisk=dict(active="inactive", sub="dead"))
         self.assertEqual(self.write()["reg"]["state"], "unknown")
 
     def test_since_only_after_a_change(self):
-        with ncp._asl_reg_lock:
-            ncp._asl_reg_info.update(state="unregistered", changed=True, since=NOW - 120)
+        with self.mod._asl_reg_lock:
+            self.mod._asl_reg_info.update(state="unregistered", changed=True, since=NOW - 120)
         d = self.write()
         self.assertEqual(d["reg"]["state"], "unregistered")
         self.assertAlmostEqual(d["reg"]["since"], time.time() - 120, delta=5)
 
     def test_check_marks_a_change_but_not_the_first_answer(self):
-        with ncp._asl_reg_lock:
-            ncp._asl_reg_info.update(state="unknown", node="", at=0.0, since=NOW)
-            ncp._asl_reg_info.pop("changed", None)
-        with mock.patch.object(ncp, "ami_command", lambda cmd, timeout=4: (self.reg_out, True)), \
-                mock.patch.object(ncp, "_asl_reg_write_status", lambda *a: None):
-            self.assertEqual(ncp._asl_reg_check(), "registered")
-            self.assertFalse(ncp._asl_reg_info.get("changed"))
-            with mock.patch.object(ncp, "ami_command", lambda cmd, timeout=4: (self.reg_out.replace("Registered", "Rejected"), True)):
-                self.assertEqual(ncp._asl_reg_check(), "unregistered")
-            self.assertTrue(ncp._asl_reg_info.get("changed"))
+        with self.mod._asl_reg_lock:
+            self.mod._asl_reg_info.update(state="unknown", node="", at=0.0, since=NOW)
+            self.mod._asl_reg_info.pop("changed", None)
+        with mock.patch.object(self.mod, "ami_command", lambda cmd, timeout=4: (self.reg_out, True)), \
+                mock.patch.object(self.mod, "_asl_reg_write_status", lambda *a: None):
+            self.assertEqual(self.mod._asl_reg_check(), "registered")
+            self.assertFalse(self.mod._asl_reg_info.get("changed"))
+            with mock.patch.object(self.mod, "ami_command", lambda cmd, timeout=4: (self.reg_out.replace("Registered", "Rejected"), True)):
+                self.assertEqual(self.mod._asl_reg_check(), "unregistered")
+            self.assertTrue(self.mod._asl_reg_info.get("changed"))
 
     def test_a_half_finished_sign_in_is_no_longer_registered(self):
         out = "register.allstarlink.org 27342 - 180 Request Sent\n"
-        self.assertEqual(ncp.reg_parse(out, "27342"), "unknown")
+        self.assertEqual(self.mod.reg_parse(out, "27342"), "unknown")
 
 
-class NodeTalkerReadsIt(unittest.TestCase):
+class NodeTalkerReadsItTests:
     def setUp(self):
         self.path = os.path.join(WORK, "run2", "services.json")
         self.text = systemd()
         patches = [
-            mock.patch.object(ncp, "SVC_STATUS_FILE", self.path),
-            mock.patch.object(ncp, "run", lambda cmd, timeout=10: (self.text, 0)),
-            mock.patch.object(ncp.time, "monotonic", lambda: NOW),
-            mock.patch.object(ncp._cfg, "asl_node", "27342", create=True),
+            mock.patch.object(self.mod, "SVC_STATUS_FILE", self.path),
+            mock.patch.object(self.mod, "run", lambda cmd, timeout=10: (self.text, 0)),
+            mock.patch.object(self.mod.time, "monotonic", lambda: NOW),
+            mock.patch.object(self.mod._cfg, "asl_node", "27342", create=True),
             mock.patch.object(nt, "SVC_NC_FILE", self.path),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        with ncp._asl_reg_lock:
-            ncp._asl_reg_info.update(state="registered", node="27342", at=NOW - 5, since=NOW - 5)
+        with self.mod._asl_reg_lock:
+            self.mod._asl_reg_info.update(state="registered", node="27342", at=NOW - 5, since=NOW - 5)
         with nt._svc_lock:
             nt._svc_cache.update(t=-1e9, v=None)
             nt._svc_own_until["t"] = 0.0
 
     def test_what_node_controller_writes_node_talker_accepts(self):
-        ncp._svc_file_write()
+        self.mod._svc_file_write()
         d = nt.svc_from_nc()
         self.assertEqual(d["source"], "nodecontrol")
         self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17"])
@@ -160,18 +161,46 @@ class NodeTalkerReadsIt(unittest.TestCase):
         self.assertLess(d["age_s"], 5)
 
     def test_the_status_route_uses_it_and_shows_where_it_came_from(self):
-        ncp._svc_file_write()
+        self.mod._svc_file_write()
         self.assertEqual(nt.svc_status()["source"], "nodecontrol")
 
     def test_both_tools_carry_the_same_function_text(self):
         for name in ("svc_table", "svc_uptime_text", "svc_unit_info", "svc_classify", "svc_rows", "reg_parse", "svc_reg_state"):
-            self.assertEqual(getattr(ncp, name).__code__.co_code, getattr(nt, name).__code__.co_code, name)
+            self.assertEqual(getattr(self.mod, name).__code__.co_code, getattr(nt, name).__code__.co_code, name)
 
     def test_the_two_tools_judge_the_same_systemd_text_the_same_way(self):
         text = systemd(ab=dict(active="failed", sub="failed"), mmdvm=dict(since=60, restarts="5"))
-        a = ncp.svc_rows(lambda args: text, NOW)
+        a = self.mod.svc_rows(lambda args: text, NOW)
         b = nt.svc_rows(lambda args: text, NOW)
         self.assertEqual(a, b)
+
+
+class WriterPi02w(WriterTests, unittest.TestCase):
+    mod = ncp
+
+
+class WriterFull(WriterTests, unittest.TestCase):
+    mod = ncf
+
+
+class NodeTalkerReadsItPi02w(NodeTalkerReadsItTests, unittest.TestCase):
+    mod = ncp
+
+
+class NodeTalkerReadsItFull(NodeTalkerReadsItTests, unittest.TestCase):
+    mod = ncf
+
+
+class BuildsAgree(unittest.TestCase):
+    def test_the_full_build_names_itself_and_the_pi02w_build_does(self):
+        self.assertFalse(ncf.VERSION.endswith("-pi02w"))
+        self.assertTrue(ncp.VERSION.endswith("-pi02w"))
+
+    def test_both_builds_write_the_same_file_and_use_the_same_parser(self):
+        for name in ("SVC_STATUS_FILE",):
+            self.assertEqual(getattr(ncf, name), getattr(ncp, name))
+        out = "register.allstarlink.org 27342 - 180 Request Sent\n"
+        self.assertEqual(ncf.reg_parse(out, "27342"), ncp.reg_parse(out, "27342"))
 
 
 if __name__ == "__main__":

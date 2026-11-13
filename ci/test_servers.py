@@ -22,7 +22,7 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_108_20261111.py", "port": 8989, "scheme": "http"},
+    "nodecontrol": {"file": "nodecontrol_v9_3_109_20261113.py", "port": 8989, "scheme": "http"},
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_114_20261113.py", "port": 8989, "scheme": "http"},
     "sysmon": {"file": "sysmon_v6_13_96_20261111.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_85_20261112.py", "port": 9999, "scheme": "http"},

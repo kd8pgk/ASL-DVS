@@ -19,13 +19,13 @@ USED_BY = {
     "rpt_scan": ("noderecorder", "44helper", "nodecontrol", "nodecontrol_pi02w"),
     "rpt_next_free": ("44helper", "nodecontrol", "nodecontrol_pi02w"),
     "rpt_remove_private": ("noderecorder",),
-    "svc_table": ("nodetalker", "nodecontrol_pi02w"),
-    "svc_uptime_text": ("nodetalker", "nodecontrol_pi02w"),
-    "svc_unit_info": ("nodetalker", "nodecontrol_pi02w"),
-    "svc_classify": ("nodetalker", "nodecontrol_pi02w"),
-    "svc_rows": ("nodetalker", "nodecontrol_pi02w"),
-    "reg_parse": ("nodetalker", "nodecontrol_pi02w"),
-    "svc_reg_state": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_table": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "svc_uptime_text": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "svc_unit_info": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "svc_classify": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "svc_rows": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "reg_parse": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "svc_reg_state": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
 }
 
 
