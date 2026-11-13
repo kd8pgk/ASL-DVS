@@ -26,6 +26,23 @@ USED_BY = {
     "svc_rows": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
     "reg_parse": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
     "svc_reg_state": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "sess_policy": (),
+    "sess_digest": (),
+    "sess_stamp": (),
+    "sess_dead": (),
+    "sess_new": (),
+    "sess_check": (),
+    "sess_drop": (),
+    "sess_drop_all": (),
+    "sess_dump": (),
+    "sess_load": (),
+    "sess_cookie_name": (),
+    "sess_cookie": (),
+    "sess_cookie_clear": (),
+    "sess_token_from": (),
+    "lock_wait": (),
+    "lock_fail": (),
+    "lock_ok": (),
 }
 
 
@@ -747,3 +764,153 @@ def svc_reg_state(node, asterisk_on, parsed):
     if parsed == "unregistered":
         return "unregistered", "Not registered"
     return "unknown", "Not known yet"
+
+
+def sess_policy(tier):
+    if tier == "standard":
+        return {"idle": 12 * 3600, "absolute": 0, "renew": 3600, "max": 50}
+    if tier == "strict":
+        return {"idle": 2 * 3600, "absolute": 12 * 3600, "renew": 3600, "max": 50}
+    raise ValueError("unknown session tier: %s" % (tier,))
+
+
+def sess_digest(token):
+    import hashlib
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def sess_stamp(password_hash):
+    import hashlib
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:32]
+
+
+def sess_dead(rec, now):
+    return rec["idle"] <= now or bool(rec["abs"] and rec["abs"] <= now)
+
+
+def sess_new(store, policy, now, stamp="", ip=""):
+    import secrets
+    for key in [k for k, r in store.items() if sess_dead(r, now)]:
+        del store[key]
+    while len(store) >= policy["max"]:
+        del store[min(store, key=lambda k: store[k]["born"])]
+    token = secrets.token_hex(32)
+    idle = now + policy["idle"]
+    hard = now + policy["absolute"] if policy["absolute"] else 0
+    store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
+                                 "renew": now, "stamp": stamp, "ip": ip}
+    return token, int(min(idle, hard) - now if hard else idle - now)
+
+
+def sess_check(store, token, policy, now, stamp=None, touch=True, ip=None):
+    if not token:
+        return False, False, 0
+    key = sess_digest(token)
+    rec = store.get(key)
+    if rec is None:
+        return False, False, 0
+    if (sess_dead(rec, now) or (stamp is not None and rec["stamp"] != stamp)
+            or (ip is not None and rec["ip"] and rec["ip"] != ip)):
+        del store[key]
+        return False, False, 0
+    if touch:
+        rec["idle"] = now + policy["idle"]
+        if rec["abs"]:
+            rec["idle"] = min(rec["idle"], rec["abs"])
+    renew = bool(touch and now - rec["renew"] >= policy["renew"])
+    if renew:
+        rec["renew"] = now
+    return True, renew, int(rec["idle"] - now)
+
+
+def sess_drop(store, token):
+    return store.pop(sess_digest(token), None) is not None if token else False
+
+
+def sess_drop_all(store):
+    count = len(store)
+    store.clear()
+    return count
+
+
+def sess_dump(store, boot):
+    return {"v": 1, "boot": boot, "sessions": {k: dict(r) for k, r in store.items()}}
+
+
+def sess_load(store, data, boot, now):
+    if (not isinstance(data, dict) or data.get("v") != 1 or data.get("boot") != boot
+            or not isinstance(data.get("sessions"), dict)):
+        return 0
+    loaded = 0
+    for key, rec in data["sessions"].items():
+        if not isinstance(key, str) or len(key) != 64 or not isinstance(rec, dict):
+            continue
+        if not all(isinstance(rec.get(f), (int, float)) and not isinstance(rec.get(f), bool)
+                   for f in ("idle", "abs", "born", "renew")):
+            continue
+        if not isinstance(rec.get("stamp"), str) or not isinstance(rec.get("ip"), str):
+            continue
+        clean = {f: rec[f] for f in ("idle", "abs", "born", "renew", "stamp", "ip")}
+        if sess_dead(clean, now):
+            continue
+        store[key] = clean
+        loaded += 1
+    return loaded
+
+
+def sess_cookie_name(name, secure):
+    return ("__Host-" if secure else "") + name
+
+
+def sess_cookie(name, token, max_age, secure):
+    parts = [sess_cookie_name(name, secure) + "=" + token, "Path=/", "HttpOnly", "SameSite=Strict",
+             "Max-Age=%d" % max(0, int(max_age))]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def sess_cookie_clear(name, secure):
+    return sess_cookie(name, "", 0, secure)
+
+
+def sess_token_from(cookie_header, name):
+    wanted = (name, "__Host-" + name)
+    for part in (cookie_header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key in wanted and value:
+            return value
+    return None
+
+
+def lock_wait(state, ip, now, wan=False):
+    recent = state.setdefault("wan", [])
+    while recent and now - recent[0] > 600:
+        recent.pop(0)
+    rec = state.setdefault("ip", {}).get(ip)
+    wait = max(0.0, rec["until"] - now) if rec else 0.0
+    if wan and len(recent) >= 20:
+        wait = max(wait, recent[0] + 600 - now)
+    return wait
+
+
+def lock_fail(state, ip, now, wan=False):
+    table = state.setdefault("ip", {})
+    recent = state.setdefault("wan", [])
+    for key in [k for k, r in table.items() if now - r["last"] > 3600 and r["until"] <= now]:
+        del table[key]
+    while len(table) >= 1000 and ip not in table:
+        del table[min(table, key=lambda k: table[k]["last"])]
+    if wan:
+        recent.append(now)
+        del recent[:-20]
+    rec = table.setdefault(ip, {"n": 0, "until": 0.0, "last": now})
+    rec["n"] += 1
+    rec["last"] = now
+    if rec["n"] >= 5:
+        rec["until"] = now + min(5 * 2 ** min(rec["n"] - 5, 10), 300)
+    return max(0.0, rec["until"] - now)
+
+
+def lock_ok(state, ip):
+    state.setdefault("ip", {}).pop(ip, None)
