@@ -60,6 +60,8 @@ jobs:
         run: python3 ci/test_sessions.py
       - name: HTTPS serving rules (shared code)
         run: python3 ci/test_tls_shared.py
+      - name: SysMon health check on its own address
+        run: python3 ci/test_sysmon_health_probe.py
       - name: Login screen (shared look and eye)
         run: python3 ci/test_login_ui.py
       - name: Session adoption (Node Talker, Node Recorder, instmon, Pibrary, wifimon, 44helper)
