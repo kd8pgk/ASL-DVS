@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_2_20261113.py`. Newest entries first.
+Current file: `noderecorder_v0_17_3_20261113.py`. Newest entries first.
+
+## 0.17.3 (2026-11-13)
+
+HTTPS code moves to the common code (`shared/confio.py`, the `tls_*` functions the other tools will use) and the page answers plain HTTP from this Pi itself. This is a release: the server's connection handling changed.
+
+- **Plain HTTP from the Pi itself is served.** Before, a plain request from the node (Node Controller, Node Talker and instmon read `http://127.0.0.1:8995/api/recorder/status`) was answered with a redirect to https, which those tools cannot follow because the certificate is self-signed, so they could not tell that a recording was running. Now that request is answered. Plain HTTP from any other address still gets a redirect to https.
+- **The cookie's Secure flag follows the connection.** A request over https gets the Secure, `__Host-` cookie; a plain request from the Pi itself does not.
+- **Nothing else changes.** Same certificate, same port, same `https` setting and fall back to plain HTTP with the note on the login page.
 
 ## 0.17.2 (2026-11-13)
 
