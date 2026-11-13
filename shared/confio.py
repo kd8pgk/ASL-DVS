@@ -45,14 +45,14 @@ USED_BY = {
     "lock_ok": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w"),
     "login_ui_html": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
     "login_ui_inject": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper"),
-    "tls_lan_ips": (),
-    "tls_ensure_cert": (),
-    "tls_set_aside": (),
-    "tls_context": (),
-    "tls_redirect": (),
-    "tls_finish_request": (),
-    "tls_start": (),
-    "tls_secure": (),
+    "tls_lan_ips": ("noderecorder",),
+    "tls_ensure_cert": ("noderecorder",),
+    "tls_set_aside": ("noderecorder",),
+    "tls_context": ("noderecorder",),
+    "tls_redirect": ("noderecorder",),
+    "tls_finish_request": ("noderecorder",),
+    "tls_start": ("noderecorder",),
+    "tls_secure": ("noderecorder",),
 }
 
 
