@@ -21,7 +21,7 @@ def shared():
         src = f.read()
     ns = {}
     for node in ast.parse(src).body:
-        if isinstance(node, ast.FunctionDef) and node.name in ("pw_eye_html", "pw_eye_inject"):
+        if isinstance(node, ast.FunctionDef) and node.name in ("login_ui_html", "login_ui_inject"):
             exec(ast.get_source_segment(src, node), ns)
     return ns
 
@@ -37,27 +37,27 @@ class EyeFunctions(unittest.TestCase):
 
     def test_inject_before_last_body(self):
         page = "<html><body><p>a</p></body></html>"
-        out = self.ns["pw_eye_inject"](page, "pw")
+        out = self.ns["login_ui_inject"](page, "pw")
         self.assertTrue(out.startswith("<html><body><p>a</p><style>"))
         self.assertTrue(out.endswith("</script></body></html>"))
         self.assertEqual(out.count("</body>"), 1)
 
     def test_last_body_only(self):
         page = "<body>x '</body>' y</body>"
-        out = self.ns["pw_eye_inject"](page, "pw")
+        out = self.ns["login_ui_inject"](page, "pw")
         self.assertTrue(out.startswith("<body>x '</body>' y<style>"))
 
     def test_no_body_is_unchanged(self):
-        self.assertEqual(self.ns["pw_eye_inject"]("<p>x</p>", "pw"), "<p>x</p>")
+        self.assertEqual(self.ns["login_ui_inject"]("<p>x</p>", "pw"), "<p>x</p>")
 
     def test_nonce_on_both_tags(self):
-        out = self.ns["pw_eye_html"]("pw", "abc")
+        out = self.ns["login_ui_html"]("pw", "abc")
         self.assertIn('<style nonce="abc">', out)
         self.assertIn('<script nonce="abc">', out)
-        self.assertNotIn("nonce", self.ns["pw_eye_html"]("pw"))
+        self.assertNotIn("nonce", self.ns["login_ui_html"]("pw"))
 
     def test_id_is_json_quoted(self):
-        out = self.ns["pw_eye_html"]('a"b</script>')
+        out = self.ns["login_ui_html"]('a"b</script>')
         self.assertNotIn("</script>a", out)
         self.assertEqual(out.count("</script>"), 1)
 
@@ -65,7 +65,7 @@ class EyeFunctions(unittest.TestCase):
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
-        out = self.ns["pw_eye_html"]("pw")
+        out = self.ns["login_ui_html"]("pw")
         js = re.search(r"<script>(.*)</script>", out, re.S).group(1)
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
             f.write(js)
@@ -76,7 +76,7 @@ class EyeFunctions(unittest.TestCase):
             os.remove(f.name)
 
     def test_button_never_submits_and_hides_again(self):
-        js = self.ns["pw_eye_html"]("pw")
+        js = self.ns["login_ui_html"]("pw")
         self.assertIn("b.type='button'", js)
         self.assertIn("'submit'", js)
         self.assertIn("pagehide", js)
@@ -88,9 +88,9 @@ class EveryToolUsesIt(unittest.TestCase):
             with self.subTest(tool=key):
                 with open(tool_file(key), encoding="utf-8") as f:
                     src = f.read()
-                self.assertIn("def pw_eye_html(", src)
-                self.assertIn("def pw_eye_inject(", src)
-                self.assertRegex(src, r'pw_eye_inject\s*\([^\n]*"%s"|pw_eye_inject\s*\(\s*(?:HTML|_HTML_SRC)' % re.escape(field)
+                self.assertIn("def login_ui_html(", src)
+                self.assertIn("def login_ui_inject(", src)
+                self.assertRegex(src, r'login_ui_inject\s*\([^\n]*"%s"|login_ui_inject\s*\(\s*(?:HTML|_HTML_SRC)' % re.escape(field)
                                  if key != "nodecontrol_pi02w" else r'"login-pw"\)\.encode')
                 self.assertIn('id="%s"' % field, src)
 
@@ -98,7 +98,7 @@ class EveryToolUsesIt(unittest.TestCase):
         for key in ("nodecontrol", "sysmon"):
             for path in glob.glob(os.path.join(ROOT, key + "_v*.py")):
                 with open(path, encoding="utf-8") as f:
-                    self.assertNotIn("pw_eye_", f.read())
+                    self.assertNotIn("login_ui_", f.read())
 
 
 if __name__ == "__main__":

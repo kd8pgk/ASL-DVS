@@ -58,8 +58,8 @@ jobs:
         run: python3 ci/test_pibrary_slowlink.py
       - name: Login session and lockout rules (shared code)
         run: python3 ci/test_sessions.py
-      - name: Password eye
-        run: python3 ci/test_pw_eye.py
+      - name: Login screen (shared look and eye)
+        run: python3 ci/test_login_ui.py
       - name: Services file tests (Node Controller pi02w, Node Talker)
         run: python3 ci/test_nodecontrol_services.py
       - name: instmon slow-link tests (compression, revalidation, keep-alive, polling)

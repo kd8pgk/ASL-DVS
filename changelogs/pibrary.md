@@ -4,8 +4,9 @@ Current file: `pibrary_v0_17_1_20261113.py`. Before 0.14.0 Pibrary was kept outs
 
 ## 0.17.1 (2026-11-13)
 
-The login screen has an eye button in the password field that shows or hides what is typed. This is a release: the page script changed.
+The login screen has an eye button in the password field and now looks the same in every tool. This is a release: the page script changed.
 
+- **One login screen everywhere.** A dark card with the tool's name, one password field, a Log in button and a line for errors, and the licence line at the foot of the page. The "Welcome to the KD8PGK ..." line, the sub-title and the field label are gone, and the field says "Password". Colours, sizes and fonts are the same in every tool (the style comes from one shared block of code); the ids the page scripts use are unchanged.
 - **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is drawn with the page's own colours and is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
 - **Nothing else changes.** The login request, the cookie and the lockout are as before; the password is typed into the same field and is never stored by the page.
 

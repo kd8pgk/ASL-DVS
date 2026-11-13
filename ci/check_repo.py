@@ -316,6 +316,10 @@ SHARED_LOOK_LINES = (
     "--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;",
     "--amber:#ffd040;--amber-dim:#6b4800;",
     "textarea,pre,code{font-family:var(--mono)!important}",
+)
+
+
+SHARED_LOGIN_OLD = (
     "#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}",
     ".welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}",
     ".welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}",
@@ -325,10 +329,19 @@ SHARED_LOOK_LINES = (
     '<div class="splash-license">',
     ' · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>',
 )
+SHARED_LOGIN_NEW = (
+    'class="lg-screen',
+    '<h2 class="lg-title">',
+    'class="lg-in"',
+    'class="lg-btn"',
+    '<div class="lg-license">',
+    ' · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>',
+)
 
 
 def check_shared_look(path, text):
-    missing = [s for s in SHARED_LOOK_LINES if s not in text]
+    login = SHARED_LOGIN_NEW if "def login_ui_html(" in text else SHARED_LOGIN_OLD
+    missing = [s for s in SHARED_LOOK_LINES + login if s not in text]
     if missing:
         fail(f"{path}: not on the shared Node Control look (missing {missing[0]!r}"
              f"{f' and {len(missing) - 1} more' if len(missing) > 1 else ''})")

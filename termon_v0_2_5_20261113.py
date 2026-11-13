@@ -2597,7 +2597,7 @@ def _host_only(h):
     return host.rsplit(":", 1)[0] if ":" in host else host
 
 
-def pw_eye_html(input_id, nonce=""):
+def login_ui_html(input_id, nonce=""):
     import json
     attr = ' nonce="%s"' % nonce if nonce else ""
     css = (
@@ -2616,6 +2616,32 @@ def pw_eye_html(input_id, nonce=""):
         ".pw-eye .pw-off{display:none}"
         '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
         '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    skin = (
+        ".lg-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "gap:14px;box-sizing:border-box;padding:24px 16px 56px;background:#070b13;color:#e6edf6;"
+        "font-family:'Readex Pro',Arial,Helvetica,sans-serif}"
+        ".lg-screen.hidden,.lg-screen[hidden]{display:none}"
+        ".lg-card{box-sizing:border-box;width:100%;max-width:320px;margin:0;padding:25.6px 22.4px 19.2px;background:#121a29;"
+        "border:1px solid #2c3d5a;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;"
+        "gap:12px;text-align:center}"
+        ".lg-form{margin:0;padding:0;display:flex;flex-direction:column;gap:12px}"
+        ".lg-title{margin:0 0 4px;padding:0;font-family:inherit;font-size:18.4px;font-weight:700;line-height:1.2;"
+        "letter-spacing:.02em;color:#ffd040;text-shadow:none}"
+        "input.lg-in{box-sizing:border-box;width:100%;min-height:0;height:auto;margin:0;padding:9.6px 11.2px;font-family:inherit;"
+        "font-size:15.2px;line-height:1.2;background:#0a1020;color:#fff;border:1px solid #2c3d5a;border-radius:6px;outline:none}"
+        "input.lg-in:focus,input.lg-in:focus-visible{border-color:#ffd040;outline:none}"
+        "button.lg-btn{box-sizing:border-box;width:100%;min-height:0;margin:0;padding:10.4px;font-family:inherit;font-size:14.4px;"
+        "font-weight:700;line-height:1.2;letter-spacing:0;text-transform:none;background:#ffd040;color:#1a1300;border:0;"
+        "border-radius:6px;cursor:pointer;box-shadow:none;text-shadow:none;filter:none;transition:none}"
+        "button.lg-btn:hover:not(:disabled){background:#ffd040;color:#1a1300;filter:brightness(1.08);box-shadow:none}"
+        "button.lg-btn:disabled{opacity:.5;cursor:default}"
+        ".lg-msg{min-height:17.6px;margin:0;font-size:12.8px;line-height:1.3;color:#ff5d73;text-align:center}"
+        ".lg-note{margin:0;max-width:300px;font-size:12.5px;color:#ff5d73}.lg-note:empty{display:none}"
+        "button.lg-link{width:auto;min-height:0;margin:0 auto;padding:3.2px 8px;background:none;border:0;box-shadow:none;"
+        "color:#8aa0bf;font-family:inherit;font-size:12.8px;text-decoration:underline;text-transform:none;letter-spacing:0;cursor:pointer}"
+        ".lg-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:#7d8aa0}"
+        ".lg-license a{color:#6cb6ff}"
     )
     js = (
         "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
@@ -2639,19 +2665,19 @@ def pw_eye_html(input_id, nonce=""):
         "wrap.appendChild(b);}"
         "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
     )
-    return "<style%s>%s</style><script%s>%s</script>" % (attr, css, attr, js)
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, skin + css, attr, js)
 
 
-def pw_eye_inject(html, input_id, nonce=""):
+def login_ui_inject(html, input_id, nonce=""):
     head, sep, tail = html.rpartition("</body>")
     if not sep:
         return html
-    return head + pw_eye_html(input_id, nonce) + sep + tail
+    return head + login_ui_html(input_id, nonce) + sep + tail
 
 
 def r_page(h, q):
     nonce = secrets.token_urlsafe(18)
-    body = pw_eye_inject(PAGE.replace("__NONCE__", nonce), "pw", nonce)
+    body = login_ui_inject(PAGE.replace("__NONCE__", nonce), "pw", nonce)
     h._send(200, "text/html; charset=utf-8", body.encode("utf-8"), csp=_csp(nonce))
 
 
@@ -3608,12 +3634,6 @@ input.port{width:110px;min-height:40px;background:#0a1020;color:#fff;border:1px 
 pre.out{background:#000;border:1px solid var(--line);border-radius:8px;padding:8px;max-height:220px;overflow:auto;font:12px/1.4 ui-monospace,Menlo,monospace;color:var(--soft);white-space:pre-wrap;word-break:break-word}
 textarea.copybox{width:100%;min-height:120px;margin-top:10px;background:#0a1020;color:#fff;border:1px solid var(--line2);border-radius:8px;padding:8px;font:12px ui-monospace,Menlo,monospace}
 a.lnk{color:var(--accent);word-break:break-all}
-#login{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
-#login-card{background:var(--card);border:1px solid var(--line2);border-radius:12px;padding:22px;width:min(360px,100%);text-align:center}
-#login-card h2{margin:0 0 10px;color:var(--amber);font-size:17px}
-#pw{width:100%;min-height:44px;background:#0a1020;color:#fff;border:1px solid var(--line2);border-radius:8px;padding:0 12px;font:15px Arial,sans-serif;margin-bottom:10px}
-#login-btn{width:100%}
-#login-msg{min-height:20px;color:var(--red);font-size:13px;margin-top:10px}
 @media (max-width:560px){.term{height:56vh}header h1{font-size:15px}.srow .nm{min-width:90px}}
 </style>
 </head>
@@ -3700,14 +3720,14 @@ a.lnk{color:var(--accent);word-break:break-all}
     </div>
   </section>
 </main>
-<div id="login" hidden>
-  <div id="login-card">
-    <h2>Terminal Monitor</h2>
-    <div class="muted" style="margin-bottom:12px">Sign in with the password of the shell account (root unless Setup says otherwise).</div>
-    <input id="pw" type="password" autocomplete="current-password" placeholder="Root password">
-    <button class="btn on" id="login-btn" type="button">Sign in</button>
-    <div id="login-msg"></div>
+<div id="login" class="lg-screen" hidden>
+  <div id="login-card" class="lg-card">
+    <h2 class="lg-title">Terminal Monitor</h2>
+    <input class="lg-in" id="pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+    <button class="lg-btn" id="login-btn" type="button">Log in</button>
+    <div id="login-msg" class="lg-msg"></div>
   </div>
+  <div class="lg-license">Terminal Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
 </div>
 <script src="/static/xterm.js"></script>
 <script src="/static/addon-fit.js"></script>

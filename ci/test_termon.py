@@ -213,7 +213,7 @@ class HeaderTests(TermonBase):
         nonce = re.search(r"'nonce-([^']+)'", script_src).group(1)
         html = body.decode("utf-8")
         self.assertIn(f'<script nonce="{nonce}">', html)
-        self.assertEqual(html.count("<script"), 3)
+        self.assertEqual(html.count("<script"), 4)
         self.assertEqual(len(re.findall(r"<script(?![^>]*\bsrc=)(?![^>]*nonce=)", html)), 0)
         self.assertNotIn("__NONCE__", html)
         self.assertNotRegex(html, r"\son(click|load|error)=")
