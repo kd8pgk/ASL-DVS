@@ -60,7 +60,7 @@ jobs:
         run: python3 ci/test_sessions.py
       - name: Login screen (shared look and eye)
         run: python3 ci/test_login_ui.py
-      - name: Session adoption (Node Talker, Node Recorder, instmon)
+      - name: Session adoption (Node Talker, Node Recorder, instmon, Pibrary, wifimon, 44helper)
         run: python3 ci/test_session_adoption.py
       - name: Services file tests (Node Controller pi02w, Node Talker)
         run: python3 ci/test_nodecontrol_services.py

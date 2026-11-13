@@ -174,9 +174,7 @@ class Revalidation(Served):
     def test_a_304_still_renews_the_session_cookie(self):
         r, _, c = self.get("/api/small")
         tag = r.getheader("ETag")
-        with mock.patch.object(pib, "_session_valid", lambda t: True), \
-                mock.patch.object(pib, "_session_cookie_header", lambda t, ttl: "pibrary_session=%s; Path=/" % t), \
-                mock.patch.object(pib.PibraryHandler, "_authed", lambda self: setattr(self, "_renew_token", "tok") or True):
+        with mock.patch.object(pib.PibraryHandler, "_authed", lambda self: setattr(self, "_renew_token", ("tok", 100)) or True):
             r2, _, _ = self.get("/api/small", {"If-None-Match": tag}, conn=c)
         self.assertEqual(r2.status, 304)
         self.assertIn("pibrary_session=tok", r2.getheader("Set-Cookie") or "")
