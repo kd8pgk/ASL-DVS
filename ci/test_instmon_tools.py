@@ -383,46 +383,71 @@ class Page(unittest.TestCase):
 
 
 class SessionsAndFullUpdate(unittest.TestCase):
+    T0 = 1_000_000.0
+
     def setUp(self):
         im._revoke_all_sessions()
+        im._sess_hold[0] = 0.0
+        im._stamp_cache[0] = 0.0
 
-    def test_an_old_session_is_kept_while_a_full_update_runs(self):
-        token = im._issue_session()
-        with im._sessions_lock:
-            im._sessions[token] = 1.0
-        with mock.patch.object(im, "full_update_running", return_value=True):
-            self.assertTrue(im._check_session(token))
-            self.assertGreater(im._sessions[token], 1_000_000.0)
-        with mock.patch.object(im, "full_update_running", return_value=False):
-            self.assertTrue(im._check_session(token))
+    def at(self, t, running=False):
+        return mock.patch.multiple(im.time, time=lambda: t), mock.patch.object(im, "full_update_running", return_value=running)
 
-    def test_an_old_session_expires_when_no_update_runs(self):
-        token = im._issue_session()
-        with im._sessions_lock:
-            im._sessions[token] = 1.0
-        with mock.patch.object(im, "full_update_running", return_value=False):
-            self.assertFalse(im._check_session(token))
+    def run_at(self, t, fn, running=False):
+        clock, run = self.at(t, running)
+        with clock, run:
+            return fn()
 
-    def test_a_login_during_an_update_does_not_drop_held_sessions(self):
-        old = im._issue_session()
-        with im._sessions_lock:
-            im._sessions[old] = 1.0
-        with mock.patch.object(im, "full_update_running", return_value=True):
-            im._issue_session()
-            self.assertIn(old, im._sessions)
+    def test_strict_tier_idle_is_two_hours(self):
+        token, age = self.run_at(self.T0, im._issue_session)
+        self.assertEqual(age, 2 * 3600)
+        self.assertTrue(self.run_at(self.T0 + 7000, lambda: im._check_session(token)))
+        self.assertTrue(self.run_at(self.T0 + 7000 + 7000, lambda: im._check_session(token)))
+        self.assertFalse(self.run_at(self.T0 + 14000 + 7300, lambda: im._check_session(token)))
 
-    def test_starting_a_full_update_drops_sessions_that_already_ran_out(self):
-        stale = im._issue_session()
-        live = im._issue_session()
-        with im._sessions_lock:
-            im._sessions[stale] = 1.0
-        im._prune_sessions()
-        with mock.patch.object(im, "full_update_running", return_value=True):
-            self.assertFalse(im._check_session(stale))
-            self.assertTrue(im._check_session(live))
+    def test_strict_tier_has_a_twelve_hour_cap(self):
+        token, _ = self.run_at(self.T0, im._issue_session)
+        for hour in range(1, 12):
+            self.assertTrue(self.run_at(self.T0 + hour * 3600, lambda: im._check_session(token)))
+        self.assertFalse(self.run_at(self.T0 + 12 * 3600 + 60, lambda: im._check_session(token)))
+
+    def test_the_cookie_is_renewed_about_hourly(self):
+        token, _ = self.run_at(self.T0, im._issue_session)
+
+        def probe(t):
+            def go():
+                ok = im._check_session(token)
+                return ok, getattr(im._sess_local, "renew", 0)
+            return self.run_at(t, go)
+        self.assertEqual(probe(self.T0 + 600), (True, 0))
+        ok, age = probe(self.T0 + 3700)
+        self.assertTrue(ok)
+        self.assertGreater(age, 0)
+
+    def test_a_session_is_held_while_a_full_update_runs_and_dropped_after(self):
+        token, _ = self.run_at(self.T0, im._issue_session, running=True)
+        self.assertTrue(self.run_at(self.T0 + 10 * 3600, lambda: im._check_session(token), running=True))
+        self.assertTrue(self.run_at(self.T0 + 30 * 3600, lambda: im._check_session(token), running=True))
+        self.assertFalse(self.run_at(self.T0 + 30 * 3600, lambda: im._check_session(token), running=False))
+
+    def test_an_expired_session_is_not_revived_by_an_update(self):
+        token, _ = self.run_at(self.T0, im._issue_session)
+        self.assertFalse(self.run_at(self.T0 + 9 * 3600, lambda: im._check_session(token), running=True))
+
+    def test_starting_an_update_drops_sessions_that_already_ran_out(self):
+        stale, _ = self.run_at(self.T0, im._issue_session)
+        live, _ = self.run_at(self.T0 + 9 * 3600, im._issue_session)
+        self.run_at(self.T0 + 9 * 3600, im._prune_sessions)
+        self.assertFalse(self.run_at(self.T0 + 9 * 3600, lambda: im._check_session(stale), running=True))
+        self.assertTrue(self.run_at(self.T0 + 9 * 3600, lambda: im._check_session(live), running=True))
+
+    def test_a_login_during_an_update_keeps_the_held_ones(self):
+        old, _ = self.run_at(self.T0, im._issue_session, running=True)
+        self.run_at(self.T0 + 5 * 3600, im._issue_session, running=True)
+        self.assertTrue(self.run_at(self.T0 + 5 * 3600, lambda: im._check_session(old), running=True))
 
     def test_finishing_a_full_update_signs_everyone_out(self):
-        tokens = [im._issue_session() for _ in range(3)]
+        tokens = [im._issue_session()[0] for _ in range(3)]
         with mock.patch.object(im, "_fu_save"), mock.patch.object(im, "_gh_event"), \
                 mock.patch.object(im, "_fu_refresh_plan"):
             im._fu_finish()

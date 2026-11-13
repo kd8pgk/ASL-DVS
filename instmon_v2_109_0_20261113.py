@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.108.0"
+VERSION ="2.109.0"
 DATE_STR ="2026-11-13"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -248,60 +248,192 @@ def _verify_root_password(password):
         log_event(f"_verify_root_password: shadow fallback failed: {exc}", "warn")
         return False
 
+def sess_policy(tier):
+    if tier == "standard":
+        return {"idle": 12 * 3600, "absolute": 0, "renew": 3600, "max": 50}
+    if tier == "strict":
+        return {"idle": 2 * 3600, "absolute": 12 * 3600, "renew": 3600, "max": 50}
+    raise ValueError("unknown session tier: %s" % (tier,))
+
+
+def sess_digest(token):
+    import hashlib
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def sess_stamp(password_hash):
+    import hashlib
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:32]
+
+
+def sess_dead(rec, now):
+    return rec["idle"] <= now or bool(rec["abs"] and rec["abs"] <= now)
+
+
+def sess_new(store, policy, now, stamp="", ip=""):
+    import secrets
+    for key in [k for k, r in store.items() if sess_dead(r, now)]:
+        del store[key]
+    while len(store) >= policy["max"]:
+        del store[min(store, key=lambda k: store[k]["born"])]
+    token = secrets.token_hex(32)
+    idle = now + policy["idle"]
+    hard = now + policy["absolute"] if policy["absolute"] else 0
+    store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
+                                 "renew": now, "stamp": stamp, "ip": ip}
+    return token, int(min(idle, hard) - now if hard else idle - now)
+
+
+def sess_check(store, token, policy, now, stamp=None, touch=True, ip=None):
+    if not token:
+        return False, False, 0
+    key = sess_digest(token)
+    rec = store.get(key)
+    if rec is None:
+        return False, False, 0
+    if (sess_dead(rec, now) or (stamp is not None and rec["stamp"] != stamp)
+            or (ip is not None and rec["ip"] and rec["ip"] != ip)):
+        del store[key]
+        return False, False, 0
+    if touch:
+        rec["idle"] = now + policy["idle"]
+        if rec["abs"]:
+            rec["idle"] = min(rec["idle"], rec["abs"])
+    renew = bool(touch and now - rec["renew"] >= policy["renew"])
+    if renew:
+        rec["renew"] = now
+    return True, renew, int(rec["idle"] - now)
+
+
+def sess_drop(store, token):
+    return store.pop(sess_digest(token), None) is not None if token else False
+
+
+def sess_drop_all(store):
+    count = len(store)
+    store.clear()
+    return count
+
+
+def sess_cookie_name(name, secure):
+    return ("__Host-" if secure else "") + name
+
+
+def sess_cookie(name, token, max_age, secure):
+    parts = [sess_cookie_name(name, secure) + "=" + token, "Path=/", "HttpOnly", "SameSite=Strict",
+             "Max-Age=%d" % max(0, int(max_age))]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def sess_cookie_clear(name, secure):
+    return sess_cookie(name, "", 0, secure)
+
+
+def sess_token_from(cookie_header, name):
+    wanted = (name, "__Host-" + name)
+    for part in (cookie_header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key in wanted and value:
+            return value
+    return None
+
+
+def lock_wait(state, ip, now, wan=False):
+    recent = state.setdefault("wan", [])
+    while recent and now - recent[0] > 600:
+        recent.pop(0)
+    rec = state.setdefault("ip", {}).get(ip)
+    wait = max(0.0, rec["until"] - now) if rec else 0.0
+    if wan and len(recent) >= 20:
+        wait = max(wait, recent[0] + 600 - now)
+    return wait
+
+
+def lock_fail(state, ip, now, wan=False):
+    table = state.setdefault("ip", {})
+    recent = state.setdefault("wan", [])
+    for key in [k for k, r in table.items() if now - r["last"] > 3600 and r["until"] <= now]:
+        del table[key]
+    while len(table) >= 1000 and ip not in table:
+        del table[min(table, key=lambda k: table[k]["last"])]
+    if wan:
+        recent.append(now)
+        del recent[:-20]
+    rec = table.setdefault(ip, {"n": 0, "until": 0.0, "last": now})
+    rec["n"] += 1
+    rec["last"] = now
+    if rec["n"] >= 5:
+        rec["until"] = now + min(5 * 2 ** min(rec["n"] - 5, 10), 300)
+    return max(0.0, rec["until"] - now)
+
+
+def lock_ok(state, ip):
+    state.setdefault("ip", {}).pop(ip, None)
+
+
 _SESSION_COOKIE_NAME = "instmon_session"
-_SESSION_TTL_SEC = 12 * 3600
 _auth_log_lock = threading.Lock()
 _auth_log_state = {}
-
+_SESS_POLICY = sess_policy("strict")
 _sessions = {}
 _sessions_lock = threading.Lock()
+_sess_local = threading.local()
+_stamp_cache = [0.0, ""]
+
+
+_sess_hold = [0.0]
+
+
+def _sess_now():
+    if full_update_running():
+        if not _sess_hold[0]:
+            _sess_hold[0] = time.time()
+        return _sess_hold[0]
+    _sess_hold[0] = 0.0
+    return time.time()
+
+
+def _pw_stamp():
+    now = time.time()
+    if now - _stamp_cache[0] > 5:
+        try:
+            value = sess_stamp(_read_shadow_hash(_AUTH_ACCOUNT) or "")
+        except Exception:
+            value = ""
+        _stamp_cache[0] = now
+        _stamp_cache[1] = value
+    return _stamp_cache[1]
+
 
 def _issue_session():
-    token = secrets.token_hex(32)
-    now = time.time()
-    holding = full_update_running()
+    now = _sess_now()
     with _sessions_lock:
-        for t in [tk for tk, exp in _sessions.items() if exp <= now and not holding]:
-            _sessions.pop(t, None)
-        _sessions[token] = now + _SESSION_TTL_SEC
-    return token
+        return sess_new(_sessions, _SESS_POLICY, now, _pw_stamp())
+
 
 def _check_session(token):
-    if not token:
-        return False
-    holding = full_update_running()
+    _sess_local.renew = 0
+    now = _sess_now()
     with _sessions_lock:
-        exp = _sessions.get(token)
-        if exp is not None and holding and exp <= time.time():
-            _sessions[token] = time.time() + _SESSION_TTL_SEC
-            return True
-        if exp is None or exp <= time.time():
-            _sessions.pop(token, None)
-            return False
-        _sessions[token] = time.time() + _SESSION_TTL_SEC
-        return True
+        ok, renew, age = sess_check(_sessions, token, _SESS_POLICY, now, _pw_stamp())
+    if ok and renew:
+        _sess_local.renew = age
+    return ok
 
-def _revoke_session(token):
-    with _sessions_lock:
-        _sessions.pop(token, None)
-
-def _prune_sessions():
-    now = time.time()
-    with _sessions_lock:
-        for t in [tk for tk, exp in _sessions.items() if exp <= now]:
-            _sessions.pop(t, None)
 
 def _revoke_all_sessions():
     with _sessions_lock:
-        count = len(_sessions)
-        _sessions.clear()
-    return count
+        return sess_drop_all(_sessions)
 
-def _session_cookie_header(token, max_age):
-    return f"{_SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
 
-def _clear_session_cookie_header():
-    return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+def _prune_sessions():
+    now = _sess_now()
+    with _sessions_lock:
+        for key in [k for k, r in _sessions.items() if sess_dead(r, now)]:
+            del _sessions[key]
+
 
 _DISKIMG_REQUIRED_TOOLS = ("dd", "lsblk", "findmnt", "mount", "umount", "partprobe")
 _DISKIMG_OPTIONAL_TOOLS = {
@@ -2998,37 +3130,26 @@ _running_installs_lock =threading .Lock ()
 
 _LOG_CONTROL_CHARS_RE =re .compile (r'[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]')
 
-_auth_failures ={}
-_auth_failures_lock =threading .Lock ()
-AUTH_MAX_FAILURES =5 
-AUTH_LOCKOUT_BASE_SEC =5 
-AUTH_LOCKOUT_MAX_SEC =300 
+_lock_state = {}
+_lock_lock = threading.Lock()
 
-def _auth_lockout_remaining (client_ip ):
-    with _auth_failures_lock :
-        rec =_auth_failures .get (client_ip )
-        if not rec :
-            return 0 
-        return max (0 ,rec ["locked_until"]-time .time ())
 
-def _record_auth_failure (client_ip ):
-    with _auth_failures_lock :
-        rec =_auth_failures .setdefault (client_ip ,{"fails":0 ,"locked_until":0 })
-        rec ["fails"]+=1 
-        if rec ["fails"]>=AUTH_MAX_FAILURES :
-            backoff =min (
-            AUTH_LOCKOUT_BASE_SEC *(2 **(rec ["fails"]-AUTH_MAX_FAILURES )),
-            AUTH_LOCKOUT_MAX_SEC ,
-            )
-            rec ["locked_until"]=time .time ()+backoff 
-            log_event (
-            f"Auth: {client_ip } locked out for {backoff }s after {rec ['fails']} failed attempts",
-            "warn",
-            )
+def _auth_lockout_remaining(client_ip, wan=False):
+    with _lock_lock:
+        return lock_wait(_lock_state, client_ip, time.time(), wan)
 
-def _record_auth_success (client_ip ):
-    with _auth_failures_lock :
-        _auth_failures .pop (client_ip ,None )
+
+def _record_auth_failure(client_ip, wan=False):
+    with _lock_lock:
+        wait = lock_fail(_lock_state, client_ip, time.time(), wan)
+    if wait > 0:
+        log_event(f"Auth: {client_ip} locked out for {int(wait)}s after repeated failed attempts", "warn")
+
+
+def _record_auth_success(client_ip):
+    with _lock_lock:
+        lock_ok(_lock_state, client_ip)
+
 
 def log_event (message ,level ="info"):
     global _log_seq 
@@ -7999,6 +8120,7 @@ def full_update_start():
                          updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None,
                          in_progress=None)
         _fu_stop_ev.clear()
+    _sess_now()
     _prune_sessions()
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
@@ -13635,6 +13757,11 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _send_body(self, status, body, ctype, extra_headers=None):
         extra = list(extra_headers or [])
         names = {k.lower() for k, _ in extra}
+        age = getattr(_sess_local, "renew", 0)
+        if age:
+            _sess_local.renew = 0
+            if "set-cookie" not in names:
+                extra.append(("Set-Cookie", sess_cookie(_SESSION_COOKIE_NAME, self._session_token() or "", age, False)))
         etag = ""
         if self.command in ("GET", "HEAD") and status == 200 and "etag" not in names:
             etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
@@ -13675,12 +13802,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self ._send_json (status ,{"error":message ,"message":message })
 
     def _session_token(self):
-        cookie_header = self.headers.get("Cookie", "")
-        for part in cookie_header.split(";"):
-            part = part.strip()
-            if part.startswith(_SESSION_COOKIE_NAME + "="):
-                return part[len(_SESSION_COOKIE_NAME) + 1:]
-        return None
+        return sess_token_from(self.headers.get("Cookie", ""), _SESSION_COOKIE_NAME)
 
     def _require_auth(self):
         client_ip = self.client_address[0]
@@ -14660,8 +14782,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             if not _check_session(self._session_token()):
                 self._require_auth()
                 return
-            _revoke_session(self._session_token())
-            self._send_json(200, {"ok": True}, extra_headers=[("Set-Cookie", _clear_session_cookie_header())])
+            _revoke_all_sessions()
+            self._send_json(200, {"ok": True}, extra_headers=[("Set-Cookie", sess_cookie_clear(_SESSION_COOKIE_NAME, False))])
             return
         if not _check_session(self._session_token()):
             self._require_auth()
@@ -14706,9 +14828,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         password = body.get("password") or ""
         if _verify_root_password(password):
             _record_auth_success(client_ip)
-            token = _issue_session()
+            token, age = _issue_session()
             self._send_json(200, {"ok": True},
-                             extra_headers=[("Set-Cookie", _session_cookie_header(token, _SESSION_TTL_SEC))])
+                             extra_headers=[("Set-Cookie", sess_cookie(_SESSION_COOKIE_NAME, token, age, False))])
         else:
             _record_auth_failure(client_ip)
             self._send_json(401, {"ok": False, "error": "Invalid password", "message": "Invalid password"})

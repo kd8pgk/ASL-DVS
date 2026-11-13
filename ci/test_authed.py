@@ -169,7 +169,11 @@ def make_case(key):
             st, _, _, _ = get_partial(self.server, probe, own)
             self.assertIn(st, (401, 403), "the logged-out cookie must stop working")
             st = get_partial(self.server, probe, self.cookie)[0]
-            self.assertEqual(st, 200, "logging out one session must not end the others")
+            if key in LOGOUT_ENDS_EVERY_SESSION:
+                self.assertIn(st, (401, 403), "any logout must end every session")
+                type(self).cookie = login(self.server)
+            else:
+                self.assertEqual(st, 200, "logging out one session must not end the others")
 
     AuthedCase.__name__ = f"Authed_{key}"
     AuthedCase.__qualname__ = f"Authed_{key}"
@@ -521,6 +525,7 @@ def make_nt_case(key):
     return NTCase
 
 
+LOGOUT_ENDS_EVERY_SESSION = ("nodetalker", "noderecorder", "instmon")
 NT_KEYS = ("nodetalker", "amp_nodetalker", "noderecorder")
 
 for _key in ts.SERVERS:

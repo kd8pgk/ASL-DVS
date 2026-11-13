@@ -1,5 +1,16 @@
 # Node Talker changelog
 
+## 0.10.46 (2026-11-13)
+
+Login sessions and lockout follow the common model (`shared/confio.py`, the same code as the other tools will use). This is a release: the server's session rules changed.
+
+- **Tier: standard.** A session ends after 12 hours without use; there is no hard cap. Using the page keeps it alive, and the cookie is renewed about once an hour while in use (before, its life was fixed at the login and the browser dropped it 12 hours after the login even while the page was in use).
+- **Any Log Out ends every session.** There is no separate "log out everywhere"; the one Log Out button signs out all browsers.
+- **A root password change ends every session.** The page asks for the new password.
+- **Safer cookie.** Only a hash of each session's key is kept in memory (at most 50 sessions); on an https page the cookie is named with `__Host-` in front (Secure, no domain).
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s; a login that works clears it. Many failures from the internet in 10 minutes also pause internet logins.
+- **Nothing else changes.** Same password, same login request.
+
 ## 0.10.45 (2026-11-13)
 
 The login screen has an eye button in the password field and now looks the same in every tool. This is a release: the page script changed.
@@ -232,7 +243,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_45_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_46_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
