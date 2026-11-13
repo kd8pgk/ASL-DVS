@@ -1,6 +1,22 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_15_0_20261110.py`. Newest entries first.
+Current file: `noderecorder_v0_16_0_20261113.py`. Newest entries first.
+
+## 0.16.0 (2026-11-13)
+
+Node Recorder is checked against Node Talker and Node Controller, and the faults Node Talker fixed in 0.10.35 and 0.10.39 are fixed here too. This is a release: tune, connect and disconnect behaviour changed. Most of it matters when Node Controller is not running and Node Recorder tunes DVSwitch itself, which is how a scheduled digital recording is set up then. Not tried on a node.
+
+- **A failed DVSwitch mode switch stops the tune.** When `dvswitch.sh mode` failed it was logged and the tune went on in the old mode, so a scheduled DMR, P25 or NXDN recording could record the wrong thing. The tune now stops with a message.
+- **Disconnect reports a failure.** A failed `dvswitch.sh` disconnect, an M17 ini that cannot be written, or a USRP2M17 service that does not restart now fails the disconnect ("... is still tuned: ...") and what was tuned stays shown. A new tune still goes ahead when the old one's teardown fails.
+- **Link drops are checked.** After a disconnect Node Recorder reads the link list again (up to 3 s). A node Asterisk still lists is reported as still linked, for a single node, a favorite and Disconnect Links. If the list cannot be read, the disconnect is reported as before.
+- **The connect check follows Node Controller and Node Talker.** It waits up to 10 s (was 15), asking Asterisk every half second. It fails at once when the node appears and then drops out of the link list, and after 5 s when the node never appears. A node still connecting after 10 s is reported as still trying.
+- **Disconnect All forgets the remembered mode and DMR network,** so the first tune after the services restart sets both again.
+- **Waits 220 s for a tune through Node Controller,** up from 100 s, so a tune that takes Node Controller longer is not reported as "not answering".
+- **Same sound conversion code.** `_ulaw_byte` is now the same text as in Node Talker and Node Controller; a test checks every sample gives the same byte as before.
+- **Checked by the shared-code rule.** Node Recorder is now listed in `shared/confio.py` for `atomic_write`, `ami_credentials`, `firewall_backend`, `open_firewall_port`, `close_firewall_port` and `allmon3_sync`. It already carried them unchanged; `check_repo` now fails if one drifts. `rpt_scan` and `rpt_remove_private` were already listed.
+- The Local monitor link choice (`ilink 8`) is kept in every changed path.
+- Left as they are on purpose: the login session code (it matches Node Talker, and Node Controller keeps its own), the "tuned" verdict on the tune line, and the Suite Log, which belong to Node Talker's own features.
+- Tests: new `ci/test_noderecorder_links.py` (18 tests: the Node Talker cases for the mode switch, the disconnect failures, the drop check and the connect check, the link choice kept, the waits, and the sound conversion over every sample).
 
 ## 0.15.0 (2026-11-10)
 

@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 DATE_STR = "2026-11-09"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -757,14 +757,12 @@ def _schedule_restart():
 
 def _ulaw_byte(s):
     sign = 0x80 if s < 0 else 0
-    if s < 0:
-        s = -s
-    if s > 32635:
-        s = 32635
-    s += 0x84
-    exponent = min(7, max(0, s.bit_length() - 8))
-    mantissa = (s >> (exponent + 3)) & 0x0F
-    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+    s = min(-s if s < 0 else s, 32635) + 0x84
+    exp, mask = 7, 0x4000
+    while exp > 0 and not (s & mask):
+        exp -= 1
+        mask >>= 1
+    return ~(sign | (exp << 4) | ((s >> (exp + 3)) & 0x0F)) & 0xFF
 
 
 ULAW_TABLE = bytes(_ulaw_byte(i - 65536 if i >= 32768 else i) for i in range(65536))
@@ -1670,6 +1668,7 @@ def _reset_run():
             log_event(f"Disconnect All: {label} did not restart: {why}", "err")
     _lstats_invalidate()
     _links_cache["t"] = -1e9
+    _dvs_now.update(mode="", dmr="")
     parts = []
     if done:
         parts.append("restarted " + ", ".join(done))
@@ -1888,7 +1887,12 @@ _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 _CALL_TRIM = re.compile(r"[\x00-\x1f\x7f]")
 _M17_REF_RE = re.compile(r"[A-Z0-9][A-Z0-9-]{0,15}")
 M17_STATUS_TTL = 5.0
-LINK_WAIT_SEC = 15
+LINK_WAIT_SEC = 10
+LINK_WAIT_STEP_SEC = 0.5
+LINK_WAIT_MIN_STEPS = 10
+DROP_CHECK_TRIES = 6
+DROP_CHECK_STEP_SEC = 0.5
+NC_TUNE_TIMEOUT = 220
 
 
 def iax_bindport():
@@ -2807,8 +2811,13 @@ def _m17_park():
         _atomic_write(M17_INI, _m17_ini_text(callsign_now()[0], "DISCONNECTED", "0.0.0.0", "A"), 0o644)
     except OSError as exc:
         log_event(f"Could not write {M17_INI}: {exc}", "warn")
-        return
-    _systemctl("restart", M17_SERVICE, timeout=30)
+        return f"could not write {M17_INI}: {exc}"
+    res = _systemctl("restart", M17_SERVICE, timeout=30)
+    if res.returncode != 0:
+        why = (res.stderr or res.stdout or "").strip()[:160] or f"exit {res.returncode}"
+        log_event(f"{M17_SERVICE} did not restart: {why}", "warn")
+        return f"{M17_SERVICE} did not restart: {why}"
+    return ""
 
 
 def _m17_present():
@@ -2896,21 +2905,26 @@ def teardown(node, keep=(), what="Connect"):
     return dropped
 
 
-def _leave(node, next_kind):
+def _leave(node, next_kind, strict=False):
     mode, bridge = _solo["mode"], _solo["bridge"]
     if mode in DVS_MODES:
         if mode == "DSTAR":
             dvs("tune", DSTAR_UNLINK)
         if next_kind != "dvs":
-            dvs("tune", DVS_DISCONNECT)
+            ok, out = dvs("tune", DVS_DISCONNECT)
+            if strict and not ok:
+                return f"dvswitch.sh did not disconnect: {out[:160] or 'no answer'}"
             if bridge:
                 ilink(node, 1, bridge)
     elif mode == "M17" and next_kind != "m17":
-        _m17_park()
+        err = _m17_park()
+        if strict and err:
+            return err
         if bridge:
             ilink(node, 1, bridge)
     if mode:
         _solo_set()
+    return ""
 
 
 def _busy():
@@ -3045,7 +3059,7 @@ def nc_dvs(f, node, net_action=None):
                 return {"ok": False, "error": "this version of Node Controller can't take networks from Node Recorder; update it."
                         if _nc_old(r) else f"Node Controller: {r['error']}"}
             log_event(f"Added DMR network {net['name']} to Node Controller", "ok")
-    r = dash_call(body, timeout=100)
+    r = dash_call(body, timeout=NC_TUNE_TIMEOUT)
     _nc_dvs_status["t"] = -M17_STATUS_TTL
     _lstats_invalidate()
     if r is None:
@@ -3135,6 +3149,7 @@ def solo_dvs(f, node, net_action=None, op=3):
             _dvs_now["mode"] = f["mode"] if ok else ""
             if not ok:
                 log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
+                return {"ok": False, "error": f"Could not switch DVSwitch to {label}: {out[:160] or 'no answer from dvswitch.sh'}"}
             time.sleep(DVS_SETTLE_SEC)
         if net is not None:
             tune = f"{net['password']}@{net['address']}"
@@ -3207,9 +3222,12 @@ def solo_disconnect(node):
         return _busy()
     try:
         name = _solo["name"]
-        _leave(node, "off")
+        err = _leave(node, "off", strict=True)
     finally:
         _tune_lock.release()
+    if err:
+        log_event(f"Disconnect {name} failed: {err}", "warn")
+        return {"ok": False, "error": f"{name} is still tuned: {err}"}
     log_event(f"Disconnected {name}", "ok")
     return name
 
@@ -3270,15 +3288,21 @@ def m17_connect(f, node, op=3):
 
 
 def wait_link(node, target, wait=LINK_WAIT_SEC):
-    deadline = time.monotonic() + wait
-    while True:
+    seen = answered = False
+    for i in range(int(wait / LINK_WAIT_STEP_SEC)):
+        time.sleep(LINK_WAIT_STEP_SEC)
         ok, links = rpt_links(node, max_age=0)
+        if not ok:
+            continue
+        answered = True
         hit = next((l for l in links if l["node"] == target), None)
-        if hit is not None and hit["state"].upper() in ("", "ESTABLISHED"):
-            return "up"
-        if time.monotonic() >= deadline:
-            return "unknown" if not ok else "connecting" if hit else "down"
-        time.sleep(1)
+        if hit is not None:
+            if hit["state"].upper() in ("", "ESTABLISHED"):
+                return "up"
+            seen = True
+        elif seen or i + 1 >= LINK_WAIT_MIN_STEPS:
+            return "down"
+    return "connecting" if answered else "unknown"
 
 
 def _link_outcome(f, node, via):
@@ -3399,7 +3423,9 @@ def _fav_disconnect_impl(index=None):
         log_event(f"Disconnect {done[0]} through Node Controller", "ok")
     if not hit:
         return {"ok": True, "message": f"Disconnected {done[0]}." if done else ("That favorite is not linked." if index is not None else "No favorite is linked.")}
-    drop_peers(node, hit)
+    left = drop_peers(node, hit)
+    if left:
+        return _still_linked(left)
     return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
@@ -3416,8 +3442,12 @@ def disconnect_links(_body=None):
         else:
             hit = [l["node"] for l in links if l["node"] != REC_NODE]
             if hit:
-                drop_peers(node, hit)
-                said.append(f"Disconnected {', '.join(hit)}.")
+                left = drop_peers(node, hit)
+                gone = [p for p in hit if p not in left]
+                if gone:
+                    said.append(f"Disconnected {', '.join(gone)}.")
+                if left:
+                    bad.append(_still_linked(left)["error"])
     if bad:
         return {"ok": False, "error": " ".join(bad)}
     return {"ok": True, "message": " ".join(said) or "Nothing is linked."}
@@ -3433,7 +3463,27 @@ def drop_peers(node, hit):
     _lstats_invalidate()
     if _asl_keep["v"] in hit:
         _asl_keep["v"] = ""
-    log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
+    left = []
+    for _ in range(DROP_CHECK_TRIES):
+        ok, links = rpt_links(node, max_age=0)
+        if not ok:
+            left = []
+            break
+        now = {l["node"] for l in links}
+        left = [p for p in hit if p in now]
+        if not left:
+            break
+        time.sleep(DROP_CHECK_STEP_SEC)
+    gone = [p for p in hit if p not in left]
+    if gone:
+        log_event(f"Disconnect {', '.join(gone)} from node {node}" + (" through Node Controller" if via else ""), "ok")
+    if left:
+        log_event(f"Disconnect: node {node} still lists {', '.join(left)} as linked", "warn")
+    return left
+
+
+def _still_linked(left):
+    return {"ok": False, "error": f"Asterisk still lists {', '.join(left)} as linked. Try Disconnect again."}
 
 
 MMDVM_DIR = os.environ.get("NODERECORDER_MMDVM_DIR", "/var/lib/mmdvm")
@@ -3742,7 +3792,9 @@ def _tune_disconnect_impl(b=None):
             return {"ok": False, "error": NO_LINK_LIST}
         if not any(l["node"] == fav_target(f) for l in links):
             return {"ok": True, "message": f"{fav_name(f)} is not linked."}
-        drop_peers(node, [fav_target(f)])
+        left = drop_peers(node, [fav_target(f)])
+        if left:
+            return _still_linked(left)
         return {"ok": True, "message": f"Disconnected {fav_name(f)}."}
     if not nc_running():
         if not _solo["target"]:
