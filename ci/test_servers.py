@@ -26,7 +26,7 @@ SERVERS = {
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_116_20261113.py", "port": 8989, "scheme": "http"},
     "sysmon": {"file": "sysmon_v6_13_98_20261113.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_87_20261113.py", "port": 9999, "scheme": "http"},
-    "nodetalker": {"file": "nodetalker_v0_10_46_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "nodetalker": {"file": "nodetalker_v0_10_47_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_17_3_20261113.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "pibrary": {"file": "pibrary_v0_17_2_20261113.py", "port": 9000, "scheme": "http", "health": "/api/health",
