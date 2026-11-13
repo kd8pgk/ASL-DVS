@@ -1,6 +1,17 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_113_20261112.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_114_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.114-pi02w (2026-11-13)
+
+Node Controller hands its service lights to Node Talker, and its registration check no longer takes a half-finished sign-in for a registered one. This is a release: the server writes a new file and judges one thing differently.
+
+- **New file `/run/asl_dvs/services.json`, written every 15 s.** It holds the five services Node Talker's Services card shows (Asterisk, Analog Bridge, MMDVM Bridge, STFU, USRP2M17: light, one line of text, installed, restartable) and the AllStarLink registration (registered, not registered, not known, private node, no node number). It is written whole and readable by everyone, next to `asl_reg.json`. Node Talker 0.10.44 reads it while it is fresh; an older Node Talker ignores it. Nothing on the Dashboard page changes.
+- **The registration check reads the State column.** The old check called any line of `rpt show registrations` that contained "regist" registered, and the host name `register.allstarlink.org` is on every line, so "Request Sent" and "Auth. Sent" counted as registered. Now only a State of "Registered" does; "Request Sent" and "Auth. Sent" are not known yet, and "Unregistered", "Rejected", "Timeout", "No Authentication" and similar are not registered. The Dashboard's own registration indicator uses the same check.
+- **`asl_reg.json` gets a `changed` mark inside Node Controller** so the time shown as "since" is the time the state changed, not the time Node Controller started. The file's own fields are as before.
+- The shared code (`svc_table`, `svc_uptime_text`, `svc_unit_info`, `svc_classify`, `svc_rows`, `reg_parse`, `svc_reg_state`) is copied unchanged from `shared/confio.py`, the same text Node Talker 0.10.44 carries.
+- Not changed: the full build (`nodecontrol_v9_3_108_20261111.py`) keeps the old registration check and writes no `services.json`. Node Talker's own checks cover a node that runs it.
+- Tests: new `ci/test_nodecontrol_services.py` (11 tests: the shape of the file, its permissions, the capital-A Analog Bridge unit, registration for a private node, no node, Asterisk down, the "since" rule, the half-finished sign-in, and that Node Talker accepts what this writes).
 
 ## 9.3.113-pi02w (2026-11-12)
 

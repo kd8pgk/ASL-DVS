@@ -1,6 +1,16 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_108_20261111.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_109_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.109 (2026-11-13)
+
+The full build gets what the Pi Zero 2 W build got in 9.3.114-pi02w: it hands its service lights to Node Talker, and its registration check no longer takes a half-finished sign-in for a registered one. This is a release: the server writes a new file and judges one thing differently. The full build is named in the request for this change.
+
+- **New file `/run/asl_dvs/services.json`, written every 15 s.** The five services Node Talker's Services card shows (Asterisk, Analog Bridge, MMDVM Bridge, STFU, USRP2M17: light, one line of text, installed, restartable) and the AllStarLink registration (registered, not registered, not known, private node, no node number), written whole and readable by everyone, next to `asl_reg.json`. Node Talker 0.10.44 reads it while it is fresh; an older Node Talker ignores it. Nothing on the Dashboard page changes.
+- **The registration check reads the State column.** The old check called any line of `rpt show registrations` containing "regist" registered, and the host name `register.allstarlink.org` is on every line, so "Request Sent" and "Auth. Sent" counted as registered. Now only a State of "Registered" does. The Dashboard's own registration indicator uses the same check.
+- **`asl_reg.json` gets a `changed` mark inside Node Controller** so "since" is the time the state changed, not the time Node Controller started. The file's own fields are as before.
+- The shared code (`svc_table`, `svc_uptime_text`, `svc_unit_info`, `svc_classify`, `svc_rows`, `reg_parse`, `svc_reg_state`) is copied unchanged from `shared/confio.py`, the same text as in the pi02w build and Node Talker 0.10.44.
+- Tests: `ci/test_nodecontrol_services.py` now runs its 11 file and registration tests against both builds, and checks that what each writes is what Node Talker accepts (24 tests).
 
 ## 9.3.108 (2026-11-11)
 

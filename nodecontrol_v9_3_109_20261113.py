@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.108"
+VERSION      = "9.3.109"
 BUILD_DATE   = "2026-11-11"
 
 ASL_NODE        = "652702"
@@ -6628,12 +6628,130 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
     finally:
         _link_exit()
 
-_ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _ASL_REG_FAST_SEC  = 30.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
 _asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
+def svc_table():
+    return (("asterisk", "Asterisk", ("asterisk",)),
+            ("ab", "Analog Bridge", ("analog_bridge", "Analog_Bridge")),
+            ("mmdvm", "MMDVM Bridge", ("mmdvm_bridge",)),
+            ("stfu", "STFU", ("stfu",)),
+            ("m17", "USRP2M17", ("usrp2m17",)))
+
+def svc_uptime_text(sec):
+    sec = int(max(0, sec))
+    if sec < 60:
+        return "Running"
+    if sec < 3600:
+        return f"Running {sec // 60} min"
+    if sec < 86400:
+        return f"Running {sec // 3600} h {sec % 3600 // 60} min"
+    return f"Running {sec // 86400} d {sec % 86400 // 3600} h"
+
+def svc_unit_info(units, run):
+    out = {}
+    text = run(["show", "-p", "Id,LoadState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,ActiveEnterTimestampMonotonic",
+                *units]) or ""
+    for block in text.split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("Id"):
+            out[kv["Id"]] = kv
+    return out
+
+def svc_classify(kv, now_mono):
+    if not kv:
+        return "warn", "Could not read the service state", True
+    if kv.get("LoadState") == "not-found":
+        return "off", "Not installed", False
+    active, sub = kv.get("ActiveState", ""), kv.get("SubState", "")
+    try:
+        restarts = int(kv.get("NRestarts") or 0)
+    except ValueError:
+        restarts = 0
+    if active == "active":
+        try:
+            began = int(kv.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+        except ValueError:
+            began = 0.0
+        up = now_mono - began if began > 0 else None
+        if restarts >= 3 and up is not None and up < 600.0:
+            return "warn", f"Restarting often: {restarts} restarts", True
+        return "on", svc_uptime_text(up) if up is not None else "Running", True
+    if active == "activating":
+        if sub == "auto-restart":
+            return "warn", "Restarting after a stop" + (f" ({restarts} restarts)" if restarts else ""), True
+        return "warn", "Starting...", True
+    if active == "reloading":
+        return "warn", "Reloading...", True
+    if active == "deactivating":
+        return "warn", "Stopping...", True
+    if active == "failed":
+        code = kv.get("ExecMainStatus", "")
+        nice = {"exit-code": "exited with an error", "signal": "killed by a signal", "core-dump": "crashed",
+                "timeout": "timed out", "start-limit-hit": "restarted too often", "watchdog": "watchdog timeout",
+                "oom-kill": "out of memory"}
+        why = f"exit code {code}" if code not in ("", "0") else nice.get(kv.get("Result") or "", "")
+        return "fail", "Failed" + (f": {why}" if why else ""), True
+    if active == "inactive":
+        return "fail", "Stopped", True
+    return "warn", f"State: {active or 'unknown'}", True
+
+def svc_rows(run, now_mono, stfu_probe=None):
+    table = svc_table()
+    info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
+    rows = []
+    for key, label, units in table:
+        unit = next((u for u in units if (info.get(u + ".service") or {}).get("LoadState") not in (None, "not-found")), units[0])
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now_mono)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed and stfu_probe is not None:
+            by_hand = stfu_probe()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    return rows
+
+def reg_parse(out, node):
+    import re
+    if not out.strip() or not node:
+        return "unknown"
+    bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+    cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        cols = cols_re.match(line)
+        if cols and cols.group(2) == node:
+            text = cols.group(5).lower()
+        elif pat.search(line):
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        else:
+            continue
+        if any(w in text for w in bad):
+            return "unregistered"
+        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
+    return state
+
+def svc_reg_state(node, asterisk_on, parsed):
+    node = str(node or "").strip()
+    if not node.isdigit():
+        return "none", "No node number found"
+    if 1000 <= int(node) <= 1999:
+        return "private", "Private node: it never registers with AllStarLink"
+    if not asterisk_on:
+        return "unknown", "Asterisk is not running"
+    if parsed is None:
+        return "unknown", "Asterisk did not answer"
+    if parsed == "registered":
+        return "registered", "Registered"
+    if parsed == "unregistered":
+        return "unregistered", "Not registered"
+    return "unknown", "Not known yet"
+
 ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
+SVC_STATUS_FILE = "/run/asl_dvs/services.json"
 
 def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
     try:
@@ -6649,28 +6767,16 @@ def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
     except OSError as e:
         log.debug("asl_reg: couldn't write %s: %s", ASL_REG_STATUS_FILE, e)
 
-def _asl_reg_parse(out: str, node: str) -> str:
-    if not out.strip() or not node:
-        return "unknown"
-    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
-    state = "unregistered"
-    for line in out.splitlines():
-        if not pat.search(line):
-            continue
-        low = line.lower()
-        if any(w in low for w in _ASL_REG_BAD_WORDS):
-            return "unregistered"
-        state = "registered" if "regist" in low else "unknown"
-    return state
-
 def _asl_reg_check() -> str:
     node = (_cfg.asl_node or "").strip()
     out, ok = ami_command("rpt show registrations", timeout=4)
-    state = _asl_reg_parse(out, node) if ok else "unknown"
+    state = reg_parse(out, node) if ok else "unknown"
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
         if state != prev:
             _asl_reg_info["since"] = time.monotonic()
+            if prev != "unknown":
+                _asl_reg_info["changed"] = True
         _asl_reg_info.update(state=state, node=node, at=time.monotonic())
         since = _asl_reg_info["since"]
     if state != prev:
@@ -6805,6 +6911,29 @@ def _tune_check_loop() -> None:
         except Exception as e:
             log.warning("_tune_check_loop: %s", e)
 
+def _svc_stfu_probe():
+    if not os.path.isfile("/opt/STFU/STFU"):
+        return None
+    out, _rc = run(["pgrep", "-x", "STFU"], timeout=3)
+    return bool(out.strip())
+
+def _svc_file_write() -> None:
+    rows = svc_rows(lambda args: run(["systemctl", *args], timeout=15)[0], time.monotonic(), _svc_stfu_probe)
+    node = (_cfg.asl_node or "").strip()
+    with _asl_reg_lock:
+        parsed, changed, since_mono, checked = (_asl_reg_info["state"], _asl_reg_info.get("changed"),
+                                                _asl_reg_info["since"], _asl_reg_info["at"])
+    state, detail = svc_reg_state(node, rows[0]["light"] == "on", parsed if checked else "unknown")
+    since = time.time() - max(0.0, time.monotonic() - since_mono) if changed and state in ("registered", "unregistered") else None
+    doc = {"version": 1, "source": "nodecontrol", "host_version": VERSION, "checked_at": time.time(),
+           "next_check_secs": _SVC_CHECK_SEC, "reg": {"state": state, "node": node, "detail": detail, "since": since},
+           "services": rows}
+    try:
+        os.makedirs(os.path.dirname(SVC_STATUS_FILE), exist_ok=True)
+        atomic_write(SVC_STATUS_FILE, json.dumps(doc, separators=(",", ":")), mode=0o644)
+    except OSError as e:
+        log.debug("svc: couldn't write %s: %s", SVC_STATUS_FILE, e)
+
 def _svc_loop() -> None:
     global _status_etag, _svc_checked_at
     while True:
@@ -6822,6 +6951,10 @@ def _svc_loop() -> None:
             log.info("svc: %s", ", ".join(f"{k} {v}" for k, v in new.items()))
         with _lock:
             _status_etag = ""
+        try:
+            _svc_file_write()
+        except Exception as e:
+            log.debug("svc: file write error: %s", e)
         time.sleep(_SVC_CHECK_SEC)
 
 def _net_signature() -> tuple:
