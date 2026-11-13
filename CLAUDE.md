@@ -59,6 +59,19 @@
   `USED_BY` is copied unchanged into every tool listed there (a tool's own
   wrapper may call it); `ci/check_repo.py` fails a tool whose copy differs.
   Change the reference first, then copy it into every listed tool.
+- **Login sessions follow one model** (`sess_*` and `lock_*` in
+  `shared/confio.py`; each tool moves onto them in its own release). Two
+  tiers: **standard** (12 h idle, no hard cap) and **strict** (2 h idle, 12 h
+  hard cap). Strict: Terminal Monitor, 44helper and instmon. Everything else is
+  standard. The cookie is refreshed about hourly while in use, tokens are kept
+  only as hashes, a root password change ends every session, and **any logout
+  button ends every session** (there is no second "log out everywhere"
+  button). An alive probe (for example SysMon's console) never extends a
+  session. Failed logins wait 5 s doubling to 300 s after 5 mistakes. Node
+  Controller keeps the names `_SESSION_COOKIE_NAME`, `_require_auth` and
+  `/api/login` that SysMon's Security tab looks for, and Node Controller and
+  SysMon keep reading the shared `auth_session.json` in its current layout
+  while nodes can run mixed versions.
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
 - **Manuals** (the user manual, the dialplan guide and the install manuals in
