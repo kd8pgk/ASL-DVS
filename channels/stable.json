@@ -74,13 +74,13 @@
    "version": "9.3.108-pi02w"
   },
   "noderecorder": {
-   "blob": "9bdc6a259aef3399fe5aa5f83a52970f5453f039",
-   "commit": "c362cc1724d65d81188063580d22ca5794b7ab60",
-   "file": "noderecorder_v0_10_0_20261108.py",
-   "landed": "2026-11-08T21:55:07Z",
-   "promoted": "2026-11-11T21:55:07Z",
+   "blob": "bedcec6c44b762270ee60dcb0cad244d585d9d65",
+   "commit": "1e8951565c72f6c8ba5234b4c2a41aff74bf8839",
+   "file": "noderecorder_v0_11_0_20261108.py",
+   "landed": "2026-11-08T22:17:48Z",
+   "promoted": "2026-11-13T03:46:55Z",
    "reason": "count",
-   "version": "0.10.0"
+   "version": "0.11.0"
   },
   "nodetalker": {
    "blob": "b4bb24d3a41eef767f8fa8eeabe0e2035fa70e7d",
