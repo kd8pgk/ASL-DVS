@@ -31,7 +31,7 @@ SERVERS = {
     "noderecorder": {"file": "noderecorder_v0_17_4_20261113.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "pibrary": {"file": "pibrary_v0_17_2_20261113.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
-    "instmon": {"file": "instmon_v2_109_0_20261113.py", "port": 8990, "scheme": "http", "health": "/",
+    "instmon": {"file": "instmon_v2_110_0_20261113.py", "port": 8990, "scheme": "http", "health": "/",
                 "health_expect": b"<html", "error_keys": ("message",),
                 "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
                 "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",

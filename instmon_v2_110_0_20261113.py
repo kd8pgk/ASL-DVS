@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.109.0"
+VERSION ="2.110.0"
 DATE_STR ="2026-11-13"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -421,6 +421,34 @@ def _check_session(token):
     if ok and renew:
         _sess_local.renew = age
     return ok
+
+
+_PURGE_COOKIES = ("asl_dvs_session", "helper44_session", "pibrary_session", "wifimon_session",
+                  "nodetalker_session", "noderecorder_session", "amp_nodetalker_session", "termon_session")
+_PURGE_KEEP_SEC = 6 * 3600
+_purge_keys = {}
+_purge_lock = threading.Lock()
+
+
+def _note_purge(keys):
+    now = time.time()
+    with _purge_lock:
+        for key in [k for k, until in _purge_keys.items() if until <= now]:
+            del _purge_keys[key]
+        for key in keys:
+            _purge_keys[key] = now + _PURGE_KEEP_SEC
+
+
+def _purge_due(token):
+    if not token:
+        return False
+    with _purge_lock:
+        until = _purge_keys.pop(sess_digest(token), None)
+    return until is not None and until > time.time()
+
+
+def _purge_headers():
+    return [("Set-Cookie", sess_cookie_clear(name, False)) for name in _PURGE_COOKIES + (_SESSION_COOKIE_NAME,)]
 
 
 def _revoke_all_sessions():
@@ -7814,8 +7842,11 @@ def _fu_finish(error=""):
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+    with _sessions_lock:
+        ended = list(_sessions)
     if _revoke_all_sessions():
-        log_event("Full Update finished: everyone is signed out; sign in again to see the result", "info")
+        _note_purge(ended)
+        log_event("Full Update finished: everyone is signed out and each browser is asked to drop the other tools' login cookies; sign in again to see the result", "info")
     _fu_refresh_plan()
 
 def _fu_manuals(skipped):
@@ -13826,7 +13857,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 log_event(f"HTTP 401: Authentication required ({self.command} {self.path}) from {client_ip}{note}", "err")
             else:
                 _auth_log_state[client_ip] = (last, suppressed + 1)
-        self._send_json(401, {"error": "Authentication required"})
+        self._send_json(401, {"error": "Authentication required"},
+                        extra_headers=_purge_headers() if _purge_due(self._session_token()) else None)
 
     def _find_library_file (self ,filename ,category =None ):
         if category and category in LIB_SUBDIRS :
