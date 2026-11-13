@@ -849,14 +849,14 @@ class SessionLimitTests(TermonBase):
                 tm._session_valid(tok, touch=False)
             self.assertFalse(tm._session_valid(tok, touch=False))
 
-    def test_sign_out_everywhere_ends_every_login_and_terminal(self):
+    def test_sign_out_ends_every_login_and_terminal(self):
         a, b = Client(self.port), Client(self.port)
         a.login()
         b.login()
         st, _, t = b.json("POST", "/api/term/ticket", {})
         st, _, o = b.json("POST", "/api/term/open", {"ticket": t["ticket"], "kind": "shell"})
         sess = tm._ptys[o["sid"]]
-        st, h, _ = a.json("POST", "/api/logout_all", {})
+        st, h, _ = a.json("POST", "/api/logout", {})
         self.assertEqual(st, 200)
         self.assertIn("Max-Age=0", h["Set-Cookie"])
         self.assertFalse(a.json("GET", "/api/whoami")[2]["logged_in"])
@@ -893,7 +893,7 @@ class SessionLimitTests(TermonBase):
         self.assertTrue(self.c.json("GET", "/api/setup")[2]["options"]["bind_session_ip"])
         with tm._sess_lock:
             for rec in tm._sessions.values():
-                rec[2] = "203.0.113.50"
+                rec["ip"] = "203.0.113.50"
         self.assertEqual(self.c.json("GET", "/api/setup")[0], 401)
         self.c.login()
         st, _, j = self.c.json("POST", "/api/setup/options", {"bind_session_ip": False, "confirm": True})
@@ -957,8 +957,55 @@ class CertificateTests(TermonBase):
         self.assertEqual(self.c.json("POST", "/api/setup/cert", {})[0], 400)
 
     def test_new_routes_need_a_login(self):
-        for path in ("/api/logout_all", "/api/setup/options", "/api/setup/cert"):
+        for path in ("/api/setup/options", "/api/setup/cert"):
             self.assertEqual(self.c.json("POST", path, {"confirm": True})[0], 401, path)
+
+
+class SharedSessionModelTests(TermonBase):
+    def test_the_limits_are_the_strict_tier(self):
+        policy = tm.sess_policy("strict")
+        self.assertEqual((tm.SESSION_TTL_SEC, tm.SESSION_MAX_SEC), (policy["idle"], policy["absolute"]))
+
+    def test_the_second_logout_everywhere_route_and_button_are_gone(self):
+        self.assertNotIn("/api/logout_all", tm.ROUTES_POST if hasattr(tm, "ROUTES_POST") else {})
+        self.assertNotIn("logout-all", tm.PAGE)
+        self.assertNotIn("logout_all", tm.PAGE)
+        self.c.login()
+        self.assertEqual(self.c.json("POST", "/api/logout_all", {})[0], 404)
+
+    def test_only_a_hash_of_the_key_is_kept(self):
+        tok = tm._issue_session("10.0.0.1")
+        self.assertNotIn(tok, tm._sessions)
+        self.assertIn(tm._digest(tok), tm._sessions)
+
+    def test_a_password_change_ends_every_session(self):
+        with mock.patch.object(tm.BACKEND, "stamp", return_value="aaaa", create=True):
+            tm._stamp_cache[0] = 0.0
+            tok = tm._issue_session("10.0.0.1")
+            self.assertTrue(tm._session_valid(tok))
+        with mock.patch.object(tm.BACKEND, "stamp", return_value="bbbb", create=True):
+            tm._stamp_cache[0] = 0.0
+            self.assertFalse(tm._session_valid(tok))
+        tm._stamp_cache[0] = 0.0
+
+    def test_a_helper_that_cannot_answer_keeps_the_last_stamp(self):
+        with mock.patch.object(tm.BACKEND, "stamp", return_value="cccc", create=True):
+            tm._stamp_cache[0] = 0.0
+            tok = tm._issue_session("10.0.0.1")
+        with mock.patch.object(tm.BACKEND, "stamp", side_effect=OSError("down"), create=True):
+            tm._stamp_cache[0] = 0.0
+            self.assertTrue(tm._session_valid(tok))
+        tm._stamp_cache[0] = 0.0
+
+    def test_at_most_fifty_sessions(self):
+        toks = [tm._issue_session("10.0.0.1") for _ in range(55)]
+        self.assertEqual(len(tm._sessions), 50)
+        self.assertFalse(tm._session_valid(toks[0]))
+        self.assertTrue(tm._session_valid(toks[-1]))
+
+    def test_the_cookie_stays_a_browser_session_cookie(self):
+        st, h, _ = self.c.login()
+        self.assertNotIn("Max-Age", h["Set-Cookie"])
 
 
 class QuietBeforeSignInTests(TermonBase):

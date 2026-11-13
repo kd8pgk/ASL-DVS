@@ -1,6 +1,16 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_4_20261109.py`. Newest entries first.
+Current file: `termon_v0_2_5_20261113.py`. Newest entries first.
+
+## 0.2.5 (2026-11-13)
+
+Terminal Monitor's login sessions follow the common model (`shared/confio.py`, the same code as the other tools). This is a release: the server's session rules changed.
+
+- **Tier: strict.** A session ends after 2 hours without use and never lasts more than 12 hours in all, as before. The session store now uses the shared code: only a hash of each key is kept, at most 50 sessions, and the optional "bind to the address" switch still works.
+- **Any Sign out ends every session** and closes every terminal. The separate "Sign out everywhere" button and its `/api/logout_all` route are gone.
+- **A password change ends every session.** The helper (which can read the shell account's password entry) hands the page only a one-way stamp of it; if the helper cannot answer, the last stamp is kept.
+- **Kept stricter on purpose** (Terminal Monitor gives a root shell): the cookie is still a browser-session cookie with no Max-Age (it ends when the browser closes), and failed logins still double up to 15 minutes (the common model's cap is 5 minutes), group an IPv6 /64 as one source, and slow every login when many sources fail at once.
+- **Nothing else changes.** Same password, same login request.
 
 ## 0.2.4 (2026-11-09)
 
