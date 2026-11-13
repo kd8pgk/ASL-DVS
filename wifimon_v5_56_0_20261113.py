@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.55.0"
+APP_VERSION = "5.56.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -6401,7 +6401,8 @@ class _Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8", extra)
 
     def _session_token(self) -> Optional[str]:
-        return sess_token_from(self.headers.get("Cookie"), _COOKIE_NAME)
+        cookie = self.headers.get("Cookie")
+        return sess_token_from(cookie, "__Host-" + _COOKIE_NAME) or sess_token_from(cookie, _COOKIE_NAME)
 
     def _authed(self) -> bool:
         token = self._session_token()

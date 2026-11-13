@@ -37,7 +37,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.17.3"
+VERSION = "0.17.4"
 DATE_STR = "2026-11-13"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -8122,7 +8122,9 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def _token(self):
-        return sess_token_from(self.headers.get("Cookie", ""), _SESSION_COOKIE_NAME) or ""
+        cookie = self.headers.get("Cookie", "")
+        return (sess_token_from(cookie, "__Host-" + _SESSION_COOKIE_NAME)
+                or sess_token_from(cookie, _SESSION_COOKIE_NAME) or "")
 
     def _authed(self):
         return _check_session(self._token())

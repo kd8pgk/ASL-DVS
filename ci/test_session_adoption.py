@@ -244,5 +244,27 @@ class Adoption(unittest.TestCase):
         self.assertNotIn("logout_all", src)
         self.assertNotIn("Log out all devices", src)
 
+class StaleCookieTests(unittest.TestCase):
+    def stub(self, cookie):
+        import types
+        return types.SimpleNamespace(headers={"Cookie": cookie})
+
+    def test_the_prefixed_cookie_wins_over_an_old_one_of_the_same_name(self):
+        cases = (("nodetalker", "_token", "_SESSION_COOKIE_NAME", "Handler"),
+                 ("noderecorder", "_token", "_SESSION_COOKIE_NAME", "Handler"),
+                 ("wifimon", "_session_token", "_COOKIE_NAME", "_Handler"))
+        for key, meth, const, cls in cases:
+            mod = MODULES[key][0]
+            name = getattr(mod, const)
+            fn = getattr(getattr(mod, cls), meth)
+            for cookie in ("%s=old; __Host-%s=new" % (name, name), "__Host-%s=new; %s=old" % (name, name)):
+                with self.subTest(tool=key, cookie=cookie):
+                    self.assertEqual(fn(self.stub(cookie)), "new")
+            with self.subTest(tool=key, case="old only"):
+                self.assertEqual(fn(self.stub("%s=old" % name)), "old")
+            with self.subTest(tool=key, case="none"):
+                self.assertFalse(fn(self.stub("a=b")))
+
+
 if __name__ == "__main__":
     unittest.main()

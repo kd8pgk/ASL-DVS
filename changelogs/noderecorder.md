@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_3_20261113.py`. Newest entries first.
+Current file: `noderecorder_v0_17_4_20261113.py`. Newest entries first.
+
+## 0.17.4 (2026-11-13)
+
+Fixes a login that succeeded and then was refused on an https page. This is a release: the server's cookie reading changed.
+
+- **The cause.** Since the session rules moved onto the common model, the cookie on an https page is named with `__Host-` in front. A browser that still held the old cookie of the same name without the prefix (written by an earlier version, good for 12 hours) sent both, and the server read the old one first, so the new login was thrown away: the password was accepted, then every request got 401 and the login screen came back.
+- **The fix.** The server now reads the `__Host-` cookie first and uses the old name only when there is no prefixed one. Nothing needs clearing in the browser.
+- **Nothing else changes.**
 
 ## 0.17.3 (2026-11-13)
 
