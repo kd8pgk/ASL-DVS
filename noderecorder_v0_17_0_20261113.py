@@ -4,6 +4,8 @@ import argparse
 import array
 import configparser
 import glob
+import gzip
+import hashlib
 import hmac
 import http.client
 import ipaddress
@@ -35,7 +37,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 DATE_STR = "2026-11-09"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6200,9 +6202,66 @@ function setOffline(on) {
 async function beat() {
   try { const r = await fetch('/api/health', {cache: 'no-store'}); setOffline(!r.ok); } catch (e) { setOffline(true); }
 }
+const NET = {mult: 1, avg: 0, forced: '', active: Date.now(), next: {}};
+['pointerdown', 'keydown', 'touchstart'].forEach(function (name) {
+  document.addEventListener(name, function () { NET.active = Date.now(); }, true);
+});
+NET.read = function () {
+  let v = '';
+  try { const m = document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/); if (m) v = m[1]; } catch (e) {}
+  NET.forced = v;
+};
+NET.read();
+NET.show = function () {
+  const el = document.getElementById('net-note');
+  if (el) el.textContent = NET.mult > 1 ? 'polling ' + NET.mult + 'x slower' : '';
+  document.querySelectorAll('[data-net-set]').forEach(function (b) {
+    const v = b.getAttribute('data-net-set');
+    b.setAttribute('aria-pressed', String((v === 'auto' ? '' : v) === NET.forced));
+  });
+};
+NET.sample = function (ms) {
+  NET.read();
+  NET.avg = NET.avg ? NET.avg * 0.7 + ms * 0.3 : ms;
+  let m = Math.max(1, Math.min(8, Math.ceil(NET.avg / 400)));
+  if (NET.forced === 'on') m = Math.max(m, 6);
+  if (NET.forced === 'off') m = 1;
+  NET.mult = m;
+  NET.show();
+};
+NET.set = function (value) {
+  NET.forced = value === 'auto' ? '' : value;
+  document.cookie = 'asl_slow=' + NET.forced + '; path=/; max-age=' + (NET.forced ? 31536000 : 0) + '; SameSite=Strict';
+  if (NET.forced === 'on') NET.mult = Math.max(NET.mult, 6);
+  if (NET.forced === 'off') { NET.mult = 1; NET.avg = 0; }
+  NET.show();
+};
+NET.idle = function () { return NET.mult > 1 && Date.now() - NET.active > 120000 ? 2 : 1; };
+NET.factor = function () {
+  if (typeof pollBusy === 'function' && pollBusy()) return 1;
+  return NET.mult * NET.idle();
+};
+NET.delay = function (ms) { return ms * NET.factor(); };
+NET.gate = function (key, ms) {
+  if (document.visibilityState === 'hidden') return true;
+  const now = Date.now();
+  if (now < (NET.next[key] || 0)) return true;
+  NET.next[key] = now + ms * (NET.factor() - 1);
+  return false;
+};
+document.addEventListener('click', function (ev) {
+  const b = ev.target && ev.target.closest ? ev.target.closest('[data-net-set]') : null;
+  if (b) NET.set(b.getAttribute('data-net-set'));
+});
+document.addEventListener('DOMContentLoaded', function () { NET.show(); });
+
+const _tags = {};
 async function api(url, opts) {
   opts = opts || {};
+  const tagged = !!opts.tag && !opts.method;
+  delete opts.tag;
   opts.headers = Object.assign({'X-Requested-With': 'XMLHttpRequest'}, opts.headers || {});
+  if (tagged && _tags[url]) opts.headers['If-None-Match'] = _tags[url].etag;
   if (opts.body && typeof opts.body !== 'string') {
     opts.body = JSON.stringify(opts.body);
     opts.headers['Content-Type'] = 'application/json';
@@ -6211,7 +6270,13 @@ async function api(url, opts) {
   try { r = await fetch(url, opts); } catch (e) { setOffline(true); return {ok: false, error: 'Node Recorder is not answering.'}; }
   setOffline(false);
   let d = {};
-  try { d = await r.json(); } catch (e) { d = {ok: false, error: 'HTTP ' + r.status}; }
+  if (tagged && r.status === 304 && _tags[url]) return JSON.parse(_tags[url].text);
+  try {
+    const text = await r.text();
+    d = JSON.parse(text);
+    const etag = r.headers.get('ETag');
+    if (tagged && etag && r.status === 200) _tags[url] = {etag: etag, text: text};
+  } catch (e) { d = {ok: false, error: 'HTTP ' + r.status}; }
   if (r.status === 401 && url !== '/api/login' && authed) { authed = false; render(); }
   return d;
 }
@@ -6265,8 +6330,8 @@ function hostLinks(d) {
   $('ql-row').classList.toggle('hidden', !any);
 }
 async function pollHostLinks() {
-  if (document.visibilityState !== 'visible') return;
-  const d = await api('/api/whoami');
+  if (document.visibilityState !== 'visible' || NET.gate('hl', 30000)) return;
+  const d = await api('/api/whoami', {tag: true});
   if (d.ok) hostLinks(d);
 }
 async function doReboot() {
@@ -6772,12 +6837,14 @@ function pollEvery(fn, ms) {
   setTimeout(async () => {
     try { await fn(); } catch (e) {}
     pollEvery(fn, ms);
-  }, ms);
+  }, NET.delay(ms));
 }
 async function pollStatus() {
   if (!authed || document.visibilityState === 'hidden') return;
-  const d = await api('/api/status');
+  const t0 = performance.now();
+  const d = await api('/api/status', {tag: true});
   if (!d || d.ok === false) return;
+  if (document.visibilityState !== 'hidden') NET.sample(performance.now() - t0);
   lastStatus = d;
   $('st-node').textContent = d.node || '(not set)';
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
@@ -7043,7 +7110,7 @@ async function loadConv() {
   const cur = d.encoders.find((e) => e.id === d.encoder);
   sum('conv', !d.enabled ? 'off (WAV kept)' : cur && !cur.installed ? cur.label + ' missing' : cur ? cur.label : '');
   const poll = run || c.queued > 0;
-  if (poll && !convTimer) convTimer = setInterval(() => { if (tab === 'setup') loadConv(); }, 2000);
+  if (poll && !convTimer) convTimer = setInterval(() => { if (tab === 'setup' && !NET.gate('conv', 2000)) loadConv(); }, 2000);
   if (!poll && convTimer) { clearInterval(convTimer); convTimer = null; }
 }
 async function saveConv() {
@@ -7683,7 +7750,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 </div>
 </div>
 
-<div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
+<div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
 </section>
 </main>
 <nav class="tabs hidden" id="nav" aria-label="Main">
@@ -7710,7 +7777,11 @@ _page = None
 _TLS_NOTE = ""
 
 
-def render_page():
+_FONT_FACE_RE = re.compile(rb"@font-face\{[^}]*\}\n?")
+_page_variants = {}
+
+
+def render_page(lite=False, packed=False):
     global _page
     if _page is None:
         html = _HTML_TEMPLATE
@@ -7718,7 +7789,14 @@ def render_page():
                          ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__TLS_NOTE__", _TLS_NOTE)):
             html = html.replace(key, val)
         _page = html.encode("utf-8")
-    return _page
+    key = (bool(lite), bool(packed))
+    body = _page_variants.get(key)
+    if body is None:
+        body = _FONT_FACE_RE.sub(b"", _page) if lite else _page
+        if packed:
+            body = gzip.compress(body, 6, mtime=0)
+        _page_variants[key] = body
+    return body
 
 
 _POST_ACTIONS = {
@@ -7744,6 +7822,7 @@ _POST_ACTIONS = {
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
 }
+GZIP_MIN_BYTES = 600
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 
 
@@ -7814,8 +7893,54 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
+    def _accepts_gzip(self):
+        for token in self.headers.get("Accept-Encoding", "").split(","):
+            name, _, params = token.strip().partition(";")
+            if name.strip().lower() in ("gzip", "x-gzip"):
+                q = params.strip().replace(" ", "")
+                return q not in ("q=0", "q=0.0", "q=0.00", "q=0.000")
+        return False
+
+    def _etag_matches(self, etag):
+        raw = self.headers.get("If-None-Match", "")
+        if not raw:
+            return False
+        if raw.strip() == "*":
+            return True
+        bare = etag[2:] if etag.startswith("W/") else etag
+        return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in raw.split(","))
+
+    def _cookie_is(self, name, value):
+        return any(part.strip() == name + "=" + value for part in self.headers.get("Cookie", "").split(";"))
+
+    def _wants_lite(self):
+        return self.headers.get("Save-Data", "").strip().lower() == "on" or self._cookie_is("asl_slow", "on")
+
     def _send(self, code, body, ctype, headers=None):
-        self._head(code, ctype, dict(headers or {}, **{"Content-Length": str(len(body))}))
+        headers = dict(headers or {})
+        if ctype.startswith("application/json") and "Content-Encoding" not in headers:
+            if self.command == "GET" and code == 200:
+                etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+                if self._etag_matches(etag):
+                    self._head(304, ctype, {"ETag": etag, "Vary": "Accept-Encoding"})
+                    return
+                headers["ETag"] = etag
+            if len(body) >= GZIP_MIN_BYTES and self._accepts_gzip():
+                body = gzip.compress(body, 5, mtime=0)
+                headers["Content-Encoding"] = "gzip"
+            headers["Vary"] = "Accept-Encoding"
+        self._head(code, ctype, dict(headers, **{"Content-Length": str(len(body))}))
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _send_page(self):
+        lite = self._wants_lite()
+        packed = self._accepts_gzip()
+        body = render_page(lite, packed)
+        headers = {"Content-Length": str(len(body)), "Vary": "Accept-Encoding, Cookie"}
+        if packed:
+            headers["Content-Encoding"] = "gzip"
+        self._head(200, "text/html; charset=utf-8", headers)
         if self.command != "HEAD":
             self.wfile.write(body)
 
@@ -7863,7 +7988,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if path in ("/", "/index.html"):
-                self._send(200, render_page(), "text/html; charset=utf-8")
+                self._send_page()
             elif path == "/api/health":
                 self._json(200, {"ok": True, "version": VERSION})
             elif path == "/api/whoami":
