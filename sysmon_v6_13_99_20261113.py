@@ -1468,12 +1468,16 @@ _PROBE_EVERY     = 10.0
 _bg_beat = time.monotonic()
 _http_ok_at = time.monotonic()
 
-def _health_probe_loop(host: str, port: int) -> None:
+def _health_probe_loop(host: str, port: int, tls: bool = False) -> None:
     global _http_ok_at
     import http.client
+    import ssl as _ssl
     while True:
         time.sleep(_PROBE_EVERY)
-        conn = http.client.HTTPConnection(host, port, timeout=5)
+        if tls:
+            conn = http.client.HTTPSConnection(host, port, timeout=5, context=_ssl._create_unverified_context())
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=5)
         try:
             conn.request("GET", "/healthz")
             resp = conn.getresponse()
@@ -36157,7 +36161,7 @@ def main() -> None:
     if probe_host in ("0.0.0.0", ""):
         probe_host = "127.0.0.1"
     _http_ok_at = time.monotonic()
-    threading.Thread(target=_health_probe_loop, args=(probe_host, server.server_address[1]),
+    threading.Thread(target=_health_probe_loop, args=(probe_host, server.server_address[1], server.ssl_ctx is not None),
                      name="health-probe", daemon=True).start()
     threading.Thread(target=_sd_heartbeat_loop, name="sd-heartbeat", daemon=True).start()
     _sd_notify("READY=1")

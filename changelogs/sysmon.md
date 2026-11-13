@@ -12,6 +12,7 @@ SysMon (full build) is served over HTTPS, the way Node Talker and the Pi Zero 2 
 - **If the certificate cannot be made or loaded** (for example openssl is missing) SysMon serves plain HTTP and the login page says so.
 - **Safer cookie.** Over https the login cookie is Secure and named with `__Host-` in front.
 - **A refused request no longer drops the connection.** When SysMon answered a POST without reading its body (not logged in, locked out), the unread bytes made the closing connection reset on https. SysMon now reads the rest of a small body before it closes.
+- **The health check follows https.** The check that keeps systemd's watchdog fed connects to the address SysMon is bound to, which is not always this node's loopback; over plain HTTP it would have been sent on to https and read as a dead server. It now uses https when SysMon does.
 - **Common code.** The HTTPS handling is the `tls_*` code in `shared/confio.py`.
 
 ## 6.13.98 (2026-11-13)
