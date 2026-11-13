@@ -525,7 +525,7 @@ def make_nt_case(key):
     return NTCase
 
 
-LOGOUT_ENDS_EVERY_SESSION = ("nodetalker", "noderecorder", "instmon")
+LOGOUT_ENDS_EVERY_SESSION = ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper")
 NT_KEYS = ("nodetalker", "amp_nodetalker", "noderecorder")
 
 for _key in ts.SERVERS:

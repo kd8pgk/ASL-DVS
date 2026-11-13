@@ -1,6 +1,17 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_54_0_20261113.py`. Newest entries first.
+Current file: `wifimon_v5_55_0_20261113.py`. Newest entries first.
+
+## 5.55.0 (2026-11-13)
+
+Login sessions and lockout follow the common model (`shared/confio.py`, the same code as Node Talker, Node Recorder and instmon). This is a release: the server's session rules changed.
+
+- **Tier: standard.** A session ends after 12 hours without use; there is no hard cap. Using the page keeps it alive, and the cookie is renewed about once an hour while in use.
+- **Any Log Out ends every session.** There is no separate "log out everywhere"; the one Log Out button signs out all browsers.
+- **A password change ends every session.** When the root password changes, every login stops working and the page asks again.
+- **Safer cookie.** Only a hash of each session's key is kept (at most 50 sessions); on an https page the cookie name starts with `__Host-` and is Secure.
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s; a login that works clears it.
+- **Nothing else changes.** Same password, same login request.
 
 ## 5.54.0 (2026-11-13)
 

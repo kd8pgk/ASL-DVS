@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_23_20261113.py`. Newest entries first.
+Current file: `44helper_v0_1_24_20261113.py`. Newest entries first.
+
+## 0.1.24 (2026-11-13)
+
+Login sessions and lockout follow the common model (`shared/confio.py`, the same code as Node Talker, Node Recorder and instmon). This is a release: the server's session rules changed.
+
+- **Tier: strict.** A session ends after 2 hours without use and never lasts more than 12 hours in all. The cookie is renewed about once an hour while in use (it used to be written for a year). Sessions still survive a restart of the helper on the same boot (the file in `/run/44helper` now holds hashes with the boot id and is ignored after a reboot).
+- **One Log Out.** The "Log out all devices" link and its route are gone; Log Out ends every login on every browser and device.
+- **A password change ends every session.** When the root password changes, every login stops working and the page asks again.
+- **Safer cookie.** Only a hash of each session's key is kept (at most 50 sessions); on an https page the cookie name starts with `__Host-` and is Secure.
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s; a login that works clears it. (Before, 44helper locked an address for a flat 15 minutes after 5 mistakes in 5 minutes.)
+- **Nothing else changes.** Same password, same login request.
 
 ## 0.1.23 (2026-11-13)
 

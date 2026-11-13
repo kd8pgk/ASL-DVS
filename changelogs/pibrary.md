@@ -1,6 +1,17 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_17_1_20261113.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_17_2_20261113.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.17.2 (2026-11-13)
+
+Login sessions and lockout follow the common model (`shared/confio.py`, the same code as Node Talker, Node Recorder and instmon). This is a release: the server's session rules changed.
+
+- **Tier: standard.** A session ends after 12 hours without use; there is no hard cap. Using the page keeps it alive, and the cookie is renewed about once an hour while in use.
+- **Any Log Out ends every session.** There is no separate "log out everywhere"; the one Log Out button signs out all browsers.
+- **A password change ends every session.** When the Pibrary password (or the root password when none is set) changes, every login stops working and the page asks again.
+- **Safer cookie.** Only a hash of each session's key is kept (at most 50 sessions); on an https page the cookie name starts with `__Host-` and is Secure.
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s; a login that works clears it.
+- **Nothing else changes.** Same password, same login request.
 
 ## 0.17.1 (2026-11-13)
 
