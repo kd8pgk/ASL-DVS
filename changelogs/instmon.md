@@ -2,20 +2,12 @@
 
 ## 2.108.0 (2026-11-13)
 
-The sign-in is held during a Full Update and ends when it finishes. This is a release: the server's session rules changed.
+The sign-in is held during a Full Update and ends when it finishes, and the login screen is the same as in the other tools with an eye button on the password field. This is a release: the server's session rules and the page script changed.
 
-- **No sign-out while a Full Update runs.** A session that would have run out of time keeps working until the update is done, and a login during the update does not clear the others.
-- **Everyone is signed out when it finishes.** The moment Full Update ends (finished, stopped or failed) every session is dropped, so the next page load asks for the password and then shows the result. The log notes it.
-- Nothing else about the sign-in changes (12 hours, sliding).
-
-## 2.107.0 (2026-11-13)
-
-The login screen has an eye button in the password field and now looks the same in every tool. This is a release: the page script changed.
-
-- **One login screen everywhere.** A dark card with the tool's name, one password field, a Log in button and a line for errors, and the licence line at the foot of the page. The "Welcome to the KD8PGK ..." line, the sub-title and the field label are gone, and the field says "Password". Colours, sizes and fonts are the same in every tool (the style comes from one shared block of code); the ids the page scripts use are unchanged.
-- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is drawn with the page's own colours and is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
-- **Nothing else changes.** The login request, the cookie and the lockout are as before; the password is typed into the same field and is never stored by the page.
-
+- **No sign-out while a Full Update runs.** A session that would have run out of time keeps working until the update is done, and a login during the update does not clear the others. Sessions that had already run out when the update started are dropped at that moment.
+- **Everyone is signed out when it finishes.** The moment Full Update ends (finished, stopped or failed) every session is dropped, so the next page load asks for the password and then shows the result. The log notes it. Nothing else about the sign-in changes (12 hours, sliding).
+- **One login screen everywhere.** A dark card with the tool's name, one password field, a Log in button and a line for errors, and the licence line at the foot of the page. The "Welcome to the KD8PGK ..." line and the field label are gone, and the field says "Password". The style comes from one shared block of code; the ids the page script uses are unchanged.
+- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
 
 ## 2.106.0 (2026-11-12)
 

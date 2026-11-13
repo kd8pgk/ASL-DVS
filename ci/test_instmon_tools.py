@@ -411,6 +411,16 @@ class SessionsAndFullUpdate(unittest.TestCase):
             im._issue_session()
             self.assertIn(old, im._sessions)
 
+    def test_starting_a_full_update_drops_sessions_that_already_ran_out(self):
+        stale = im._issue_session()
+        live = im._issue_session()
+        with im._sessions_lock:
+            im._sessions[stale] = 1.0
+        im._prune_sessions()
+        with mock.patch.object(im, "full_update_running", return_value=True):
+            self.assertFalse(im._check_session(stale))
+            self.assertTrue(im._check_session(live))
+
     def test_finishing_a_full_update_signs_everyone_out(self):
         tokens = [im._issue_session() for _ in range(3)]
         with mock.patch.object(im, "_fu_save"), mock.patch.object(im, "_gh_event"), \

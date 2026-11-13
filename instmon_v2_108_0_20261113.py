@@ -285,6 +285,12 @@ def _revoke_session(token):
     with _sessions_lock:
         _sessions.pop(token, None)
 
+def _prune_sessions():
+    now = time.time()
+    with _sessions_lock:
+        for t in [tk for tk, exp in _sessions.items() if exp <= now]:
+            _sessions.pop(t, None)
+
 def _revoke_all_sessions():
     with _sessions_lock:
         count = len(_sessions)
@@ -7993,6 +7999,7 @@ def full_update_start():
                          updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None,
                          in_progress=None)
         _fu_stop_ev.clear()
+    _prune_sessions()
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
 
