@@ -19,6 +19,13 @@ USED_BY = {
     "rpt_scan": ("noderecorder", "44helper", "nodecontrol", "nodecontrol_pi02w"),
     "rpt_next_free": ("44helper", "nodecontrol", "nodecontrol_pi02w"),
     "rpt_remove_private": ("noderecorder",),
+    "svc_table": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_uptime_text": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_unit_info": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_classify": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_rows": ("nodetalker", "nodecontrol_pi02w"),
+    "reg_parse": ("nodetalker", "nodecontrol_pi02w"),
+    "svc_reg_state": ("nodetalker", "nodecontrol_pi02w"),
 }
 
 
@@ -615,3 +622,128 @@ def rpt_remove_private(text, node, marker):
             after_drop = False
         out.append(line)
     return "\n".join(out), True
+
+
+def svc_table():
+    return (("asterisk", "Asterisk", ("asterisk",)),
+            ("ab", "Analog Bridge", ("analog_bridge", "Analog_Bridge")),
+            ("mmdvm", "MMDVM Bridge", ("mmdvm_bridge",)),
+            ("stfu", "STFU", ("stfu",)),
+            ("m17", "USRP2M17", ("usrp2m17",)))
+
+
+def svc_uptime_text(sec):
+    sec = int(max(0, sec))
+    if sec < 60:
+        return "Running"
+    if sec < 3600:
+        return f"Running {sec // 60} min"
+    if sec < 86400:
+        return f"Running {sec // 3600} h {sec % 3600 // 60} min"
+    return f"Running {sec // 86400} d {sec % 86400 // 3600} h"
+
+
+def svc_unit_info(units, run):
+    out = {}
+    text = run(["show", "-p", "Id,LoadState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,ActiveEnterTimestampMonotonic",
+                *units]) or ""
+    for block in text.split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("Id"):
+            out[kv["Id"]] = kv
+    return out
+
+
+def svc_classify(kv, now_mono):
+    if not kv:
+        return "warn", "Could not read the service state", True
+    if kv.get("LoadState") == "not-found":
+        return "off", "Not installed", False
+    active, sub = kv.get("ActiveState", ""), kv.get("SubState", "")
+    try:
+        restarts = int(kv.get("NRestarts") or 0)
+    except ValueError:
+        restarts = 0
+    if active == "active":
+        try:
+            began = int(kv.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+        except ValueError:
+            began = 0.0
+        up = now_mono - began if began > 0 else None
+        if restarts >= 3 and up is not None and up < 600.0:
+            return "warn", f"Restarting often: {restarts} restarts", True
+        return "on", svc_uptime_text(up) if up is not None else "Running", True
+    if active == "activating":
+        if sub == "auto-restart":
+            return "warn", "Restarting after a stop" + (f" ({restarts} restarts)" if restarts else ""), True
+        return "warn", "Starting...", True
+    if active == "reloading":
+        return "warn", "Reloading...", True
+    if active == "deactivating":
+        return "warn", "Stopping...", True
+    if active == "failed":
+        code = kv.get("ExecMainStatus", "")
+        nice = {"exit-code": "exited with an error", "signal": "killed by a signal", "core-dump": "crashed",
+                "timeout": "timed out", "start-limit-hit": "restarted too often", "watchdog": "watchdog timeout",
+                "oom-kill": "out of memory"}
+        why = f"exit code {code}" if code not in ("", "0") else nice.get(kv.get("Result") or "", "")
+        return "fail", "Failed" + (f": {why}" if why else ""), True
+    if active == "inactive":
+        return "fail", "Stopped", True
+    return "warn", f"State: {active or 'unknown'}", True
+
+
+def svc_rows(run, now_mono, stfu_probe=None):
+    table = svc_table()
+    info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
+    rows = []
+    for key, label, units in table:
+        unit = next((u for u in units if (info.get(u + ".service") or {}).get("LoadState") not in (None, "not-found")), units[0])
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now_mono)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed and stfu_probe is not None:
+            by_hand = stfu_probe()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    return rows
+
+
+def reg_parse(out, node):
+    import re
+    if not out.strip() or not node:
+        return "unknown"
+    bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+    cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        cols = cols_re.match(line)
+        if cols and cols.group(2) == node:
+            text = cols.group(5).lower()
+        elif pat.search(line):
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        else:
+            continue
+        if any(w in text for w in bad):
+            return "unregistered"
+        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
+    return state
+
+
+def svc_reg_state(node, asterisk_on, parsed):
+    node = str(node or "").strip()
+    if not node.isdigit():
+        return "none", "No node number found"
+    if 1000 <= int(node) <= 1999:
+        return "private", "Private node: it never registers with AllStarLink"
+    if not asterisk_on:
+        return "unknown", "Asterisk is not running"
+    if parsed is None:
+        return "unknown", "Asterisk did not answer"
+    if parsed == "registered":
+        return "registered", "Registered"
+    if parsed == "unregistered":
+        return "unregistered", "Not registered"
+    return "unknown", "Not known yet"

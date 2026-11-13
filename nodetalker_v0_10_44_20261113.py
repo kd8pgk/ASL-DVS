@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.43"
+VERSION = "0.10.44"
 DATE_STR = "2026-11-06"
 APP_NAME = "Node Talker"
 
@@ -3111,20 +3111,28 @@ def restart_asterisk():
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
 
 
-SVC_UNITS = (("asterisk", "Asterisk", "asterisk"), ("ab", "Analog Bridge", "analog_bridge"),
-             ("mmdvm", "MMDVM Bridge", "mmdvm_bridge"), ("stfu", "STFU", "stfu"), ("m17", "USRP2M17", "usrp2m17"))
 SVC_CACHE_SEC = 4.0
 SVC_REG_SEC = 10.0
-SVC_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
-SVC_REG_COLS = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
-SVC_FLAP_RESTARTS = 3
-SVC_FLAP_SEC = 600.0
 SVC_RESTART_SEC = 90
+SVC_OWN_AFTER_RESTART_SEC = 20.0
 STFU_BINARY = "/opt/STFU/STFU"
+SVC_NC_FILE = os.environ.get("NODETALKER_SERVICES_FILE", "/run/asl_dvs/services.json")
+SVC_NC_MAX_BYTES = 65536
+SVC_LIGHTS = ("on", "warn", "fail", "off")
+SVC_REG_STATES = ("registered", "unregistered", "unknown", "private", "none")
 _svc_lock = threading.Lock()
 _svc_cache = {"t": -1e9, "v": None}
 _svc_busy = {}
+_svc_own_until = {"t": 0.0}
 _reg_cache = {"t": -1e9, "node": "", "state": "unknown", "detail": "", "since": None}
+
+
+def svc_table():
+    return (("asterisk", "Asterisk", ("asterisk",)),
+            ("ab", "Analog Bridge", ("analog_bridge", "Analog_Bridge")),
+            ("mmdvm", "MMDVM Bridge", ("mmdvm_bridge",)),
+            ("stfu", "STFU", ("stfu",)),
+            ("m17", "USRP2M17", ("usrp2m17",)))
 
 
 def svc_uptime_text(sec):
@@ -3138,11 +3146,11 @@ def svc_uptime_text(sec):
     return f"Running {sec // 86400} d {sec % 86400 // 3600} h"
 
 
-def svc_unit_info(units):
-    r = _systemctl("show", "-p", "Id,LoadState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,ActiveEnterTimestampMonotonic",
-                   *units, timeout=15)
+def svc_unit_info(units, run):
     out = {}
-    for block in (r.stdout or "").split("\n\n"):
+    text = run(["show", "-p", "Id,LoadState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,ActiveEnterTimestampMonotonic",
+                *units]) or ""
+    for block in text.split("\n\n"):
         kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
         if kv.get("Id"):
             out[kv["Id"]] = kv
@@ -3165,7 +3173,7 @@ def svc_classify(kv, now_mono):
         except ValueError:
             began = 0.0
         up = now_mono - began if began > 0 else None
-        if restarts >= SVC_FLAP_RESTARTS and up is not None and up < SVC_FLAP_SEC:
+        if restarts >= 3 and up is not None and up < 600.0:
             return "warn", f"Restarting often: {restarts} restarts", True
         return "on", svc_uptime_text(up) if up is not None else "Running", True
     if active == "activating":
@@ -3178,11 +3186,74 @@ def svc_classify(kv, now_mono):
         return "warn", "Stopping...", True
     if active == "failed":
         code = kv.get("ExecMainStatus", "")
-        why = f"exit code {code}" if code not in ("", "0") else (kv.get("Result") or "failed")
-        return "fail", f"Failed: {why}", True
+        nice = {"exit-code": "exited with an error", "signal": "killed by a signal", "core-dump": "crashed",
+                "timeout": "timed out", "start-limit-hit": "restarted too often", "watchdog": "watchdog timeout",
+                "oom-kill": "out of memory"}
+        why = f"exit code {code}" if code not in ("", "0") else nice.get(kv.get("Result") or "", "")
+        return "fail", "Failed" + (f": {why}" if why else ""), True
     if active == "inactive":
         return "fail", "Stopped", True
     return "warn", f"State: {active or 'unknown'}", True
+
+
+def svc_rows(run, now_mono, stfu_probe=None):
+    table = svc_table()
+    info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
+    rows = []
+    for key, label, units in table:
+        unit = next((u for u in units if (info.get(u + ".service") or {}).get("LoadState") not in (None, "not-found")), units[0])
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now_mono)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed and stfu_probe is not None:
+            by_hand = stfu_probe()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    return rows
+
+
+def reg_parse(out, node):
+    import re
+    if not out.strip() or not node:
+        return "unknown"
+    bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+    cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        cols = cols_re.match(line)
+        if cols and cols.group(2) == node:
+            text = cols.group(5).lower()
+        elif pat.search(line):
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        else:
+            continue
+        if any(w in text for w in bad):
+            return "unregistered"
+        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
+    return state
+
+
+def svc_reg_state(node, asterisk_on, parsed):
+    node = str(node or "").strip()
+    if not node.isdigit():
+        return "none", "No node number found"
+    if 1000 <= int(node) <= 1999:
+        return "private", "Private node: it never registers with AllStarLink"
+    if not asterisk_on:
+        return "unknown", "Asterisk is not running"
+    if parsed is None:
+        return "unknown", "Asterisk did not answer"
+    if parsed == "registered":
+        return "registered", "Registered"
+    if parsed == "unregistered":
+        return "unregistered", "Not registered"
+    return "unknown", "Not known yet"
+
+
+def _svc_run(args):
+    return _systemctl(*args, timeout=15).stdout
 
 
 def svc_stfu_by_hand():
@@ -3195,44 +3266,19 @@ def svc_stfu_by_hand():
     return r.returncode == 0
 
 
-def reg_parse(out, node):
-    if not out.strip() or not node:
-        return "unknown"
-    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
-    state = "unregistered"
-    for line in out.splitlines():
-        cols = SVC_REG_COLS.match(line)
-        if cols and cols.group(2) == node:
-            text = cols.group(5).lower()
-        elif pat.search(line):
-            text = " ".join(t for t in line.lower().split() if "." not in t)
-        else:
-            continue
-        if any(w in text for w in SVC_REG_BAD_WORDS):
-            return "unregistered"
-        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
-    return state
-
-
 def svc_registration(asterisk_on):
     node = str(main_node() or "").strip()
     now = time.monotonic()
-    if not node.isdigit():
-        return {"state": "none", "node": node, "detail": "No node number found", "since": None}
-    if 1000 <= int(node) <= 1999:
-        return {"state": "private", "node": node, "detail": "Private node: it never registers with AllStarLink", "since": None}
-    if not asterisk_on:
-        return {"state": "unknown", "node": node, "detail": "Asterisk is not running", "since": None}
+    private = node.isdigit() and 1000 <= int(node) <= 1999
+    if not asterisk_on or not node.isdigit() or private:
+        state, detail = svc_reg_state(node, asterisk_on, "unknown")
+        return {"state": state, "node": node, "detail": detail, "since": None}
     with _svc_lock:
         c = _reg_cache
         if c["node"] == node and now - c["t"] < SVC_REG_SEC:
             return {"state": c["state"], "node": node, "detail": c["detail"], "since": c["since"]}
     ok, out = ast_cli("rpt show registrations", timeout=4)
-    if not ok:
-        state, detail = "unknown", "Asterisk did not answer"
-    else:
-        state = reg_parse(out, node)
-        detail = {"registered": "Registered", "unregistered": "Not registered", "unknown": "Not known yet"}[state]
+    state, detail = svc_reg_state(node, True, reg_parse(out, node) if ok else None)
     with _svc_lock:
         c = _reg_cache
         if c["node"] == node and c["state"] != state and c["t"] > -1e8:
@@ -3243,43 +3289,87 @@ def svc_registration(asterisk_on):
         return {"state": state, "node": node, "detail": detail, "since": c["since"]}
 
 
+def _svc_text(value, limit=160):
+    return value[:limit] if isinstance(value, str) else ""
+
+
+def svc_from_nc(now_epoch=None):
+    import stat
+    now = time.time() if now_epoch is None else now_epoch
+    try:
+        st = os.lstat(SVC_NC_FILE)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > SVC_NC_MAX_BYTES:
+            return None
+        if os.geteuid() == 0 and st.st_uid != 0:
+            return None
+        with open(SVC_NC_FILE, "rb") as fh:
+            doc = json.loads(fh.read(SVC_NC_MAX_BYTES + 1).decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("version") != 1 or doc.get("source") != "nodecontrol":
+        return None
+    checked, every = doc.get("checked_at"), doc.get("next_check_secs")
+    for num in (checked, every):
+        if isinstance(num, bool) or not isinstance(num, (int, float)):
+            return None
+    age = now - checked
+    if age < -10 or age > max(45.0, 3 * every) or every <= 0 or every > 3600:
+        return None
+    reg, rows = doc.get("reg"), doc.get("services")
+    if not isinstance(reg, dict) or reg.get("state") not in SVC_REG_STATES or not isinstance(rows, list):
+        return None
+    table = svc_table()
+    got = {r.get("key"): r for r in rows if isinstance(r, dict)}
+    out = []
+    for key, label, units in table:
+        r = got.get(key)
+        if r is None or r.get("light") not in SVC_LIGHTS or r.get("unit") not in [u + ".service" for u in units]:
+            return None
+        if not isinstance(r.get("installed"), bool) or not isinstance(r.get("restartable"), bool):
+            return None
+        out.append({"key": key, "label": label, "unit": r["unit"], "light": r["light"], "detail": _svc_text(r.get("detail")),
+                    "installed": r["installed"], "restartable": r["restartable"]})
+    since = reg.get("since")
+    since = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) and 0 < since <= now + 10 else None
+    node = reg.get("node")
+    return {"ok": True, "source": "nodecontrol", "checked_at": checked, "age_s": round(max(0.0, age), 1),
+            "reg": {"state": reg["state"], "node": node if isinstance(node, str) and node.isdigit() else "",
+                    "detail": _svc_text(reg.get("detail")), "since": since},
+            "services": out}
+
+
 def svc_status(_body=None):
     now = time.monotonic()
     with _svc_lock:
         if _svc_cache["v"] is not None and now - _svc_cache["t"] < SVC_CACHE_SEC:
             return dict(_svc_cache["v"])
-    info = svc_unit_info([u + ".service" for _k, _l, u in SVC_UNITS])
-    rows = []
-    for key, label, unit in SVC_UNITS:
-        light, detail, installed = svc_classify(info.get(unit + ".service"), now)
-        restartable = installed and light != "off"
-        if key == "stfu" and not installed:
-            by_hand = svc_stfu_by_hand()
-            if by_hand is not None:
-                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
-        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
-                     "installed": installed, "restartable": restartable})
-    reg = svc_registration(rows[0]["light"] == "on")
-    v = {"ok": True, "source": "nodetalker", "checked_at": time.time(), "reg": reg, "services": rows}
+        own_only = now < _svc_own_until["t"]
+    v = None if own_only else svc_from_nc()
+    if v is None:
+        rows = svc_rows(_svc_run, now, svc_stfu_by_hand)
+        reg = svc_registration(rows[0]["light"] == "on")
+        v = {"ok": True, "source": "nodetalker", "checked_at": time.time(), "reg": reg, "services": rows}
     with _svc_lock:
         _svc_cache.update(t=now, v=v)
     return dict(v)
 
 
 def svc_label(key):
-    return next((label for k, label, _u in SVC_UNITS if k == key), "the service")
+    return next((label for k, label, _u in svc_table() if k == key), "the service")
 
 
 def svc_restart(body):
     key = str((body or {}).get("key", ""))
-    row = next((x for x in SVC_UNITS if x[0] == key), None)
+    row = next((x for x in svc_table() if x[0] == key), None)
     if row is None:
         return {"ok": False, "error": "Unknown service."}
     if os.geteuid() != 0:
         return {"ok": False, "error": "root required to restart the services"}
-    _k, label, unit = row
-    unit += ".service"
-    if service_states([unit]).get(unit) == "missing":
+    _k, label, units = row
+    names = [u + ".service" for u in units]
+    states = service_states(names)
+    unit = next((n for n in names if states.get(n) != "missing"), None)
+    if unit is None:
         return {"ok": False, "error": f"{label} is not installed."}
     with _svc_lock:
         if key in _svc_busy:
@@ -3302,6 +3392,7 @@ def svc_restart(body):
             _svc_busy.pop(key, None)
             _svc_cache["t"] = -1e9
             _reg_cache["t"] = -1e9
+            _svc_own_until["t"] = time.monotonic() + SVC_OWN_AFTER_RESTART_SEC
     if key == "asterisk":
         _lstats_invalidate()
         _links_cache["t"] = -1e9
@@ -10965,7 +11056,8 @@ function svcRender(d) {
     box.appendChild(row);
   });
   sum('svc', bad ? bad + ' need attention' : warn ? warn + ' to check' : 'all good');
-  $('sv-src').textContent = d.source === 'nodetalker' ? 'Node Talker' : String(d.source || '');
+  $('sv-src').textContent = d.source === 'nodecontrol' ? 'Node Controller' : d.source === 'nodetalker' ? 'Node Talker' : String(d.source || '');
+  $('sv-age').textContent = d.source === 'nodecontrol' && d.age_s != null ? ' (' + Math.round(d.age_s) + ' s old)' : '';
 }
 async function svcRestart(key, label) {
   const ask = key === 'asterisk' ? 'Restart Asterisk now? Every link on this node drops and reconnects.' : 'Restart ' + label + '?';
@@ -11652,7 +11744,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="sv-list"></div>
 <div class="sv-legend"><span><i class="sv-dot sv-on"></i>Running</span><span><i class="sv-dot sv-warn"></i>Starting, restarting or needs a look</span><span><i class="sv-dot sv-fail"></i>Stopped or failed</span><span><i class="sv-dot"></i>Not installed</span></div>
 <div id="sv-msg" class="msg"></div>
-<div class="sv-src muted small">Source: <b id="sv-src">Node Talker</b>, checked every 10 s while this tab is open.</div>
+<div class="sv-src muted small">Source: <b id="sv-src">Node Talker</b><span id="sv-age"></span>. Refreshed every 10 s while this tab is open.</div>
 </div>
 </div>
 <div class="card fold" id="cd-setup">

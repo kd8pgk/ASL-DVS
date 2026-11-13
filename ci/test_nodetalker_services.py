@@ -5,6 +5,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+import types
+import json
 import unittest
 from unittest import mock
 
@@ -76,7 +79,8 @@ class Classify(unittest.TestCase):
     def test_failed_and_stopped_are_red(self):
         light, text, _ = self.c(active="failed", sub="failed", result="exit-code", status="1")
         self.assertEqual((light, text), ("fail", "Failed: exit code 1"))
-        self.assertEqual(self.c(active="failed", sub="failed", result="signal", status="0")[1], "Failed: signal")
+        self.assertEqual(self.c(active="failed", sub="failed", result="signal", status="0")[1], "Failed: killed by a signal")
+        self.assertEqual(self.c(active="failed", sub="failed", result="success", status="0")[1], "Failed")
         self.assertEqual(self.c(active="inactive", sub="dead")[:2], ("fail", "Stopped"))
 
     def test_not_installed_is_grey_and_not_restartable(self):
@@ -141,6 +145,7 @@ class Status(unittest.TestCase):
             nt._svc_cache.update(t=-1e9, v=None)
             nt._reg_cache.update(t=-1e9, node="", state="unknown", detail="", since=None)
         with mock.patch.object(nt, "_systemctl", lambda *a, **k: completed(text)), \
+                mock.patch.object(nt, "SVC_NC_FILE", os.path.join(WORK, "no-such-services.json")), \
                 mock.patch.object(nt.time, "monotonic", lambda: NOW), \
                 mock.patch.object(nt, "svc_stfu_by_hand", lambda: stfu_by_hand), \
                 mock.patch.object(nt, "main_node", lambda: node), \
@@ -184,6 +189,7 @@ class Status(unittest.TestCase):
         self.status(shown())
         calls = []
         with mock.patch.object(nt, "_systemctl", lambda *a, **k: calls.append(1) or completed("")), \
+                mock.patch.object(nt, "SVC_NC_FILE", os.path.join(WORK, "no-such-services.json")), \
                 mock.patch.object(nt.time, "monotonic", lambda: NOW + 1):
             nt.svc_status()
         self.assertFalse(calls)
@@ -263,6 +269,152 @@ class Restart(unittest.TestCase):
             need = nt.rec_confirm_needed("/api/services/restart", {"key": "mmdvm"})
         self.assertEqual(need["kind"], "power")
         self.assertIn("Restarting MMDVM Bridge", need["message"])
+
+
+class FromNodeController(unittest.TestCase):
+    NOWE = 2000000.0
+
+    def doc(self, **over):
+        rows = [{"key": k, "label": l, "unit": units[0] + ".service", "light": "on", "detail": "Running",
+                 "installed": True, "restartable": True} for k, l, units in nt.svc_table()]
+        d = {"version": 1, "source": "nodecontrol", "host_version": "9.3.114-pi02w", "checked_at": self.NOWE - 8,
+             "next_check_secs": 15.0, "reg": {"state": "registered", "node": "27342", "detail": "Registered", "since": None},
+             "services": rows}
+        d.update(over)
+        return d
+
+    def setUp(self):
+        self.path = os.path.join(WORK, "services.json")
+        self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
+        p = mock.patch.object(nt, "SVC_NC_FILE", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        with nt._svc_lock:
+            nt._svc_cache.update(t=-1e9, v=None)
+            nt._svc_own_until["t"] = 0.0
+
+    def put(self, doc):
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write(doc if isinstance(doc, str) else json.dumps(doc))
+
+    def read(self, doc):
+        self.put(doc)
+        return nt.svc_from_nc(self.NOWE)
+
+    def test_a_good_file_is_accepted(self):
+        d = self.read(self.doc())
+        self.assertEqual(d["source"], "nodecontrol")
+        self.assertEqual(d["age_s"], 8.0)
+        self.assertEqual(len(d["services"]), 5)
+        self.assertEqual(d["reg"]["state"], "registered")
+
+    def test_no_file_gives_none(self):
+        self.assertIsNone(nt.svc_from_nc(self.NOWE))
+
+    def test_old_future_and_nonsense_times_are_refused(self):
+        for at in (self.NOWE - 100, self.NOWE + 60, "now", True, None):
+            self.assertIsNone(self.read(self.doc(checked_at=at)), at)
+        self.assertIsNotNone(self.read(self.doc(checked_at=self.NOWE - 40)))
+        self.assertIsNone(self.read(self.doc(next_check_secs=0)))
+        self.assertIsNone(self.read(self.doc(next_check_secs=99999)))
+
+    def test_the_wait_follows_the_writers_own_interval(self):
+        self.assertIsNotNone(self.read(self.doc(checked_at=self.NOWE - 100, next_check_secs=60.0)))
+        self.assertIsNone(self.read(self.doc(checked_at=self.NOWE - 200, next_check_secs=60.0)))
+
+    def test_wrong_version_or_source_or_shape_is_refused(self):
+        for bad in (self.doc(version=2), self.doc(source="sysmon"), self.doc(reg=None), self.doc(services="x"),
+                    self.doc(reg={"state": "great"}), [], "[1,2]", "not json", "{"):
+            self.assertIsNone(self.read(bad), bad)
+
+    def test_a_missing_extra_or_odd_service_row_is_refused(self):
+        d = self.doc()
+        self.assertIsNone(self.read(dict(d, services=d["services"][:4])))
+        rows = [dict(r) for r in d["services"]]
+        rows[1]["light"] = "purple"
+        self.assertIsNone(self.read(dict(d, services=rows)))
+        rows = [dict(r) for r in d["services"]]
+        rows[2]["unit"] = "sshd.service"
+        self.assertIsNone(self.read(dict(d, services=rows)))
+        rows = [dict(r) for r in d["services"]]
+        rows[0]["restartable"] = "yes"
+        self.assertIsNone(self.read(dict(d, services=rows)))
+
+    def test_labels_come_from_node_talker_and_text_is_cut(self):
+        d = self.doc()
+        rows = [dict(r) for r in d["services"]]
+        rows[0]["label"] = "<script>x</script>"
+        rows[0]["detail"] = "y" * 5000
+        out = self.read(dict(d, services=rows))
+        self.assertEqual(out["services"][0]["label"], "Asterisk")
+        self.assertEqual(len(out["services"][0]["detail"]), 160)
+
+    def test_the_capital_a_unit_is_allowed_for_analog_bridge_only(self):
+        d = self.doc()
+        rows = [dict(r) for r in d["services"]]
+        rows[1]["unit"] = "Analog_Bridge.service"
+        self.assertIsNotNone(self.read(dict(d, services=rows)))
+
+    def test_big_files_and_links_are_refused(self):
+        self.put(self.doc())
+        with mock.patch.object(nt, "SVC_NC_MAX_BYTES", 50):
+            self.assertIsNone(nt.svc_from_nc(self.NOWE))
+        os.remove(self.path)
+        target = os.path.join(WORK, "real.json")
+        with open(target, "w") as fh:
+            json.dump(self.doc(), fh)
+        os.symlink(target, self.path)
+        self.assertIsNone(nt.svc_from_nc(self.NOWE))
+
+    def test_a_file_owned_by_someone_else_is_refused_when_running_as_root(self):
+        self.put(self.doc())
+        with mock.patch.object(nt.os, "geteuid", lambda: 0), \
+                mock.patch.object(nt.os, "lstat", lambda p: types.SimpleNamespace(st_mode=0o100644, st_size=100, st_uid=1000)):
+            self.assertIsNone(nt.svc_from_nc(self.NOWE))
+
+    def test_since_is_kept_only_when_it_is_a_sane_time(self):
+        d = self.doc(reg={"state": "unregistered", "node": "27342", "detail": "Not registered", "since": self.NOWE - 60})
+        self.assertEqual(self.read(d)["reg"]["since"], self.NOWE - 60)
+        d = self.doc(reg={"state": "unregistered", "node": "27342", "detail": "x", "since": self.NOWE + 9999})
+        self.assertIsNone(self.read(d)["reg"]["since"])
+
+    def test_status_prefers_the_file_then_falls_back(self):
+        fresh = self.doc(checked_at=time.time() - 3)
+        self.put(fresh)
+        self.assertEqual(nt.svc_status()["source"], "nodecontrol")
+        os.remove(self.path)
+        with nt._svc_lock:
+            nt._svc_cache.update(t=-1e9, v=None)
+        with mock.patch.object(nt, "_systemctl", lambda *a, **k: completed(shown())), \
+                mock.patch.object(nt, "main_node", lambda: "27342"), \
+                mock.patch.object(nt, "ast_cli", lambda cmd, timeout=0: (True, "x 27342 y 1 Registered\n")), \
+                mock.patch.object(nt, "svc_stfu_by_hand", lambda: None), \
+                mock.patch.object(nt.time, "monotonic", lambda: NOW):
+            self.assertEqual(nt.svc_status()["source"], "nodetalker")
+
+    def test_after_a_restart_node_talker_looks_for_itself_for_a_while(self):
+        self.put(self.doc(checked_at=time.time() - 3))
+        with nt._svc_lock:
+            nt._svc_own_until["t"] = nt.time.monotonic() + 20
+            nt._svc_cache.update(t=-1e9, v=None)
+        with mock.patch.object(nt, "_systemctl", lambda *a, **k: completed(shown())), \
+                mock.patch.object(nt, "main_node", lambda: "27342"), \
+                mock.patch.object(nt, "ast_cli", lambda cmd, timeout=0: (True, "x 27342 y 1 Registered\n")), \
+                mock.patch.object(nt, "svc_stfu_by_hand", lambda: None):
+            self.assertEqual(nt.svc_status()["source"], "nodetalker")
+
+    def test_a_restart_starts_that_window(self):
+        with mock.patch.object(nt.os, "geteuid", lambda: 0), mock.patch.object(nt, "log_event", lambda *a, **k: None), \
+                mock.patch.object(nt, "service_states", lambda units: {u: "active" for u in units}), \
+                mock.patch.object(nt, "_systemctl", lambda *a, **k: completed("")):
+            nt._svc_own_until["t"] = 0.0
+            self.assertTrue(nt.svc_restart({"key": "ab"})["ok"])
+        self.assertGreater(nt._svc_own_until["t"], nt.time.monotonic() + 10)
+
+    def test_footer_names_the_source(self):
+        html = nt.render_page().decode("utf-8")
+        for n in ("d.source === 'nodecontrol' ? 'Node Controller'", 'id="sv-age"', "' s old)'"):
+            self.assertIn(n, html, n)
 
 
 class Page(unittest.TestCase):

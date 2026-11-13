@@ -1,5 +1,16 @@
 # Node Talker changelog
 
+## 0.10.44 (2026-11-13)
+
+The Services card uses Node Controller's answer when it is running. This is a release: the server's source of data changed.
+
+- **Node Controller's answer, when it is fresh.** Node Controller pi02w 9.3.114 writes `/run/asl_dvs/services.json` every 15 s with the five services and the registration. Node Talker reads it when it is no older than 45 s (or three of its own intervals), and the card's footer then says "Source: Node Controller (8 s old)". When the file is missing, old, from the future or not exactly what is expected, Node Talker checks systemd and Asterisk itself, as in 0.10.42. With Node Controller stopped the file goes stale and Node Talker takes over within a minute.
+- **The file is checked before it is believed.** It must be a regular file (not a link) up to 64 KB, owned by root when Node Talker runs as root, version 1 from `nodecontrol`, with exactly the five services, a light that is one of the four, a unit name from the known list, and the registration in one of five states. Labels always come from Node Talker, and text is cut at 160 characters.
+- **After a restart, Node Talker looks for itself for 20 s,** so the card shows the new state at once and not the state Node Controller saw up to 15 s ago.
+- The shared code for the lights and the registration moved into `shared/confio.py` (`svc_table`, `svc_uptime_text`, `svc_unit_info`, `svc_classify`, `svc_rows`, `reg_parse`, `svc_reg_state`), copied unchanged into Node Talker and Node Controller pi02w. Analog Bridge's unit is found under both `analog_bridge` and `Analog_Bridge`, as Node Controller already did.
+- Works the same with an older Node Controller (no file, so Node Talker's own checks) and an older Node Talker (ignores the file).
+- Tests: `ci/test_nodetalker_services.py` is now 48 tests (the file's checks one by one, the source choice, the 20 s window after a restart, the footer) and `ci/test_nodecontrol_services.py` (11 tests) checks that what Node Controller writes is what Node Talker accepts.
+
 ## 0.10.43 (2026-11-12)
 
 Slow link for the Node Talker page, the same idea as Node Controller 9.3.113-pi02w and instmon 2.95.0: less traffic on the node's Wi-Fi, which also carries the audio. This is a release: server and page behaviour changed. Not yet measured on a node. The audio path, the key-up path, the Balancer and the receive-health report are not changed.
@@ -212,7 +223,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_43_20261112.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_44_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
