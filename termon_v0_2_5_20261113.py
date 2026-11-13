@@ -35,8 +35,8 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.4"
-DATE_STR = "2026-11-09"
+VERSION = "0.2.5"
+DATE_STR = "2026-11-13"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
 INSTALL_BIN_PATH = "/usr/local/bin/termon.py"
@@ -399,6 +399,69 @@ def _verify_account_password(account, password):
     return _crypt_verify(password, stored)
 
 
+def sess_policy(tier):
+    if tier == "standard":
+        return {"idle": 12 * 3600, "absolute": 0, "renew": 3600, "max": 50}
+    if tier == "strict":
+        return {"idle": 2 * 3600, "absolute": 12 * 3600, "renew": 3600, "max": 50}
+    raise ValueError("unknown session tier: %s" % (tier,))
+
+
+def sess_digest(token):
+    import hashlib
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def sess_stamp(password_hash):
+    import hashlib
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:32]
+
+
+def sess_dead(rec, now):
+    return rec["idle"] <= now or bool(rec["abs"] and rec["abs"] <= now)
+
+
+def sess_new(store, policy, now, stamp="", ip=""):
+    import secrets
+    for key in [k for k, r in store.items() if sess_dead(r, now)]:
+        del store[key]
+    while len(store) >= policy["max"]:
+        del store[min(store, key=lambda k: store[k]["born"])]
+    token = secrets.token_hex(32)
+    idle = now + policy["idle"]
+    hard = now + policy["absolute"] if policy["absolute"] else 0
+    store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
+                                 "renew": now, "stamp": stamp, "ip": ip}
+    return token, int(min(idle, hard) - now if hard else idle - now)
+
+
+def sess_check(store, token, policy, now, stamp=None, touch=True, ip=None):
+    if not token:
+        return False, False, 0
+    key = sess_digest(token)
+    rec = store.get(key)
+    if rec is None:
+        return False, False, 0
+    if (sess_dead(rec, now) or (stamp is not None and rec["stamp"] != stamp)
+            or (ip is not None and rec["ip"] and rec["ip"] != ip)):
+        del store[key]
+        return False, False, 0
+    if touch:
+        rec["idle"] = now + policy["idle"]
+        if rec["abs"]:
+            rec["idle"] = min(rec["idle"], rec["abs"])
+    renew = bool(touch and now - rec["renew"] >= policy["renew"])
+    if renew:
+        rec["renew"] = now
+    return True, renew, int(rec["idle"] - now)
+
+
+def sess_drop_all(store):
+    count = len(store)
+    store.clear()
+    return count
+
+
 _sess_lock = threading.Lock()
 _sessions = {}
 _ticket_lock = threading.Lock()
@@ -416,17 +479,30 @@ def _digest(token):
 _BIND_IP = False
 
 
-def _session_dead(rec, now):
-    return rec[0] < now or rec[1] < now
+_sess_local = threading.local()
+_stamp_cache = [0.0, ""]
+
+
+def _policy():
+    return dict(sess_policy("strict"), idle=SESSION_TTL_SEC, absolute=SESSION_MAX_SEC)
+
+
+def _pw_stamp():
+    now = time.time()
+    if now - _stamp_cache[0] > 5:
+        try:
+            value = str(BACKEND.stamp()) if BACKEND is not None else ""
+        except Exception:
+            value = _stamp_cache[1]
+        _stamp_cache[0] = now
+        _stamp_cache[1] = value
+    return _stamp_cache[1]
 
 
 def _issue_session(ip=""):
-    token = secrets.token_urlsafe(32)
-    now = time.time()
+    stamp = _pw_stamp()
     with _sess_lock:
-        for k in [k for k, v in _sessions.items() if _session_dead(v, now)]:
-            del _sessions[k]
-        _sessions[_digest(token)] = [now + SESSION_TTL_SEC, now + SESSION_MAX_SEC, _lock_key(ip) if ip else ""]
+        token, _ = sess_new(_sessions, _policy(), time.time(), stamp, _lock_key(ip) if ip else "")
     return token
 
 
@@ -435,33 +511,28 @@ def _session_valid(token, touch=True, ip=None):
         return False
     now = time.time()
     d = _digest(token)
+    stamp = _pw_stamp()
+    refused = None
     with _sess_lock:
         rec = _sessions.get(d)
-        if rec is None:
-            return False
-        if _session_dead(rec, now):
-            _sessions.pop(d, None)
-            return False
-        if _BIND_IP and ip is not None and rec[2] and rec[2] != _lock_key(ip):
-            _sessions.pop(d, None)
-            refused = True
+        if (rec is not None and _BIND_IP and ip is not None and rec["ip"] and rec["ip"] != _lock_key(ip)
+                and not sess_dead(rec, now)):
+            refused = rec["ip"]
+            del _sessions[d]
+            ok = False
         else:
-            refused = False
-            if touch:
-                rec[0] = now + SESSION_TTL_SEC
-    if refused:
-        audit(f"session: ended, it was used from {_lock_key(ip)} but signed in from {rec[2]}")
+            ok, _renew, _age = sess_check(_sessions, token, _policy(), now, stamp, touch)
+    if refused is not None:
+        audit(f"session: ended, it was used from {_lock_key(ip)} but signed in from {refused}")
         _close_owner(d)
-        return False
-    return True
+    return ok
 
 
-def _revoke_session(token):
-    if token:
-        d = _digest(token)
-        with _sess_lock:
-            _sessions.pop(d, None)
-        _close_owner(d)
+def _revoke_all_sessions():
+    with _sess_lock:
+        count = sess_drop_all(_sessions)
+    _close_all_sessions()
+    return count
 
 
 def _issue_ticket(token):
@@ -725,7 +796,7 @@ def _close_owner(owner):
 def _sweep():
     now = time.time()
     with _sess_lock:
-        for k in [k for k, v in _sessions.items() if _session_dead(v, now)]:
+        for k in [k for k, v in _sessions.items() if sess_dead(v, now)]:
             del _sessions[k]
         live = set(_sessions)
     with _pty_lock:
@@ -1379,6 +1450,14 @@ class Privileged:
         return {"account": account, "sudo": _sudo_state(account), "web_user": cfg["web_user"],
                 "split": self.split}
 
+    def stamp(self):
+        account = load_config()["shell_user"] or "root"
+        try:
+            stored = _shadow_hash(account)
+        except OSError:
+            stored = None
+        return sess_stamp(stored or "")
+
 
 def _clean_text(value, limit=64):
     return "".join(c for c in str(value or "")[:limit] if c.isprintable())
@@ -1516,6 +1595,8 @@ class HelperServer:
             return p.regen_cert(who), None
         if op == "account":
             return {"info": dict(p.account_info(), split=True)}, None
+        if op == "stamp":
+            return {"stamp": p.stamp()}, None
         raise PrivError(400, "Unknown request.")
 
 
@@ -1615,6 +1696,9 @@ class RemoteBackend:
 
     def account_info(self):
         return self._call("account")["info"]
+
+    def stamp(self):
+        return self._call("stamp")["stamp"]
 
 
 _ASSET_RAW = {
@@ -2649,7 +2733,8 @@ def r_login(h, q):
 
 
 def r_logout(h, q):
-    _revoke_session(_token_of(h))
+    _revoke_all_sessions()
+    audit(f"session: every sign-in ended (sign out from {h._peer()})")
     h._json(200, {"ok": True}, extra=[_set_cookie(h, "", clear=True)])
 
 
@@ -2751,15 +2836,6 @@ def r_setup_web_user(h, q):
         raise HttpErr(400, "Send the user name as text.")
     restarting = _priv(BACKEND.set_web_user, name, h._peer())
     h._json(200, {"ok": True, "restarting": bool(restarting)})
-
-
-def r_logout_all(h, q):
-    _need(h)
-    with _sess_lock:
-        _sessions.clear()
-    _close_all_sessions()
-    audit(f"session: every sign-in ended (requested from {h._peer()})")
-    h._json(200, {"ok": True}, extra=[_set_cookie(h, "", clear=True)])
 
 
 def r_setup_options(h, q):
@@ -2913,7 +2989,6 @@ GET_ROUTES = {
 POST_ROUTES = {
     "/api/login": r_login,
     "/api/logout": r_logout,
-    "/api/logout_all": r_logout_all,
     "/api/setup/install": r_setup_install,
     "/api/setup/port": r_setup_port,
     "/api/setup/hosts": r_setup_hosts,
@@ -3571,7 +3646,7 @@ a.lnk{color:var(--accent);word-break:break-all}
   <div class="tabs">
     <button class="btn" id="tab-monitor" type="button">Monitor</button>
     <button class="btn" id="tab-terminal" type="button">Terminal</button>
-    <button class="btn" id="logout" type="button" hidden>Sign out</button>
+    <button class="btn" id="logout" type="button" title="Ends every sign-in and closes every terminal" hidden>Sign out</button>
   </div>
 </header>
 <main>
@@ -3629,7 +3704,6 @@ a.lnk{color:var(--accent);word-break:break-all}
       </div>
       <div class="muted" id="session-note" style="margin-top:6px"></div>
       <div class="row" style="margin-top:12px">
-        <button class="btn" id="logout-all" type="button">Sign out everywhere</button>
       </div>
       <div class="muted" id="setup-note" style="margin-top:8px"></div>
       </div>
@@ -4159,14 +4233,6 @@ a.lnk{color:var(--accent);word-break:break-all}
     api('POST', '/api/setup/options', { bind_session_ip: box.checked, confirm: true }).then(function (j) {
       if (!j.ok) { box.checked = !box.checked; $('session-note').textContent = j.message; return; }
       api('GET', '/api/setup').then(function (s) { if (s.ok) applyCert(s); });
-    });
-  };
-
-  $('logout-all').onclick = function () {
-    if (!window.confirm('End every sign-in, including other browsers, and close every terminal?')) return;
-    api('POST', '/api/logout_all', {}).then(function () {
-      stopAll();
-      showLogin('Signed out everywhere.');
     });
   };
 
