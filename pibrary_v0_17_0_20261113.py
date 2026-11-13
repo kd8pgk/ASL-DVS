@@ -4,6 +4,7 @@ import argparse
 import base64
 import configparser
 import errno
+import gzip
 import hashlib
 import hmac
 import http.client
@@ -30,8 +31,8 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.16.1"
-DATE_STR = "2026-11-04"
+VERSION = "0.17.0"
+DATE_STR = "2026-11-13"
 APP_NAME = "Pibrary"
 
 INSTALL_BIN_PATH = "/usr/local/bin/pibrary.py"
@@ -5151,6 +5152,67 @@ window.fetch = async function(input, init) {
   return resp;
 };
 
+const NET = {mult: 1, avg: 0, forced: '', active: Date.now(), next: {}};
+['pointerdown', 'keydown', 'touchstart'].forEach(function (name) {
+  document.addEventListener(name, function () { NET.active = Date.now(); }, true);
+});
+NET.read = function () {
+  let v = '';
+  try { const m = document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/); if (m) v = m[1]; } catch (e) {}
+  NET.forced = v;
+};
+NET.read();
+NET.show = function () {
+  const el = document.getElementById('net-note');
+  if (el) el.textContent = NET.mult > 1 ? 'polling ' + NET.mult + 'x slower' : '';
+  const sel = document.getElementById('vp-slow');
+  if (sel) sel.value = NET.forced || 'auto';
+};
+NET.sample = function (ms) {
+  NET.read();
+  NET.avg = NET.avg ? NET.avg * 0.7 + ms * 0.3 : ms;
+  let m = Math.max(1, Math.min(8, Math.ceil(NET.avg / 400)));
+  if (NET.forced === 'on') m = Math.max(m, 6);
+  if (NET.forced === 'off') m = 1;
+  NET.mult = m;
+  NET.show();
+};
+NET.set = function (value) {
+  NET.forced = value === 'auto' ? '' : value;
+  document.cookie = 'asl_slow=' + NET.forced + '; path=/; max-age=' + (NET.forced ? 31536000 : 0) + '; SameSite=Strict';
+  if (NET.forced === 'on') NET.mult = Math.max(NET.mult, 6);
+  if (NET.forced === 'off') { NET.mult = 1; NET.avg = 0; }
+  NET.show();
+};
+NET.idle = function () { return NET.mult > 1 && Date.now() - NET.active > 120000 ? 2 : 1; };
+NET.factor = function () {
+  let playing = false;
+  try { playing = typeof _M !== 'undefined' && Object.keys(_M).some(function (k) { return _M[k] && _M[k].playing; }); } catch (e) {}
+  return playing ? Math.min(NET.mult, 4) : NET.mult * NET.idle();
+};
+NET.gate = function (key, ms) {
+  if (document.visibilityState === 'hidden') return true;
+  const now = Date.now();
+  if (now < (NET.next[key] || 0)) return true;
+  NET.next[key] = now + ms * (NET.factor() - 1);
+  return false;
+};
+document.addEventListener('DOMContentLoaded', function () { NET.show(); });
+
+const _tags = {};
+async function netGet(url) {
+  const headers = {};
+  if (_tags[url]) headers['If-None-Match'] = _tags[url].etag;
+  const r = await fetch(url, {headers: headers});
+  if (r.status === 304 && _tags[url]) return {ok: true, status: 200, data: JSON.parse(_tags[url].text)};
+  const text = await r.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch (e) {}
+  const etag = r.headers.get('ETag');
+  if (etag && r.status === 200 && data !== null) _tags[url] = {etag: etag, text: text};
+  return {ok: r.ok, status: r.status, data: data};
+}
+
 let _authLostReloading = false;
 const _AUTH_MSG_KEY = 'pibrary_auth_msg';
 function _onAuthLost() {
@@ -5537,8 +5599,7 @@ async function loadRecent() {
   if (!_appStarted || _recentBusy || !_recentOpen || document.hidden || _curTab !== 'status') return;
   _recentBusy = true;
   try {
-    const r = await fetch('/api/lib/recent?n=5');
-    const d = await r.json();
+    const d = (await netGet('/api/lib/recent?n=5')).data;
     const box = $('recent-box');
     const wrap = document.createElement('div');
     wrap.className = 'recent';
@@ -5659,8 +5720,11 @@ async function pollStatus() {
   if (!_appStarted || _pollStatusBusy || document.hidden || _curTab !== 'status' || !_sysOpen) return;
   _pollStatusBusy = true;
   try {
-    const r = await fetch('/api/status');
-    const s = await r.json();
+    const t0 = performance.now();
+    const res = await netGet('/api/status');
+    const s = res.data;
+    if (!s) return;
+    NET.sample(performance.now() - t0);
     const g = document.createElement('div');
     g.className = 'kv';
     addKv(g, 'Host', s.hostname + (s.model ? ' (' + s.model + ')' : ''));
@@ -6404,9 +6468,9 @@ async function pollAlerts() {
   if (!_appStarted || _pollAlertsBusy || document.hidden) return;
   _pollAlertsBusy = true;
   try {
-    const r = await fetch('/api/alerts');
-    if (!r.ok) return;
-    const d = await r.json();
+    const res = await netGet('/api/alerts');
+    if (!res.ok) return;
+    const d = res.data;
     const gone = alertDismissed();
     const frag = document.createDocumentFragment();
     (d.alerts || []).forEach(function(a) {
@@ -6630,9 +6694,11 @@ async function pollKeep() {
   if (!_appStarted || _pollKeepBusy) return;
   _pollKeepBusy = true;
   try {
-    const r = await fetch('/api/keep');
-    if (r.ok) {
-      const d = await r.json();
+    const t0 = performance.now();
+    const res = await netGet('/api/keep');
+    if (res.ok) {
+      NET.sample(performance.now() - t0);
+      const d = res.data;
       const before = JSON.stringify(_keepItems.map(function(k) { return k.kind; }));
       _keepItems = d.pending || [];
       _keepAt = Date.now();
@@ -8346,15 +8412,15 @@ function _startApp() {
   mpRestore();
   posSyncInit();
   _tabActivated(_curTab);
-  setInterval(function() { pollStatus(); }, 5000);
-  setInterval(loadRecent, 60000);
+  setInterval(function() { if (!NET.gate('st', 5000)) pollStatus(); }, 5000);
+  setInterval(function() { if (!NET.gate('rc', 60000)) loadRecent(); }, 60000);
   pollAlerts();
-  setInterval(pollAlerts, 30000);
+  setInterval(function() { if (!NET.gate('al', 30000)) pollAlerts(); }, 30000);
   pollKeep();
-  setInterval(pollKeep, 5000);
+  setInterval(function() { if (!NET.gate('kp', 5000)) pollKeep(); }, 5000);
   setInterval(tickKeep, 1000);
-  setInterval(pollLog, 2000);
-  setInterval(pollStreams, 2000);
+  setInterval(function() { if (!NET.gate('lg', 2000)) pollLog(); }, 2000);
+  setInterval(function() { if (!NET.gate('sm', 2000)) pollStreams(); }, 2000);
 }
 
 async function _bootAfterLogin() {
@@ -8482,6 +8548,7 @@ $('keyhelp').addEventListener('click', function(ev) { if (ev.target === this) to
     if (p[1] === 'mview') Object.keys(_M).forEach(function(k) { if (_M[k].meta) renderList(k); });
   });
 });
+$('vp-slow').addEventListener('change', function() { NET.set(this.value); });
 ['lg-info', 'lg-ok', 'lg-warn', 'lg-err'].forEach(function(id) { $(id).addEventListener('change', renderLog); });
 $('lg-filter').addEventListener('input', renderLog);
 $('lg-dl').addEventListener('click', downloadLog);
@@ -8589,6 +8656,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <label><span>Text size</span><select id="vp-size"><option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option></select></label>
   <label><span>Density</span><select id="vp-density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
   <label><span>Media view</span><select id="vp-mview"><option value="list">List</option><option value="grid">Grid</option></select></label>
+  <label><span>Slow link</span><select id="vp-slow"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></label>
+  <div id="net-note" class="small muted"></div>
   <label><span>Remember open cards</span><input type="checkbox" id="vp-foldmem"></label>
   <button id="vp-keys">Keyboard shortcuts (?)</button>
   <button id="vp-close">Close</button>
@@ -8910,13 +8979,29 @@ __JS__</script>
 """
 
 
-def render_page():
-    return (_HTML_TEMPLATE
-            .replace("%%CSS%%", _CSS)
-            .replace("__JS__", _JS)
-            .replace("%%VERSION%%", VERSION)
-            .replace("%%DATE%%", DATE_STR)
-            .replace("%%PORT%%", str(PORT)))
+_page = None
+_FONT_FACE_RE = re.compile(rb"@font-face\{[^}]*\}\n?")
+_page_variants = {}
+GZIP_MIN_BYTES = 600
+
+
+def render_page(lite=False, packed=False):
+    global _page
+    if _page is None:
+        _page = (_HTML_TEMPLATE
+                 .replace("%%CSS%%", _CSS)
+                 .replace("__JS__", _JS)
+                 .replace("%%VERSION%%", VERSION)
+                 .replace("%%DATE%%", DATE_STR)
+                 .replace("%%PORT%%", str(PORT))).encode("utf-8")
+    key = (bool(lite), bool(packed))
+    body = _page_variants.get(key)
+    if body is None:
+        body = _FONT_FACE_RE.sub(b"", _page) if lite else _page
+        if packed:
+            body = gzip.compress(body, 6, mtime=0)
+        _page_variants[key] = body
+    return body
 
 
 MANIFEST = {
@@ -8976,9 +9061,13 @@ def _icon_png(size):
 
 class PibraryHandler(http.server.BaseHTTPRequestHandler):
     server_version = f"pibrary/{VERSION}"
+    protocol_version = "HTTP/1.1"
     timeout = 60
 
     def send_response(self, code, message=None):
+        self._keep_ok = False
+        self._sent_length = False
+        self._status = code
         super().send_response(code, message)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -8991,33 +9080,97 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
             "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
 
-    def _send_json(self, status, payload, extra_headers=None):
-        if isinstance(payload, dict) and payload.get("error") and "message" not in payload:
-            payload = dict(payload, message=payload["error"])
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        if extra_headers:
-            for k, v in extra_headers:
-                self.send_header(k, v)
+    def send_header(self, keyword, value):
+        if keyword.lower() in ("content-length", "transfer-encoding"):
+            self._sent_length = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        framed = getattr(self, "_sent_length", False) or getattr(self, "_status", 0) in (204, 304)
+        if not (getattr(self, "_keep_ok", False) and framed and self.command in ("GET", "HEAD")):
+            self.send_header("Connection", "close")
+            self.close_connection = True
+        self._keep_ok = False
+        super().end_headers()
+
+    def _accepts_gzip(self):
+        for token in self.headers.get("Accept-Encoding", "").split(","):
+            name, _, params = token.strip().partition(";")
+            if name.strip().lower() in ("gzip", "x-gzip"):
+                q = params.strip().replace(" ", "")
+                return q not in ("q=0", "q=0.0", "q=0.00", "q=0.000")
+        return False
+
+    def _etag_matches(self, etag):
+        raw = self.headers.get("If-None-Match", "")
+        if not raw:
+            return False
+        if raw.strip() == "*":
+            return True
+        bare = etag[2:] if etag.startswith("W/") else etag
+        return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in raw.split(","))
+
+    def _cookie_is(self, name, value):
+        return any(part.strip() == name + "=" + value for part in self.headers.get("Cookie", "").split(";"))
+
+    def _wants_lite(self):
+        return self.headers.get("Save-Data", "").strip().lower() == "on" or self._cookie_is("asl_slow", "on")
+
+    def _send_renewed_cookie(self, extra_headers):
         renew = getattr(self, "_renew_token", None)
         self._renew_token = None
         if (renew and _session_valid(renew)
                 and not any(k.lower() == "set-cookie" for k, _v in (extra_headers or []))):
             self.send_header("Set-Cookie", _session_cookie_header(renew, _SESSION_TTL_SEC))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _send_html(self, status, html):
-        body = html.encode("utf-8")
+    def _send_json(self, status, payload, extra_headers=None):
+        if isinstance(payload, dict) and payload.get("error") and "message" not in payload:
+            payload = dict(payload, message=payload["error"])
+        body = json.dumps(payload).encode("utf-8")
+        extra = list(extra_headers or [])
+        if self.command == "GET" and status == 200:
+            etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+            if self._etag_matches(etag):
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Vary", "Accept-Encoding")
+                self.send_header("Cache-Control", "no-store")
+                self._send_renewed_cookie(extra)
+                self._keep_ok = True
+                self.end_headers()
+                return
+            extra.append(("ETag", etag))
+        if len(body) >= GZIP_MIN_BYTES and self._accepts_gzip():
+            body = gzip.compress(body, 5, mtime=0)
+            extra.append(("Content-Encoding", "gzip"))
+        extra.append(("Vary", "Accept-Encoding"))
         self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in extra:
+            self.send_header(k, v)
+        self._send_renewed_cookie(extra)
+        self._keep_ok = True
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _send_page(self):
+        lite = self._wants_lite()
+        packed = self._accepts_gzip()
+        body = render_page(lite, packed)
+        self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Vary", "Accept-Encoding, Cookie")
+        if packed:
+            self.send_header("Content-Encoding", "gzip")
+        self._keep_ok = True
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _error_json(self, status, message):
         log_event(f"HTTP {status}: {message} ({self.command} {self.path})", "err")
@@ -9067,7 +9220,7 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
 
 
     def _route_index(self):
-        self._send_html(200, render_page())
+        self._send_page()
 
     def _route_health(self):
         self._send_json(200, {"ok": True, "version": VERSION})

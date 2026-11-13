@@ -50,6 +50,12 @@ jobs:
         run: python3 ci/test_nodetalker_links.py
       - name: Services card tests (Node Talker)
         run: python3 ci/test_nodetalker_services.py
+      - name: Link, tune and disconnect tests (Node Recorder)
+        run: python3 ci/test_noderecorder_links.py
+      - name: Slow link tests (Node Recorder)
+        run: python3 ci/test_noderecorder_slowlink.py
+      - name: Slow link tests (Pibrary)
+        run: python3 ci/test_pibrary_slowlink.py
       - name: Services file tests (Node Controller pi02w, Node Talker)
         run: python3 ci/test_nodecontrol_services.py
       - name: instmon slow-link tests (compression, revalidation, keep-alive, polling)

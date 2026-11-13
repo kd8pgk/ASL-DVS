@@ -1,6 +1,21 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_16_1_20261104.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_17_0_20261113.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.17.0 (2026-11-13)
+
+Slow link for the Pibrary page, the same idea and the same code as Node Talker 0.10.43, Node Controller 9.3.113-pi02w, Node Recorder 0.17.0 and instmon 2.95.0: less traffic on the node's Wi-Fi. This is a release: server and page behaviour changed. Not yet measured on a node. Playing and downloading media, uploads, the library and the config are not changed.
+
+- **The page is sent gzip-compressed** when the browser accepts it: 221 KB becomes 73 KB. The compressed page is made once and kept. JSON replies of 600 bytes or more are compressed too (level 5).
+- **Unchanged replies cost almost nothing.** Every JSON reply to a GET carries an ETag (the same with and without gzip) and answers 304 when it is unchanged; a 304 still renews the login cookie. The page asks that way for the status, the alerts, the keep list and the recent list, and reuses its last reply on a 304. `Cache-Control: no-store`, the security headers and the CSP are unchanged; error replies carry no ETag.
+- **One connection for many polls.** The server now speaks HTTP/1.1 keep-alive, but only for JSON and page replies to a GET (and 304s). Every other reply closes the connection as before: media and downloads, uploads, icons, every reply to a POST. An HTTP/1.0 client works as before.
+- **Slow link choice (Auto, On, Off)** in the View panel, in the cookie `asl_slow` shared with Node Talker, Node Recorder, Node Controller and instmon. Auto times the keep poll; over about 0.4 s the page polls less often (up to 8 times slower) and recovers when the line does. On is at least 6 times slower, Off is normal. A page nobody touched for two minutes polls half as often again while the line is slow.
+- **What slows down.** The log (2 s), keep (5 s), status (5 s, while it is open), alerts (30 s) and recent (60 s) polls, each multiplied by the slow factor. A hidden tab does not poll. While something is playing the factor is held to 4 and the idle rule is not used, so a long film does not slow the stalled-stream check more than that.
+- **What does not change.** The local timers (the keep countdown, the sleep timer), the position sync every 5 minutes, and everything on the server side.
+- **A light page on a slow link.** With the cookie `on` or a browser that sends `Save-Data: on`, the page is sent without the embedded fonts (48 KB compressed instead of 73 KB; text uses the system font).
+- **Compatible.** An older Node Controller or instmon does not write the cookie; this page's own choice works alone. A client that does not send `Accept-Encoding: gzip` gets the same plain replies as before.
+- Common tool changed: Pibrary serves both builds. Nothing else is needed on the node.
+- Tests: new `ci/test_pibrary_slowlink.py` (26 tests: gzip with and without the header and `q=0`, small and error replies, the security headers kept, keep-alive reused for JSON and 304 and closed for icons, the manifest, a POST and an HTTP/1.0 client, ETag and 304 in every form, a 304 renewing the cookie, the page packed and light, look-alike cookies, the session cookie still read, the poll rules in the page, the local timers left alone, and the shared helper run in Node).
 
 ## 0.16.1 (2026-11-04)
 

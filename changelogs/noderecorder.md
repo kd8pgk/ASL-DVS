@@ -1,6 +1,35 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_15_0_20261110.py`. Newest entries first.
+Current file: `noderecorder_v0_17_0_20261113.py`. Newest entries first.
+
+## 0.17.0 (2026-11-13)
+
+Slow link for the Node Recorder page, the same idea and the same code as Node Talker 0.10.43, Node Controller 9.3.113-pi02w and instmon 2.95.0: less traffic on the node's Wi-Fi. This is a release: server and page behaviour changed. Not yet measured on a node. Recording, the schedule, the converter and the audio path are not changed.
+
+- **The page is sent gzip-compressed** when the browser accepts it. The compressed page is made once and kept, so it costs the node nothing per load. JSON replies of 600 bytes or more are compressed too (level 5).
+- **Unchanged replies cost almost nothing.** Every JSON reply to a GET carries an ETag (the same with and without gzip) and answers 304 when it is unchanged. The page asks that way for the status and the host links and reuses its last reply on a 304. `Cache-Control: no-store` is unchanged; error replies carry no ETag.
+- **Slow link switch (Auto, On, Off)** next to the theme switch, in the cookie `asl_slow` shared with Node Talker, Node Controller and instmon. Auto times the status poll; over about 0.4 s the page polls less often (up to 8 times slower) and recovers when the line does. On is at least 6 times slower, Off is normal. A page nobody touched for two minutes polls half as often again while the line is slow.
+- **What slows down.** The status poll (1.5 s), the log (3 s), the schedule (4 s) and storage (15 s) polls, the host links (30 s) and the converter's 2 s refresh. A hidden tab does not poll the host links or the status.
+- **What does not change.** The 5 s check that the page is still reaching Node Recorder, Disconnect All's own progress poll, and everything on the server side: the schedule, the recordings, the converter and the audio.
+- **A light page on a slow link.** With the cookie `on` or a browser that sends `Save-Data: on`, the page is sent without the embedded fonts (text uses the system font).
+- **Compatible.** Another tool's `/api/recorder/status` request is a plain GET without `Accept-Encoding` and gets the same plain reply as before (plus an ETag header). An older Node Controller or instmon does not write the cookie; this page's own switch works alone.
+- Tests: new `ci/test_noderecorder_slowlink.py` (19 tests: gzip with and without the header and `q=0`, small and error replies, ETag and 304 in every form, the page packed and light, look-alike cookies, the session cookie still read, the poll rules in the page, the 5 s check left alone, and the shared helper run in Node: cookie, factor, cap, recovery, busy, hidden tab, idle).
+
+## 0.16.0 (2026-11-13)
+
+Node Recorder is checked against Node Talker and Node Controller, and the faults Node Talker fixed in 0.10.35 and 0.10.39 are fixed here too. This is a release: tune, connect and disconnect behaviour changed. Most of it matters when Node Controller is not running and Node Recorder tunes DVSwitch itself, which is how a scheduled digital recording is set up then. Not tried on a node.
+
+- **A failed DVSwitch mode switch stops the tune.** When `dvswitch.sh mode` failed it was logged and the tune went on in the old mode, so a scheduled DMR, P25 or NXDN recording could record the wrong thing. The tune now stops with a message.
+- **Disconnect reports a failure.** A failed `dvswitch.sh` disconnect, an M17 ini that cannot be written, or a USRP2M17 service that does not restart now fails the disconnect ("... is still tuned: ...") and what was tuned stays shown. A new tune still goes ahead when the old one's teardown fails.
+- **Link drops are checked.** After a disconnect Node Recorder reads the link list again (up to 3 s). A node Asterisk still lists is reported as still linked, for a single node, a favorite and Disconnect Links. If the list cannot be read, the disconnect is reported as before.
+- **The connect check follows Node Controller and Node Talker.** It waits up to 10 s (was 15), asking Asterisk every half second. It fails at once when the node appears and then drops out of the link list, and after 5 s when the node never appears. A node still connecting after 10 s is reported as still trying.
+- **Disconnect All forgets the remembered mode and DMR network,** so the first tune after the services restart sets both again.
+- **Waits 220 s for a tune through Node Controller,** up from 100 s, so a tune that takes Node Controller longer is not reported as "not answering".
+- **Same sound conversion code.** `_ulaw_byte` is now the same text as in Node Talker and Node Controller; a test checks every sample gives the same byte as before.
+- **Checked by the shared-code rule.** Node Recorder is now listed in `shared/confio.py` for `atomic_write`, `ami_credentials`, `firewall_backend`, `open_firewall_port`, `close_firewall_port` and `allmon3_sync`. It already carried them unchanged; `check_repo` now fails if one drifts. `rpt_scan` and `rpt_remove_private` were already listed.
+- The Local monitor link choice (`ilink 8`) is kept in every changed path.
+- Left as they are on purpose: the login session code (it matches Node Talker, and Node Controller keeps its own), the "tuned" verdict on the tune line, and the Suite Log, which belong to Node Talker's own features.
+- Tests: new `ci/test_noderecorder_links.py` (18 tests: the Node Talker cases for the mode switch, the disconnect failures, the drop check and the connect check, the link choice kept, the waits, and the sound conversion over every sample).
 
 ## 0.15.0 (2026-11-10)
 
