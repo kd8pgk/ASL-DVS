@@ -1,5 +1,14 @@
 # Node Talker changelog
 
+## 0.10.47 (2026-11-13)
+
+HTTPS code moves to the common code (`shared/confio.py`, the `tls_*` functions the other tools use) and the page answers plain HTTP from this Pi itself. This is a release: the server's connection handling changed.
+
+- **Plain HTTP from the Pi itself is served.** Before, a plain request from the node (a health check, a script, a tunnel on this Pi) was answered with a redirect to https. Plain HTTP from any other address still gets a redirect to https.
+- **The cookie's Secure flag follows the connection.** A request over https gets the Secure, `__Host-` cookie; a plain request from the Pi itself does not.
+- **The login page note says "See the log"** (it named the Node Talker log before) when https could not start.
+- **Nothing else changes.** Same certificate, same port, same `https` setting and fall back to plain HTTP with the note on the login page.
+
 ## 0.10.46 (2026-11-13)
 
 Login sessions and lockout follow the common model (`shared/confio.py`, the same code as the other tools will use). This is a release: the server's session rules changed.
@@ -243,7 +252,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_46_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_47_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
