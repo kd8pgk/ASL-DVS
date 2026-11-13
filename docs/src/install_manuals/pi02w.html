@@ -14,7 +14,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-11-11</div>
+    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-11-13</div>
   </div>
   <div class="body">
     <h1>Install Manual<br><span>Pi Zero 2 W</span></h1>
@@ -28,15 +28,15 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_103_0_20261111.py</td><td>2.103.0</td></tr>
-      <tr><td>Installer</td><td class="mono">install_all_v7_5_0_20261110.sh</td><td>7.5.0</td></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_112_20261111.py</td><td>9.3.112-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_84_20261111.py</td><td>6.13.84-pi02w</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_51_0_20261111.py</td><td>5.51.0</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_1_19_20261108.py</td><td>0.1.19</td></tr>
-      <tr><td>Node Talker (optional)</td><td class="mono">nodetalker_v0_10_38_20261111.py</td><td>0.10.38</td></tr>
-      <tr><td>Node Recorder (optional)</td><td class="mono">noderecorder_v0_15_0_20261110.py</td><td>0.15.0</td></tr>
-      <tr><td>Pibrary (optional)</td><td class="mono">pibrary_v0_16_1_20261104.py</td><td>0.16.1</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_108_0_20261113.py</td><td>2.108.0</td></tr>
+      <tr><td>Installer</td><td class="mono">install_all_v7_6_0_20261112.sh</td><td>7.6.0</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_115_20261113.py</td><td>9.3.115-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_86_20261113.py</td><td>6.13.86-pi02w</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_54_0_20261113.py</td><td>5.54.0</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_1_23_20261113.py</td><td>0.1.23</td></tr>
+      <tr><td>Node Talker (optional)</td><td class="mono">nodetalker_v0_10_45_20261113.py</td><td>0.10.45</td></tr>
+      <tr><td>Node Recorder (optional)</td><td class="mono">noderecorder_v0_17_1_20261113.py</td><td>0.17.1</td></tr>
+      <tr><td>Pibrary (optional)</td><td class="mono">pibrary_v0_17_1_20261113.py</td><td>0.17.1</td></tr>
       <tr><td>Terminal Monitor (optional)</td><td class="mono">termon_v0_2_4_20261109.py</td><td>0.2.4</td></tr>
       <tr><td>Uninstaller</td><td class="mono">uninstall_all_v1_10_0_20261110.sh</td><td>1.10.0</td></tr>
     </table>
@@ -147,23 +147,23 @@ sudo systemctl status sysmon</pre>
 <pre><span class="c"># files from the main branch on GitHub</span>
 cd ~
 B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
-wget $B/instmon_v2_103_0_20261111.py
-wget $B/install_all_v7_5_0_20261110.sh
-wget $B/nodecontrol_pi02w_v9_3_112_20261111.py
-wget $B/sysmon_pi02w_v6_13_84_20261111.py
-wget $B/wifimon_v5_51_0_20261111.py
+wget $B/instmon_v2_108_0_20261113.py
+wget $B/install_all_v7_6_0_20261112.sh
+wget $B/nodecontrol_pi02w_v9_3_115_20261113.py
+wget $B/sysmon_pi02w_v6_13_86_20261113.py
+wget $B/wifimon_v5_54_0_20261113.py
 <span class="c"># optional</span>
-wget $B/44helper_v0_1_19_20261108.py
-wget $B/nodetalker_v0_10_38_20261111.py
-wget $B/noderecorder_v0_15_0_20261110.py
-wget $B/pibrary_v0_16_1_20261104.py
+wget $B/44helper_v0_1_23_20261113.py
+wget $B/nodetalker_v0_10_45_20261113.py
+wget $B/noderecorder_v0_17_1_20261113.py
+wget $B/pibrary_v0_17_1_20261113.py
 wget $B/termon_v0_2_4_20261109.py</pre>
   <div class="call tip"><span class="t">TIP</span>Newer files may be on GitHub by the time you read this. Check the
     repo's file list and use the newest <code>_pi02w_</code> SysMon and Dashboard files.</div>
   <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
     updates itself.</p>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
-<pre>sudo python3 instmon_v2_103_0_20261111.py --install</pre>
+<pre>sudo python3 instmon_v2_108_0_20261113.py --install</pre>
     <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
   <h2>What --install does</h2>
   <ul>
@@ -184,7 +184,7 @@ wget $B/termon_v0_2_4_20261109.py</pre>
   <div class="kicker">4 · Step 2</div>
   <h1 class="ch">Install the rest with the installer</h1>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 2 · installer</h4>
-<pre>sudo bash install_all_v7_5_0_20261110.sh</pre></div>
+<pre>sudo bash install_all_v7_6_0_20261112.sh</pre></div>
   <h2>What it asks</h2>
   <ol class="steps">
     <li><b>Operation.</b> If tools are already installed: <code>i</code> install / reinstall, <code>u</code> update binaries only, or <code>q</code> quit. Config is kept either way.</li>
@@ -211,14 +211,14 @@ wget $B/termon_v0_2_4_20261109.py</pre>
     <li>otherwise <code>pi02w</code> on a Pi Zero 2 W, <code>full</code> on any other Pi.</li>
   </ol>
 <pre><span class="c"># force the Pi02w build (sudo needs the variables on its own line)</span>
-sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_5_0_20261110.sh</pre>
+sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_6_0_20261112.sh</pre>
   <div class="call care"><span class="t">CAREFUL</span>If no file of the chosen build is found, that tool is skipped
     with a warning. The other build is never used in its place.</div>
   <h2>Without questions</h2>
   <p>Add <code>--non-interactive</code> (or <code>-y</code>). It picks the newest files, updates an existing install,
     and takes the identity from environment variables on a fresh node:</p>
 <pre>sudo AUTO_CALLSIGN=KD8PGK AUTO_NODE=652701 AUTO_LABEL="Travel Node" \
-     bash install_all_v7_5_0_20261110.sh --non-interactive</pre>
+     bash install_all_v7_6_0_20261112.sh --non-interactive</pre>
   <p>When it finishes, the installer checks that each service is running and listening on its port.</p>
   <h2>Optional tools and other flags</h2>
   <table>
@@ -251,7 +251,7 @@ sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_5_0_20261110.sh
     <tr><td>Pibrary (if installed)</td><td class="mono">http://&lt;pi-address&gt;:9000</td></tr>
     <tr><td>Terminal Monitor (if installed)</td><td class="mono">https://&lt;pi-address&gt;:7878</td></tr>
   </table>
-  <p>Log in as root with the root password from section 2. Node Recorder and Terminal Monitor use HTTPS with a
+  <p>Log in as root with the root password from section 2: type it in the Password box and press Log in (the eye button shows what you typed). Node Recorder and Terminal Monitor use HTTPS with a
     self-signed certificate, so the browser warns once. The other pages use plain HTTP, so only open them on your own
     network or over a VPN.</p>
   <div class="call tip"><span class="t">TIP</span>On the first visit to the Dashboard, check that the callsign and
@@ -395,8 +395,8 @@ ss -tlnp | grep 9999</pre>
   <h1 class="ch">Quick reference</h1>
   <table>
     <tr><th>Task</th><th>Command</th></tr>
-    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_103_0_20261111.py --install</td></tr>
-    <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_5_0_20261110.sh</td></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_108_0_20261113.py --install</td></tr>
+    <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_6_0_20261112.sh</td></tr>
     <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
     <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>
     <tr><td>Restart the web tools</td><td class="mono">sudo systemctl restart sysmon nodecontrol instmon wifimon</td></tr>
