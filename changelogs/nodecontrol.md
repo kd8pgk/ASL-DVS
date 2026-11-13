@@ -1,6 +1,19 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_110_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_111_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.111 (2026-11-13)
+
+The full build's login sessions and lockout follow the common model (`shared/confio.py`), the same as the Pi Zero 2 W builds (Node Controller 9.3.116-pi02w, SysMon 6.13.87-pi02w). This is a release: the server's session rules changed.
+
+- **Tier: standard.** A session ends after 12 hours without use; there is no hard cap. Using the page keeps it alive, and the cookie is renewed about once an hour while in use (before, its life was fixed at the login).
+- **Any Log Out ends every session**, on Node Controller and SysMon alike (they share one login).
+- **A root password change ends every session.**
+- **Only a hash of each session's key is kept** in `/run/asl_dvs/auth_session.json` (at most 50 sessions).
+- **Failed logins wait longer each time.** After 5 mistakes from one address the wait is 5 s, doubling to 300 s (before, a flat 15 minutes after 5 mistakes in 5 minutes); a login that works clears it. The lock is shared by Node Controller and SysMon.
+- **Mixed versions keep working.** The shared file keeps its three old parts (`sessions` with a number for every entry, `failures`, `locked`) and adds `meta` and `lock`. A session written by an older build is accepted once and moved to a hashed entry; a lock written by an older build is honoured; an older build does not recognise a session issued by this one, so on a mixed node each page asks for the password once.
+- **Names kept** for SysMon's Security tab: `_SESSION_COOKIE_NAME`, `_require_auth` and `/api/login`.
+- **Nothing else changes.** Same password, same login request.
 
 ## 9.3.110 (2026-11-13)
 
