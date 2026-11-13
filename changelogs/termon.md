@@ -1,6 +1,14 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_4_20261109.py`. Newest entries first.
+Current file: `termon_v0_2_5_20261113.py`. Newest entries first.
+
+## 0.2.5 (2026-11-13)
+
+The login screen has an eye button in the password field that shows or hides what is typed. This is a release: the page script changed.
+
+- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is drawn with the page's own colours and is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
+- **Nothing else changes.** The login request, the cookie and the lockout are as before; the password is typed into the same field and is never stored by the page.
+
 
 ## 0.2.4 (2026-11-09)
 

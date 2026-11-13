@@ -1,6 +1,14 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_7_20261101.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_8_20261113.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+
+## 0.3.8 (2026-11-13)
+
+The login screen has an eye button in the password field that shows or hides what is typed. This is a release: the page script changed.
+
+- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is drawn with the page's own colours and is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
+- **Nothing else changes.** The login request, the cookie and the lockout are as before; the password is typed into the same field and is never stored by the page.
+
 
 ## 0.3.7 (2026-11-01)
 

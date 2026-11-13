@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.85-pi02w"
-BUILD_DATE   = "20261112"
+VERSION      = "6.13.86-pi02w"
+BUILD_DATE   = "20261113"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -11282,7 +11282,59 @@ _SVC_LEGEND_HTML = (
 )
 _HTML_SRC   = (_HTML.replace("__VERSION__", VERSION)
                     .replace("__SVC_LEGEND__", _SVC_LEGEND_HTML))
-_HTML_BYTES = _HTML_SRC.encode("utf-8")
+def pw_eye_html(input_id, nonce=""):
+    import json
+    attr = ' nonce="%s"' % nonce if nonce else ""
+    css = (
+        ".pw-wrap{position:relative;display:block}"
+        ".pw-wrap>input{box-sizing:border-box;width:100%;padding-right:2.7rem}"
+        ".pw-wrap>.pw-eye{position:absolute!important;top:50%!important;right:.3rem!important;transform:translateY(-50%)!important;"
+        "width:2.1rem!important;height:2.1rem!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;"
+        "border:0!important;border-radius:4px!important;background:transparent!important;color:inherit!important;opacity:.7;"
+        "cursor:pointer;box-shadow:none!important;filter:none!important;text-shadow:none!important;text-transform:none!important;"
+        "letter-spacing:0!important;font-size:1rem!important;line-height:1!important;display:flex!important;align-items:center!important;"
+        "justify-content:center!important}"
+        ".pw-wrap>.pw-eye:hover,.pw-wrap>.pw-eye:focus-visible{opacity:1;background:rgba(127,127,127,.2)!important;box-shadow:none!important;filter:none!important}"
+        ".pw-wrap>.pw-eye:active{transform:translateY(-50%)!important}"
+        ".pw-eye svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"
+        "stroke-linejoin:round;pointer-events:none}"
+        ".pw-eye .pw-off{display:none}"
+        '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
+        '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    js = (
+        "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
+        "function go(){var input=document.getElementById(ID);if(!input||input.getAttribute('data-pw-eye'))return;"
+        "input.setAttribute('data-pw-eye','1');"
+        "var wrap=document.createElement('span');wrap.className='pw-wrap';"
+        "input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);"
+        "var b=document.createElement('button');b.type='button';b.className='pw-eye';"
+        "b.innerHTML='<svg class=\"pw-on\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z\"/>"
+        "<circle cx=\"12\" cy=\"12\" r=\"3\"/></svg><svg class=\"pw-off\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        "<path d=\"M17.9 17.9A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7"
+        "a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2\"/><path d=\"M1 1l22 22\"/></svg>';"
+        "function show(on){input.type=on?'text':'password';b.setAttribute('aria-pressed',on?'true':'false');"
+        "var t=on?'Hide password':'Show password';b.setAttribute('aria-label',t);b.title=t;}"
+        "show(false);"
+        "b.addEventListener('mousedown',function(e){e.preventDefault();});"
+        "b.addEventListener('click',function(){show(input.type==='password');input.focus();});"
+        "if(input.form)input.form.addEventListener('submit',function(){show(false);});"
+        "document.addEventListener('visibilitychange',function(){if(document.hidden)show(false);});"
+        "window.addEventListener('pagehide',function(){show(false);});"
+        "wrap.appendChild(b);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
+    )
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, css, attr, js)
+
+
+def pw_eye_inject(html, input_id, nonce=""):
+    head, sep, tail = html.rpartition("</body>")
+    if not sep:
+        return html
+    return head + pw_eye_html(input_id, nonce) + sep + tail
+
+
+_HTML_BYTES = pw_eye_inject(_HTML_SRC, "login-pw").encode("utf-8")
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
 _HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
 _HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
