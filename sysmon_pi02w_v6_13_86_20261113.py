@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.85-pi02w"
-BUILD_DATE   = "20261112"
+VERSION      = "6.13.86-pi02w"
+BUILD_DATE   = "20261113"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -1770,29 +1770,8 @@ header{background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);
 #wfm-shutdown-msg{font-family:var(--sans);font-size:var(--fs-lg);color:var(--red);line-height:1.6}
 #wfm-shutdown-sub{font-family:var(--sans);font-size:var(--fs-sm);color:#ffffff;letter-spacing:.03em}
 
-#login-screen{display:none;position:fixed;inset:0;z-index:9999;
-  align-items:center;justify-content:center;
-  background:rgba(4,7,13,.86);backdrop-filter:blur(2px)}
+#login-screen{display:none}
 #login-screen.open{display:flex}
-#login-card{width:90%;max-width:320px;background:var(--panel,#141a24);
-  border:1px solid var(--border,#2a3444);border-radius:10px;
-  padding:1.4rem 1.3rem;box-shadow:0 12px 40px rgba(0,0,0,.5);
-  font-family:var(--sans)}
-#login-card h2{margin:0 0 .2rem;font-size:var(--fs-lg);color:var(--amber,#ffd040);
-  letter-spacing:.02em}
-#login-card p.sub{margin:0 0 1rem;font-size:var(--fs-base);color:var(--muted,#8a95a8)}
-#login-card label{display:block;font-size:var(--fs-base);color:var(--muted,#8a95a8);
-  margin-bottom:.3rem}
-#login-pw{width:100%;box-sizing:border-box;padding:.55rem .6rem;
-  background:var(--bg,#0b0f16);border:1px solid var(--border,#2a3444);
-  border-radius:6px;color:#fff;font-size:var(--fs-md);font-family:var(--sans)}
-#login-pw:focus{outline:none;border-color:var(--amber,#ffd040)}
-#login-btn{width:100%;margin-top:.8rem;padding:.6rem;border:none;border-radius:6px;
-  background:var(--amber,#ffd040);color:#1a1300;font-weight:600;font-size:var(--fs-md);
-  cursor:pointer}
-#login-btn:disabled{opacity:.5;cursor:default}
-#login-btn:hover:not(:disabled){filter:brightness(1.08)}
-#login-err{min-height:1.1rem;margin-top:.6rem;font-size:var(--fs-base);color:var(--red)}
 
 #offline-bar{display:none;position:fixed;top:0;left:0;right:0;z-index:1000;
   background:#3a0a0a;border-bottom:1px solid #8b1a1a;color:var(--red);
@@ -2761,29 +2740,21 @@ body.tab-edit #zone-content{
 
 .ast-toggle.on{color:var(--text-bright);border-color:var(--teal)}
 
-#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
-.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
-.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
-.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
-.splash-license a{color:var(--blue)}
 .hdr-logout{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);background:transparent;border:1px solid var(--border2);border-radius:5px;padding:.2rem .5rem;cursor:pointer}
 </style>
 </head>
 <body>
 
-<div id="login-screen">
-  <div class="welcome">Welcome to the <b>KD8PGK</b> System Monitor</div>
-  <div class="splash-license">System Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
-  <div id="login-card">
-    <h2>System Monitor</h2>
-    <p class="sub">Sign in with this node's root password.</p>
-    <form onsubmit="_doLogin(event)">
-      <label for="login-pw">Root password</label>
-      <input id="login-pw" type="password" autocomplete="current-password" required>
-      <button id="login-btn" type="submit">Log In</button>
-      <div id="login-err"></div>
+<div id="login-screen" class="lg-screen">
+  <div id="login-card" class="lg-card">
+    <h2 class="lg-title">System Monitor</h2>
+    <form class="lg-form" onsubmit="_doLogin(event)">
+      <input class="lg-in" id="login-pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+      <button class="lg-btn" id="login-btn" type="submit">Log in</button>
     </form>
+    <div id="login-err" class="lg-msg"></div>
   </div>
+  <div class="lg-license">System Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
 </div>
 
 <div id="offline-bar">SERVER UNREACHABLE — retrying…</div>
@@ -11282,7 +11253,85 @@ _SVC_LEGEND_HTML = (
 )
 _HTML_SRC   = (_HTML.replace("__VERSION__", VERSION)
                     .replace("__SVC_LEGEND__", _SVC_LEGEND_HTML))
-_HTML_BYTES = _HTML_SRC.encode("utf-8")
+def login_ui_html(input_id, nonce=""):
+    import json
+    attr = ' nonce="%s"' % nonce if nonce else ""
+    css = (
+        ".pw-wrap{position:relative;display:block}"
+        ".pw-wrap>input{box-sizing:border-box;width:100%;padding-right:2.7rem}"
+        ".pw-wrap>.pw-eye{position:absolute!important;top:50%!important;right:.3rem!important;transform:translateY(-50%)!important;"
+        "width:2.1rem!important;height:2.1rem!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;"
+        "border:0!important;border-radius:4px!important;background:transparent!important;color:inherit!important;opacity:.7;"
+        "cursor:pointer;box-shadow:none!important;filter:none!important;text-shadow:none!important;text-transform:none!important;"
+        "letter-spacing:0!important;font-size:1rem!important;line-height:1!important;display:flex!important;align-items:center!important;"
+        "justify-content:center!important}"
+        ".pw-wrap>.pw-eye:hover,.pw-wrap>.pw-eye:focus-visible{opacity:1;background:rgba(127,127,127,.2)!important;box-shadow:none!important;filter:none!important}"
+        ".pw-wrap>.pw-eye:active{transform:translateY(-50%)!important}"
+        ".pw-eye svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"
+        "stroke-linejoin:round;pointer-events:none}"
+        ".pw-eye .pw-off{display:none}"
+        '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
+        '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    skin = (
+        ".lg-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "gap:14px;box-sizing:border-box;padding:24px 16px 56px;background:#070b13;color:#e6edf6;"
+        "font-family:'Readex Pro',Arial,Helvetica,sans-serif}"
+        ".lg-screen.hidden,.lg-screen[hidden]{display:none}"
+        ".lg-card{box-sizing:border-box;width:100%;max-width:320px;margin:0;padding:25.6px 22.4px 19.2px;background:#121a29;"
+        "border:1px solid #2c3d5a;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;"
+        "gap:12px;text-align:center}"
+        ".lg-form{margin:0;padding:0;display:flex;flex-direction:column;gap:12px}"
+        ".lg-title{margin:0 0 4px;padding:0;font-family:inherit;font-size:18.4px;font-weight:700;line-height:1.2;"
+        "letter-spacing:.02em;color:#ffd040;text-shadow:none}"
+        "input.lg-in{box-sizing:border-box;width:100%;min-height:0;height:auto;margin:0;padding:9.6px 11.2px;font-family:inherit;"
+        "font-size:15.2px;line-height:1.2;background:#0a1020;color:#fff;border:1px solid #2c3d5a;border-radius:6px;outline:none}"
+        "input.lg-in:focus,input.lg-in:focus-visible{border-color:#ffd040;outline:none}"
+        "button.lg-btn{box-sizing:border-box;width:100%;min-height:0;margin:0;padding:10.4px;font-family:inherit;font-size:14.4px;"
+        "font-weight:700;line-height:1.2;letter-spacing:0;text-transform:none;background:#ffd040;color:#1a1300;border:0;"
+        "border-radius:6px;cursor:pointer;box-shadow:none;text-shadow:none;filter:none;transition:none}"
+        "button.lg-btn:hover:not(:disabled){background:#ffd040;color:#1a1300;filter:brightness(1.08);box-shadow:none}"
+        "button.lg-btn:disabled{opacity:.5;cursor:default}"
+        ".lg-msg{min-height:17.6px;margin:0;font-size:12.8px;line-height:1.3;color:#ff5d73;text-align:center}"
+        ".lg-note{margin:0;max-width:300px;font-size:12.5px;color:#ff5d73}.lg-note:empty{display:none}"
+        "button.lg-link{width:auto;min-height:0;margin:0 auto;padding:3.2px 8px;background:none;border:0;box-shadow:none;"
+        "color:#8aa0bf;font-family:inherit;font-size:12.8px;text-decoration:underline;text-transform:none;letter-spacing:0;cursor:pointer}"
+        ".lg-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:#7d8aa0}"
+        ".lg-license a{color:#6cb6ff}"
+    )
+    js = (
+        "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
+        "function go(){var input=document.getElementById(ID);if(!input||input.getAttribute('data-pw-eye'))return;"
+        "input.setAttribute('data-pw-eye','1');"
+        "var wrap=document.createElement('span');wrap.className='pw-wrap';"
+        "input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);"
+        "var b=document.createElement('button');b.type='button';b.className='pw-eye';"
+        "b.innerHTML='<svg class=\"pw-on\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z\"/>"
+        "<circle cx=\"12\" cy=\"12\" r=\"3\"/></svg><svg class=\"pw-off\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        "<path d=\"M17.9 17.9A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7"
+        "a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2\"/><path d=\"M1 1l22 22\"/></svg>';"
+        "function show(on){input.type=on?'text':'password';b.setAttribute('aria-pressed',on?'true':'false');"
+        "var t=on?'Hide password':'Show password';b.setAttribute('aria-label',t);b.title=t;}"
+        "show(false);"
+        "b.addEventListener('mousedown',function(e){e.preventDefault();});"
+        "b.addEventListener('click',function(){show(input.type==='password');input.focus();});"
+        "if(input.form)input.form.addEventListener('submit',function(){show(false);});"
+        "document.addEventListener('visibilitychange',function(){if(document.hidden)show(false);});"
+        "window.addEventListener('pagehide',function(){show(false);});"
+        "wrap.appendChild(b);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
+    )
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, skin + css, attr, js)
+
+
+def login_ui_inject(html, input_id, nonce=""):
+    head, sep, tail = html.rpartition("</body>")
+    if not sep:
+        return html
+    return head + login_ui_html(input_id, nonce) + sep + tail
+
+
+_HTML_BYTES = login_ui_inject(_HTML_SRC, "login-pw").encode("utf-8")
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
 _HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
 _HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)

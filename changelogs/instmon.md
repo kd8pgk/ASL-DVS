@@ -1,5 +1,14 @@
 # instmon changelog
 
+## 2.108.0 (2026-11-13)
+
+The sign-in is held during a Full Update and ends when it finishes, and the login screen is the same as in the other tools with an eye button on the password field. This is a release: the server's session rules and the page script changed.
+
+- **No sign-out while a Full Update runs.** A session that would have run out of time keeps working until the update is done, and a login during the update does not clear the others. Sessions that had already run out when the update started are dropped at that moment.
+- **Everyone is signed out when it finishes.** The moment Full Update ends (finished, stopped or failed) every session is dropped, so the next page load asks for the password and then shows the result. The log notes it. Nothing else about the sign-in changes (12 hours, sliding).
+- **One login screen everywhere.** A dark card with the tool's name, one password field, a Log in button and a line for errors, and the licence line at the foot of the page. The "Welcome to the KD8PGK ..." line and the field label are gone, and the field says "Password". The style comes from one shared block of code; the ids the page script uses are unchanged.
+- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
+
 ## 2.106.0 (2026-11-12)
 
 The Slow link choice is shared with Node Controller. This is a release: the page script and the way the page is served changed.
@@ -177,7 +186,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_106_0_20261112.py`. Newest entries first.
+Current file: `instmon_v2_108_0_20261113.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

@@ -382,5 +382,59 @@ class Page(unittest.TestCase):
         self.assertIn("gh_autocheck", im._ACTION_HANDLERS)
 
 
+class SessionsAndFullUpdate(unittest.TestCase):
+    def setUp(self):
+        im._revoke_all_sessions()
+
+    def test_an_old_session_is_kept_while_a_full_update_runs(self):
+        token = im._issue_session()
+        with im._sessions_lock:
+            im._sessions[token] = 1.0
+        with mock.patch.object(im, "full_update_running", return_value=True):
+            self.assertTrue(im._check_session(token))
+            self.assertGreater(im._sessions[token], 1_000_000.0)
+        with mock.patch.object(im, "full_update_running", return_value=False):
+            self.assertTrue(im._check_session(token))
+
+    def test_an_old_session_expires_when_no_update_runs(self):
+        token = im._issue_session()
+        with im._sessions_lock:
+            im._sessions[token] = 1.0
+        with mock.patch.object(im, "full_update_running", return_value=False):
+            self.assertFalse(im._check_session(token))
+
+    def test_a_login_during_an_update_does_not_drop_held_sessions(self):
+        old = im._issue_session()
+        with im._sessions_lock:
+            im._sessions[old] = 1.0
+        with mock.patch.object(im, "full_update_running", return_value=True):
+            im._issue_session()
+            self.assertIn(old, im._sessions)
+
+    def test_starting_a_full_update_drops_sessions_that_already_ran_out(self):
+        stale = im._issue_session()
+        live = im._issue_session()
+        with im._sessions_lock:
+            im._sessions[stale] = 1.0
+        im._prune_sessions()
+        with mock.patch.object(im, "full_update_running", return_value=True):
+            self.assertFalse(im._check_session(stale))
+            self.assertTrue(im._check_session(live))
+
+    def test_finishing_a_full_update_signs_everyone_out(self):
+        tokens = [im._issue_session() for _ in range(3)]
+        with mock.patch.object(im, "_fu_save"), mock.patch.object(im, "_gh_event"), \
+                mock.patch.object(im, "_fu_refresh_plan"):
+            im._fu_finish()
+        for t in tokens:
+            self.assertFalse(im._check_session(t))
+
+    def test_no_session_means_no_logout_note(self):
+        with mock.patch.object(im, "_fu_save"), mock.patch.object(im, "_gh_event"), \
+                mock.patch.object(im, "_fu_refresh_plan"), mock.patch.object(im, "log_event") as log:
+            im._fu_finish()
+        self.assertFalse([c for c in log.call_args_list if "signed out" in str(c)])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

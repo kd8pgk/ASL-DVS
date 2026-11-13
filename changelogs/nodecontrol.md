@@ -1,6 +1,14 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_109_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_110_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.110 (2026-11-13)
+
+The login screen is the same as in the other tools and has an eye button in the password field. This is a release: the page script changed.
+
+- **One login screen everywhere.** A dark card with the tool's name, one password field, a Log in button and a line for errors, and the licence line at the foot of the page. The "Welcome to the KD8PGK ..." line, the sub-title and the field label are gone, and the field says "Password". The style comes from one shared block of code, the same as in the pi02w builds and the common tools; the ids the page scripts use are unchanged.
+- **Eye button on the password field.** Press it to see the password in the clear and press it again to hide it. It hides the password again when the form is sent, when the page is hidden or left, and it keeps the cursor in the field. It is a real button with a label ("Show password" / "Hide password") for keyboards and screen readers.
+- **Nothing else changes.** The login request, the cookie and the lockout are as before.
 
 ## 9.3.109 (2026-11-13)
 

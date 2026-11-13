@@ -7,7 +7,6 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
-import io
 import hashlib
 import hmac
 import ipaddress
@@ -41,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.114-pi02w"
-BUILD_DATE   = "2026-11-12"
+VERSION      = "9.3.110"
+BUILD_DATE   = "2026-11-13"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -5864,154 +5863,75 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
+_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
+def _parse_astdb(f) -> dict:
+    rows, by_node = [], {}
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
+        node = parts[0]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node in by_node:
+            continue
+        call = parts[1] if len(parts) > 1 else ""
+        desc = parts[2] if len(parts) > 2 else ""
+        loc  = parts[3] if len(parts) > 3 else ""
+        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+        rows.append(row)
+        by_node[node] = row
+    return {"rows": rows, "by_node": by_node}
 
-class _LineDB:
+def _build_astdb(prev):
+    try:
+        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
+    except OSError:
+        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+    if prev and prev.get("found") and prev["mtime"] == mtime:
+        return prev, False
+    try:
+        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
+            part = _parse_astdb(f)
+    except OSError as e:
+        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
+        part = {"rows": [], "by_node": {}}
+    return {"found": True, "mtime": mtime, **part}, False
 
-    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
-        self._path_fn     = path_fn
-        self._node_of     = node_of
-        self._parse       = parse
-        self._missing_msg = missing_msg
-        self._warned      = False
-        self._lock        = threading.Lock()
-        self._index_key   = None
-        self._index       = (0, True, frozenset())
+_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
+                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
+                                                 "node menu will be empty (turn on "
+                                                 "asl3-update-astdb)", _ASTDB_PATH))
 
-    @property
-    def path(self) -> str:
-        return self._path_fn()
+def _load_astdb() -> dict:
+    return _astdb_cache.get()
 
-    def stat(self) -> "tuple[bool, int, int]":
-        try:
-            st = os.stat(self.path)
-        except OSError:
-            if self._missing_msg and not self._warned:
-                self._warned = True
-                log.warning(self._missing_msg, self.path)
-            return False, 0, 0
-        self._warned = False
-        return True, int(st.st_mtime), st.st_size
-
-    def index(self) -> "tuple[int, bool, frozenset]":
-        found, mtime, size = self.stat()
-        if not found:
-            return 0, True, frozenset()
-        key = (mtime, size)
-        with self._lock:
-            if self._index_key == key:
-                return self._index
-        seen: "set[str]" = set()
-        repeats = False
-        ctrl: "set[int]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                for i, raw in enumerate(f):
-                    if _CTRL_IN_RE.search(raw.strip()):
-                        ctrl.add(i)
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if node in seen:
-                        repeats = True
-                    else:
-                        seen.add(node)
-        except OSError:
-            return 0, True, frozenset()
-        result = (len(seen), repeats, frozenset(ctrl))
-        with self._lock:
-            self._index_key, self._index = key, result
-        return result
-
-    def total(self) -> int:
-        return self.index()[0]
-
-    def rows(self, raw_ok=None, node_ok=None):
-        _total, repeats, ctrl = self.index()
-        seen: "set[str]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                st = os.fstat(f.fileno())
-                with self._lock:
-                    same = self._index_key == (int(st.st_mtime), st.st_size)
-                if not same:
-                    repeats, raw_ok, ctrl = True, None, frozenset()
-                for i, raw in enumerate(f):
-                    quick = raw_ok is not None and i not in ctrl
-                    if not repeats and quick and not raw_ok(raw):
-                        continue
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if repeats:
-                        if node in seen:
-                            continue
-                        seen.add(node)
-                        if quick and not raw_ok(raw):
-                            continue
-                    if node_ok is not None and not node_ok(node):
-                        continue
-                    yield self._parse(raw, node)
-        except OSError as e:
-            log.warning("Could not read %s: %s", self.path, e)
-
-    def find(self, node: str):
-        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
-                             node_ok=lambda n: n == node):
-            return row
-        return None
-
-def _astdb_node_of(raw: str):
-    line = raw.strip()
-    if not line or line.startswith(("#", ";")):
-        return None
-    node = _strip_ctrl(line.split("|", 1)[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    return str(int(node))
-
-def _astdb_parse(raw: str, node: str):
-    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
-    call = parts[1] if len(parts) > 1 else ""
-    desc = parts[2] if len(parts) > 2 else ""
-    loc  = parts[3] if len(parts) > 3 else ""
-    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-
-_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
-                 "AllStar node list not found at %s — the ASL node menu will be empty "
-                 "(turn on asl3-update-astdb)")
-
-def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
+def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    found, mtime, _size = db.stat()
-    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
-           "total": db.total() if found else 0, "min": min_q,
+    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
+           "total": len(db["rows"]), "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not found or len(q) < min_q:
+    if not db["found"] or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
-        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
-        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
-        def raw_ok(raw):
-            low = raw.lower()
-            return all(w in low for w in words)
-        node_ok = None
     count, matches = 0, []
-    for r in db.rows(raw_ok, node_ok):
+    for r in db["rows"]:
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -6034,11 +5954,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _astdb.find(node)
+    row = _load_astdb()["by_node"].get(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -6061,72 +5981,44 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
-
-_echodb_refresh_lock = threading.Lock()
-_echodb_next_try     = 0.0
-_echodb_warned       = False
-
-def _echodb_node_of(raw: str):
-    parts = raw.split("|", 2)
-    if len(parts) < 2:
-        return None
-    node = _strip_ctrl(parts[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    node = str(int(node))
-    return None if node == "0" else node
-
-def _echodb_parse(raw: str, node: str):
-    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
-    return (node, call, f"{node} {call}".lower())
-
-def _echodb_write(text: str) -> None:
-    seen: "set[str]" = set()
-    rows = []
-    for raw in io.StringIO(text):
-        node = _echodb_node_of(raw)
-        if node is None or node in seen:
+def _parse_echodb(text: str) -> dict:
+    rows, by_node = [], {}
+    for raw in text.splitlines():
+        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
+        if len(parts) < 2:
             continue
-        seen.add(node)
-        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
-    rows.sort()
-    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
-    tmp = _ECHODB_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for _n, node, call in rows:
-            f.write(f"{node}|{call}\n")
-    os.replace(tmp, _ECHODB_FILE)
+        node, call = parts[0], parts[1]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node == "0" or node in by_node:
+            continue
+        call = call[:24]
+        row = (node, call, f"{node} {call}".lower())
+        rows.append(row)
+        by_node[node] = row
+    rows.sort(key=lambda r: int(r[0]))
+    return {"rows": rows, "by_node": by_node}
 
-def _echodb_refresh() -> None:
-    global _echodb_next_try, _echodb_warned
-    with _echodb_refresh_lock:
-        now = time.time()
-        try:
-            age = now - os.stat(_ECHODB_FILE).st_mtime
-        except OSError:
-            age = None
-        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
-            return
-        out, ok = ami_command(_ECHODB_CMD, timeout=8)
-        if ok and "no such command" not in out.lower():
-            try:
-                _echodb_write(out)
-                _echodb_warned = False
-                return
-            except OSError as e:
-                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
-        _echodb_next_try = now + _ECHODB_TTL
-        if age is None and not _echodb_warned:
-            _echodb_warned = True
-            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
-                        _ECHODB_CMD)
+def _build_echodb(prev):
+    out, ok = ami_command(_ECHODB_CMD, timeout=8)
+    if ok and "no such command" not in out.lower():
+        part = _parse_echodb(out)
+        return {"found": True, "mtime": int(time.time()), **part}, False
+    if prev and prev.get("found"):
+        return prev, False
+    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
 
-_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
+_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
+                           lambda _r: log.warning("EchoLink station list not available "
+                                                  "(%s failed -- is chan_echolink loaded?)",
+                                                  _ECHODB_CMD))
+
+def _load_echodb() -> dict:
+    return _echodb_cache.get()
 
 def action_echo_directory(path: str) -> dict:
-    _echodb_refresh()
-    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -6138,8 +6030,7 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    _echodb_refresh()
-    row = _echodb.find(node)
+    row = _load_echodb()["by_node"].get(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6618,11 +6509,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 2
+_BRIDGE_DOWN_THRESHOLD     = 3
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 2
+_BRIDGE_UP_THRESHOLD    = 3
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6737,7 +6628,7 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
     finally:
         _link_exit()
 
-_ASL_REG_FAST_SEC  = 60.0
+_ASL_REG_FAST_SEC  = 30.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
 _asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
@@ -7164,7 +7055,7 @@ _POLL_FAILS_UNKNOWN = 3
 
 def _link_poll_loop() -> None:
     global _poll_beat
-    INTERVAL     = 2.0
+    INTERVAL     = 1.0
     fails        = 0
     last_detect  = time.monotonic()
     busy_noted   = False
@@ -9784,71 +9675,20 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
   .dmr-srv-select { max-width: 90px; }
 }
 .hidden{display:none}
-/* ── Login overlay (v8.0.9) ── */
-#login-screen {
-  position: fixed; inset: 0; z-index: 9999;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(4,7,13,.86);
-  backdrop-filter: blur(2px);
-}
-/* #login-screen.hidden must win on specificity — a bare .hidden{display:none}
-   rule (0,0,1,0) can never beat the #login-screen ID rule above (0,1,0,0),
-   so classList.add('hidden') after login would silently do nothing
-   visually otherwise. */
-#login-screen.hidden { display: none; }
-#login-card {
-  width: 90%; max-width: 320px;
-  background: var(--surface); border: 1px solid var(--border2);
-  border-radius: 10px; padding: 1.4rem 1.3rem;
-  box-shadow: 0 12px 40px rgba(0,0,0,.5);
-  font-family: var(--sans);
-}
-#login-card h2 {
-  margin: 0 0 .2rem; font-size: 1.05rem; color: var(--amber);
-  letter-spacing: .02em;
-}
-#login-card p.sub {
-  margin: 0 0 1rem; font-size: .8rem; color: var(--muted);
-}
-#login-card label {
-  display: block; font-size: .78rem; color: var(--muted); margin-bottom: .3rem;
-}
-#login-pw {
-  width: 100%; box-sizing: border-box; padding: .55rem .6rem;
-  background: var(--bg); border: 1px solid var(--border2); border-radius: 6px;
-  color: #fff; font-size: .92rem; font-family: var(--sans);
-}
-#login-pw:focus { outline: none; border-color: var(--amber); }
-#login-btn {
-  width: 100%; margin-top: .8rem; padding: .6rem; border: none; border-radius: 6px;
-  background: var(--amber); color: #1a1300; font-weight: 600; font-size: .88rem;
-  cursor: pointer;
-}
-#login-btn:disabled { opacity: .5; cursor: default; }
-#login-btn:hover:not(:disabled) { filter: brightness(1.08); }
-#login-err {
-  min-height: 1.1rem; margin-top: .6rem; font-size: .78rem; color: var(--red);
-}
-#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
-.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
-.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
-.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
-.splash-license a{color:var(--blue)}
 </style>
 </head>
 <body>
 <div id="rec-banner" role="status"></div>
-<div id="login-screen" class="hidden">
-  <div class="welcome">Welcome to the <b>KD8PGK</b> Node Controller</div>
-  <div class="splash-license">Node Controller · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
-  <form id="login-card" onsubmit="_doLogin(event)">
-    <h2>Node Controller</h2>
-    <p class="sub">Sign in with this node's root password.</p>
-    <label for="login-pw">Root password</label>
-    <input id="login-pw" type="password" autocomplete="current-password" required>
-    <button id="login-btn" type="submit">Log In</button>
-    <div id="login-err"></div>
-  </form>
+<div id="login-screen" class="lg-screen hidden">
+  <div id="login-card" class="lg-card">
+    <h2 class="lg-title">Node Controller</h2>
+    <form class="lg-form" onsubmit="_doLogin(event)">
+      <input class="lg-in" id="login-pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+      <button class="lg-btn" id="login-btn" type="submit">Log in</button>
+    </form>
+    <div id="login-err" class="lg-msg"></div>
+  </div>
+  <div class="lg-license">Node Controller · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
 </div>
 <div id="offline-bar">SERVER UNREACHABLE — retrying…</div>
 <div id="perm-link-bar">⚠ PERMANENT LINK ACTIVE · Node <span id="perm-link-node">—</span> · Bridging risk<button class="perm-disc-btn" style="margin-left:.9rem" onclick="doBannerDiscPermLink()">Disconnect</button></div>
@@ -10288,7 +10128,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -10309,7 +10149,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
             <button class="btn btn-teal"  onclick="edSave()">Save</button>
             <button class="btn btn-muted" onclick="edReload()">Reload</button>
           </div>
-          <div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
+          <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
         </div>
       </div>
     </div>
@@ -10409,54 +10249,6 @@ let _pendingTune=null; // {tg,mode,name,at} while awaiting ABInfo confirmation; 
 // Never touched by Edit → Back navigation (showPage preserves the flag as-is).
 let _dmrNetSelectMode=false;
 let _lastEtag='';  // ETag from last /api/status 200 — sent as If-None-Match on next poll
-const NET={mult:1,avg:0,forced:'',active:Date.now(),next:{}};
-['pointerdown','keydown','touchstart'].forEach(function(name){
-  document.addEventListener(name,function(){NET.active=Date.now()},true);
-});
-NET.read=function(){
-  let v='';
-  try{const m=document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/);if(m)v=m[1];}catch(e){}
-  NET.forced=v;
-};
-NET.read();
-NET.show=function(){
-  const el=document.getElementById('net-note');
-  if(el)el.textContent=NET.mult>1?'polling '+NET.mult+'x slower':'';
-  document.querySelectorAll('[data-net-set]').forEach(function(b){
-    const v=b.getAttribute('data-net-set');
-    b.setAttribute('aria-pressed',String((v==='auto'?'':v)===NET.forced));
-  });
-};
-NET.sample=function(ms){
-  NET.read();
-  NET.avg=NET.avg?NET.avg*0.7+ms*0.3:ms;
-  let m=Math.max(1,Math.min(8,Math.ceil(NET.avg/400)));
-  if(NET.forced==='on')m=Math.max(m,6);
-  if(NET.forced==='off')m=1;
-  NET.mult=m;
-  NET.show();
-};
-NET.set=function(value){
-  NET.forced=value==='auto'?'':value;
-  document.cookie='asl_slow='+NET.forced+'; path=/; max-age='+(NET.forced?31536000:0)+'; SameSite=Strict';
-  if(NET.forced==='on')NET.mult=Math.max(NET.mult,6);
-  if(NET.forced==='off'){NET.mult=1;NET.avg=0;}
-  NET.show();
-};
-NET.idle=function(){return NET.mult>1&&Date.now()-NET.active>120000?2:1};
-NET.delay=function(ms){return ms*NET.mult*NET.idle()};
-NET.gate=function(key,ms){
-  if(document.hidden)return true;
-  const now=Date.now();
-  if(now<(NET.next[key]||0))return true;
-  NET.next[key]=now+ms*(NET.mult*NET.idle()-1);
-  return false;
-};
-document.addEventListener('click',function(ev){
-  const b=ev.target&&ev.target.closest?ev.target.closest('[data-net-set]'):null;
-  if(b)NET.set(b.getAttribute('data-net-set'));
-});
-document.addEventListener('DOMContentLoaded',function(){NET.show()});
 let _tgDataLoaded=false; // true once loadTgData() has completed at least one successful fetch
 // FCS browse card state (v8.4.2) — see the fcsCard* block near openLast().
 let _fcs={loaded:false,loading:false,saving:false,at:0,tried:0,byId:{},sig:'',tuned:'',applied:null};
@@ -10552,19 +10344,11 @@ function recBanner(){
   b.textContent=recBusy.override?'Recording in progress: override is on, so changes go through. It ends with the recording.'
     :'Recording in progress: '+(recBusy.entry||'Node Recorder')+'. Links, settings and restarts are locked until it ends.';
 }
-let _recEtag='',_recData=null;
 async function recPoll(){
-  if(NET.gate('rec',3000))return;
   try{
-    const r=await fetch('/api/recording',{headers:_recEtag?{'If-None-Match':_recEtag}:{}});
-    let d;
-    if(r.status===304&&_recData)d=_recData;
-    else{
-      if(!r.ok)return;
-      d=await r.json();
-      _recData=d;
-      _recEtag=r.headers.get('ETag')||'';
-    }
+    const r=await fetch('/api/recording');
+    if(!r.ok)return;
+    const d=await r.json();
     recBusy=d.recording||null;
     recInfo=d||{};
     recBanner();
@@ -12862,10 +12646,8 @@ async function refresh(){
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),5000);
     const hdrs=_lastEtag?{'If-None-Match':_lastEtag}:{};
-    const t0=performance.now();
     const r=await fetch('/api/status',{headers:hdrs,signal:ctrl.signal});
     clearTimeout(tid);
-    if(!document.hidden)NET.sample(performance.now()-t0);
     if(r.status===304){
       _failCount=0;document.body.classList.remove('offline');
       return;
@@ -14128,26 +13910,17 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{if(!document.hidden)await refresh()}finally{schedulePoll()}},busy?1000:NET.delay(5000));  // Pi02w: idle was 3000
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
 }
-let _keyedTimer=null,_keyedBusy=false,_keyedEtag='',_keyedData=null;
+let _keyedTimer=null;
 let _lastLinkKnown=true;
 async function pollKeyed(){
-  if(_keyedBusy)return;
-  if(document.hidden){_keyedTimer=setTimeout(pollKeyed,2000);return}
-  _keyedBusy=true;
   try{
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),2000);
-    const r=await fetch('/api/keyed',{headers:_keyedEtag?{'If-None-Match':_keyedEtag}:{},signal:ctrl.signal});
+    const r=await fetch('/api/keyed',{signal:ctrl.signal});
     clearTimeout(tid);
-    let d;
-    if(r.status===304&&_keyedData)d=_keyedData;
-    else{
-      d=await r.json();
-      _keyedData=d;
-      _keyedEtag=r.headers.get('ETag')||'';
-    }
+    const d=await r.json();
     const keyed      =!!d.keyed;
     const linkedNode =d.linked_node||null;
     const onPermLink  =!!d.on_perm_link;
@@ -14220,16 +13993,8 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedBusy=false;
-  _keyedTimer=setTimeout(pollKeyed,(_lastKeyed||busy)?1000:1000*Math.min(NET.mult,4));  // Pi02w: was 500 (the server updates every 2 s)
+  _keyedTimer=setTimeout(pollKeyed,500);
 }
-document.addEventListener('visibilitychange',function(){
-  if(document.hidden||!_appStarted)return;
-  clearTimeout(_pollTimer);
-  refresh().finally(schedulePoll);
-  if(!_keyedBusy){clearTimeout(_keyedTimer);pollKeyed();}
-  recPoll();
-});
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 // The server compares the tuned talkgroup with what Analog_Bridge reports and
 // sends the verdict (tune_state) in /api/status and /api/abinfo.  While a tune
@@ -14461,13 +14226,89 @@ try { window.name = 'asl_dvs_dash'; } catch (_) {}
 </html>
 """
 
-_HTML_BYTES = (HTML
-               .replace("__VERSION__",    VERSION)
-               .replace("__BUILD_DATE__", BUILD_DATE)
-               .encode())
+def login_ui_html(input_id, nonce=""):
+    import json
+    attr = ' nonce="%s"' % nonce if nonce else ""
+    css = (
+        ".pw-wrap{position:relative;display:block}"
+        ".pw-wrap>input{box-sizing:border-box;width:100%;padding-right:2.7rem}"
+        ".pw-wrap>.pw-eye{position:absolute!important;top:50%!important;right:.3rem!important;transform:translateY(-50%)!important;"
+        "width:2.1rem!important;height:2.1rem!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;"
+        "border:0!important;border-radius:4px!important;background:transparent!important;color:inherit!important;opacity:.7;"
+        "cursor:pointer;box-shadow:none!important;filter:none!important;text-shadow:none!important;text-transform:none!important;"
+        "letter-spacing:0!important;font-size:1rem!important;line-height:1!important;display:flex!important;align-items:center!important;"
+        "justify-content:center!important}"
+        ".pw-wrap>.pw-eye:hover,.pw-wrap>.pw-eye:focus-visible{opacity:1;background:rgba(127,127,127,.2)!important;box-shadow:none!important;filter:none!important}"
+        ".pw-wrap>.pw-eye:active{transform:translateY(-50%)!important}"
+        ".pw-eye svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"
+        "stroke-linejoin:round;pointer-events:none}"
+        ".pw-eye .pw-off{display:none}"
+        '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
+        '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    skin = (
+        ".lg-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "gap:14px;box-sizing:border-box;padding:24px 16px 56px;background:#070b13;color:#e6edf6;"
+        "font-family:'Readex Pro',Arial,Helvetica,sans-serif}"
+        ".lg-screen.hidden,.lg-screen[hidden]{display:none}"
+        ".lg-card{box-sizing:border-box;width:100%;max-width:320px;margin:0;padding:25.6px 22.4px 19.2px;background:#121a29;"
+        "border:1px solid #2c3d5a;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;"
+        "gap:12px;text-align:center}"
+        ".lg-form{margin:0;padding:0;display:flex;flex-direction:column;gap:12px}"
+        ".lg-title{margin:0 0 4px;padding:0;font-family:inherit;font-size:18.4px;font-weight:700;line-height:1.2;"
+        "letter-spacing:.02em;color:#ffd040;text-shadow:none}"
+        "input.lg-in{box-sizing:border-box;width:100%;min-height:0;height:auto;margin:0;padding:9.6px 11.2px;font-family:inherit;"
+        "font-size:15.2px;line-height:1.2;background:#0a1020;color:#fff;border:1px solid #2c3d5a;border-radius:6px;outline:none}"
+        "input.lg-in:focus,input.lg-in:focus-visible{border-color:#ffd040;outline:none}"
+        "button.lg-btn{box-sizing:border-box;width:100%;min-height:0;margin:0;padding:10.4px;font-family:inherit;font-size:14.4px;"
+        "font-weight:700;line-height:1.2;letter-spacing:0;text-transform:none;background:#ffd040;color:#1a1300;border:0;"
+        "border-radius:6px;cursor:pointer;box-shadow:none;text-shadow:none;filter:none;transition:none}"
+        "button.lg-btn:hover:not(:disabled){background:#ffd040;color:#1a1300;filter:brightness(1.08);box-shadow:none}"
+        "button.lg-btn:disabled{opacity:.5;cursor:default}"
+        ".lg-msg{min-height:17.6px;margin:0;font-size:12.8px;line-height:1.3;color:#ff5d73;text-align:center}"
+        ".lg-note{margin:0;max-width:300px;font-size:12.5px;color:#ff5d73}.lg-note:empty{display:none}"
+        "button.lg-link{width:auto;min-height:0;margin:0 auto;padding:3.2px 8px;background:none;border:0;box-shadow:none;"
+        "color:#8aa0bf;font-family:inherit;font-size:12.8px;text-decoration:underline;text-transform:none;letter-spacing:0;cursor:pointer}"
+        ".lg-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:#7d8aa0}"
+        ".lg-license a{color:#6cb6ff}"
+    )
+    js = (
+        "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
+        "function go(){var input=document.getElementById(ID);if(!input||input.getAttribute('data-pw-eye'))return;"
+        "input.setAttribute('data-pw-eye','1');"
+        "var wrap=document.createElement('span');wrap.className='pw-wrap';"
+        "input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);"
+        "var b=document.createElement('button');b.type='button';b.className='pw-eye';"
+        "b.innerHTML='<svg class=\"pw-on\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z\"/>"
+        "<circle cx=\"12\" cy=\"12\" r=\"3\"/></svg><svg class=\"pw-off\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        "<path d=\"M17.9 17.9A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7"
+        "a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2\"/><path d=\"M1 1l22 22\"/></svg>';"
+        "function show(on){input.type=on?'text':'password';b.setAttribute('aria-pressed',on?'true':'false');"
+        "var t=on?'Hide password':'Show password';b.setAttribute('aria-label',t);b.title=t;}"
+        "show(false);"
+        "b.addEventListener('mousedown',function(e){e.preventDefault();});"
+        "b.addEventListener('click',function(){show(input.type==='password');input.focus();});"
+        "if(input.form)input.form.addEventListener('submit',function(){show(false);});"
+        "document.addEventListener('visibilitychange',function(){if(document.hidden)show(false);});"
+        "window.addEventListener('pagehide',function(){show(false);});"
+        "wrap.appendChild(b);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
+    )
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, skin + css, attr, js)
+
+
+def login_ui_inject(html, input_id, nonce=""):
+    head, sep, tail = html.rpartition("</body>")
+    if not sep:
+        return html
+    return head + login_ui_html(input_id, nonce) + sep + tail
+
+
+_HTML_BYTES = login_ui_inject(HTML
+                              .replace("__VERSION__",    VERSION)
+                              .replace("__BUILD_DATE__", BUILD_DATE),
+                              "login-pw").encode()
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
-_HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
-_HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
 
 _AUTH_ACCOUNT        = "root"
 _SESSION_TTL_SEC     = 12 * 3600
@@ -14673,54 +14514,17 @@ _PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X
                   "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
 
 class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
     timeout = 30
 
     def log_message(self, fmt, *args):
         pass
-
-    def send_response(self, code, message=None):
-        self._sent_length = code in (204, 304)
-        super().send_response(code, message)
-
-    def send_header(self, keyword, value):
-        if keyword.lower() in ("content-length", "transfer-encoding"):
-            self._sent_length = True
-        super().send_header(keyword, value)
-
-    def _keep_alive_ok(self) -> bool:
-        try:
-            with self.server._per_ip_lock:
-                held = self.server._per_ip_count.get(self.client_address[0], 0)
-        except AttributeError:
-            return True
-        return held <= _MAX_CONCURRENT_CONNECTIONS_PER_IP // 2
-
-    def end_headers(self):
-        if not (getattr(self, "_sent_length", False) and self.command == "GET" and self._keep_alive_ok()):
-            self.send_header("Connection", "close")
-        super().end_headers()
 
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")
 
     def send_json(self, data: dict, status: int = 200,
                   extra_headers: Optional[Dict[str, str]] = None) -> None:
-        self._send_raw_json(json.dumps(data, separators=(",", ":")).encode(), status, extra_headers)
-
-    def send_json_tagged(self, data: dict) -> None:
         raw = json.dumps(data, separators=(",", ":")).encode()
-        etag = '"' + hashlib.md5(raw).hexdigest() + '"'
-        if self.headers.get("If-None-Match", "") == etag:
-            self.send_response(304)
-            self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return
-        self._send_raw_json(raw, 200, {"ETag": etag})
-
-    def _send_raw_json(self, raw: bytes, status: int,
-                       extra_headers: Optional[Dict[str, str]]) -> None:
         self.send_response(status)
         self.send_header("Content-Type",          "application/json")
         self.send_header("Cache-Control",          "no-store")
@@ -14747,14 +14551,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _wants_lite_page(self) -> bool:
-        if self.headers.get("Save-Data", "").strip().lower() == "on":
-            return True
-        for part in self.headers.get("Cookie", "").split(";"):
-            if part.strip() == "asl_slow=on":
-                return True
-        return False
-
     def send_html(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type",          "text/html; charset=utf-8")
@@ -14765,12 +14561,11 @@ class Handler(BaseHTTPRequestHandler):
                          "script-src 'unsafe-inline'; connect-src 'self'; "
                          "frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
-        lite = self._wants_lite_page()
         if self._accepts_gzip():
-            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
+            body = _HTML_GZIP
             self.send_header("Content-Encoding", "gzip")
         else:
-            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
+            body = _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -15561,8 +15356,8 @@ _GET_ROUTES: dict = {
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
-    "/api/recording":  lambda h: h.send_json_tagged(recording_view()),
-    "/api/keyed":      lambda h: h.send_json_tagged(action_get_keyed()),
+    "/api/recording":  lambda h: h.send_json(recording_view()),
+    "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
     "/api/asl-nodes":      lambda h: h.send_json(action_get_asl_nodes()),
     "/api/echo-nodes":     lambda h: h.send_json(action_get_echo_nodes()),
@@ -16348,11 +16143,6 @@ def uninstall_service() -> None:
         except OSError:
             pass
     _remove_launcher_if_unused()
-
-    echodb_dir = os.path.dirname(_ECHODB_FILE)
-    if os.path.isdir(echodb_dir):
-        shutil.rmtree(echodb_dir, ignore_errors=True)
-        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     mark, msg = close_firewall_port(_listen_port())
     print(f"  [{mark}] {msg}")

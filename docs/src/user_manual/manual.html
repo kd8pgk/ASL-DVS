@@ -299,12 +299,14 @@ sudo systemctl status sysmon</pre>
   <h2><span class="n">1.5</span>Logging in</h2>
   <ol class="steps">
     <li>Open the page in a browser: <code>http://&lt;pi-address&gt;:&lt;port&gt;</code>, for example <code>http://192.168.1.50:9999</code> for SysMon.</li>
-    <li>Type the Pi's <b>root password</b> and press Log In. There is no user name.</li>
+    <li>Type the Pi's <b>root password</b> in the Password box and press <b>Log in</b>. There is no user name. The eye button at the right end of the box shows what you typed; press it again to hide it (it also hides it when you log in).</li>
     <li>When you're done, press <b>Log Out</b> in the header, especially on a shared computer.</li>
   </ol>
   <ul>
     <li><b>The Dashboard and SysMon share one login.</b> Log in to either one and the other opens without asking, in the same browser. A shared login lasts 12 hours from the last time you used either page.</li>
     <li><b>instmon, wifimon and 44helper each have their own login.</b></li>
+    <li><b>Every page looks the same at login</b> (Terminal Monitor excepted): a card with the tool's name, the Password box, the Log in button and a line for any error.</li>
+    <li><b>instmon holds your login during a Full Update</b> so a long update never signs you out halfway. When the update ends, instmon signs everyone out; log in again to see the result.</li>
     <li><b>Wrong passwords lock you out for a while.</b> On the Dashboard and SysMon, five wrong passwords within 5 minutes lock that address out of both for 15 minutes. The other tools have similar limits. Wait it out; don't keep guessing.</li>
     <li><b>44helper stays logged in</b> until you log out, press <b>Log out all devices</b>, or the Pi reboots, because its jobs can run for a long time.</li>
   </ul>
@@ -2815,7 +2817,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <span class="lbl">UNDER THE HOOD</span>
     <h2>instmon's files and jobs</h2>
     <ul>
-      <li><b>Program:</b> <code>/usr/local/bin/instmon.py</code>, service <code>instmon</code>, port 8990. Its own login: cookie <code>instmon_session</code>, 12 hours, kept in memory, so restarting instmon logs everyone out and the page reloads to the login screen.</li>
+      <li><b>Program:</b> <code>/usr/local/bin/instmon.py</code>, service <code>instmon</code>, port 8990. Its own login: cookie <code>instmon_session</code>, 12 hours, kept in memory, so restarting instmon logs everyone out and the page reloads to the login screen. A Full Update holds the login while it runs and signs everyone out when it ends.</li>
       <li><b>Library:</b> <code>/etc/asl_dvs/instmon_library/</code> (<code>$INSTMON_LIBRARY_DIR</code>), one folder per category: <code>dashboard</code>, <code>sysmon</code>, <code>wifimon</code>, <code>44helper</code>, <code>nodelisten</code> (Node Talker), <code>noderecorder</code>, <code>pibrary</code>, <code>termon</code>, <code>confgetter</code>, <code>confputter</code>, <code>instmon</code>, <code>scripts</code>, <code>config</code>. 44helper adds <code>config/wg0.conf</code> and <code>config_restore/</code>.</li>
       <li><b>Install</b> runs the file's own <code>--install</code>; <b>Uninstall</b> runs <code>--uninstall</code>. A tool is only offered for install if its file supports <code>--install</code> (and <code>--uninstall</code>) and passes the download checks in Chapter 2.</li>
       <li><b>Version</b> comes from the file's <code>VERSION</code>, <code>APP_VERSION</code> or <code>SCRIPT_VERSION</code> line, or, for <code>.sh</code> scripts, the title line <code># name.sh  vX.Y (date)</code>.</li>

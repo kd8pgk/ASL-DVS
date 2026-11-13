@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.53.0"
+APP_VERSION = "5.54.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -7632,23 +7632,6 @@ button.danger{border-color:var(--red);background:rgba(255,61,90,.12);color:#ffff
 button:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .good{color:var(--green)} .warn{color:var(--amber)} .bad{color:var(--red)}
 
-#login{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
-  padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
-#login-form{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:1.4rem 1.6rem;
-  min-width:260px;max-width:90vw;box-shadow:0 8px 40px rgba(0,0,0,.8);text-align:center;
-  display:flex;flex-direction:column;gap:.6rem;font-family:var(--sans)}
-#login-form h1{margin:0 0 .4rem;font-family:var(--sans);font-size:var(--fs-lg);font-weight:700;
-  color:#ffd040;letter-spacing:.06em;text-shadow:0 0 8px rgba(255,208,64,.5)}
-#login-pw{font-family:var(--sans);font-size:var(--fs-md);background:#0a1020;color:#ffffff;
-  border:1px solid var(--border2);border-radius:4px;padding:.45rem .6rem;outline:none}
-#login-pw:focus{border-color:#ffd040}
-#login-btn{font-family:var(--sans);font-size:var(--fs-base);font-weight:700;letter-spacing:.04em;
-  text-transform:uppercase;background:transparent;color:#ffd040;border:1px solid var(--amber-dim);
-  border-radius:4px;padding:.32rem .85rem;cursor:pointer;transition:all .14s}
-#login-btn:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
-#login-btn:focus-visible{outline:none;box-shadow:0 0 10px currentColor}
-#login-btn:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
-#login-err{margin:.2rem 0 0;min-height:1.1rem;font-size:var(--fs-base);color:#ff3d5a}
 label{font-weight:600}
 input[type=password]{font:inherit;padding:9px 10px;border-radius:6px;border:1px solid var(--border2);
   background:var(--bg);color:var(--text)}
@@ -7805,25 +7788,19 @@ a.btnlink:hover{border-color:var(--blue)}
 .modal .check{align-items:flex-start}
 .modal .check input{margin-top:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
-#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
-.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
-.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
-.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
-.splash-license a{color:var(--blue)}
 .hdr-logout{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);background:transparent;border:1px solid var(--border2);border-radius:5px;padding:.2rem .5rem;cursor:pointer}
 </style>
 </head>
 <body>
 
-<div id="login" hidden>
-  <div class="welcome">Welcome to the <b>KD8PGK</b> WiFi Monitor</div>
-  <div class="splash-license">WiFi Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
-  <form id="login-form">
-    <h1>WiFi Monitor</h1>
-    <input id="login-pw" type="password" autocomplete="current-password" placeholder="Root password" aria-label="Root password">
-    <button type="submit" id="login-btn">Log In</button>
-    <p id="login-err" role="alert"></p>
+<div id="login" class="lg-screen" hidden>
+  <form id="login-form" class="lg-card">
+    <h2 class="lg-title">WiFi Monitor</h2>
+    <input class="lg-in" id="login-pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+    <button class="lg-btn" type="submit" id="login-btn">Log in</button>
+    <p id="login-err" class="lg-msg" role="alert"></p>
   </form>
+  <div class="lg-license">WiFi Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
 </div>
 
 <div id="app" hidden>
@@ -9963,12 +9940,90 @@ a.btnlink:hover{border-color:var(--blue)}
 </html>
 """
 
+def login_ui_html(input_id, nonce=""):
+    import json
+    attr = ' nonce="%s"' % nonce if nonce else ""
+    css = (
+        ".pw-wrap{position:relative;display:block}"
+        ".pw-wrap>input{box-sizing:border-box;width:100%;padding-right:2.7rem}"
+        ".pw-wrap>.pw-eye{position:absolute!important;top:50%!important;right:.3rem!important;transform:translateY(-50%)!important;"
+        "width:2.1rem!important;height:2.1rem!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;"
+        "border:0!important;border-radius:4px!important;background:transparent!important;color:inherit!important;opacity:.7;"
+        "cursor:pointer;box-shadow:none!important;filter:none!important;text-shadow:none!important;text-transform:none!important;"
+        "letter-spacing:0!important;font-size:1rem!important;line-height:1!important;display:flex!important;align-items:center!important;"
+        "justify-content:center!important}"
+        ".pw-wrap>.pw-eye:hover,.pw-wrap>.pw-eye:focus-visible{opacity:1;background:rgba(127,127,127,.2)!important;box-shadow:none!important;filter:none!important}"
+        ".pw-wrap>.pw-eye:active{transform:translateY(-50%)!important}"
+        ".pw-eye svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"
+        "stroke-linejoin:round;pointer-events:none}"
+        ".pw-eye .pw-off{display:none}"
+        '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
+        '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    skin = (
+        ".lg-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "gap:14px;box-sizing:border-box;padding:24px 16px 56px;background:#070b13;color:#e6edf6;"
+        "font-family:'Readex Pro',Arial,Helvetica,sans-serif}"
+        ".lg-screen.hidden,.lg-screen[hidden]{display:none}"
+        ".lg-card{box-sizing:border-box;width:100%;max-width:320px;margin:0;padding:25.6px 22.4px 19.2px;background:#121a29;"
+        "border:1px solid #2c3d5a;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;"
+        "gap:12px;text-align:center}"
+        ".lg-form{margin:0;padding:0;display:flex;flex-direction:column;gap:12px}"
+        ".lg-title{margin:0 0 4px;padding:0;font-family:inherit;font-size:18.4px;font-weight:700;line-height:1.2;"
+        "letter-spacing:.02em;color:#ffd040;text-shadow:none}"
+        "input.lg-in{box-sizing:border-box;width:100%;min-height:0;height:auto;margin:0;padding:9.6px 11.2px;font-family:inherit;"
+        "font-size:15.2px;line-height:1.2;background:#0a1020;color:#fff;border:1px solid #2c3d5a;border-radius:6px;outline:none}"
+        "input.lg-in:focus,input.lg-in:focus-visible{border-color:#ffd040;outline:none}"
+        "button.lg-btn{box-sizing:border-box;width:100%;min-height:0;margin:0;padding:10.4px;font-family:inherit;font-size:14.4px;"
+        "font-weight:700;line-height:1.2;letter-spacing:0;text-transform:none;background:#ffd040;color:#1a1300;border:0;"
+        "border-radius:6px;cursor:pointer;box-shadow:none;text-shadow:none;filter:none;transition:none}"
+        "button.lg-btn:hover:not(:disabled){background:#ffd040;color:#1a1300;filter:brightness(1.08);box-shadow:none}"
+        "button.lg-btn:disabled{opacity:.5;cursor:default}"
+        ".lg-msg{min-height:17.6px;margin:0;font-size:12.8px;line-height:1.3;color:#ff5d73;text-align:center}"
+        ".lg-note{margin:0;max-width:300px;font-size:12.5px;color:#ff5d73}.lg-note:empty{display:none}"
+        "button.lg-link{width:auto;min-height:0;margin:0 auto;padding:3.2px 8px;background:none;border:0;box-shadow:none;"
+        "color:#8aa0bf;font-family:inherit;font-size:12.8px;text-decoration:underline;text-transform:none;letter-spacing:0;cursor:pointer}"
+        ".lg-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:#7d8aa0}"
+        ".lg-license a{color:#6cb6ff}"
+    )
+    js = (
+        "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
+        "function go(){var input=document.getElementById(ID);if(!input||input.getAttribute('data-pw-eye'))return;"
+        "input.setAttribute('data-pw-eye','1');"
+        "var wrap=document.createElement('span');wrap.className='pw-wrap';"
+        "input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);"
+        "var b=document.createElement('button');b.type='button';b.className='pw-eye';"
+        "b.innerHTML='<svg class=\"pw-on\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z\"/>"
+        "<circle cx=\"12\" cy=\"12\" r=\"3\"/></svg><svg class=\"pw-off\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        "<path d=\"M17.9 17.9A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7"
+        "a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2\"/><path d=\"M1 1l22 22\"/></svg>';"
+        "function show(on){input.type=on?'text':'password';b.setAttribute('aria-pressed',on?'true':'false');"
+        "var t=on?'Hide password':'Show password';b.setAttribute('aria-label',t);b.title=t;}"
+        "show(false);"
+        "b.addEventListener('mousedown',function(e){e.preventDefault();});"
+        "b.addEventListener('click',function(){show(input.type==='password');input.focus();});"
+        "if(input.form)input.form.addEventListener('submit',function(){show(false);});"
+        "document.addEventListener('visibilitychange',function(){if(document.hidden)show(false);});"
+        "window.addEventListener('pagehide',function(){show(false);});"
+        "wrap.appendChild(b);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
+    )
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, skin + css, attr, js)
+
+
+def login_ui_inject(html, input_id, nonce=""):
+    head, sep, tail = html.rpartition("</body>")
+    if not sep:
+        return html
+    return head + login_ui_html(input_id, nonce) + sep + tail
+
+
 _page_cache: Optional[bytes] = None
 
 def _page_bytes() -> bytes:
     global _page_cache
     if _page_cache is None:
-        _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).encode("utf-8")
+        _page_cache = login_ui_inject(_PAGE_HTML.replace("__APP_VERSION__", APP_VERSION), "login-pw").encode("utf-8")
     return _page_cache
 
 def run() -> None:
