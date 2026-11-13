@@ -1,5 +1,13 @@
 # Node Talker changelog
 
+## 0.10.48 (2026-11-13)
+
+Fixes a login that succeeded and then was refused on an https page. This is a release: the server's cookie reading changed.
+
+- **The cause.** Since the session rules moved onto the common model, the cookie on an https page is named with `__Host-` in front. A browser that still held the old cookie of the same name without the prefix (written by an earlier version, good for 12 hours) sent both, and the server read the old one first, so the new login was thrown away: the password was accepted, then every request got 401 and the login screen came back.
+- **The fix.** The server now reads the `__Host-` cookie first and uses the old name only when there is no prefixed one. Nothing needs clearing in the browser.
+- **Nothing else changes.**
+
 ## 0.10.47 (2026-11-13)
 
 HTTPS code moves to the common code (`shared/confio.py`, the `tls_*` functions the other tools use) and the page answers plain HTTP from this Pi itself. This is a release: the server's connection handling changed.
@@ -252,7 +260,7 @@ First of three releases that check Node Talker for the faults fixed in Node Cont
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_47_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_48_20261113.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
