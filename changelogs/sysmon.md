@@ -1,6 +1,19 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_98_20261113.py`. Newest entries first.
+Current file: `sysmon_v6_13_99_20261113.py`. Newest entries first.
+
+## 6.13.99 (2026-11-13)
+
+SysMon (full build) is served over HTTPS, the way Node Talker and the Pi Zero 2 W build are. This is a release: the server and the Edit page changed.
+
+- **HTTPS is on by default.** SysMon makes a self-signed certificate on first start (kept in `/etc/asl_dvs/sysmon_tls`, valid 10 years, for this node's name and addresses). The browser shows a certificate warning once.
+- **One port.** An `http://` address on the same port is sent on to `https://`, so old bookmarks and links from the other tools keep working. Plain HTTP from the node itself (the health check, scripts, tunnels) is answered as before.
+- **Edit page, Server: "Use https".** Untick it to go back to plain HTTP; the page asks for a restart of sysmon to apply it. The setting is `https` under `[server]` in `/etc/sysmon/sysmon.conf`.
+- **If the certificate cannot be made or loaded** (for example openssl is missing) SysMon serves plain HTTP and the login page says so.
+- **Safer cookie.** Over https the login cookie is Secure and named with `__Host-` in front.
+- **A refused request no longer drops the connection.** When SysMon answered a POST without reading its body (not logged in, locked out), the unread bytes made the closing connection reset on https. SysMon now reads the rest of a small body before it closes.
+- **The health check follows https.** The check that keeps systemd's watchdog fed connects to the address SysMon is bound to, which is not always this node's loopback; over plain HTTP it would have been sent on to https and read as a dead server. It now uses https when SysMon does.
+- **Common code.** The HTTPS handling is the `tls_*` code in `shared/confio.py`.
 
 ## 6.13.98 (2026-11-13)
 

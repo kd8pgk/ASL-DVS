@@ -23,12 +23,12 @@ SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
     "nodecontrol": {"file": "nodecontrol_v9_3_111_20261113.py", "port": 8989, "scheme": "http"},
-    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_116_20261113.py", "port": 8989, "scheme": "http"},
-    "sysmon": {"file": "sysmon_v6_13_98_20261113.py", "port": 9999, "scheme": "http"},
-    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_87_20261113.py", "port": 9999, "scheme": "http"},
-    "nodetalker": {"file": "nodetalker_v0_10_46_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_117_20261113.py", "port": 8989, "scheme": "https", "plain_loopback": True},
+    "sysmon": {"file": "sysmon_v6_13_99_20261113.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_88_20261113.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "nodetalker": {"file": "nodetalker_v0_10_47_20261113.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "noderecorder": {"file": "noderecorder_v0_17_2_20261113.py", "port": 8995, "scheme": "https", "health": "/api/health"},
+    "noderecorder": {"file": "noderecorder_v0_17_3_20261113.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "pibrary": {"file": "pibrary_v0_17_2_20261113.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
     "instmon": {"file": "instmon_v2_109_0_20261113.py", "port": 8990, "scheme": "http", "health": "/",
@@ -237,6 +237,27 @@ def is_public(key, path):
             or path in PUBLIC_BY_DESIGN.get(key, set()))
 
 
+def lan_address():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            ip = s.getsockname()[0]
+    except OSError:
+        return ""
+    return "" if ip.startswith("127.") else ip
+
+
+def plain_get(host, port, path, timeout=10):
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        conn.request("GET", path, headers={"Host": "%s:%d" % (host, port)})
+        resp = conn.getresponse()
+        resp.read()
+        return resp.status, resp.getheader("Location")
+    finally:
+        conn.close()
+
+
 def make_case(key):
     class ServerCase(unittest.TestCase):
         server = None
@@ -257,6 +278,18 @@ def make_case(key):
             status, _, body = self.server.request("GET", self.server.spec["health"])
             self.assertEqual(status, 200)
             self.assertIn(self.server.spec.get("health_expect", b'"ok"'), body)
+
+        @unittest.skipUnless(SERVERS[key].get("plain_loopback"), "plain HTTP from the Pi is not served by this tool yet")
+        def test_plain_http_is_served_from_the_pi_and_redirected_from_the_network(self):
+            spec = self.server.spec
+            status, loc = plain_get("127.0.0.1", spec["port"], spec["health"])
+            self.assertEqual((status, loc), (200, None))
+            lan = lan_address()
+            if not lan:
+                self.skipTest("this machine has no network address besides loopback")
+            status, loc = plain_get(lan, spec["port"], "/x?a=1")
+            self.assertEqual(status, 301)
+            self.assertEqual(loc, "https://%s:%d/x?a=1" % (lan, spec["port"]))
 
         def test_protected_get_routes_refuse_without_login(self):
             failures = []
