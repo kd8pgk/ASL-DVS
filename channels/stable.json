@@ -74,22 +74,22 @@
    "version": "9.3.108-pi02w"
   },
   "noderecorder": {
-   "blob": "54da3343389cc058cddbf78b4e7da64c9a1ab933",
-   "commit": "7fff7b1c6aa4a6a0f9ddaded874f9a09c0e169b6",
-   "file": "noderecorder_v0_12_0_20261108.py",
-   "landed": "2026-11-08T22:44:07Z",
-   "promoted": "2026-11-13T04:57:48Z",
+   "blob": "5ed59f121391124690f3b0239a77ed8c660c05b8",
+   "commit": "245139094f2ebce05b1779974fd9b587ace59b6e",
+   "file": "noderecorder_v0_14_0_20261109.py",
+   "landed": "2026-11-09T09:33:53Z",
+   "promoted": "2026-11-13T09:16:57Z",
    "reason": "count",
-   "version": "0.12.0"
+   "version": "0.14.0"
   },
   "nodetalker": {
-   "blob": "b4bb24d3a41eef767f8fa8eeabe0e2035fa70e7d",
-   "commit": "c362cc1724d65d81188063580d22ca5794b7ab60",
-   "file": "nodetalker_v0_10_26_20261108.py",
-   "landed": "2026-11-08T21:55:07Z",
-   "promoted": "2026-11-11T21:55:07Z",
+   "blob": "7146619791e6f3a61a3cc7c1a44ed7ba56af81c6",
+   "commit": "f3f6012d07085f5c732850cbaa1351b908527a06",
+   "file": "nodetalker_v0_10_27_20261110.py",
+   "landed": "2026-11-10T05:51:41Z",
+   "promoted": "2026-11-13T05:51:41Z",
    "reason": "count",
-   "version": "0.10.26"
+   "version": "0.10.27"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
