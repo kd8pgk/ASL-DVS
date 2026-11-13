@@ -3644,7 +3644,7 @@ class InstmonFetchMissingTests(unittest.TestCase):
 
     def test_the_number_of_downloads_per_check_is_capped(self):
         e1 = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
-        e2 = self.entry("pibrary_v0_16_1_20261104.py", "pibrary", "0.16.1")
+        e2 = self.entry("pibrary_v0_17_0_20261113.py", "pibrary", "0.16.1")
         with mock.patch.object(self.m, "FETCH_MISSING_MAX", 1):
             self.assertEqual(len(self.m._gh_fetch_missing([e1, e2])), 1)
         with mock.patch.object(self.m, "FETCH_MISSING_MAX", 0):
@@ -3654,7 +3654,7 @@ class InstmonFetchMissingTests(unittest.TestCase):
         m = self.m
         bad = self.entry("termon_v0_2_2_20261109.py", "termon", "0.2.2")
         self.net[bad["name"]] = self.net[bad["name"]] + b"# changed on the way\n"
-        good = self.entry("pibrary_v0_16_1_20261104.py", "pibrary", "0.16.1")
+        good = self.entry("pibrary_v0_17_0_20261113.py", "pibrary", "0.16.1")
         got = m._gh_fetch_missing([bad, good])
         self.assertEqual(got, [good["name"]])
         self.assertEqual(self.listed(bad), [])
