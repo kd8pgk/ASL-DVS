@@ -1,5 +1,13 @@
 # instmon changelog
 
+## 2.110.0 (2026-11-13)
+
+A Full Update now also asks each signed-in browser to drop the other tools' login cookies. This is a release: the server's replies changed.
+
+- **What it does.** When a Full Update ends, instmon already signs everyone out. It now also remembers which browsers had a login at that moment. The first time one of those browsers is refused (its next status check), the reply carries instructions to delete the login cookies of Node Controller and SysMon (`asl_dvs_session`), 44helper, Pibrary, wifimon, Node Talker, Node Recorder, Node Talker for AMP and Terminal Monitor, so a cookie left over from a version that has just been replaced cannot get in the way of the next login. It happens once per browser, only after a Full Update (a login that simply ran out does not do it), and only for the next 6 hours.
+- **Its limit.** A browser keeps cookies by host name, not by port, so instmon's reply reaches the other tools' cookies. But a page served over plain http cannot delete a cookie that was set as Secure or with the `__Host-` prefix (what Node Talker, Node Recorder, Terminal Monitor and wifimon use on https). Those stay until the tool's own page replaces them, or until instmon is served over https.
+- **Nothing else changes.**
+
 ## 2.109.0 (2026-11-13)
 
 Login sessions and lockout follow the common model (`shared/confio.py`, the same code as the other tools will use). This is a release: the server's session rules changed.
@@ -197,7 +205,7 @@ Tests: the registry entry and its place in every table, file recognition by name
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
 
-Current file: `instmon_v2_109_0_20261113.py`. Newest entries first.
+Current file: `instmon_v2_110_0_20261113.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

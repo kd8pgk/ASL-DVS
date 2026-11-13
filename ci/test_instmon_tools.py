@@ -3,6 +3,7 @@ import hashlib
 import http.client
 import json
 import threading
+import time
 import importlib.util
 import io
 import os
@@ -459,6 +460,58 @@ class SessionsAndFullUpdate(unittest.TestCase):
                 mock.patch.object(im, "_fu_refresh_plan"), mock.patch.object(im, "log_event") as log:
             im._fu_finish()
         self.assertFalse([c for c in log.call_args_list if "signed out" in str(c)])
+
+
+class CookiePurgeAfterFullUpdate(unittest.TestCase):
+    def setUp(self):
+        im._revoke_all_sessions()
+        im._purge_keys.clear()
+
+    def refuse(self, token):
+        import types
+        sent = {}
+        stub = types.SimpleNamespace(
+            client_address=("10.9.9.9", 1), command="GET", path="/api/status",
+            _session_token=lambda: token,
+            _send_json=lambda status, payload, extra_headers=None: sent.update(status=status, extra=extra_headers))
+        with mock.patch.object(im, "log_event"):
+            im.InstmonHandler._require_auth(stub)
+        return sent
+
+    def finish(self):
+        with mock.patch.object(im, "_fu_save"), mock.patch.object(im, "_gh_event"), \
+                mock.patch.object(im, "_fu_refresh_plan"), mock.patch.object(im, "log_event"):
+            im._fu_finish()
+
+    def test_a_browser_that_had_a_login_is_asked_once_to_drop_the_other_cookies(self):
+        token, _ = im._issue_session()
+        self.finish()
+        first = self.refuse(token)
+        self.assertEqual(first["status"], 401)
+        names = [h[1].split("=")[0] for h in first["extra"]]
+        for name in ("asl_dvs_session", "helper44_session", "pibrary_session", "wifimon_session", "nodetalker_session",
+                     "noderecorder_session", "termon_session", "instmon_session"):
+            self.assertIn(name, names)
+        self.assertTrue(all("Max-Age=0" in h[1] for h in first["extra"]))
+        self.assertIsNone(self.refuse(token)["extra"])
+
+    def test_a_login_that_simply_ran_out_does_not_do_it(self):
+        token, _ = im._issue_session()
+        self.assertIsNone(self.refuse(token)["extra"])
+
+    def test_a_browser_with_no_login_at_the_end_is_left_alone(self):
+        im._issue_session()
+        self.finish()
+        self.assertIsNone(self.refuse("never-had-one")["extra"])
+        self.assertIsNone(self.refuse(None)["extra"])
+
+    def test_the_request_is_forgotten_after_six_hours(self):
+        token, _ = im._issue_session()
+        self.finish()
+        with im._purge_lock:
+            for key in im._purge_keys:
+                im._purge_keys[key] = time.time() - 1
+        self.assertIsNone(self.refuse(token)["extra"])
 
 
 if __name__ == "__main__":
