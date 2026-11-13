@@ -11,6 +11,7 @@ SysMon is served over HTTPS, the way Node Talker is. This is a release: the serv
 - **Edit page, Server: "Use https".** Untick it to go back to plain HTTP; the page asks for a restart of sysmon to apply it. The setting is `https` under `[server]` in `/etc/sysmon/sysmon.conf`.
 - **If the certificate cannot be made or loaded** (for example openssl is missing) SysMon serves plain HTTP and the login page says so.
 - **Safer cookie.** Over https the login cookie is Secure and named with `__Host-` in front. Node Controller (still on http here) asks for the password once more.
+- **A refused request no longer drops the connection.** When SysMon answered a POST without reading its body (not logged in, locked out), the unread bytes made the closing connection reset on https and the browser lost the answer. SysMon now reads the rest of a small body before it closes.
 - **Common code.** The HTTPS handling is the `tls_*` code in `shared/confio.py`.
 
 ## 6.13.87-pi02w (2026-11-13)
