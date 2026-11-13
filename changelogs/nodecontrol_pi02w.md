@@ -1,6 +1,18 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_116_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_117_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.117-pi02w (2026-11-13)
+
+Node Controller is served over HTTPS, the way Node Talker is. This is a release: the server and the Edit page changed.
+
+- **HTTPS is on by default.** Node Controller makes a self-signed certificate on first start (kept in `/etc/asl_dvs/nodecontrol_tls`, valid 10 years, for this node's name and addresses). The browser shows a certificate warning once.
+- **One port.** An `http://` address on the same port is sent on to `https://`, so old bookmarks keep working. Plain HTTP from the Pi itself (the event script Asterisk runs, the health check, other tools on this node) is answered as before.
+- **Edit tab: "Use https (restart to apply)".** Untick it to go back to plain HTTP. The setting is `https=true` or `https=false` in the `[CONFIG]` part of `/etc/asl_dvs/asl_dvs.conf`; when it is missing, https is on.
+- **If the certificate cannot be made or loaded** (for example openssl is missing) Node Controller serves plain HTTP and the login page says so.
+- **Safer cookie.** Over https (or behind an https tunnel) the login cookie is Secure and named with `__Host-` in front.
+- **A refused request no longer drops the connection.** When Node Controller answered a POST without reading its body (not logged in, locked out), the unread bytes made the closing connection reset on https. It now reads the rest of a small body before it closes.
+- **Common code.** The HTTPS handling is the `tls_*` code in `shared/confio.py`.
 
 ## 9.3.116-pi02w (2026-11-13)
 
