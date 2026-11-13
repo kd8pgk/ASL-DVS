@@ -92,13 +92,13 @@
    "version": "0.10.27"
   },
   "pibrary": {
-   "blob": "3297c565ab64a0992f3640702d203199661d5169",
-   "commit": "22568d86f255cde585175b5efe09e470f54e4ce3",
-   "file": "pibrary_v0_15_0_20261028.py",
-   "landed": "2026-10-28T07:28:17Z",
-   "promoted": "2026-10-28T07:28:17Z",
-   "reason": "hotfix",
-   "version": "0.15.0"
+   "blob": "1b0a26971e740a9e6ad5bb7e67b24bb0cc6be15e",
+   "commit": "e6cb8ab5e1bbd13cde7c3e54a78d10fe3a75b3cc",
+   "file": "pibrary_v0_16_0_20261102.py",
+   "landed": "2026-11-02T10:24:37Z",
+   "promoted": "2026-11-13T09:39:55Z",
+   "reason": "count",
+   "version": "0.16.0"
   },
   "sysmon": {
    "blob": "04343e160c28f43cfe414977edeccf31f7c10979",
