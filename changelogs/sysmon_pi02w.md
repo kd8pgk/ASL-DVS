@@ -1,6 +1,17 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_87_20261113.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_88_20261113.py`. Newest entries first.
+
+## 6.13.88-pi02w (2026-11-13)
+
+SysMon is served over HTTPS, the way Node Talker is. This is a release: the server and the Edit page changed.
+
+- **HTTPS is on by default.** SysMon makes a self-signed certificate on first start (kept in `/etc/asl_dvs/sysmon_tls`, valid 10 years, for this node's name and addresses). The browser shows a certificate warning once.
+- **One port.** An `http://` address on the same port is sent on to `https://`, so old bookmarks and links from the other tools keep working. Plain HTTP from the Pi itself (the health check, scripts, tunnels) is answered as before.
+- **Edit page, Server: "Use https".** Untick it to go back to plain HTTP; the page asks for a restart of sysmon to apply it. The setting is `https` under `[server]` in `/etc/sysmon/sysmon.conf`.
+- **If the certificate cannot be made or loaded** (for example openssl is missing) SysMon serves plain HTTP and the login page says so.
+- **Safer cookie.** Over https the login cookie is Secure and named with `__Host-` in front. Node Controller (still on http here) asks for the password once more.
+- **Common code.** The HTTPS handling is the `tls_*` code in `shared/confio.py`.
 
 ## 6.13.87-pi02w (2026-11-13)
 
