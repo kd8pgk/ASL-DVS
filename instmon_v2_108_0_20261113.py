@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.107.0"
+VERSION ="2.108.0"
 DATE_STR ="2026-11-13"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -259,8 +259,9 @@ _sessions_lock = threading.Lock()
 def _issue_session():
     token = secrets.token_hex(32)
     now = time.time()
+    holding = full_update_running()
     with _sessions_lock:
-        for t in [tk for tk, exp in _sessions.items() if exp <= now]:
+        for t in [tk for tk, exp in _sessions.items() if exp <= now and not holding]:
             _sessions.pop(t, None)
         _sessions[token] = now + _SESSION_TTL_SEC
     return token
@@ -268,8 +269,12 @@ def _issue_session():
 def _check_session(token):
     if not token:
         return False
+    holding = full_update_running()
     with _sessions_lock:
         exp = _sessions.get(token)
+        if exp is not None and holding and exp <= time.time():
+            _sessions[token] = time.time() + _SESSION_TTL_SEC
+            return True
         if exp is None or exp <= time.time():
             _sessions.pop(token, None)
             return False
@@ -279,6 +284,12 @@ def _check_session(token):
 def _revoke_session(token):
     with _sessions_lock:
         _sessions.pop(token, None)
+
+def _revoke_all_sessions():
+    with _sessions_lock:
+        count = len(_sessions)
+        _sessions.clear()
+    return count
 
 def _session_cookie_header(token, max_age):
     return f"{_SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
@@ -7676,6 +7687,8 @@ def _fu_finish(error=""):
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+    if _revoke_all_sessions():
+        log_event("Full Update finished: everyone is signed out; sign in again to see the result", "info")
     _fu_refresh_plan()
 
 def _fu_manuals(skipped):
