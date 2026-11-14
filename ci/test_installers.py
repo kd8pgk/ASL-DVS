@@ -6,6 +6,7 @@ import os
 import pty
 import select
 import shutil
+import socket
 import subprocess
 import tempfile
 import termios
@@ -66,6 +67,11 @@ elif "--uninstall" in sys.argv:
 '''
 
 
+MENU_FRESH = "Choose [1-5/q] (Enter = 1): "
+MENU_INSTALLED = "Choose [1-5/q] (Enter = 2): "
+GO = "Go ahead? [Y/n, or letters to leave out, e.g. C]: "
+
+
 class InstallerBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -88,6 +94,12 @@ class InstallerBase(unittest.TestCase):
         shutil.copyfile(INSTALLER, self.script)
         self.stopped = os.path.join(self.d, "stopped.json")
         self.quiet = os.path.join(self.d, "quiet.json")
+        self.etc = os.path.join(self.d, "etc")
+        self.run_dir = os.path.join(self.d, "run")
+        self.backup = os.path.join(self.d, "backup")
+        self.model = os.path.join(self.d, "model")
+        for p in (self.etc, self.run_dir):
+            os.makedirs(p)
         self.staged = []
         self.addCleanup(self.cleanup_system)
 
@@ -139,9 +151,12 @@ class InstallerBase(unittest.TestCase):
     def environment(self, env=None):
         full = dict(os.environ, STUB_DIR=self.stub, INSTMON_LIBRARY_DIR=self.lib,
                     PATH=STUB_BIN + os.pathsep + os.environ.get("PATH", ""),
-                    ASL_DVS_USER_STOPPED=self.stopped, ASL_DVS_QUIET_STATE=self.quiet)
+                    ASL_DVS_USER_STOPPED=self.stopped, ASL_DVS_QUIET_STATE=self.quiet,
+                    ASL_DVS_ETC=self.etc, ASL_DVS_RUN_DIR=self.run_dir, ASL_DVS_BACKUP_DIR=self.backup,
+                    ASL_DVS_MODEL_FILE=self.model, ASL_DVS_START_WAIT="2", ASL_DVS_HEAVY_PAUSE="0")
         for var in ("INSTALL_TERMON", "INSTALL_NODETALKER", "INSTALL_NODELISTEN", "INSTALL_NODERECORDER",
-                    "INSTALL_PIBRARY", "ASL_DVS_CHANNEL", "ASL_DVS_GIT_URL", "ASL_DVS_RAW_URL", "ASL_DVS_REPO"):
+                    "INSTALL_PIBRARY", "ASL_DVS_CHANNEL", "ASL_DVS_GIT_URL", "ASL_DVS_RAW_URL", "ASL_DVS_REPO",
+                    "ASL_DVS_CALLER"):
             full.pop(var, None)
         full.update(env or {})
         return full
@@ -243,7 +258,8 @@ class InstallerBase(unittest.TestCase):
         self.git(repo, "config", "uploadpack.allowFilter", "true")
         self.git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
         for name, body in files.items():
-            with open(os.path.join(repo, name), "w") as fh:
+            os.makedirs(os.path.dirname(os.path.join(repo, name)), exist_ok=True)
+            with open(os.path.join(repo, name), "wb" if isinstance(body, bytes) else "w") as fh:
                 fh.write(body)
         self.git(repo, "add", "-A")
         self.git(repo, "commit", "-q", "-m", "files")
@@ -544,10 +560,11 @@ class FreshInstallTests(InstallerBase):
         self.assertFalse(self.installed("termon"))
         self.assertIn("Node Recorder has no stable build yet", out)
 
-    def test_enter_at_the_question_installs_the_suite_and_asks_about_terminal_monitor(self):
+    def test_enter_at_the_menu_is_a_full_first_install(self):
         self.stage_all()
-        rc, out = self.run_tty("--offline", answers=[("Install the whole suite? [Y/n/c]: ", ""),
-                                                    ("Install Terminal Monitor? [y/N]: ", "")])
+        rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, ""),
+                                                    ("Install Terminal Monitor? [y/N]: ", ""),
+                                                    (GO, "")])
         self.assertEqual(rc, 0, out[-2500:])
         self.assertEqual(self.unanswered, [])
         for key in self.SUITE:
@@ -555,34 +572,58 @@ class FreshInstallTests(InstallerBase):
         self.assertFalse(self.installed("termon"))
         self.assertNotIn("Select wifimon version", out)
         self.assertIn("Offline: only the files on this Pi are used.", out)
+        self.assertIn("Plan: Full first install", out)
+        self.assertIn("[C] Manuals    skipped (offline)", out)
+        self.assertIn("[D] RESET", out)
+        self.assertIn("[F] Start and check", out)
 
     def test_yes_to_terminal_monitor_adds_it(self):
         self.stage_all()
-        rc, out = self.run_tty("--offline", answers=[("Install the whole suite? [Y/n/c]: ", "y"),
-                                                    ("Install Terminal Monitor? [y/N]: ", "y")])
+        rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, "1"),
+                                                    ("Install Terminal Monitor? [y/N]: ", "y"),
+                                                    (GO, "")])
         self.assertEqual(rc, 0, out[-2500:])
         self.assertTrue(self.installed("termon"))
 
-    def test_c_asks_tool_by_tool(self):
+    def test_4_asks_tool_by_tool(self):
         self.put("wifimon")
         self.put("pibrary")
         self.put("noderecorder")
-        rc, out = self.run_tty("--offline", answers=[("Install the whole suite? [Y/n/c]: ", "c"),
+        rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, "4"),
                                                     ("Select wifimon version [a]: ", ""),
                                                     ("Install Node Recorder? [y/N]: ", "n"),
                                                     ("Install Pibrary? [y/N]: ", "y"),
-                                                    ("Select Pibrary version [a]: ", "")])
+                                                    ("Select Pibrary version [a]: ", ""),
+                                                    (GO, "")])
         self.assertEqual(rc, 0, out[-2500:])
         self.assertEqual(self.unanswered, [])
         self.assertTrue(self.installed("wifimon"))
         self.assertTrue(self.installed("pibrary"))
         self.assertFalse(self.installed("noderecorder"))
+        self.assertNotIn("Reset the services", out)
 
-    def test_n_quits_and_installs_nothing(self):
-        self.stage_all()
-        rc, out = self.run_tty("--offline", answers=[("Install the whole suite? [Y/n/c]: ", "n")])
-        self.assertEqual(rc, 0, out[-1500:])
+    def test_the_old_c_key_still_chooses_tool_by_tool(self):
+        self.put("wifimon")
+        rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, "c"), ("Select wifimon version [a]: ", ""), (GO, "n")])
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertEqual(self.unanswered, [])
+        self.assertIn("Action: Component install", out)
         self.assertIn("Aborted by user", out)
+        self.assertFalse(self.installed("wifimon"))
+
+    def test_an_option_that_does_not_fit_is_asked_again(self):
+        self.stage_all()
+        rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, "2"), (MENU_FRESH, "q")])
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertIn("Nothing is installed yet — choose 1 (full first install) or 4 (component install)", out)
+        self.assertIn("Aborted by user", out)
+
+    def test_q_and_n_quit_and_install_nothing(self):
+        self.stage_all()
+        for key in ("q", "n"):
+            rc, out = self.run_tty("--offline", answers=[(MENU_FRESH, key)])
+            self.assertEqual(rc, 0, out[-1500:])
+            self.assertIn("Aborted by user", out)
         for key in NAMES:
             self.assertFalse(self.installed(key), key)
 
@@ -776,6 +817,325 @@ class UninstallerTests(InstallerBase):
         rc, out = self.run_installer()
         self.assertIn("== Suite — Mass Uninstall", out)
         self.assertNotIn("== ASL-DVS Suite", out)
+
+
+class MenuTests(InstallerBase):
+    def setUp(self):
+        super().setUp()
+        self.install_old("wifimon", "9.9.0")
+        self.state("wifimon", "active", "enabled")
+
+    def version(self, key):
+        with open(f"/usr/local/bin/{NAMES[key]}.py") as fh:
+            for line in fh:
+                if line.startswith("VERSION"):
+                    return line.split('"')[1]
+        return ""
+
+    def test_enter_on_an_installed_node_is_a_full_upgrade_that_adds_nothing(self):
+        self.put("wifimon", "9.9.9")
+        self.put("pibrary", "9.9.9")
+        rc, out = self.run_tty("--offline", answers=[(MENU_INSTALLED, ""), (GO, "")])
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertEqual(self.unanswered, [])
+        self.assertIn("Action: Full upgrade", out)
+        self.assertEqual(self.version("wifimon"), "9.9.9")
+        self.assertFalse(self.installed("pibrary"))
+        self.assertIn("Pibrary is not installed — a full upgrade does not add it", out)
+        self.assertIn("Everyone is signed out", out)
+        self.assertEqual(self.read_state("wifimon"), "active")
+
+    def test_the_old_keys_still_work_on_an_installed_node(self):
+        self.put("wifimon", "9.9.9")
+        for key, label in (("u", "Full upgrade"), ("i", "Full replace")):
+            rc, out = self.run_tty("--offline", answers=[(MENU_INSTALLED, key), (GO, "n")])
+            self.assertEqual(rc, 0, out[-1500:])
+            self.assertIn("Action: " + label, out)
+        self.assertEqual(self.version("wifimon"), "9.9.0")
+
+    def test_1_on_an_installed_node_is_asked_again(self):
+        rc, out = self.run_tty("--offline", answers=[(MENU_INSTALLED, "1"), (MENU_INSTALLED, "q")])
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertIn("Tools are already installed here — choose 2 (upgrade) or 3 (replace)", out)
+
+    def test_an_upgrade_never_goes_back(self):
+        self.install_old("wifimon", "9.9.9")
+        self.put("wifimon", "9.9.0")
+        rc, out = self.run_installer("--action=upgrade", "--offline")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("is older than the installed 9.9.9 — skipped, never downgraded", out)
+        self.assertEqual(self.version("wifimon"), "9.9.9")
+
+    def test_a_replace_reinstalls_backs_up_and_completes_the_suite(self):
+        self.install_old("wifimon", "9.9.9")
+        self.put("wifimon", "9.9.9")
+        self.put("pibrary", "9.9.9")
+        with open(self.put("wifimon", "9.9.9")) as fh, open("/usr/local/bin/wifimon.py", "w") as out_fh:
+            out_fh.write(fh.read())
+        rc, out = self.run_installer("--action=replace", "--offline", "--reset")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("Full replace: reinstalling wifimon anyway", out)
+        self.assertTrue(self.installed("pibrary"))
+        saved = [f for d in os.listdir(self.backup) for f in os.listdir(os.path.join(self.backup, d))]
+        self.assertIn("wifimon_9.9.9.py", saved)
+
+    def test_a_replace_without_a_terminal_needs_a_reset_choice(self):
+        self.put("wifimon", "9.9.9")
+        rc, out = self.run_installer("--action=replace", "--offline")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("--action=replace without a terminal needs --reset", out)
+        self.assertEqual(self.version("wifimon"), "9.9.0")
+        rc, out = self.run_installer("--action=replace", "--offline", "--no-reset")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("Full replace without [D] RESET", out)
+
+    def test_leaving_the_reset_out_of_a_replace_needs_skip(self):
+        self.put("wifimon", "9.9.9")
+        rc, out = self.run_tty("--offline", answers=[(MENU_INSTALLED, "3"), (GO, "D"),
+                                                    ("Type skip to leave [D] out anyway: ", "no"), (GO, "")])
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertEqual(self.unanswered, [])
+        self.assertIn("[D] RESET kept", out)
+        self.assertIn("← required for a replace", out)
+        self.assertIn("Everyone is signed out", out)
+
+    def test_the_printed_line_repeats_the_same_plan(self):
+        self.put("wifimon", "9.9.9")
+        rc, out = self.run_tty("--offline", answers=[(MENU_INSTALLED, "3"), (GO, "n")])
+        self.assertEqual(rc, 0, out[-2500:])
+        line = out.split("To repeat this without questions:\n", 1)[1].splitlines()[0].strip()
+        self.assertTrue(line.startswith("sudo bash "), line)
+        args = line.split()[3:]
+        self.assertIn("--non-interactive", args)
+        self.assertIn("--reset", args)
+        rc2, out2 = self.run_installer(*args)
+        self.assertEqual(rc2, 0, out2[-2500:])
+
+        def plan(text):
+            body = text.split("══ Plan: ", 1)[1]
+            return body.split("\n\n", 1)[0]
+        self.assertEqual(plan(out), plan(out2))
+        self.assertEqual(self.version("wifimon"), "9.9.9")
+
+    def test_without_a_terminal_and_without_flags_it_runs_as_7_6_0(self):
+        self.put("wifimon", "9.9.9")
+        rc, out = self.run_installer("--offline")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("defaulting to 'update'", out)
+        self.assertNotIn("Plan:", out)
+        self.assertNotIn("signed out", out)
+        self.assertIn("Startup verification", out)
+
+    def test_steps_leave_out_only_c_and_d(self):
+        self.put("wifimon", "9.9.9")
+        rc, out = self.run_installer("--action=upgrade", "--offline", "--steps=B")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("only [C] and [D] can be left out", out)
+        self.assertIn("-  [D] RESET left out", out)
+        self.assertIn("[E] Check", out)
+        self.assertEqual(self.version("wifimon"), "9.9.9")
+
+
+class ResetTests(InstallerBase):
+    def setUp(self):
+        super().setUp()
+        for key in ("wifimon", "44helper", "pibrary"):
+            self.install_old(key, "9.9.0")
+            self.state(key, "active", "enabled")
+        os.makedirs(os.path.join(self.run_dir, "asl_dvs"))
+        os.makedirs(os.path.join(self.run_dir, "44helper"))
+        self.auth = os.path.join(self.run_dir, "asl_dvs", "auth_session.json")
+        self.helper = os.path.join(self.run_dir, "44helper", "sessions.json")
+        for path in (self.auth, self.helper):
+            with open(path, "w") as fh:
+                fh.write('{"v": 1, "sessions": {}}')
+
+    def test_reset_only_restarts_and_signs_everyone_out_without_installing(self):
+        self.put("wifimon", "9.9.9")
+        self.state("pibrary", "inactive", "enabled")
+        with open(self.stopped, "w") as fh:
+            json.dump({"services": {"pibrary": {"at": 1}}}, fh)
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertFalse(os.path.exists(self.auth))
+        self.assertFalse(os.path.exists(self.helper))
+        self.assertEqual(self.read_state("wifimon"), "active")
+        self.assertEqual(self.read_state("44helper"), "active")
+        self.assertEqual(self.read_state("pibrary"), "inactive")
+        self.assertIn("pibrary is stopped, as you had it", out)
+        self.assertIn("Before:", out)
+        self.assertIn("After:", out)
+        with open("/usr/local/bin/wifimon.py") as fh:
+            self.assertIn('VERSION = "9.9.0"', fh.read())
+
+    def test_an_old_mark_on_a_running_service_does_not_keep_it_stopped(self):
+        with open(self.stopped, "w") as fh:
+            json.dump({"services": {"wifimon": {"at": 1}}}, fh)
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertEqual(self.read_state("wifimon"), "active")
+
+    def test_menu_5_is_reset_only(self):
+        rc, out = self.run_tty(answers=[(MENU_INSTALLED, "5"), ("Reset now? Everyone is signed out. [Y/n]: ", "")])
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertEqual(self.unanswered, [])
+        self.assertIn("Reset done", out)
+        self.assertFalse(os.path.exists(self.auth))
+
+    def test_reset_only_on_an_empty_node_refuses(self):
+        for key in ("wifimon", "44helper", "pibrary"):
+            os.unlink(f"/usr/local/bin/{NAMES[key]}.py")
+            self.state(key, "inactive")
+        rc, out = self.run_installer("--reset-only")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("Nothing is installed on this node — nothing to reset.", out)
+
+    def test_instmon_running_the_installer_is_left_running(self):
+        self.state("instmon", "active", "enabled")
+        rc, out = self.run_installer("--reset-only", env={"ASL_DVS_CALLER": "instmon"})
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("instmon is running this installer — left running", out)
+        self.assertNotIn("Stopping instmon", out)
+
+    def test_a_service_quiet_system_paused_is_left_as_it_is(self):
+        self.state("pibrary", "inactive", "enabled")
+        with open(self.quiet, "w") as fh:
+            json.dump({"services": {"pibrary": {}}}, fh)
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("pibrary is paused by Quiet System", out)
+        self.assertEqual(self.read_state("pibrary"), "inactive")
+
+    def test_a_unit_that_will_not_start_is_reported_with_its_log(self):
+        open(os.path.join(self.stub, "units", "wifimon.nostart"), "w").close()
+        start = time.time()
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 1, out[-2500:])
+        self.assertIn("wifimon did not start cleanly", out)
+        self.assertIn("Last lines of its log", out)
+        self.assertIn("Did not start: wifimon", out)
+        self.assertEqual(self.read_state("44helper"), "active")
+        self.assertLess(time.time() - start, 90)
+
+    def test_a_port_in_use_holds_only_that_tool(self):
+        if not shutil.which("ss"):
+            self.skipTest("ss is not installed")
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("0.0.0.0", 8991))
+        except OSError:
+            self.skipTest("port 8991 is in use here")
+        sock.listen(1)
+        self.addCleanup(sock.close)
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("wifimon: held — port 8991 is in use", out)
+        self.assertEqual(self.read_state("wifimon"), "inactive")
+        self.assertEqual(self.read_state("44helper"), "active")
+
+    def test_a_damaged_config_holds_the_tool_and_is_kept(self):
+        self.install_old("nodetalker", "9.9.0")
+        self.state("nodetalker", "active", "enabled")
+        conf = os.path.join(self.etc, "nodetalker.conf")
+        with open(conf, "wb") as fh:
+            fh.write(b"port = 8993\n\x00\x00junk")
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("nodetalker.conf is damaged (not a text file) — left in place", out)
+        self.assertEqual(self.read_state("nodetalker"), "inactive")
+        with open(conf, "rb") as fh:
+            self.assertIn(b"\x00", fh.read())
+
+    def test_an_install_with_the_reset_holds_a_tool_whose_port_is_taken(self):
+        if not shutil.which("ss"):
+            self.skipTest("ss is not installed")
+        self.put("wifimon", "9.9.9")
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("0.0.0.0", 8991))
+        except OSError:
+            self.skipTest("port 8991 is in use here")
+        sock.listen(1)
+        self.addCleanup(sock.close)
+        rc, out = self.run_installer("--action=upgrade", "--offline", "--reset")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("wifimon is not installed this time; the installed copy is left as it was", out)
+        with open("/usr/local/bin/wifimon.py") as fh:
+            self.assertIn('VERSION = "9.9.0"', fh.read())
+        self.assertIn("Held, not started: wifimon", out)
+
+
+class ManualTests(InstallerBase):
+    def docs_repo(self):
+        files = self.files()
+        files["docs/ASL-DVS_User_Manual.pdf"] = b"%PDF-1.4 user manual"
+        files["docs/ASL-DVS_Old_Guide.pdf"] = b"%PDF-1.4 old guide"
+        files["docs/ASL-DVS_Bad_Manual.pdf"] = b"not a pdf at all"
+        files["docs/Node_Controller_Notes.pdf"] = b"%PDF-1.4 notes"
+        for key in ("wifimon", "nodetalker", "pibrary", "termon"):
+            self.staged.append(f"/tmp/{key}_v9_9_9_20990101.py")
+        with open(os.path.join(self.etc, "instmon_manuals_deleted.json"), "w") as fh:
+            json.dump(["ASL-DVS_Old_Guide.pdf"], fh)
+        return self.make_repo(files, {"wifimon": "wifimon_v9_9_9_20990101.py"})
+
+    def test_a_first_install_saves_the_manuals_instmon_shows(self):
+        url = self.docs_repo()
+        rc, out = self.run_installer("--action=first", "--core", env={"ASL_DVS_GIT_URL": url})
+        self.assertEqual(rc, 0, out[-2500:])
+        docs = os.path.join(self.lib, "docs")
+        self.assertEqual(sorted(os.listdir(docs)), ["ASL-DVS_User_Manual.pdf"])
+        self.assertIn("Manual ASL-DVS_Bad_Manual.pdf: not a PDF file — not saved", out)
+        self.assertIn("1 manual(s) you deleted in instmon are left out", out)
+        self.assertTrue(os.path.exists(os.path.join(self.etc, "instmon_manuals_fetched")))
+        self.assertTrue(self.installed("wifimon"))
+
+    def test_no_manuals_leaves_them_out(self):
+        url = self.docs_repo()
+        rc, out = self.run_installer("--action=first", "--core", "--no-manuals", env={"ASL_DVS_GIT_URL": url})
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertFalse(os.path.exists(os.path.join(self.lib, "docs")))
+        self.assertIn("-  [C] Manuals left out", out)
+
+
+class HardwareTests(InstallerBase):
+    def zero2(self):
+        with open(self.model, "w") as fh:
+            fh.write("Raspberry Pi Zero 2 W Rev 1.0\0")
+
+    def test_a_pi_zero_2_w_gets_the_pi_zero_builds(self):
+        self.zero2()
+        self.put("wifimon")
+        rc, out = self.run_installer("--non-interactive", "--offline", "--core")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("This Pi: Raspberry Pi Zero 2 W Rev 1.0", out)
+        self.assertIn("Dashboard and SysMon: Pi Zero 2 W builds", out)
+        self.assertIn("Dashboard build: Pi Zero 2 W", out)
+
+    def test_another_pi_gets_the_full_builds(self):
+        with open(self.model, "w") as fh:
+            fh.write("Raspberry Pi 4 Model B Rev 1.4\0")
+        self.put("wifimon")
+        rc, out = self.run_installer("--non-interactive", "--offline", "--core")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("Dashboard and SysMon: full builds", out)
+        self.assertIn("Dashboard build: full", out)
+
+    def test_an_installed_full_build_on_a_pi_zero_is_kept_without_a_terminal(self):
+        self.zero2()
+        path = "/usr/local/bin/nodecontrol.py"
+        if os.path.lexists(path):
+            self.skipTest("a Dashboard is installed here")
+        with open(path, "w") as fh:
+            fh.write(fake_tool("nodecontrol", "9.3.1"))
+        self.addCleanup(os.unlink, path)
+        self.state("nodecontrol", "active", "enabled")
+        rc, out = self.run_installer("--reset-only")
+        self.assertEqual(rc, 0, out[-2500:])
+        self.assertIn("The installed Dashboard or SysMon is the full build, but this Pi is a Pi Zero 2 W", out)
+        self.assertIn("The installed build is kept (--build=pi02w switches it)", out)
+        self.assertIn("Dashboard and SysMon: full builds", out)
 
 
 if __name__ == "__main__":
