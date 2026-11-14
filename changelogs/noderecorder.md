@@ -1,6 +1,19 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_4_20261113.py`. Newest entries first.
+Current file: `noderecorder_v0_17_6_20261113.py`. Newest entries first.
+
+## 0.17.6 (2026-11-13)
+
+Record tab: a "Next up" card. This is a release: the page and the schedule route changed.
+
+- **Next up.** A card at the top of the Record tab shows the next enabled schedule entry (name, day, date and time, target, format, length and how long until it starts), or "Recording now until HH:MM" while a recording runs. It refreshes every 15 minutes and whenever the schedule is loaded.
+- **Schedule route.** The schedule reply carries `now_at`, the node's own time, so the countdown does not depend on the browser's clock.
+
+## 0.17.5 (2026-11-13)
+
+A recording with no audio is deleted. This is a release: the converter's behaviour changed.
+
+- **Header-only WAV.** A WAV that holds no audio can never become an MP3, so the converter removes it instead of keeping it, logs "Deleted <name>" and shows it as the last conversion result. If it cannot be removed the old "holds no audio" failure is reported with the reason.
 
 ## 0.17.4 (2026-11-13)
 
