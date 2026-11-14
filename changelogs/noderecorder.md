@@ -1,6 +1,17 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_6_20261113.py`. Newest entries first.
+Current file: `noderecorder_v0_17_7_20261114.py`. Newest entries first.
+
+## 0.17.7 (2026-11-14)
+
+Schedule: a Record checkbox, and the Link dropdown is gone. This is a release: the schedule sequence, the stored entry and the page changed.
+
+- **Record.** The "Schedule a recording" card has a **Record** checkbox next to **On**, checked by default. With it off, the entry links at its start time and drops the link at its end but writes no audio (no file, no conversion). The window is logged as "linked, not recorded". The Format list is dimmed while Record is off.
+- **State.** A link-only window reports the state `linked` (the Record tab says "Linked (not recording)", Next up says "Linked now until HH:MM"). `/api/recorder/status` keeps `busy` true during it, so Node Talker, Node Controller and instmon still see the Pi's link as in use. The Stop button also ends a link-only window.
+- **Display.** The schedule table shows "| link only" and Next up shows "Link only" in place of the format.
+- **Older entries.** An entry saved before this version has no Record setting and records as before.
+- **Link dropdown removed.** Schedules always connect as transceive. An entry saved as "Local monitor only" now runs as transceive and sends audio to its target. `link_mode` is no longer stored, and `link_op` and the monitor operation are removed from the schedule path.
+- **Not changed.** Retry of a lost link applies only to windows that recorded; a link-only window that loses its link ends with `link_lost`.
 
 ## 0.17.6 (2026-11-13)
 
