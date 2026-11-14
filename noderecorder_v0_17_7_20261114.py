@@ -37,7 +37,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.17.6"
+VERSION = "0.17.7"
 DATE_STR = "2026-11-13"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -2850,11 +2850,6 @@ def _linked(node, peer, max_age=0):
 
 _tune_lock = threading.Lock()
 _solo = {"mode": "", "target": "", "name": "", "bridge": "", "op": ""}
-LINK_MODES = {"": 3, "transceive": 3, "monitor": 8}
-
-
-def link_op(b):
-    return LINK_MODES.get(str(b.get("link_mode") or "").strip().lower(), 3) if isinstance(b, dict) else 3
 
 
 def _solo_set(**kw):
@@ -3847,13 +3842,12 @@ def _tune_connect_impl(b):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
-    op = link_op(b)
     if f["mode"] == "M17":
-        return m17_connect(f, node, op)
+        return m17_connect(f, node)
     if f["mode"] in ("ASL", "EchoLink"):
-        return node_connect(f, node, op)
+        return node_connect(f, node)
     act = b.get("net_action")
-    return solo_dvs(f, node, act if act in ("add", "once") else None, op)
+    return solo_dvs(f, node, act if act in ("add", "once") else None)
 
 
 def tune_connect(b):
@@ -5325,9 +5319,6 @@ def schedule_norm_entry(raw, check_target=True):
         datetime.fromisoformat(rev)
     except ValueError:
         rev = ""
-    link_mode = str(raw.get("link_mode") or "").strip().lower()
-    if link_mode not in LINK_MODES:
-        raise ValueError("link must be transceive or local monitor only")
     kind = str(raw.get("kind") or "regular").strip().lower()
     if kind not in ("regular", "special"):
         raise ValueError("kind must be regular or special")
@@ -5346,7 +5337,7 @@ def schedule_norm_entry(raw, check_target=True):
     return {"id": eid, "name": name, "enabled": _parse_bool(raw.get("enabled", True)),
             "days": days, "start": _hm_text(start), "end": _hm_text(end),
             "duration_min": (end - start) % 1440, "target": target, "format": fmt, "rev": rev,
-            "kind": kind, "date": date, "link_mode": "" if link_mode == "transceive" else link_mode}
+            "kind": kind, "date": date, "record": _parse_bool(raw.get("record", True))}
 
 
 def _special_window(e):
@@ -5580,7 +5571,7 @@ class DryActions:
 
 class RealActions:
     def connect(self, entry):
-        r = tune_connect(dict(entry["target"], link_mode=entry.get("link_mode", "")))
+        r = tune_connect(dict(entry["target"]))
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
     def link_alive(self, entry):
@@ -5637,12 +5628,16 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     if abort.is_set():
         do("disconnect", actions.disconnect, entry)
         return done("aborted", "stopped before the recording started")
-    ok, msg, fname = do("start", actions.start, entry, window)
-    if not ok:
-        do("stop", actions.stop)
-        do("disconnect", actions.disconnect, entry)
-        return done("start_failed", f"could not start recording: {msg}")
-    set_state("recording", file=fname or "")
+    rec = entry.get("record", True)
+    if rec:
+        ok, msg, fname = do("start", actions.start, entry, window)
+        if not ok:
+            do("stop", actions.stop)
+            do("disconnect", actions.disconnect, entry)
+            return done("start_failed", f"could not start recording: {msg}")
+        set_state("recording", file=fname or "")
+    else:
+        set_state("linked")
     result, detail, lost = "ok", "", 0
     next_check = now_fn() + LINK_CHECK_SEC
     while True:
@@ -5653,7 +5648,7 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
         if t >= end_at:
             break
         try:
-            healthy, why = actions.healthy(entry)
+            healthy, why = actions.healthy(entry) if rec else (True, "")
         except Exception:
             healthy, why = True, ""
         if not healthy:
@@ -5670,14 +5665,17 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
                 break
             next_check = t + LINK_CHECK_SEC
         sleep_fn(min(1.0, max(0.05, end_at - t)))
-    set_state("stopping")
-    ok, msg, _ = do("stop", actions.stop)
-    if not ok and result == "ok":
-        result, detail = "stop_failed", f"the recording did not stop cleanly: {msg}"
+    if rec:
+        set_state("stopping")
+        ok, msg, _ = do("stop", actions.stop)
+        if not ok and result == "ok":
+            result, detail = "stop_failed", f"the recording did not stop cleanly: {msg}"
     set_state("disconnecting")
     ok, msg, _ = do("disconnect", actions.disconnect, entry)
     if not ok and result == "ok":
         result, detail = "disconnect_failed", f"the link was not dropped: {msg}"
+    if not rec and result == "ok":
+        detail = "linked, not recorded"
     return done(result, detail)
 
 
@@ -7142,7 +7140,7 @@ async function oldNodesRemove() {
   setMsg('rn-msg', await post('/api/oldnodes/remove', {}));
   loadRecNode();
 }
-const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
+const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', linked: 'Linked (not recording)', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
 const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
   stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
@@ -7173,10 +7171,10 @@ function renderNextUp(d) {
   box.innerHTML = '';
   const line = (cls, text) => { const x = document.createElement('div'); x.className = cls; x.textContent = text; box.appendChild(x); };
   const st = d.status || {}, cur = st.current;
-  if (cur && (st.state === 'recording' || st.state === 'connecting')) {
+  if (cur && (st.state === 'recording' || st.state === 'connecting' || st.state === 'linked')) {
     const e = cur.end || '', p = nuParse(e);
     line('nu-name', '\u25cf ' + cur.name);
-    line('nu-when', 'Recording now' + (p ? ' until ' + p.hm : ''));
+    line('nu-when', (st.state === 'linked' ? 'Linked now' : 'Recording now') + (p ? ' until ' + p.hm : ''));
     if (p) line('nu-meta', NU_DAYS[new Date(Date.UTC(p.y, p.mo - 1, p.d)).getUTCDay()] + ' ' + p.d + ' ' + NU_MONTHS[p.mo - 1] + ' ' + p.y);
     return;
   }
@@ -7188,7 +7186,7 @@ function renderNextUp(d) {
   line('nu-name', nxt.name);
   line('nu-when', nuLabel(p));
   const n = nuParse(d.now_at);
-  const meta = [schedTarget(nxt.target), nxt.format === 'pcm' ? 'PCM' : 'u-law', nxt.duration_min ? nxt.duration_min + ' min' : '']
+  const meta = [schedTarget(nxt.target), nxt.record === false ? 'Link only' : nxt.format === 'pcm' ? 'PCM' : 'u-law', nxt.duration_min ? nxt.duration_min + ' min' : '']
     .concat(n ? [nuIn(nuMins(p) - nuMins(n))] : []).filter(Boolean).join(' \u00b7 ');
   line('nu-meta', meta);
 }
@@ -7215,7 +7213,7 @@ async function loadSchedule() {
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
   $('rec-start').disabled = st.state !== 'idle';
-  $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording';
+  $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording' && st.state !== 'linked';
   $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
@@ -7226,7 +7224,7 @@ async function loadSchedule() {
       const tr = document.createElement('tr');
       tr.className = 'sched-entry' + (e.done ? ' sched-done' : '') + (e.enabled ? '' : ' sched-off');
       const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
-      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target) + (e.link_mode === 'monitor' ? ' | local monitor only' : '')]);
+      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target) + (e.record === false ? ' | link only' : '')]);
       cell([(e.kind === 'special' ? 'Special ' + e.date : schedDays(e.days)) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
       const tr2 = document.createElement('tr');
       const act = document.createElement('td');
@@ -7492,11 +7490,14 @@ function schedClear(keepMsg) {
   schedFieldsShow(); schedPickFill();
   $('sc-num').value = ''; $('sc-mod').value = ''; schedNetFill('');
   $('sc-format').value = 'pcm'; $('sc-enabled').checked = true;
-  $('sc-link').value = '';
+  $('sc-record').checked = true; schedRecordUi();
   if (!keepMsg) note('sc-msg', '', '');
 }
 function schedEntry(e, on) {
-  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format, kind: e.kind || 'regular', date: e.date || '', link_mode: e.link_mode || ''};
+  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format, kind: e.kind || 'regular', date: e.date || '', record: e.record !== false};
+}
+function schedRecordUi() {
+  $('sc-format').disabled = !$('sc-record').checked;
 }
 function schedKindShow() {
   const sp = $('sc-special').checked;
@@ -7516,7 +7517,7 @@ function schedFormEntry() {
   const sp = $('sc-special').checked;
   return {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: sp ? [] : schedDaysValue(), start: hmGet('sc-start'),
     end: hmGet('sc-end'), target: target, format: $('sc-format').value, kind: sp ? 'special' : 'regular', date: sp ? $('sc-date').value : '',
-    link_mode: $('sc-link').value};
+    record: $('sc-record').checked};
 }
 async function recStart() {
   $('rec-start').disabled = true;
@@ -7552,7 +7553,7 @@ function schedEdit(e) {
   schedNetFill(e.target.net || '');
   schedLabel = e.target.label || '';
   $('sc-format').value = e.format; $('sc-enabled').checked = e.enabled;
-  $('sc-link').value = e.link_mode || '';
+  $('sc-record').checked = e.record !== false; schedRecordUi();
   showTab('connect');
   note('sc-msg', '', 'Change it and press Set.');
   $('cd-sched-form').scrollIntoView();
@@ -7608,6 +7609,7 @@ function initPage() {
   $('rn-add').addEventListener('click', recNodeEnable);
   $('rec-start').addEventListener('click', recStart);
   $('sc-special').addEventListener('change', schedKindShow);
+  $('sc-record').addEventListener('change', schedRecordUi);
   $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
   $('rn-old-remove').addEventListener('click', oldNodesRemove);
@@ -7784,9 +7786,9 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><label><span id="sc-num-l">Node</span> <input type="text" id="sc-num" maxlength="40" style="width:150px"></label>
 <label id="sc-net-w" class="hidden">Network <select id="sc-net"></select></label>
 <label id="sc-mod-w" class="hidden">Module <input type="text" id="sc-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
-<div class="row"><label>Link <select id="sc-link"><option value="">Transceive (as before)</option><option value="monitor">Local monitor only (never sends audio to the target)</option></select></label></div>
 <div class="row"><label>Format <select id="sc-format"><option value="pcm">PCM (best; becomes an MP3 after recording when Convert is on)</option><option value="ulaw">u-law (half the size, noisier)</option></select></label>
-<label><input type="checkbox" id="sc-enabled" checked> On</label></div>
+<label><input type="checkbox" id="sc-enabled" checked> On</label>
+<label><input type="checkbox" id="sc-record" checked> Record</label></div>
 <div class="row"><button id="sc-set" class="btn primary" type="button">Set</button><button id="sc-clear" class="btn" type="button">Clear</button></div>
 <div id="sc-msg" class="msg"></div>
 <div id="sc-src" class="muted small"></div>

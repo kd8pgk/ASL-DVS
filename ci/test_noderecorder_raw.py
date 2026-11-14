@@ -62,56 +62,94 @@ class RawPath(unittest.TestCase):
         self.assertEqual(self.rx.process(frame, 0.0, -120.0), frame)
 
 
-def mk_entry(eid, start, end, link_mode="", kind="regular", target=None):
+def mk_entry(eid, start, end, kind="regular", target=None, **extra):
     raw = {"id": eid, "name": eid, "days": [0, 1, 2, 3, 4, 5, 6], "start": start, "end": end,
-           "target": target or {"mode": "ASL", "num": "2000"}, "format": "pcm", "link_mode": link_mode, "kind": kind,
+           "target": target or {"mode": "ASL", "num": "2000"}, "format": "pcm", "kind": kind,
            "date": nr.sched_now().strftime("%Y-%m-%d") if kind == "special" else "", "enabled": True}
+    raw.update(extra)
     if kind == "special":
         raw["days"] = []
     return nr.schedule_norm_entry(raw, check_target=False)
 
 
-class LinkMode(unittest.TestCase):
-    def test_entries_carry_a_link_mode_and_default_to_transceive(self):
-        self.assertEqual(mk_entry("a", "20:00", "21:00")["link_mode"], "")
-        self.assertEqual(mk_entry("a", "20:00", "21:00", "monitor")["link_mode"], "monitor")
-        self.assertEqual(mk_entry("a", "20:00", "21:00", "transceive")["link_mode"], "")
-        with self.assertRaises(ValueError):
-            mk_entry("a", "20:00", "21:00", "listen")
+class CallLogActions:
+    def __init__(self):
+        self.calls = []
 
-    def test_old_entries_without_the_field_still_load(self):
+    def connect(self, entry):
+        self.calls.append("connect")
+        return True, "", None
+
+    def link_alive(self, entry):
+        return True
+
+    def healthy(self, entry):
+        self.calls.append("healthy")
+        return True, ""
+
+    def start(self, entry, window):
+        self.calls.append("start")
+        return True, "", "f.wav"
+
+    def stop(self):
+        self.calls.append("stop")
+        return True, "", None
+
+    def disconnect(self, entry):
+        self.calls.append("disconnect")
+        return True, "", None
+
+
+def run_fake(entry):
+    import threading
+    clock = [0.0]
+    states = []
+
+    def sleep(sec):
+        clock[0] += max(sec, 1.0)
+
+    act = CallLogActions()
+    res = nr.run_sequence(entry, act, 5.0, threading.Event(), lambda s, file=None: states.append(s), lambda: clock[0], sleep)
+    return res, act.calls, states
+
+
+class RecordFlag(unittest.TestCase):
+    def test_record_defaults_to_on_and_old_entries_load(self):
+        self.assertIs(mk_entry("a", "20:00", "21:00")["record"], True)
+        self.assertIs(mk_entry("a", "20:00", "21:00", record=False)["record"], False)
+        self.assertIs(mk_entry("a", "20:00", "21:00", record="false")["record"], False)
         raw = {"id": "o", "name": "o", "days": [1], "start": "20:00", "end": "21:00", "target": {"mode": "ASL", "num": "2000"}, "format": "pcm"}
-        self.assertEqual(nr.schedule_norm_entry(raw, check_target=False)["link_mode"], "")
+        self.assertIs(nr.schedule_norm_entry(raw, check_target=False)["record"], True)
 
-    def test_link_op_is_8_for_local_monitor_and_3_otherwise(self):
-        self.assertEqual(nr.link_op({"link_mode": "monitor"}), 8)
-        self.assertEqual(nr.link_op({"link_mode": "Monitor"}), 8)
-        self.assertEqual(nr.link_op({"link_mode": ""}), 3)
-        self.assertEqual(nr.link_op({}), 3)
-        self.assertEqual(nr.link_op(None), 3)
-        self.assertEqual(nr.link_op({"link_mode": "bogus"}), 3)
+    def test_the_link_mode_is_gone_and_an_old_monitor_entry_becomes_transceive(self):
+        e = mk_entry("a", "20:00", "21:00", link_mode="monitor")
+        self.assertNotIn("link_mode", e)
+        self.assertFalse(hasattr(nr, "link_op"))
 
-    def test_the_scheduler_passes_the_mode_to_the_tune(self):
+    def test_the_scheduler_connects_without_a_link_mode(self):
         seen = []
         with mock.patch.object(nr, "tune_connect", lambda b: (seen.append(b), {"ok": True, "message": "ok"})[1]):
-            nr.RealActions().connect(mk_entry("a", "20:00", "21:00", "monitor"))
-            nr.RealActions().connect(mk_entry("b", "20:00", "21:00"))
-        self.assertEqual([nr.link_op(b) for b in seen], [8, 3])
+            nr.RealActions().connect(mk_entry("a", "20:00", "21:00", link_mode="monitor"))
+        self.assertNotIn("link_mode", seen[0])
         self.assertEqual(seen[0]["num"], "2000")
 
-    def test_the_connect_routes_use_the_mode(self):
-        calls = []
-        patches = {"_tune_fav": lambda b: {"mode": b["mode"], "num": b["num"], "net": b.get("net", ""), "label": "", "module": b.get("module", "")},
-                   "_connect_node": lambda: ("1234", ""),
-                   "node_connect": lambda f, n, op=3: (calls.append(("asl", op)), {"ok": True})[1],
-                   "m17_connect": lambda f, n, op=3: (calls.append(("m17", op)), {"ok": True})[1],
-                   "solo_dvs": lambda f, n, act=None, op=3: (calls.append(("dvs", op)), {"ok": True})[1],
-                   "_set_active": lambda f, r: r}
-        with mock.patch.multiple(nr, **patches):
-            for mode, num in (("ASL", "2000"), ("M17", "M17-ABC"), ("DMR", "91")):
-                nr.tune_connect({"mode": mode, "num": num, "link_mode": "monitor"})
-                nr.tune_connect({"mode": mode, "num": num})
-        self.assertEqual(calls, [("asl", 8), ("asl", 3), ("m17", 8), ("m17", 3), ("dvs", 8), ("dvs", 3)])
+    def test_a_recording_window_starts_and_stops_the_recorder(self):
+        res, calls, states = run_fake(mk_entry("a", "20:00", "21:00"))
+        self.assertEqual(res["result"], "ok")
+        self.assertEqual(calls[0], "connect")
+        self.assertIn("start", calls)
+        self.assertIn("stop", calls)
+        self.assertEqual(calls[-1], "disconnect")
+        self.assertIn("recording", states)
+
+    def test_a_link_only_window_links_and_unlinks_without_recording(self):
+        res, calls, states = run_fake(mk_entry("a", "20:00", "21:00", record=False))
+        self.assertEqual(res["result"], "ok")
+        self.assertEqual(res["detail"], "linked, not recorded")
+        self.assertEqual(calls, ["connect", "disconnect"])
+        self.assertIn("linked", states)
+        self.assertNotIn("recording", states)
+        self.assertFalse(any(s["step"] in ("start", "stop") for s in res["steps"]))
 
     def test_an_asl_link_uses_the_mode(self):
         ops = []
