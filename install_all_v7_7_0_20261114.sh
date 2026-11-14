@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.6.0  (2026-11-12)
+# install_all.sh  v7.7.0  (2026-11-14)
 
 set -euo pipefail
 
@@ -26,6 +26,13 @@ CORE=false
 AUTO_PICK=false
 GIT_DECLINED=false
 APT_UPDATED=false
+ACTION=""
+TOOLS_LIST=""
+BUILD_ARG=""
+STEPS_ARG=""
+RESET_ARG=""
+RESET_ONLY=false
+MANUALS=true
 for _arg in "$@"; do
     case "${_arg}" in
         --non-interactive|--auto|-y) NONINTERACTIVE=true ;;
@@ -34,11 +41,68 @@ for _arg in "$@"; do
         --core) CORE=true ;;
         --with-termon) INSTALL_TERMON=1 ;;
         --download-only) DOWNLOAD_ONLY=true ;;
+        --action=*) ACTION="${_arg#*=}" ;;
+        --tools=*) TOOLS_LIST="${_arg#*=}" ;;
+        --build=*) BUILD_ARG="${_arg#*=}" ;;
+        --steps=*) STEPS_ARG="${_arg#*=}" ;;
+        --reset) RESET_ARG="on" ;;
+        --no-reset) RESET_ARG="off" ;;
+        --reset-only) RESET_ONLY=true ;;
+        --no-manuals) MANUALS=false ;;
     esac
 done
 if [[ ! -t 0 ]]; then
     NONINTERACTIVE=true
 fi
+ACTION="${ACTION,,}"
+case "${ACTION}" in
+    ""|first|upgrade|replace|components) ;;
+    reset) RESET_ONLY=true; ACTION="" ;;
+    *) echo "--action must be first, upgrade, replace or components (got '${ACTION}')" >&2; exit 1 ;;
+esac
+TOOLS_LIST="${TOOLS_LIST,,}"
+TOOLS_LIST="${TOOLS_LIST// /}"
+if [[ -n "${TOOLS_LIST}" ]]; then
+    for _t in ${TOOLS_LIST//,/ }; do
+        case "${_t}" in
+            instmon|dashboard|sysmon|wifimon|44helper|manuals|none) ;;
+            nodetalker) INSTALL_NODETALKER=1 ;;
+            noderecorder) INSTALL_NODERECORDER=1 ;;
+            pibrary) INSTALL_PIBRARY=1 ;;
+            termon) INSTALL_TERMON=1 ;;
+            *) echo "--tools: unknown item '${_t}' (use instmon, dashboard, sysmon, wifimon, 44helper, nodetalker, noderecorder, pibrary, termon, manuals)" >&2; exit 1 ;;
+        esac
+    done
+    [[ -z "${ACTION}" ]] && ACTION="components"
+    if [[ "${ACTION}" != "components" ]]; then
+        echo "--tools goes with --action=components" >&2
+        exit 1
+    fi
+fi
+BUILD_ARG="${BUILD_ARG,,}"
+case "${BUILD_ARG}" in
+    "") ;;
+    pi02w|full)
+        DASH_VARIANT="${DASH_VARIANT:-${BUILD_ARG}}"
+        SYSMON_VARIANT="${SYSMON_VARIANT:-${BUILD_ARG}}"
+        ;;
+    *) echo "--build must be pi02w or full (got '${BUILD_ARG}')" >&2; exit 1 ;;
+esac
+STEPS_ARG="${STEPS_ARG^^}"
+STEPS_ARG="${STEPS_ARG//[^A-F]/}"
+if [[ "${RESET_ONLY}" == "true" && "${DOWNLOAD_ONLY}" == "true" ]]; then
+    echo "--reset-only and --download-only cannot be used together" >&2
+    exit 1
+fi
+if [[ -n "${STEPS_ARG}" && -z "${ACTION}" && "${NONINTERACTIVE}" == "true" ]]; then
+    echo "--steps needs --action (first, upgrade, replace or components)" >&2
+    exit 1
+fi
+ASL_DVS_ETC="${ASL_DVS_ETC:-/etc/asl_dvs}"
+RUN_DIR="${ASL_DVS_RUN_DIR:-/run}"
+MODEL_FILE="${ASL_DVS_MODEL_FILE:-/proc/device-tree/model}"
+START_WAIT="${ASL_DVS_START_WAIT:-20}"
+HEAVY_PAUSE="${ASL_DVS_HEAVY_PAUSE:-3}"
 
 DASH_BIN="/usr/local/bin/nodecontrol.py"
 DASH_LEGACY_BIN="/usr/local/bin/asl_dvs_dashboard.py"
@@ -54,7 +118,7 @@ if [[ -e "${DASH_LEGACY_BIN}" && ( ! -e "${DASH_BIN}" || "${DASH_SERVICE}" == "a
     DASH_BIN="${DASH_LEGACY_BIN}"
 fi
 DASH_PORT=8989
-DASH_CONF_DIR="/etc/asl_dvs"
+DASH_CONF_DIR="${ASL_DVS_ETC}"
 DASH_CONF="${DASH_CONF_DIR}/asl_dvs.conf"
 LEGACY_CONF="/etc/dvswitch/dvswitch.conf"
 
@@ -79,13 +143,13 @@ NODELISTEN_BIN="/usr/local/bin/nodetalker.py"
 NODELISTEN_LEGACY_BIN="/usr/local/bin/nodelisten.py"
 NODELISTEN_SERVICE="nodetalker"
 NODELISTEN_PORT=8993
-NODELISTEN_CONF="/etc/asl_dvs/nodetalker.conf"
+NODELISTEN_CONF="${ASL_DVS_ETC}/nodetalker.conf"
 NODELISTEN_PATTERN="nodetalker*.py|nodelisten*.py"
 if [[ ! -e "${NODELISTEN_BIN}" && -e "${NODELISTEN_LEGACY_BIN}" ]]; then
     NODELISTEN_BIN="${NODELISTEN_LEGACY_BIN}"
 fi
-if [[ ! -e "${NODELISTEN_CONF}" && -e /etc/asl_dvs/nodelisten.conf ]]; then
-    NODELISTEN_CONF="/etc/asl_dvs/nodelisten.conf"
+if [[ ! -e "${NODELISTEN_CONF}" && -e "${ASL_DVS_ETC}/nodelisten.conf" ]]; then
+    NODELISTEN_CONF="${ASL_DVS_ETC}/nodelisten.conf"
 fi
 INSTALL_NODELISTEN="${INSTALL_NODETALKER:-${INSTALL_NODELISTEN:-}}"
 
@@ -516,9 +580,33 @@ a,b=k(sys.argv[1]),k(sys.argv[2])
 sys.exit(0 if a and b and a<b else 1)' "$1" "$2"
 }
 
+syntax_ok() {
+    python3 -I -c 'import sys; compile(open(sys.argv[1],"rb").read(), sys.argv[1], "exec")' "$1"
+}
+
+is_zero2() {
+    tr -d '\0' 2>/dev/null < "${MODEL_FILE}" | grep -qi 'Zero 2'
+}
+
+bin_build() {
+    [[ -f "$1" ]] || return 0
+    if grep -qE '^VERSION[[:space:]]*=[[:space:]]*"[^"]*-pi02w"' "$1" 2>/dev/null; then
+        echo "pi02w"
+    else
+        echo "full"
+    fi
+}
+
+FORCE_FETCH=false
+ACTION_LABEL=""
 FETCHED_FILE=""
 fetch_if_missing() {
     local key="$1" label="$2" installed="$3" pattern="$4" exclude="$5" lib_dir="$6" build="${7:-}" installed_bin="${8:-}" ans new_ver old_ver
+    if [[ "${FORCE_FETCH}" == "true" && "${DOWNLOAD}" == "true" ]]; then
+        info "${ACTION_LABEL}: getting the ${GH_CHANNEL} build of ${label} from GitHub"
+        fetch_tool "${key}" "${label}" "${pattern}" "${exclude}" "${lib_dir}" "${build}" || true
+        return 0
+    fi
     any_file "${pattern}" "${lib_dir}" "${exclude}" true && return 0
     if [[ "${DOWNLOAD}" != "true" ]]; then
         info "No ${label} file found — offline, nothing downloaded"
@@ -569,7 +657,7 @@ pick_build() {
         PICKED_WHY="the installed copy"
     fi
     if [[ -z "${PICKED_BUILD}" ]]; then
-        if tr -d '\0' < /proc/device-tree/model 2>/dev/null | grep -qi 'Zero 2'; then
+        if is_zero2; then
             PICKED_BUILD="pi02w"
         else
             PICKED_BUILD="full"
@@ -602,6 +690,21 @@ check_port() {
     fi
 }
 
+REINSTALL=false
+NO_DOWNGRADE=false
+downgrade_check() {
+    local label="$1" chosen="$2" installed_bin="$3" new_ver old_ver
+    UP_TO_DATE_SKIP=false
+    [[ "${NO_DOWNGRADE}" == "true" && -n "${chosen}" && -f "${installed_bin}" ]] || return 0
+    new_ver="$(file_version "${chosen}")"
+    old_ver="$(file_version "${installed_bin}")"
+    if [[ -n "${new_ver}" && -n "${old_ver}" ]] && version_older "${new_ver}" "${old_ver}"; then
+        warn "${label}: $(basename "${chosen}") (${new_ver}) is older than the installed ${old_ver} — skipped, never downgraded"
+        UP_TO_DATE_SKIP=true
+    fi
+    return 0
+}
+
 UP_TO_DATE_SKIP=false
 uptodate_check() {
     local label="$1" chosen="$2" installed_bin="$3"
@@ -609,7 +712,11 @@ uptodate_check() {
     [[ -z "${chosen}" || ! -f "${installed_bin}" ]] && return
     if cmp -s "${chosen}" "${installed_bin}"; then
         warn "${label} — selected file is identical to the installed version"
-        if [[ "${NONINTERACTIVE}" == "true" ]]; then
+        if [[ "${REINSTALL}" == "true" ]]; then
+            info "Full replace: reinstalling ${label} anyway"
+            return
+        fi
+        if [[ "${NONINTERACTIVE}" == "true" || "${ACTION}" == "upgrade" ]]; then
             info "Non-interactive: skipping ${label} — already up to date"
             UP_TO_DATE_SKIP=true
             return
@@ -715,8 +822,8 @@ write_sysmon_seed() {
     ok "Seed config written: ${_smc}"
 }
 
-USER_STOPPED_FILE="${ASL_DVS_USER_STOPPED:-/etc/asl_dvs/instmon_user_stopped.json}"
-QUIET_STATE_FILE="${ASL_DVS_QUIET_STATE:-/etc/asl_dvs/instmon_quiesce_state.json}"
+USER_STOPPED_FILE="${ASL_DVS_USER_STOPPED:-${ASL_DVS_ETC}/instmon_user_stopped.json}"
+QUIET_STATE_FILE="${ASL_DVS_QUIET_STATE:-${ASL_DVS_ETC}/instmon_quiesce_state.json}"
 declare -A HELD=()
 
 svc_active() {
@@ -744,9 +851,10 @@ if isinstance(rows, list):
 sys.exit(1)' "$1" "$2"
 }
 
+declare -A RS_WAS_ACTIVE=()
 user_stopped() {
     local svc="$1"
-    if svc_active "${svc}"; then
+    if svc_active "${svc}" || [[ -n "${RS_WAS_ACTIVE[${svc}]+x}" ]]; then
         return 1
     fi
     if json_has_service "${USER_STOPPED_FILE}" "${svc}"; then
@@ -871,11 +979,908 @@ discover_optional() {
     OPT_CHOSEN["${key}"]="${CHOSEN}"
     if [[ -n "${CHOSEN}" ]]; then
         info "Checking syntax…"
-        python3 -m py_compile "${CHOSEN}" \
+        syntax_ok "${CHOSEN}" \
             || die "Syntax error in $(basename "${CHOSEN}") — install aborted"
         ok "Syntax OK"
     fi
     return 0
+}
+
+REG_KEYS=(dashboard sysmon wifimon 44helper pibrary nodetalker noderecorder termon instmon)
+LEGACY=false
+ONLY_INSTALLED=false
+STEP_C=false
+STEP_D=false
+RESET_DONE=false
+HW_BUILD="full"
+HW_TEXT="full-size Pi"
+BACKUP_DIR="${ASL_DVS_BACKUP_DIR:-${ASL_DVS_ETC}/install_backup}"
+DOCS_DIR="${INSTMON_LIBRARY_DIR}/docs"
+DOCS_MAX_BYTES=$((64 * 1024 * 1024))
+MAN_RE='^ASL-DVS_[A-Za-z0-9._-]*_(Manual|Guide)\.pdf$'
+MAN_DELETED_FILE="${ASL_DVS_ETC}/instmon_manuals_deleted.json"
+MAN_FETCHED_FILE="${ASL_DVS_ETC}/instmon_manuals_fetched"
+MAN_LIST=()
+MAN_DELETED=()
+MAN_BYTES=0
+MAN_STATE=""
+MAN_RESTORE=false
+F_FAILED=()
+declare -A RS_TOUCHED=() RS_SKIP=() HC_HELD=()
+HC_REASON=""
+
+reg_label() {
+    case "$1" in
+        dashboard) echo "Dashboard" ;;
+        sysmon) echo "SysMon" ;;
+        wifimon) echo "wifimon" ;;
+        44helper) echo "44helper" ;;
+        nodetalker) echo "Node Talker" ;;
+        instmon) echo "instmon" ;;
+        noderecorder|pibrary|termon) echo "${OPT_LABEL[$1]}" ;;
+    esac
+}
+
+reg_svc() {
+    case "$1" in
+        dashboard) echo "${DASH_SERVICE}" ;;
+        sysmon) echo "${SYSMON_SERVICE}" ;;
+        wifimon) echo "${WIFIMON_SERVICE}" ;;
+        44helper) echo "${HELPER_SERVICE}" ;;
+        nodetalker)
+            if [[ "${NODELISTEN_SERVICE}" == "nodetalker" && ! -f /etc/systemd/system/nodetalker.service \
+                  && -f /etc/systemd/system/nodelisten.service ]]; then
+                echo "nodelisten"
+            else
+                echo "${NODELISTEN_SERVICE}"
+            fi
+            ;;
+        instmon) echo "${INSTMON_SERVICE}" ;;
+        noderecorder|pibrary|termon) echo "${OPT_SERVICE[$1]}" ;;
+    esac
+}
+
+reg_bin() {
+    case "$1" in
+        dashboard) echo "${DASH_BIN}" ;;
+        sysmon) echo "${SYSMON_BIN}" ;;
+        wifimon) echo "${WIFIMON_BIN}" ;;
+        44helper) echo "${HELPER_BIN}" ;;
+        nodetalker) echo "${NODELISTEN_BIN}" ;;
+        instmon) echo "${INSTMON_BIN}" ;;
+        noderecorder|pibrary|termon) echo "${OPT_BIN[$1]}" ;;
+    esac
+}
+
+conf_port() {
+    sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "$1" 2>/dev/null | head -1 || true
+}
+
+reg_port() {
+    local p
+    case "$1" in
+        dashboard) echo "${DASH_PORT}" ;;
+        sysmon) echo "${SYSMON_PORT}" ;;
+        wifimon) echo "${WIFIMON_PORT}" ;;
+        44helper) echo "${HELPER_PORT}" ;;
+        instmon) echo "${INSTMON_PORT}" ;;
+        nodetalker)
+            p="$(conf_port "${NODELISTEN_CONF}")"
+            echo "${p:-${NODELISTEN_PORT}}"
+            ;;
+        termon)
+            p="$(conf_port "${ASL_DVS_ETC}/termon.conf")"
+            echo "${p:-${OPT_PORT[termon]}}"
+            ;;
+        noderecorder|pibrary) echo "${OPT_PORT[$1]}" ;;
+    esac
+}
+
+reg_conf() {
+    case "$1" in
+        dashboard) echo "${DASH_CONF}" ;;
+        sysmon) echo "${SYSMON_CONF_DIR}/sysmon.conf" ;;
+        nodetalker) echo "${NODELISTEN_CONF}" ;;
+        termon) echo "${ASL_DVS_ETC}/termon.conf" ;;
+        *) echo "" ;;
+    esac
+}
+
+reg_installed() {
+    [[ -f "$(reg_bin "$1")" ]] && return 0
+    svc_active "$(reg_svc "$1")"
+}
+
+reg_chosen() {
+    case "$1" in
+        dashboard) echo "${DASH_CHOSEN:-}" ;;
+        sysmon) echo "${SYSMON_CHOSEN:-}" ;;
+        wifimon) echo "${WIFIMON_CHOSEN:-}" ;;
+        44helper) echo "${HELPER_CHOSEN:-}" ;;
+        nodetalker) echo "${NODELISTEN_CHOSEN:-}" ;;
+        instmon) echo "${INSTMON_CHOSEN:-}" ;;
+        noderecorder|pibrary|termon) echo "${OPT_CHOSEN[$1]:-}" ;;
+    esac
+}
+
+reg_unchoose() {
+    case "$1" in
+        dashboard) DASH_CHOSEN="" ;;
+        sysmon) SYSMON_CHOSEN="" ;;
+        wifimon) WIFIMON_CHOSEN="" ;;
+        44helper) HELPER_CHOSEN="" ;;
+        nodetalker) NODELISTEN_CHOSEN="" ;;
+        instmon) INSTMON_CHOSEN="" ;;
+        noderecorder|pibrary|termon) OPT_CHOSEN["$1"]="" ;;
+    esac
+}
+
+is_heavy() {
+    [[ "$1" == "nodetalker" || "$1" == "noderecorder" ]]
+}
+
+small_pi() {
+    [[ "${HW_BUILD}" == "pi02w" || "${DASH_VARIANT:-}" == "pi02w" ]]
+}
+
+tool_allowed() {
+    local key="$1" exists="$2"
+    if [[ -n "${TOOLS_LIST}" ]]; then
+        if [[ ",${TOOLS_LIST}," == *",${key},"* ]]; then
+            return 0
+        fi
+        info "$(reg_label "${key}"): not in --tools — left out"
+        return 1
+    fi
+    if [[ "${ONLY_INSTALLED}" == "true" && "${exists}" != "true" ]]; then
+        info "$(reg_label "${key}") is not installed — a full upgrade does not add it (use Full replace or Component install)"
+        return 1
+    fi
+    return 0
+}
+
+caller_is_instmon() {
+    local pid="$$" n=0 cmd
+    if [[ "${ASL_DVS_CALLER:-}" == "instmon" ]]; then
+        return 0
+    fi
+    if grep -qs '/instmon\.service' "/proc/$$/cgroup"; then
+        return 0
+    fi
+    while [[ "${pid}" =~ ^[0-9]+$ && "${pid}" -gt 1 && ${n} -lt 20 ]]; do
+        cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+        if [[ "${cmd}" == *instmon*.py* ]]; then
+            return 0
+        fi
+        pid="$(sed -E 's/^.*\) [A-Za-z] ([0-9]+) .*$/\1/' "/proc/${pid}/stat" 2>/dev/null || echo 1)"
+        n=$((n + 1))
+    done
+    return 1
+}
+
+port_busy() {
+    ss -tln "sport = :$1" 2>/dev/null | grep -q ":$1"
+}
+
+port_owner() {
+    ss -tlnp "sport = :$1" 2>/dev/null | awk 'NR>1 {print $NF}' | head -1 || true
+}
+
+conf_damaged() {
+    python3 -I -c 'import sys
+data = open(sys.argv[1], "rb").read()
+sys.exit(0 if b"\0" in data else 1)' "$1" 2>/dev/null
+}
+
+reset_stop() {
+    local k svc i n
+    local -a order=()
+    hdr "[D] Reset: services and sign-ins"
+    for (( i=${#REG_KEYS[@]}-1; i>=0; i-- )); do
+        order+=("${REG_KEYS[${i}]}")
+    done
+    for k in "${order[@]}"; do
+        reg_installed "${k}" || continue
+        svc="$(reg_svc "${k}")"
+        if [[ "${k}" == "instmon" ]] && caller_is_instmon; then
+            info "instmon is running this installer — left running"
+            RS_SKIP["${k}"]="caller"
+            continue
+        fi
+        if json_has_service "${QUIET_STATE_FILE}" "${svc}"; then
+            info "${svc} is paused by Quiet System — left as it is (instmon resumes it)"
+            RS_SKIP["${k}"]="quiet"
+            continue
+        fi
+        RS_TOUCHED["${k}"]=1
+        if svc_active "${svc}"; then
+            RS_WAS_ACTIVE["${svc}"]=1
+            info "Stopping ${svc}"
+            systemctl stop "${svc}" 2>/dev/null || true
+        elif user_stopped "${svc}"; then
+            HELD["${svc}"]="enabled"
+            if [[ "$(systemctl is-enabled "${svc}" 2>/dev/null || true)" == "disabled" ]]; then
+                HELD["${svc}"]="disabled"
+            fi
+            info "${svc} was stopped by you — it stays stopped"
+        fi
+    done
+    for k in "${order[@]}"; do
+        [[ -n "${RS_TOUCHED[${k}]+x}" ]] || continue
+        svc="$(reg_svc "${k}")"
+        n=0
+        while svc_active "${svc}" && [[ ${n} -lt 10 ]]; do
+            sleep 1
+            n=$((n + 1))
+        done
+        if svc_active "${svc}"; then
+            warn "${svc} came back by itself — stopping it again"
+            systemctl stop "${svc}" 2>/dev/null || true
+        fi
+        systemctl reset-failed "${svc}" 2>/dev/null || true
+    done
+    ok "Failed marks cleared"
+    if ! svc_active "$(reg_svc dashboard)" && ! svc_active "${SYSMON_SERVICE}"; then
+        if [[ -e "${RUN_DIR}/asl_dvs/auth_session.json" ]]; then
+            rm -f -- "${RUN_DIR}/asl_dvs/auth_session.json"
+            ok "Cleared the shared sign-ins of the Dashboard and SysMon"
+        fi
+    else
+        warn "The Dashboard or SysMon is still running — their shared sign-ins were kept"
+    fi
+    if ! svc_active "${HELPER_SERVICE}" && [[ -e "${RUN_DIR}/44helper/sessions.json" ]]; then
+        rm -f -- "${RUN_DIR}/44helper/sessions.json"
+        ok "Cleared 44helper's saved sign-ins"
+    fi
+    if ! svc_active "${OPT_SERVICE[termon]}"; then
+        for i in "${RUN_DIR}/termon.lock" "${RUN_DIR}/termon/termon.lock"; do
+            if [[ -e "${i}" ]]; then
+                rm -f -- "${i}"
+                ok "Removed the stale lock ${i}"
+            fi
+        done
+    fi
+    RESET_DONE=true
+    if [[ ${#RS_TOUCHED[@]} -gt 0 ]]; then
+        ok "Everyone is signed out — sign in again on each page once it is back"
+    fi
+    return 0
+}
+
+health_check() {
+    local k="$1" file="$2" label port conf n owner
+    label="$(reg_label "${k}")"
+    HC_REASON=""
+    if [[ -n "${file}" && "${file}" == *.py && -f "${file}" ]] && ! syntax_ok "${file}" 2>/dev/null; then
+        HC_REASON="$(basename "${file}") failed the syntax check"
+    fi
+    port="$(reg_port "${k}")"
+    if [[ -z "${HC_REASON}" && -n "${port}" ]] && command -v ss &>/dev/null; then
+        n=0
+        while port_busy "${port}" && [[ ${n} -lt 5 ]]; do
+            sleep 1
+            n=$((n + 1))
+        done
+        if port_busy "${port}"; then
+            owner="$(port_owner "${port}")"
+            HC_REASON="port ${port} is in use by ${owner:-another program} (check: ss -tlnp | grep ${port})"
+        fi
+    fi
+    conf="$(reg_conf "${k}")"
+    if [[ -z "${HC_REASON}" && -n "${conf}" && -e "${conf}" ]]; then
+        if [[ -d "${conf}" || ! -r "${conf}" ]]; then
+            HC_REASON="${conf} cannot be read"
+        elif conf_damaged "${conf}"; then
+            HC_REASON="${conf} is damaged (not a text file) — left in place for you to check"
+        elif [[ "${k}" == "dashboard" ]] && ! { grep -q '^[[:space:]]*asl_node[[:space:]]*=' "${conf}" && grep -q '^[[:space:]]*callsign[[:space:]]*=' "${conf}"; }; then
+            warn "${label}: ${conf} has no asl_node or callsign line — check it on the Dashboard's page"
+        fi
+    fi
+    if [[ -n "${HC_REASON}" ]]; then
+        warn "${label}: held — ${HC_REASON}"
+        HC_HELD["${k}"]="${HC_REASON}"
+        return 1
+    fi
+    ok "${label}: file, port and config checked"
+    return 0
+}
+
+start_verify() {
+    local k svc port chosen n label
+    if [[ "${LEGACY}" == "true" ]]; then
+        hdr "Startup verification"
+    else
+        hdr "[F] Start and check"
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+    info "Waiting for services to stabilise…"
+    sleep 3
+    for k in "${REG_KEYS[@]}"; do
+        chosen="$(reg_chosen "${k}")"
+        if [[ -z "${chosen}" && -z "${RS_TOUCHED[${k}]+x}" && -z "${HC_HELD[${k}]+x}" ]]; then
+            continue
+        fi
+        if [[ "${k}" == "nodetalker" && -n "${chosen}" ]]; then
+            svc="${NODELISTEN_SERVICE}"
+        else
+            svc="$(reg_svc "${k}")"
+        fi
+        port="$(reg_port "${k}")"
+        label="$(reg_label "${k}")"
+        if [[ -n "${HELD[${svc}]+x}" ]]; then
+            ok "${svc} is stopped, as you had it"
+            continue
+        fi
+        if [[ -n "${HC_HELD[${k}]+x}" ]]; then
+            warn "${svc} held — not started: ${HC_HELD[${k}]}"
+            continue
+        fi
+        if [[ "${LEGACY}" != "true" ]] && ! svc_active "${svc}"; then
+            if is_heavy "${k}" && small_pi; then
+                sleep "${HEAVY_PAUSE}"
+            fi
+            systemctl reset-failed "${svc}" 2>/dev/null || true
+            info "Starting ${svc}"
+            timeout 30 systemctl start "${svc}" 2>/dev/null || true
+            n=0
+            while ! svc_active "${svc}" && [[ ${n} -lt ${START_WAIT} ]]; do
+                sleep 1
+                n=$((n + 1))
+            done
+        fi
+        if svc_active "${svc}"; then
+            ok "${svc} is RUNNING"
+        else
+            warn "${svc} did not start cleanly"
+            F_FAILED+=("${svc}")
+            systemctl status "${svc}" --no-pager -l 2>/dev/null || true
+            if [[ "${LEGACY}" != "true" ]] && command -v journalctl &>/dev/null; then
+                info "Last lines of its log:"
+                timeout 10 journalctl -u "${svc}" -n 15 --no-pager 2>/dev/null | sed 's/^/      /' || true
+            fi
+            continue
+        fi
+        [[ -z "${port}" ]] && continue
+        if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
+            ok "Listening on port ${port}"
+        else
+            warn "Not yet listening on port ${port} — may still be initialising"
+            warn "Re-check:  ss -tlnp | grep ${port}"
+        fi
+    done
+    return 0
+}
+
+status_table() {
+    local k svc state note
+    echo
+    echo "  ${BLD}$1${RST}"
+    for k in "${REG_KEYS[@]}"; do
+        reg_installed "${k}" || continue
+        svc="$(reg_svc "${k}")"
+        state="$(systemctl is-active "${svc}" 2>/dev/null || true)"
+        note=""
+        [[ -n "${HELD[${svc}]+x}" ]] && note="stopped, as you had it"
+        [[ -n "${HC_HELD[${k}]+x}" ]] && note="held: ${HC_HELD[${k}]}"
+        [[ "${RS_SKIP[${k}]:-}" == "quiet" ]] && note="paused by Quiet System"
+        [[ "${RS_SKIP[${k}]:-}" == "caller" ]] && note="running this installer"
+        printf '    %-18s %-10s %s\n' "$(reg_label "${k}")" "${state:-unknown}" "${note}"
+    done
+    echo
+}
+
+run_reset_only() {
+    local k any=false ans
+    hdr "Reset only"
+    for k in "${REG_KEYS[@]}"; do
+        if reg_installed "${k}"; then
+            any=true
+        fi
+    done
+    if [[ "${any}" != "true" ]]; then
+        die "Nothing is installed on this node — nothing to reset."
+    fi
+    info "Stops the installed tools, clears failed marks and sign-ins, checks each one and starts it again."
+    info "Nothing is installed or downloaded; configs, manuals and the root password are not touched."
+    status_table "Before:"
+    if [[ "${NONINTERACTIVE}" != "true" ]]; then
+        read -r -p "  Reset now? Everyone is signed out. [Y/n]: " ans </dev/tty
+        case "${ans,,}" in
+            n|no|q|quit) echo; info "Aborted by user."; exit 0 ;;
+        esac
+    fi
+    reset_stop
+    hdr "[E] Checks before each start"
+    for k in "${REG_KEYS[@]}"; do
+        [[ -n "${RS_TOUCHED[${k}]+x}" ]] || continue
+        [[ -n "${HELD[$(reg_svc "${k}")]+x}" ]] && continue
+        if health_check "${k}" "$(reg_bin "${k}")" && ! systemctl cat "$(reg_svc "${k}")" &>/dev/null; then
+            warn "$(reg_label "${k}"): held — its unit file is missing (reinstall it)"
+            HC_HELD["${k}"]="its unit file is missing (reinstall it)"
+        fi
+    done
+    start_verify
+    status_table "After:"
+    if [[ ${#F_FAILED[@]} -gt 0 ]]; then
+        warn "Did not start: ${F_FAILED[*]}"
+        exit 1
+    fi
+    ok "Reset done"
+    exit 0
+}
+
+detect_hardware() {
+    local model dash_b sys_b eff ans
+    hdr "Hardware"
+    model="$(tr -d '\0' 2>/dev/null < "${MODEL_FILE}" || true)"
+    if is_zero2; then
+        HW_BUILD="pi02w"
+        HW_TEXT="Pi Zero 2 W"
+    fi
+    info "This Pi: ${model:-model not known}"
+    dash_b="$(bin_build "${DASH_BIN}")"
+    sys_b="$(bin_build "${SYSMON_BIN}")"
+    if [[ -n "${BUILD_ARG}" && "${BUILD_ARG}" != "${HW_BUILD}" ]]; then
+        warn "--build=${BUILD_ARG} on a ${HW_TEXT}: the ${BUILD_ARG} builds are used, as asked"
+    elif [[ -z "${DASH_VARIANT:-}${SYSMON_VARIANT:-}" ]] \
+         && { [[ -n "${dash_b}" && "${dash_b}" != "${HW_BUILD}" ]] || [[ -n "${sys_b}" && "${sys_b}" != "${HW_BUILD}" ]]; }; then
+        warn "The installed Dashboard or SysMon is the ${dash_b:-${sys_b}} build, but this Pi is a ${HW_TEXT}"
+        if [[ "${NONINTERACTIVE}" == "true" || "${RESET_ONLY}" == "true" ]]; then
+            info "The installed build is kept (--build=${HW_BUILD} switches it)"
+        else
+            read -r -p "  Switch the Dashboard and SysMon to the ${HW_TEXT} build? [y/N]: " ans </dev/tty
+            case "${ans,,}" in
+                y|yes)
+                    DASH_VARIANT="${HW_BUILD}"
+                    SYSMON_VARIANT="${HW_BUILD}"
+                    ok "Switching to the ${HW_TEXT} build"
+                    ;;
+                *) info "The installed build is kept" ;;
+            esac
+        fi
+    fi
+    eff="${DASH_VARIANT:-${dash_b:-${HW_BUILD}}}"
+    if [[ "${eff}" == "pi02w" ]]; then
+        ok "Dashboard and SysMon: Pi Zero 2 W builds (nodecontrol_pi02w, sysmon_pi02w)"
+    else
+        ok "Dashboard and SysMon: full builds"
+    fi
+    return 0
+}
+
+manuals_scan() {
+    local mode type blob size path name dest deleted
+    MAN_LIST=()
+    MAN_DELETED=()
+    MAN_BYTES=0
+    if [[ "${DOWNLOAD}" != "true" ]]; then
+        MAN_STATE="offline"
+        return 1
+    fi
+    if ! open_repo; then
+        MAN_STATE="no GitHub"
+        return 1
+    fi
+    deleted="$(python3 -I -c 'import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    data = []
+for n in data if isinstance(data, list) else []:
+    if isinstance(n, str):
+        print(n)' "${MAN_DELETED_FILE}" 2>/dev/null || true)"
+    while read -r mode type blob size path; do
+        [[ "${type}" == "blob" && "${path}" == docs/* ]] || continue
+        name="${path#docs/}"
+        [[ "${name}" =~ ${MAN_RE} ]] || continue
+        [[ "${size}" =~ ^[0-9]+$ && "${size}" -gt 0 && "${size}" -le ${DOCS_MAX_BYTES} ]] || continue
+        dest="${DOCS_DIR}/${name}"
+        if [[ -f "${dest}" ]]; then
+            [[ "$(git hash-object "${dest}" 2>/dev/null)" == "${blob}" ]] && continue
+            MAN_LIST+=("${blob} ${size} ${name} changed")
+        elif grep -qxF -- "${name}" <<< "${deleted}"; then
+            MAN_DELETED+=("${blob} ${size} ${name} restored")
+            continue
+        else
+            MAN_LIST+=("${blob} ${size} ${name} new")
+        fi
+        MAN_BYTES=$((MAN_BYTES + size))
+        : "${mode}"
+    done < <(git -C "${FETCH_REPO}" ls-tree -l HEAD docs/ 2>/dev/null)
+    MAN_STATE="ok"
+    return 0
+}
+
+manuals_install() {
+    local row blob size name why tmp got=() failed=0
+    hdr "[C] Manuals"
+    if [[ "${MAN_STATE}" != "ok" ]]; then
+        info "Manuals skipped (${MAN_STATE:-not checked})"
+        return 0
+    fi
+    local -a rows=("${MAN_LIST[@]}")
+    if [[ "${MAN_RESTORE}" == "true" ]]; then
+        rows+=("${MAN_DELETED[@]}")
+    elif [[ ${#MAN_DELETED[@]} -gt 0 ]]; then
+        info "${#MAN_DELETED[@]} manual(s) you deleted in instmon are left out"
+    fi
+    mkdir -p "${DOCS_DIR}" || { warn "Could not make ${DOCS_DIR} — manuals skipped"; return 0; }
+    for row in "${rows[@]}"; do
+        read -r blob size name why <<< "${row}"
+        tmp="$(mktemp "${FETCH_DIR}/doc.XXXXXX")"
+        if ! GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" show "HEAD:docs/${name}" > "${tmp}" 2>/dev/null; then
+            warn "Manual ${name}: download failed"
+            rm -f -- "${tmp}"
+            failed=$((failed + 1))
+            continue
+        fi
+        if [[ "$(git hash-object "${tmp}")" != "${blob}" ]]; then
+            warn "Manual ${name}: the download does not match GitHub's file list — not saved"
+            rm -f -- "${tmp}"
+            failed=$((failed + 1))
+            continue
+        fi
+        if [[ "$(head -c 5 "${tmp}")" != "%PDF-" ]]; then
+            warn "Manual ${name}: not a PDF file — not saved"
+            rm -f -- "${tmp}"
+            failed=$((failed + 1))
+            continue
+        fi
+        chmod 644 "${tmp}"
+        mv -f -- "${tmp}" "${DOCS_DIR}/${name}"
+        got+=("${name}")
+        ok "Manual ${name} (${why}, $((size / 1024)) KB)"
+    done
+    if [[ ${#got[@]} -gt 0 && -f "${MAN_DELETED_FILE}" ]]; then
+        python3 -I -c 'import json, os, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path))
+except Exception:
+    sys.exit(0)
+if not isinstance(data, list):
+    sys.exit(0)
+keep = sorted(n for n in data if isinstance(n, str) and n not in set(sys.argv[2:]))
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(keep, fh)
+os.replace(tmp, path)' "${MAN_DELETED_FILE}" "${got[@]}" 2>/dev/null || true
+    fi
+    if mkdir -p "${ASL_DVS_ETC}" 2>/dev/null; then
+        date '+%Y-%m-%d %H:%M' > "${MAN_FETCHED_FILE}" 2>/dev/null || true
+    fi
+    if [[ ${failed} -gt 0 ]]; then
+        warn "Manuals: ${#got[@]} saved to ${DOCS_DIR}, ${failed} failed"
+    else
+        ok "Manuals: ${#got[@]} saved to ${DOCS_DIR}"
+    fi
+    return 0
+}
+
+backup_files() {
+    local k bin chosen dest ts ver n=0
+    hdr "[A] Back up"
+    ts="$(date +%Y%m%d_%H%M%S)"
+    dest="${BACKUP_DIR}/${ts}"
+    for k in "${REG_KEYS[@]}"; do
+        chosen="$(reg_chosen "${k}")"
+        bin="$(reg_bin "${k}")"
+        [[ -n "${chosen}" && -f "${bin}" ]] || continue
+        mkdir -p "${dest}" || { warn "Could not make ${dest} — no backup"; return 0; }
+        ver="$(file_version "${bin}")"
+        cp -p -- "${bin}" "${dest}/$(basename "${bin}" .py)${ver:+_${ver}}.py"
+        n=$((n + 1))
+    done
+    if [[ ${n} -eq 0 ]]; then
+        info "Nothing installed is replaced — nothing to back up"
+        return 0
+    fi
+    ok "Backed up ${n} installed file(s) → ${dest}/"
+    local -a old=()
+    mapfile -t old < <(find "${BACKUP_DIR}" -mindepth 1 -maxdepth 1 -type d -name '20*' 2>/dev/null | sort -r | tail -n +4)
+    for d in "${old[@]}"; do
+        rm -rf -- "${d}"
+    done
+    return 0
+}
+
+set_steps() {
+    case "${ACTION}" in
+        first|replace) STEP_C="${MANUALS}" ;;
+        upgrade) STEP_C=false ;;
+        components)
+            STEP_C=false
+            if [[ ",${TOOLS_LIST}," == *",manuals,"* ]]; then
+                STEP_C="${MANUALS}"
+            fi
+            ;;
+    esac
+    if [[ "${NONINTERACTIVE}" == "true" ]]; then
+        STEP_D=false
+        if [[ "${RESET_ARG}" == "on" ]]; then
+            STEP_D=true
+        fi
+    else
+        STEP_D=true
+        if [[ "${RESET_ARG}" == "off" ]]; then
+            STEP_D=false
+        fi
+    fi
+    if [[ -n "${STEPS_ARG}" ]]; then
+        STEP_C=false
+        STEP_D=false
+        [[ "${STEPS_ARG}" == *C* ]] && STEP_C="${MANUALS}"
+        [[ "${STEPS_ARG}" == *D* ]] && STEP_D=true
+        if [[ "${STEPS_ARG}" != *A* || "${STEPS_ARG}" != *B* || "${STEPS_ARG}" != *E* || "${STEPS_ARG}" != *F* ]]; then
+            info "--steps: [A] back up, [B] install, [E] check and [F] start always run; only [C] and [D] can be left out"
+        fi
+    fi
+    if [[ "${ACTION}" == "replace" && "${STEP_D}" != "true" && "${NONINTERACTIVE}" == "true" \
+          && "${RESET_ARG}" != "off" && -z "${STEPS_ARG}" ]]; then
+        die "--action=replace without a terminal needs --reset (everyone is signed out) or --no-reset (not recommended: a replace without the reset is the usual cause of a bad start)"
+    fi
+    if [[ "${ACTION}" == "replace" && "${STEP_D}" != "true" ]]; then
+        warn "Full replace without [D] RESET — the usual cause of a bad start"
+    fi
+    if [[ "${DOWNLOAD}" != "true" && "${STEP_C}" == "true" ]]; then
+        info "Offline: [C] manuals are skipped"
+    fi
+    return 0
+}
+
+plan_names() {
+    local k chosen out=""
+    for k in "${REG_KEYS[@]}"; do
+        chosen="$(reg_chosen "${k}")"
+        [[ -n "${chosen}" ]] || continue
+        out+="${out:+, }$(reg_label "${k}") ($(basename "${chosen}"))"
+    done
+    echo "${out:-nothing}"
+}
+
+plan_left_out() {
+    local k out=""
+    for k in "${REG_KEYS[@]}"; do
+        [[ -z "$(reg_chosen "${k}")" ]] || continue
+        out+="${out:+, }$(reg_label "${k}")"
+    done
+    echo "${out}"
+}
+
+show_plan() {
+    local build="full" verb left
+    small_pi && build="Pi Zero 2 W"
+    [[ -n "${DASH_VARIANT:-}" ]] && { [[ "${DASH_VARIANT}" == "pi02w" ]] && build="Pi Zero 2 W" || build="full"; }
+    case "${ACTION}" in
+        first) verb="Install" ;;
+        upgrade) verb="Upgrade" ;;
+        replace) verb="Replace" ;;
+        *) verb="Install" ;;
+    esac
+    hdr "Plan: ${ACTION_LABEL} (${build} builds, ${GH_CHANNEL} channel)"
+    echo "  [A] Back up    installed files that are replaced → ${BACKUP_DIR}/"
+    echo "  [B] ${verb}$(printf '%*s' $((11 - ${#verb})) '')$(plan_names)"
+    if [[ "${STEP_C}" == "true" ]]; then
+        if [[ "${MAN_STATE}" == "ok" ]]; then
+            echo "  [C] Manuals    ${#MAN_LIST[@]} to download ($(( (MAN_BYTES + 1048575) / 1048576 )) MB) → ${DOCS_DIR}/"
+        else
+            echo "  [C] Manuals    skipped (${MAN_STATE:-not checked})"
+        fi
+    else
+        echo "   -  [C] Manuals left out"
+    fi
+    if [[ "${STEP_D}" == "true" ]]; then
+        echo "  [D] RESET      stop the tools, clear failed marks and sign-ins (everyone signs in again)$([[ "${ACTION}" == "replace" ]] && echo '  ← required for a replace')"
+    else
+        echo "   -  [D] RESET left out$([[ "${ACTION}" == "replace" ]] && echo ' — not recommended for a replace')"
+    fi
+    echo "  [E] Check      file, port and config of each tool before it starts"
+    echo "  [F] Start      in order, then check each one is running"
+    left="$(plan_left_out)"
+    if [[ -n "${left}" ]]; then
+        echo "  Left out: ${left}"
+    fi
+    echo
+}
+
+repeat_line() {
+    local -a args=(--non-interactive "--action=${ACTION}")
+    local k list="" script prefix=""
+    if [[ -n "${DASH_VARIANT:-}" ]]; then
+        args+=("--build=${DASH_VARIANT}")
+    fi
+    if [[ "${ACTION}" == "components" ]]; then
+        for k in "${REG_KEYS[@]}"; do
+            [[ -n "$(reg_chosen "${k}")" ]] && list+="${list:+,}${k}"
+        done
+        [[ "${STEP_C}" == "true" ]] && list+="${list:+,}manuals"
+        args+=("--tools=${list:-none}")
+    fi
+    if [[ "${STEP_D}" == "true" ]]; then
+        args+=(--reset)
+    else
+        args+=(--no-reset)
+    fi
+    if [[ "${STEP_C}" != "true" && "${ACTION}" != "upgrade" && "${ACTION}" != "components" ]]; then
+        args+=(--no-manuals)
+    fi
+    [[ "${DOWNLOAD}" != "true" ]] && args+=(--offline)
+    [[ "${CORE}" == "true" ]] && args+=(--core)
+    if [[ "${ACTION}" != "components" && -n "${OPT_CHOSEN[termon]:-}" ]]; then
+        args+=(--with-termon)
+    fi
+    [[ "${GH_CHANNEL}" == "testing" ]] && prefix="ASL_DVS_CHANNEL=testing "
+    script="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    echo "  To repeat this without questions:"
+    echo "    sudo ${prefix}bash ${script} ${args[*]}"
+    echo
+}
+
+confirm_plan() {
+    local ans letters ch typed i
+    if [[ "${ACTION}" == "components" && "${NONINTERACTIVE}" != "true" ]]; then
+        if [[ "${DOWNLOAD}" == "true" && "${MANUALS}" == "true" && -z "${STEPS_ARG}" ]]; then
+            read -r -p "  Download the manuals too? [y/N]: " ans </dev/tty
+            case "${ans,,}" in
+                y|yes) STEP_C=true ;;
+            esac
+        fi
+        if [[ "${_any_installed}" == "true" && -z "${RESET_ARG}" && -z "${STEPS_ARG}" ]]; then
+            read -r -p "  Reset the services and sign everyone out first? [Y/n]: " ans </dev/tty
+            case "${ans,,}" in
+                n|no) STEP_D=false ;;
+            esac
+        elif [[ "${_any_installed}" != "true" && -z "${RESET_ARG}" ]]; then
+            STEP_D=false
+        fi
+    fi
+    if [[ "${STEP_C}" == "true" && -z "${MAN_STATE}" ]]; then
+        manuals_scan || true
+        if [[ "${ACTION}" == "replace" && ${#MAN_DELETED[@]} -gt 0 && "${NONINTERACTIVE}" != "true" ]]; then
+            read -r -p "  Restore the ${#MAN_DELETED[@]} manual(s) you deleted in instmon? [y/N]: " ans </dev/tty
+            case "${ans,,}" in
+                y|yes) MAN_RESTORE=true; MAN_LIST+=("${MAN_DELETED[@]}") ;;
+            esac
+        fi
+    fi
+    if [[ "${NONINTERACTIVE}" == "true" ]]; then
+        show_plan
+        return 0
+    fi
+    while true; do
+        show_plan
+        repeat_line
+        read -r -p "  Go ahead? [Y/n, or letters to leave out, e.g. C]: " ans </dev/tty
+        case "${ans,,}" in
+            ""|y|yes) return 0 ;;
+            n|no|q|quit) echo; info "Aborted by user."; exit 0 ;;
+        esac
+        letters="${ans^^}"
+        letters="${letters//[^A-F]/}"
+        if [[ -z "${letters}" ]]; then
+            warn "Enter y to go ahead, n to quit, or step letters to leave out (C or D)"
+            continue
+        fi
+        for (( i=0; i<${#letters}; i++ )); do
+            ch="${letters:${i}:1}"
+            case "${ch}" in
+                C) STEP_C=false; info "[C] Manuals left out" ;;
+                D)
+                    if [[ "${ACTION}" == "replace" ]]; then
+                        echo "  Replacing without the reset is the usual cause of a bad start."
+                        read -r -p "  Type skip to leave [D] out anyway: " typed </dev/tty
+                        if [[ "${typed,,}" == "skip" ]]; then
+                            STEP_D=false
+                            warn "[D] RESET left out"
+                        else
+                            info "[D] RESET kept"
+                        fi
+                    else
+                        STEP_D=false
+                        info "[D] RESET left out"
+                    fi
+                    ;;
+                A) warn "[A] always runs with [B]" ;;
+                B) warn "[B] is the install itself — enter n to quit instead" ;;
+                E) warn "[E] always runs before [F]" ;;
+                F) warn "[F] always runs: it starts and checks each tool" ;;
+            esac
+        done
+    done
+}
+
+show_menu() {
+    local ans def
+    if [[ "${FRESH}" == "true" ]]; then
+        def=1
+        echo "  ${BLD}Nothing is installed on this node yet.${RST}"
+    else
+        def=2
+    fi
+    if [[ "${DOWNLOAD}" == "true" ]]; then
+        echo "  Files that are not on this Pi are downloaded from GitHub (${GH_CHANNEL} channel)."
+    else
+        echo "  Offline: only the files on this Pi are used."
+    fi
+    echo
+    echo "  ${BLD}[1]${RST}  Full first install   ${CYN}the whole suite and the manuals$([[ "${def}" == 1 ]] && echo '  (default)')${RST}"
+    echo "  ${BLD}[2]${RST}  Full upgrade         ${CYN}installed tools to the newest build; config kept, nothing added$([[ "${def}" == 2 ]] && echo '  (default)')${RST}"
+    echo "  ${BLD}[3]${RST}  Full replace         ${CYN}reinstall every tool, complete the suite, refresh the manuals, reset${RST}"
+    echo "  ${BLD}[4]${RST}  Component install    ${CYN}choose tool by tool${RST}"
+    echo "  ${BLD}[5]${RST}  Reset only           ${CYN}restart the services and sign everyone out; nothing installed${RST}"
+    echo "  ${BLD}[q]${RST}  Quit"
+    echo "  Terminal Monitor is never part of a full install; it is asked about on its own."
+    echo
+    while true; do
+        read -r -p "  Choose [1-5/q] (Enter = ${def}): " ans </dev/tty
+        ans="${ans,,}"
+        case "${ans}" in
+            "") ans="${def}" ;;
+            y|yes) ans="${def}" ;;
+            i|install) ans=3 ;;
+            u|update) ans=2 ;;
+            c|choose) ans=4 ;;
+            r|reset) ans=5 ;;
+            n|no|q|quit) echo; info "Aborted by user."; exit 0 ;;
+        esac
+        case "${ans}" in
+            1)
+                if [[ "${FRESH}" != "true" ]]; then
+                    warn "Tools are already installed here — choose 2 (upgrade) or 3 (replace)"
+                    continue
+                fi
+                ACTION="first"
+                ;;
+            2|3|5)
+                if [[ "${FRESH}" == "true" ]]; then
+                    warn "Nothing is installed yet — choose 1 (full first install) or 4 (component install)"
+                    continue
+                fi
+                case "${ans}" in
+                    2) ACTION="upgrade" ;;
+                    3) ACTION="replace" ;;
+                    5) RESET_ONLY=true ;;
+                esac
+                ;;
+            4) ACTION="components" ;;
+            *) warn "Enter 1, 2, 3, 4, 5 or q"; continue ;;
+        esac
+        return 0
+    done
+}
+
+apply_action() {
+    case "${ACTION}" in
+        first)
+            MODE="install"
+            ACTION_LABEL="Full first install"
+            [[ "${CORE}" == "true" ]] || SUITE=true
+            AUTO_PICK=true
+            ;;
+        upgrade)
+            MODE="update"
+            ACTION_LABEL="Full upgrade"
+            AUTO_PICK=true
+            FORCE_FETCH=true
+            ONLY_INSTALLED=true
+            NO_DOWNGRADE=true
+            ;;
+        replace)
+            MODE="install"
+            ACTION_LABEL="Full replace"
+            [[ "${CORE}" == "true" ]] || SUITE=true
+            AUTO_PICK=true
+            FORCE_FETCH=true
+            REINSTALL=true
+            NO_DOWNGRADE=true
+            ;;
+        components)
+            MODE="install"
+            ACTION_LABEL="Component install"
+            ;;
+    esac
+    ok "Action: ${ACTION_LABEL}"
+    set_steps
 }
 
 hdr "Preflight"
@@ -904,6 +1909,12 @@ fi
 ok "systemd available"
 
 check_prereqs
+
+detect_hardware
+
+if [[ "${RESET_ONLY}" == "true" ]]; then
+    run_reset_only
+fi
 
 if [[ "${DOWNLOAD_ONLY}" == "true" ]]; then
     hdr "Download only"
@@ -986,9 +1997,26 @@ for _k in "${OPT_KEYS[@]}"; do
     fi
 done
 
+_any_installed=false
+FRESH=true
 if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
       || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
       || "${_nodelisten_exists}" == "true" || "${_opt_exists}" == "true" ]]; then
+    _any_installed=true
+    FRESH=false
+fi
+if [[ -n "${ACTION}" ]]; then
+    if [[ "${ACTION}" == "first" && "${FRESH}" != "true" ]]; then
+        die "--action=first: tools are already installed here — use --action=upgrade or --action=replace"
+    fi
+    if [[ ( "${ACTION}" == "upgrade" || "${ACTION}" == "replace" ) && "${FRESH}" == "true" ]]; then
+        die "--action=${ACTION}: nothing is installed here yet — use --action=first"
+    fi
+elif [[ "${NONINTERACTIVE}" == "true" || ( "${FRESH}" == "true" && ( "${CORE}" == "true" || "${SUITE}" == "true" ) ) ]]; then
+    LEGACY=true
+fi
+
+if [[ "${FRESH}" != "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
@@ -1002,27 +2030,11 @@ if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
         fi
     done
     echo
-    if [[ "${NONINTERACTIVE}" == "true" ]]; then
+    if [[ "${LEGACY}" == "true" ]]; then
         MODE="update"
         info "Non-interactive: existing installation detected — defaulting to 'update' (config preserved, services restarted)"
-    else
-        echo "  ${BLD}[i]${RST}  Install / reinstall  ${CYN}(replaces binaries; existing config preserved)${RST}"
-        echo "  ${BLD}[u]${RST}  Update binaries only  ${CYN}(preserves config; restarts services)${RST}"
-        echo "  ${BLD}[q]${RST}  Quit"
-        echo
-        MODE=""
-        while true; do
-            read -r -p "  Choose operation [i/u/q]: " MODE </dev/tty
-            MODE="${MODE,,}"
-            case "${MODE}" in
-                i|install) MODE="install"; break ;;
-                u|update)  MODE="update";  break ;;
-                q|quit)    echo; info "Aborted by user."; exit 0 ;;
-                *) warn "Enter 'i' to install, 'u' to update, or 'q' to quit" ;;
-            esac
-        done
     fi
-else
+elif [[ "${LEGACY}" == "true" ]]; then
     info "No existing installation found — proceeding with fresh install"
     MODE="install"
     _suite_list="Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary"
@@ -1031,34 +2043,23 @@ else
         info "--core: the Dashboard, SysMon, wifimon and 44helper; the optional tools only when asked for"
     elif [[ "${SUITE}" == "true" ]]; then
         info "--suite: installing the whole suite (${_suite_list})"
-    elif [[ "${NONINTERACTIVE}" == "true" ]]; then
+    else
         SUITE=true
         info "Fresh node: installing the whole suite (${_suite_list}); --core installs only the core tools"
-    else
-        echo
-        echo "  ${BLD}Nothing is installed on this node yet.${RST}"
-        echo "  The whole suite: ${_suite_list}."
-        if [[ "${DOWNLOAD}" == "true" ]]; then
-            echo "  Files that are not on this Pi are downloaded from GitHub (${GH_CHANNEL} channel)."
-        else
-            echo "  Offline: only the files on this Pi are used."
-        fi
-        echo "  Terminal Monitor is asked about on its own."
-        echo
-        echo "  ${BLD}[y]${RST}  Install the whole suite  ${CYN}(default)${RST}"
-        echo "  ${BLD}[c]${RST}  Choose tool by tool"
-        echo "  ${BLD}[n]${RST}  Quit"
-        echo
-        while true; do
-            read -r -p "  Install the whole suite? [Y/n/c]: " _fresh_ans </dev/tty
-            case "${_fresh_ans,,}" in
-                ""|y|yes) SUITE=true; AUTO_PICK=true; break ;;
-                c|choose) info "Choosing tool by tool"; break ;;
-                n|no|q|quit) echo; info "Aborted by user."; exit 0 ;;
-                *) warn "Enter 'y' for the whole suite, 'c' to choose, or 'n' to quit" ;;
-            esac
-        done
     fi
+else
+    info "No existing installation found"
+fi
+
+if [[ "${LEGACY}" != "true" ]]; then
+    if [[ -z "${ACTION}" ]]; then
+        echo
+        show_menu
+        if [[ "${RESET_ONLY}" == "true" ]]; then
+            run_reset_only
+        fi
+    fi
+    apply_action
 fi
 
 ok "Mode: ${MODE}"
@@ -1092,7 +2093,7 @@ retire_watchdog() {
 retire_watchdog
 
 INSTMON_CHOSEN=""
-if [[ ! -f "${INSTMON_BIN}" ]]; then
+if [[ ! -f "${INSTMON_BIN}" ]] && { [[ -z "${TOOLS_LIST}" ]] || tool_allowed instmon false; }; then
     hdr "instmon — file discovery"
     info "instmon is not installed — it will be installed too"
     CHOSEN=""
@@ -1101,7 +2102,7 @@ if [[ ! -f "${INSTMON_BIN}" ]]; then
     INSTMON_CHOSEN="${CHOSEN}"
     if [[ -n "${INSTMON_CHOSEN}" ]]; then
         info "Checking syntax…"
-        python3 -m py_compile "${INSTMON_CHOSEN}" \
+        syntax_ok "${INSTMON_CHOSEN}" \
             || die "Syntax error in $(basename "${INSTMON_CHOSEN}") — install aborted"
         ok "Syntax OK"
     fi
@@ -1109,74 +2110,85 @@ fi
 
 hdr "Dashboard — file discovery"
 CHOSEN=""
-pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
-DASH_VARIANT="${PICKED_BUILD}"
-if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
-    info "Dashboard build: Pi Zero 2 W (nodecontrol_pi02w*.py), from ${PICKED_WHY}"
-    fetch_if_missing "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${_dash_exists}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w "${DASH_BIN}"
-    stage_and_select "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
-else
-    info "Dashboard build: full (nodecontrol*.py without _pi02w), from ${PICKED_WHY}"
-    fetch_if_missing "nodecontrol" "Dashboard" "${_dash_exists}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full "${DASH_BIN}"
-    stage_and_select "nodecontrol*.py|asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" || true
+PICKED_BUILD=""
+if tool_allowed dashboard "${_dash_exists}"; then
+    pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
+    DASH_VARIANT="${PICKED_BUILD}"
+    if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
+        info "Dashboard build: Pi Zero 2 W (nodecontrol_pi02w*.py), from ${PICKED_WHY}"
+        fetch_if_missing "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${_dash_exists}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w "${DASH_BIN}"
+        stage_and_select "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
+    else
+        info "Dashboard build: full (nodecontrol*.py without _pi02w), from ${PICKED_WHY}"
+        fetch_if_missing "nodecontrol" "Dashboard" "${_dash_exists}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full "${DASH_BIN}"
+        stage_and_select "nodecontrol*.py|asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" || true
+    fi
 fi
 DASH_CHOSEN="${CHOSEN}"
-[[ -z "${DASH_CHOSEN}" ]] && warn "No ${DASH_VARIANT} Dashboard build found -- set DASH_VARIANT=pi02w or =full to choose the other build."
+[[ -z "${DASH_CHOSEN}" && -n "${PICKED_BUILD:-}" ]] && warn "No ${DASH_VARIANT} Dashboard build found -- set DASH_VARIANT=pi02w or =full to choose the other build."
 
 if [[ -n "${DASH_CHOSEN}" ]]; then
     info "Checking syntax…"
-    python3 -m py_compile "${DASH_CHOSEN}" \
+    syntax_ok "${DASH_CHOSEN}" \
         || die "Syntax error in $(basename "${DASH_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
 
 hdr "SysMon — file discovery"
-pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
-SYSMON_VARIANT="${PICKED_BUILD}"
-case "${SYSMON_VARIANT}" in
-    pi02w) info "SysMon build: Pi Zero 2 W (sysmon_pi02w*.py), from ${PICKED_WHY}" ;;
-    full)  info "SysMon build: full (sysmon*.py without _pi02w), from ${PICKED_WHY}" ;;
-esac
 CHOSEN=""
-if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
-    fetch_if_missing "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${_sysmon_exists}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w "${SYSMON_BIN}"
-    stage_and_select "sysmon_pi02w*.py" "SysMon (Pi Zero 2 W)" "${SYSMON_LIB_DIR}" || true
-else
-    fetch_if_missing "sysmon" "SysMon" "${_sysmon_exists}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full "${SYSMON_BIN}"
-    stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" "sysmon_pi02w*.py" || true
+PICKED_BUILD=""
+if tool_allowed sysmon "${_sysmon_exists}"; then
+    pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
+    SYSMON_VARIANT="${PICKED_BUILD}"
+    case "${SYSMON_VARIANT}" in
+        pi02w) info "SysMon build: Pi Zero 2 W (sysmon_pi02w*.py), from ${PICKED_WHY}" ;;
+        full)  info "SysMon build: full (sysmon*.py without _pi02w), from ${PICKED_WHY}" ;;
+    esac
+    CHOSEN=""
+    if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
+        fetch_if_missing "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${_sysmon_exists}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w "${SYSMON_BIN}"
+        stage_and_select "sysmon_pi02w*.py" "SysMon (Pi Zero 2 W)" "${SYSMON_LIB_DIR}" || true
+    else
+        fetch_if_missing "sysmon" "SysMon" "${_sysmon_exists}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full "${SYSMON_BIN}"
+        stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" "sysmon_pi02w*.py" || true
+    fi
 fi
 SYSMON_CHOSEN="${CHOSEN}"
-[[ -z "${SYSMON_CHOSEN}" ]] && warn "No ${SYSMON_VARIANT} SysMon build found -- set SYSMON_VARIANT=pi02w or =full to choose the other build."
+[[ -z "${SYSMON_CHOSEN}" && -n "${PICKED_BUILD:-}" ]] && warn "No ${SYSMON_VARIANT} SysMon build found -- set SYSMON_VARIANT=pi02w or =full to choose the other build."
 
 if [[ -n "${SYSMON_CHOSEN}" ]]; then
     info "Checking syntax…"
-    python3 -m py_compile "${SYSMON_CHOSEN}" \
+    syntax_ok "${SYSMON_CHOSEN}" \
         || die "Syntax error in $(basename "${SYSMON_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
 
 hdr "wifimon — file discovery"
 CHOSEN=""
-fetch_if_missing "wifimon" "wifimon" "${_wifimon_exists}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}" "" "${WIFIMON_BIN}"
-stage_and_select "wifimon*.py" "wifimon" "${WIFIMON_LIB_DIR}" || true
+if tool_allowed wifimon "${_wifimon_exists}"; then
+    fetch_if_missing "wifimon" "wifimon" "${_wifimon_exists}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}" "" "${WIFIMON_BIN}"
+    stage_and_select "wifimon*.py" "wifimon" "${WIFIMON_LIB_DIR}" || true
+fi
 WIFIMON_CHOSEN="${CHOSEN}"
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     info "Checking syntax…"
-    python3 -m py_compile "${WIFIMON_CHOSEN}" \
+    syntax_ok "${WIFIMON_CHOSEN}" \
         || die "Syntax error in $(basename "${WIFIMON_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
 
 hdr "44helper — file discovery"
 CHOSEN=""
-fetch_if_missing "44helper" "44helper" "${_helper_exists}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}" "" "${HELPER_BIN}"
-stage_and_select "44helper*.py|asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
+if tool_allowed 44helper "${_helper_exists}"; then
+    fetch_if_missing "44helper" "44helper" "${_helper_exists}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}" "" "${HELPER_BIN}"
+    stage_and_select "44helper*.py|asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
+fi
 HELPER_CHOSEN="${CHOSEN}"
 
 if [[ -n "${HELPER_CHOSEN}" ]]; then
     info "Checking syntax…"
-    python3 -m py_compile "${HELPER_CHOSEN}" \
+    syntax_ok "${HELPER_CHOSEN}" \
         || die "Syntax error in $(basename "${HELPER_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
@@ -1184,7 +2196,10 @@ fi
 hdr "Node Talker — file discovery"
 CHOSEN=""
 _nl_want=true
-if [[ "${_nodelisten_exists}" != "true" ]]; then
+if ! tool_allowed nodetalker "${_nodelisten_exists}"; then
+    _nl_want=false
+fi
+if [[ "${_nl_want}" == "true" && "${_nodelisten_exists}" != "true" ]]; then
     if [[ "${DOWNLOAD}" != "true" ]] && ! any_file "${NODELISTEN_PATTERN}" "${NODELISTEN_LIB_DIR}"; then
         _nl_want=false
         info "No nodetalker*.py file found — Node Talker (optional) skipped"
@@ -1216,13 +2231,23 @@ NODELISTEN_CHOSEN="${CHOSEN}"
 
 if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
     info "Checking syntax…"
-    python3 -m py_compile "${NODELISTEN_CHOSEN}" \
+    syntax_ok "${NODELISTEN_CHOSEN}" \
         || die "Syntax error in $(basename "${NODELISTEN_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
 
 for _k in "${OPT_KEYS[@]}"; do
-    discover_optional "${_k}"
+    if opt_is_installed "${_k}"; then
+        _ex=true
+    else
+        _ex=false
+    fi
+    if tool_allowed "${_k}" "${_ex}"; then
+        discover_optional "${_k}"
+    else
+        OPT_EXISTS["${_k}"]="${_ex}"
+        OPT_CHOSEN["${_k}"]=""
+    fi
 done
 
 if [[ ${#DOWNLOADED[@]} -gt 0 ]]; then
@@ -1242,22 +2267,36 @@ fi
 
 hdr "Up-to-date check"
 
+downgrade_check "Dashboard" "${DASH_CHOSEN}" "${DASH_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && DASH_CHOSEN=""
 uptodate_check "Dashboard" "${DASH_CHOSEN}"    "${DASH_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && DASH_CHOSEN=""
 
+downgrade_check "SysMon" "${SYSMON_CHOSEN}" "${SYSMON_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && SYSMON_CHOSEN=""
 uptodate_check "SysMon"    "${SYSMON_CHOSEN}"  "${SYSMON_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && SYSMON_CHOSEN=""
 
+downgrade_check "wifimon" "${WIFIMON_CHOSEN}" "${WIFIMON_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && WIFIMON_CHOSEN=""
 uptodate_check "wifimon"   "${WIFIMON_CHOSEN}" "${WIFIMON_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && WIFIMON_CHOSEN=""
 
+downgrade_check "44helper" "${HELPER_CHOSEN}" "${HELPER_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && HELPER_CHOSEN=""
 uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && HELPER_CHOSEN=""
 
+downgrade_check "Node Talker" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
 uptodate_check "Node Talker" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
 
 for _k in "${OPT_KEYS[@]}"; do
+    downgrade_check "${OPT_LABEL[${_k}]}" "${OPT_CHOSEN[${_k}]:-}" "${OPT_BIN[${_k}]}"
+    if [[ "${UP_TO_DATE_SKIP}" == "true" ]]; then
+        OPT_CHOSEN["${_k}"]=""
+    fi
     uptodate_check "${OPT_LABEL[${_k}]}" "${OPT_CHOSEN[${_k}]:-}" "${OPT_BIN[${_k}]}"
     if [[ "${UP_TO_DATE_SKIP}" == "true" ]]; then
         OPT_CHOSEN["${_k}"]=""
@@ -1267,26 +2306,52 @@ done
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]] && ! opt_any_chosen; then
     ok "All selected files are already up to date — nothing to install."
+    if [[ "${LEGACY}" != "true" ]]; then
+        info "To restart the services and sign everyone out without installing, use --reset-only (or [5] in the menu)"
+    fi
     exit 0
 fi
 
-hdr "Port checks"
-[[ -n "${INSTMON_CHOSEN}" ]] && { info "instmon port ${INSTMON_PORT}:"; check_port "${INSTMON_PORT}"; }
-[[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
-[[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
-[[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
-if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
-    _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
-    NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
-    info "Node Talker port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
+if [[ "${LEGACY}" != "true" ]]; then
+    confirm_plan
+    backup_files
+    if [[ "${STEP_D}" == "true" ]]; then
+        reset_stop
+    fi
 fi
 
-for _k in "${OPT_KEYS[@]}"; do
-    if [[ -n "${OPT_CHOSEN[${_k}]:-}" && "${OPT_EXISTS[${_k}]:-false}" != "true" ]]; then
-        info "${OPT_LABEL[${_k}]} port ${OPT_PORT[${_k}]}:"
-        check_port "${OPT_PORT[${_k}]}"
+if [[ "${RESET_DONE}" == "true" ]]; then
+    hdr "[E] Checks before each start"
+    for _k in "${REG_KEYS[@]}"; do
+        _c="$(reg_chosen "${_k}")"
+        [[ -n "${_c}" ]] || continue
+        if [[ -n "${HELD[$(reg_svc "${_k}")]+x}" ]]; then
+            continue
+        fi
+        if ! health_check "${_k}" "${_c}"; then
+            warn "$(reg_label "${_k}") is not installed this time; the installed copy is left as it was"
+            reg_unchoose "${_k}"
+        fi
+    done
+else
+    hdr "Port checks"
+    [[ -n "${INSTMON_CHOSEN}" ]] && { info "instmon port ${INSTMON_PORT}:"; check_port "${INSTMON_PORT}"; }
+    [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
+    [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
+    [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
+    if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
+        _nl_port="$(conf_port "${NODELISTEN_CONF}")"
+        NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
+        info "Node Talker port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
     fi
-done
+
+    for _k in "${OPT_KEYS[@]}"; do
+        if [[ -n "${OPT_CHOSEN[${_k}]:-}" && "${OPT_EXISTS[${_k}]:-false}" != "true" ]]; then
+            info "${OPT_LABEL[${_k}]} port ${OPT_PORT[${_k}]}:"
+            check_port "${OPT_PORT[${_k}]}"
+        fi
+    done
+fi
 
 if [[ -n "${INSTMON_CHOSEN}" ]]; then
     hdr "Installing instmon"
@@ -1394,6 +2459,9 @@ fi
 
 if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
     hdr "Installing Node Talker"
+    if [[ "${RESET_DONE}" == "true" ]] && small_pi; then
+        sleep "${HEAVY_PAUSE}"
+    fi
     if [[ "$(basename "${NODELISTEN_CHOSEN}")" == nodelisten* ]]; then
         NODELISTEN_SERVICE="nodelisten"
         if [[ -f /etc/systemd/system/nodetalker.service && -e /usr/local/bin/nodetalker.py ]]; then
@@ -1409,7 +2477,7 @@ if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
         || die "Node Talker --install failed — see output above"
     ok "Node Talker installed, enabled, and restarted"
     hold_end "${_nl_svc0}" "Node Talker" "${NODELISTEN_SERVICE}"
-    for _nl_c in /etc/asl_dvs/nodetalker.conf /etc/asl_dvs/nodelisten.conf; do
+    for _nl_c in "${ASL_DVS_ETC}/nodetalker.conf" "${ASL_DVS_ETC}/nodelisten.conf"; do
         [[ -e "${_nl_c}" ]] && { NODELISTEN_CONF="${_nl_c}"; break; }
     done
     _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
@@ -1422,6 +2490,9 @@ for _k in "${OPT_KEYS[@]}"; do
     fi
     _label="${OPT_LABEL[${_k}]}"
     hdr "Installing ${_label}"
+    if [[ "${RESET_DONE}" == "true" ]] && is_heavy "${_k}" && small_pi; then
+        sleep "${HEAVY_PAUSE}"
+    fi
     hold_begin "${OPT_SERVICE[${_k}]}" "${OPT_EXISTS[${_k}]:-false}"
     info "Delegating to: python3 $(basename "${OPT_CHOSEN[${_k}]}") --install"
     python3 "${OPT_CHOSEN[${_k}]}" --install \
@@ -1429,72 +2500,16 @@ for _k in "${OPT_KEYS[@]}"; do
     ok "${_label} installed, enabled, and restarted"
     hold_end "${OPT_SERVICE[${_k}]}" "${_label}"
     if [[ "${_k}" == "termon" ]]; then
-        _tm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' /etc/asl_dvs/termon.conf 2>/dev/null | head -1 || true)"
+        _tm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/termon.conf" 2>/dev/null | head -1 || true)"
         OPT_PORT["termon"]="${_tm_port:-${OPT_PORT[termon]}}"
     fi
 done
 
-hdr "Startup verification"
-info "Waiting for services to stabilise…"
-sleep 3
+if [[ "${LEGACY}" != "true" && "${STEP_C}" == "true" ]]; then
+    manuals_install
+fi
 
-for svc_entry in \
-    "${INSTMON_SERVICE}:${INSTMON_CHOSEN}:${INSTMON_PORT}" \
-    "${DASH_SERVICE}:${DASH_CHOSEN}:${DASH_PORT}" \
-    "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}" \
-    "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:${WIFIMON_PORT}" \
-    "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}" \
-    "${NODELISTEN_SERVICE}:${NODELISTEN_CHOSEN}:${NODELISTEN_PORT}"; do
-    svc="${svc_entry%%:*}"
-    rest="${svc_entry#*:}"
-    chosen="${rest%%:*}"
-    port="${rest##*:}"
-    [[ -z "${chosen}" ]] && continue
-
-    if [[ -n "${HELD[${svc}]+x}" ]]; then
-        ok "${svc} is stopped, as you had it"
-        continue
-    fi
-
-    if systemctl is-active --quiet "${svc}"; then
-        ok "${svc} is RUNNING"
-    else
-        warn "${svc} did not start cleanly"
-        systemctl status "${svc}" --no-pager -l || true
-    fi
-
-    [[ -z "${port}" ]] && continue
-    if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
-        ok "Listening on port ${port}"
-    else
-        warn "Not yet listening on port ${port} — may still be initialising"
-        warn "Re-check:  ss -tlnp | grep ${port}"
-    fi
-done
-
-for _k in "${OPT_KEYS[@]}"; do
-    if [[ -z "${OPT_CHOSEN[${_k}]:-}" ]]; then
-        continue
-    fi
-    svc="${OPT_SERVICE[${_k}]}"
-    port="${OPT_PORT[${_k}]}"
-    if [[ -n "${HELD[${svc}]+x}" ]]; then
-        ok "${svc} is stopped, as you had it"
-        continue
-    fi
-    if svc_active "${svc}"; then
-        ok "${svc} is RUNNING"
-    else
-        warn "${svc} did not start cleanly"
-        systemctl status "${svc}" --no-pager -l || true
-    fi
-    if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
-        ok "Listening on port ${port}"
-    else
-        warn "Not yet listening on port ${port} — may still be initialising"
-        warn "Re-check:  ss -tlnp | grep ${port}"
-    fi
-done
+start_verify
 
 hdr "Access URLs"
 
@@ -1554,3 +2569,15 @@ for _k in "${OPT_KEYS[@]}"; do
 done
 echo "    Logs      :  journalctl -u <service> -f"
 echo
+if [[ "${LEGACY}" != "true" ]]; then
+    for _k in "${!HC_HELD[@]}"; do
+        warn "Held, not started: $(reg_label "${_k}") — ${HC_HELD[${_k}]}"
+    done
+    if [[ ${#F_FAILED[@]} -gt 0 ]]; then
+        warn "Did not start: ${F_FAILED[*]} (see the log lines above)"
+    fi
+    if [[ "${RESET_DONE}" == "true" ]]; then
+        info "Everyone was signed out: sign in again on each page"
+    fi
+    echo
+fi
