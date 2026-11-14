@@ -14,7 +14,10 @@ case "$cmd" in
   is-failed)
     s=$(state "$u"); [ "$s" = failed ] && { echo failed; exit 0; }; echo "$s"; exit 1 ;;
   start|restart|reload)
+    if [ -f "$D/$u.nostart" ]; then echo failed > "$D/$u.state"; exit 1; fi
     echo active > "$D/$u.state"; exit 0 ;;
+  reset-failed)
+    [ "$(state "$u")" = failed ] && echo inactive > "$D/$u.state"; exit 0 ;;
   stop)
     echo inactive > "$D/$u.state"; exit 0 ;;
   enable)
