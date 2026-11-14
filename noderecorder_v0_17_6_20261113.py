@@ -37,7 +37,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.17.4"
+VERSION = "0.17.6"
 DATE_STR = "2026-11-13"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4860,7 +4860,11 @@ def encode_file(wav, key, kbps):
     if fmt == "pcm":
         nbytes -= nbytes % 2
     if nbytes <= 0:
-        return False, "the recording holds no audio"
+        try:
+            os.remove(wav)
+        except OSError as exc:
+            return False, f"the recording holds no audio (could not delete it: {exc})"
+        return None, "the recording holds no audio"
     base = wav[:-4]
     out = base + enc["ext"]
     n = 1
@@ -4946,6 +4950,11 @@ def _enc_worker():
             if _cfg_get("record_convert") and os.path.isfile(wav):
                 ok, msg = encode_file(wav, _cfg_get("record_encoder"), _cfg_get("record_kbps"))
                 name = os.path.basename(wav)
+                if ok is None:
+                    with _enc_lock:
+                        _enc["last"] = f"{name}: {msg}, deleted"
+                    log_event(f"Deleted {name}: {msg}", "info")
+                    continue
                 with _enc_lock:
                     _enc["done" if ok else "failed"] += 1
                     _enc["last"] = f"{name} -> {msg}" if ok else f"{name}: {msg}"
@@ -6114,6 +6123,7 @@ def schedule_view():
     return {"ok": True, "entries": rows, "error": data["error"], "max": SCHEDULE_MAX, "gap_min": SCHEDULE_GAP_MIN,
             "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "engine_ready": ENGINE_READY,
             "dry_run": bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY, "now": now.strftime("%a %d %b %H:%M"),
+            "now_at": now.isoformat(timespec="minutes"),
             "tz": _cfg_get("schedule_tz"), "tz_label": sched_tz_label()}
 
 
@@ -6266,6 +6276,10 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .sched-entry td{border-top:2px solid var(--line2);padding-top:8px}
 table.links tr.sched-entry:first-child td{border-top:0}
 .sched-entry.sched-done td{color:var(--muted)}
+#cd-next .nu-name{font-size:17px;font-weight:600;overflow-wrap:anywhere}
+#cd-next .nu-when{font-size:20px;font-weight:600;color:var(--accent);margin:2px 0}
+#cd-next .nu-live .nu-when{color:var(--amber)}
+#cd-next .nu-meta{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
 .sched-entry.sched-off td:first-child{font-style:italic}
 #tab-setup{font-size:var(--sett-font)}
 #tab-setup .btn{min-height:var(--sett-h)}
@@ -7135,6 +7149,53 @@ const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_faile
 function schedDays(days) {
   return days.length === 7 ? 'Every day' : days.map((d) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(' ');
 }
+const NU_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const NU_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+let nuData = null;
+function nuParse(iso) {
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(iso || '');
+  return m ? {y: +m[1], mo: +m[2], d: +m[3], h: +m[4], mi: +m[5], hm: m[4] + ':' + m[5]} : null;
+}
+function nuMins(p) { return Math.floor(Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) / 60000); }
+function nuLabel(p) {
+  return NU_DAYS[new Date(Date.UTC(p.y, p.mo - 1, p.d)).getUTCDay()] + ' ' + p.d + ' ' + NU_MONTHS[p.mo - 1] + ' ' + p.y + ' \u00b7 ' + p.hm;
+}
+function nuIn(mins) {
+  if (mins < 1) return 'starting now';
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  return 'in ' + [d ? d + ' d' : '', h ? h + ' h' : '', m && !d ? m + ' min' : ''].filter(Boolean).join(' ');
+}
+function renderNextUp(d) {
+  if (d) nuData = d;
+  d = nuData;
+  const box = $('nu-body');
+  if (!d || !box) return;
+  box.innerHTML = '';
+  const line = (cls, text) => { const x = document.createElement('div'); x.className = cls; x.textContent = text; box.appendChild(x); };
+  const st = d.status || {}, cur = st.current;
+  if (cur && (st.state === 'recording' || st.state === 'connecting')) {
+    const e = cur.end || '', p = nuParse(e);
+    line('nu-name', '\u25cf ' + cur.name);
+    line('nu-when', 'Recording now' + (p ? ' until ' + p.hm : ''));
+    if (p) line('nu-meta', NU_DAYS[new Date(Date.UTC(p.y, p.mo - 1, p.d)).getUTCDay()] + ' ' + p.d + ' ' + NU_MONTHS[p.mo - 1] + ' ' + p.y);
+    return;
+  }
+  const nxt = (d.entries || []).filter((e) => e.enabled && !e.now && e.next_at)
+    .sort((a, b) => (a.next_at < b.next_at ? -1 : 1))[0];
+  const p = nxt && nuParse(nxt.next_at);
+  if (!p) { box.className = 'muted'; box.textContent = 'Nothing scheduled.'; return; }
+  box.className = '';
+  line('nu-name', nxt.name);
+  line('nu-when', nuLabel(p));
+  const n = nuParse(d.now_at);
+  const meta = [schedTarget(nxt.target), nxt.format === 'pcm' ? 'PCM' : 'u-law', nxt.duration_min ? nxt.duration_min + ' min' : '']
+    .concat(n ? [nuIn(nuMins(p) - nuMins(n))] : []).filter(Boolean).join(' \u00b7 ');
+  line('nu-meta', meta);
+}
+function nuSchedule() {
+  const ms = 900000 - (Date.now() % 900000) + 1000;
+  setTimeout(() => { if (tab === 'record') loadSchedule(); nuSchedule(); }, ms);
+}
 function schedDstar(num) {
   const m = /^([A-Z0-9]{3,6}) *([A-Z])L$/.exec(String(num || '').toUpperCase());
   return m ? [m[1], m[2]] : [String(num || '').split(' ')[0], String(num || '').split(' ')[1] || ''];
@@ -7150,6 +7211,7 @@ async function loadSchedule() {
   const d = await api('/api/schedule');
   if (!d.ok) return;
   schedRows = d.entries;
+  renderNextUp(d);
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
   $('rec-start').disabled = st.state !== 'idle';
@@ -7582,6 +7644,7 @@ function initPage() {
   pollEvery(pollStatus, 1500);
   pollEvery(pollLog, 3000);
   pollEvery(() => (tab === 'record' ? loadSchedule() : null), 4000);
+  nuSchedule();
   pollEvery(() => (tab === 'record' ? loadStorage() : null), 15000);
 }
 document.addEventListener('DOMContentLoaded', initPage);
@@ -7777,6 +7840,10 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
 <p class="muted small">Record now records the link that is up now, as it is, and keeps going through link changes until you press Stop. It stops by itself after 4 hours. It is not available while a scheduled recording is running.</p>
 <div id="rec-msg" class="msg"></div>
+</div>
+<div class="card" id="cd-next">
+<h2>Next up</h2>
+<div id="nu-body" class="muted">Nothing scheduled.</div>
 </div>
 </section>
 
