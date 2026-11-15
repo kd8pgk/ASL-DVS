@@ -1050,5 +1050,122 @@ class SvxSysmonCompare(SvxWiring):
         self.assertNotIn("does not read SvxLink", r["output"])
 
 
+RPT_BARE = ("[general]\nx = 1\n\n[nodes]\n123456 = radio@127.0.0.1/123456,NONE\n\n[node-main](!)\nduplex = 1\n\n"
+            "[123456](node-main)\nrxchannel = SimpleUSB/123456\n")
+EXT_BARE = "[globals]\nHOMENPA = 330\n\n[radio-secure]\nexten => 123456,1,rpt,123456\n"
+MOD_BARE = "[modules]\nautoload = no\nnoload  = chan_usrp.so                   ; USRP Channel Module\n"
+SVX_STOCK = SVX_FILES[SVX].replace("USRP_TX_PORT=32000", "USRP_TX_PORT=41234").replace("USRP_RX_PORT=34000", "USRP_RX_PORT=41233")
+SVXU_STOCK = SVX_FILES[SVXU].replace("USRP_TX_PORT=32000", "USRP_TX_PORT=41234").replace("USRP_RX_PORT=34000", "USRP_RX_PORT=41233")
+
+
+class SvxBridge(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_BARE, "/etc/asterisk/extensions.conf": EXT_BARE,
+                         "/etc/asterisk/modules.conf": MOD_BARE, SVX: SVX_STOCK, SVXU: SVXU_STOCK}
+        p = mock.patch.object(h44, "_cfgr_installed", lambda: {g: g in ("asl3", "svx") for g in h44._CFGR_GROUPS})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def go(self, apply=True, **kw):
+        return h44._cfgr_act_svx_bridge(dict(kw), apply)
+
+    def test_preview_writes_nothing_and_shows_both_sides(self):
+        r = self.go(False)
+        self.assertTrue(r["success"], r["output"])
+        self.assertEqual(self.fs.written, {})
+        self.assertEqual(r["node"], "1900")
+        for text in ("[1900](node-main)", "rxchannel = USRP/127.0.0.1:34000:32000", "USRP_RX_PORT=34000",
+                     "USRP_TX_PORT=32000", "1900 = radio@127.0.0.1/1900,NONE", "exten => 1900,1,rpt,1900"):
+            self.assertIn(text, r["output"])
+        self.assertIn(SVXU, r["changes"])
+        self.assertIn(SVX, r["changes"])
+
+    def test_apply_wires_both_ends_and_the_check_then_passes(self):
+        r = self.go(True)
+        self.assertTrue(r["success"], r["output"])
+        f = self.fs.files
+        self.assertIn("[1900](node-main)\nrxchannel = USRP/127.0.0.1:34000:32000", f["/etc/asterisk/rpt.conf"])
+        self.assertIn("exten => 1900,1,rpt,1900", f["/etc/asterisk/extensions.conf"])
+        self.assertRegex(f["/etc/asterisk/modules.conf"], r"(?m)^load\s*=\s*chan_usrp\.so")
+        for p in (SVX, SVXU):
+            self.assertIn("USRP_HOST=127.0.0.1\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000", f[p])
+            self.assertIn("CALL=AA1AA", f[p])
+        self.assertIn("[SimplexLogic]\nTYPE=Simplex\nCALLSIGN=AA1AA", f[SVX])
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, ["SvxLink ↔ node 1900 (34000/32000)"])
+        self.assertEqual(warn, [])
+        self.assertIn("svx", r["restart_groups"])
+        self.assertIn("asl3", r["restart_groups"])
+        self.assertIn("Restart svxlink-usrp", r["output"])
+        self.assertIn("closed in the firewall", r["output"])
+
+    def test_running_it_again_changes_nothing(self):
+        self.go(True)
+        self.fs.written.clear()
+        r = self.go(True)
+        self.assertTrue(r["success"])
+        self.assertEqual(r["changes"], [])
+        self.assertIn("already wired to node 1900", r["output"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_1900_taken_uses_the_next_free_node(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] += "\n[1900](node-main)\nrxchannel = Local/pseudo\n"
+        r = self.go(False)
+        self.assertTrue(r["success"], r["output"])
+        self.assertNotEqual(r["node"], "1900")
+        self.assertIn("Node 1900 is already in rpt.conf", r["output"])
+
+    def test_ports_taken_use_the_next_free_pair(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] += "\n[1050](node-main)\nrxchannel = USRP/127.0.0.1:34000:32050\n"
+        r = self.go(True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("rxchannel = USRP/127.0.0.1:34001:32001", self.fs.files["/etc/asterisk/rpt.conf"])
+        self.assertIn("USRP_RX_PORT=34001", self.fs.files[SVXU])
+        self.assertIn("USRP_TX_PORT=32001", self.fs.files[SVXU])
+        self.assertIn("34001/32001 are used", r["output"])
+
+    def test_a_typed_node_is_used_and_a_public_one_refused(self):
+        r = self.go(False, node="1905")
+        self.assertEqual(r["node"], "1905")
+        self.assertFalse(self.go(False, node="123456")["success"])
+        self.assertFalse(self.go(False, node="2000")["success"])
+
+    def test_no_svxlink_is_refused(self):
+        del self.fs.files[SVX]
+        del self.fs.files[SVXU]
+        r = self.go(True)
+        self.assertFalse(r["success"])
+        self.assertIn("SvxLink tab", r["output"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_no_rpt_conf_is_refused(self):
+        del self.fs.files["/etc/asterisk/rpt.conf"]
+        self.assertFalse(self.go(True)["success"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_only_the_svxlink_d_copy_is_enough(self):
+        del self.fs.files[SVX]
+        r = self.go(True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("USRP_RX_PORT=34000", self.fs.files[SVXU])
+
+    def test_missing_port_lines_are_added_under_the_header(self):
+        self.fs.files[SVXU] = "[UsrpLogic]\nTYPE=Usrp\nCALL=AA1AA\n#USRP_TX_PORT=1\n"
+        del self.fs.files[SVX]
+        r = self.go(True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("[UsrpLogic]\nUSRP_HOST=127.0.0.1\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000\nTYPE=Usrp", self.fs.files[SVXU])
+        self.assertIn("#USRP_TX_PORT=1", self.fs.files[SVXU])
+
+    def test_set_ports_leaves_other_sections_alone(self):
+        text = "[Other]\nUSRP_TX_PORT=1\n\n[UsrpLogic]\nUSRP_TX_PORT=2\nUSRP_RX_PORT=3\nUSRP_HOST=x\n\n[After]\nUSRP_RX_PORT=9\n"
+        out = h44._cfgr_svx_set_ports(text, 34000, 32000)
+        self.assertIn("[Other]\nUSRP_TX_PORT=1", out)
+        self.assertIn("[After]\nUSRP_RX_PORT=9", out)
+        self.assertIn("[UsrpLogic]\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000\nUSRP_HOST=127.0.0.1", out)
+        self.assertEqual(h44._cfgr_svx_set_ports("[X]\na=1\n", 1, 2), "[X]\na=1\n")
+
+
 if __name__ == "__main__":
     unittest.main()

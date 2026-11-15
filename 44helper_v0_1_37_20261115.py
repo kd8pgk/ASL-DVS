@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.36"
+APP_VERSION = "0.1.37"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17646,7 +17646,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -18613,7 +18613,8 @@ def _pn_allmon(changes: dict[str, tuple[bytes, bytes]], notes: list[str], add: l
         changes[_CFGR_ALLMON] = (am, data)
         notes.append("Allmon3 shows the change after it restarts (the ASL3 Restart button restarts it with Asterisk).")
 
-def _cfgr_act_pn_add(payload: dict, apply: bool) -> dict:
+def _cfgr_act_pn_add(payload: dict, apply: bool,
+                     more: Callable[[dict, list[str]], None] | None = None) -> dict:
     rpt_b = _cfgr_read(_CFGR_RPT)
     if rpt_b is None:
         return {"success": False, "output": f"{_CFGR_RPT} not found. Install ASL3 first."}
@@ -18695,8 +18696,103 @@ def _cfgr_act_pn_add(payload: dict, apply: bool) -> dict:
         clashes, _n = _cfgr_port_clashes(override)
         notes += [f"WARNING: {w}" for w in clashes]
     _pn_allmon(changes, notes, [node], [])
+    if more is not None:
+        more(changes, notes)
     head = [f"Private node {node} ({'USRP bridge ' + rx if kind == 'usrp' else 'plain, ' + rx}):"]
     return _pn_finish(changes, f"adding private node {node}", apply, head, notes, {"node": node})
+
+_CFGR_SVX_BRIDGE_NODE = "1900"
+_CFGR_SVX_BRIDGE_TX, _CFGR_SVX_BRIDGE_RX = 34000, 32000
+
+def _cfgr_svx_set_ports(text: str, listen: int, send: int) -> str:
+    want = {"usrp_host": ("USRP_HOST", "127.0.0.1"), "usrp_tx_port": ("USRP_TX_PORT", str(send)),
+            "usrp_rx_port": ("USRP_RX_PORT", str(listen))}
+    lines = text.split("\n")
+    start = end = None
+    for i, line in enumerate(lines):
+        h = _CFGR_HDR_RE.match(line)
+        if h:
+            if start is not None:
+                end = i
+                break
+            if h.group(1).strip().lower() == "usrplogic":
+                start = i
+    if start is None:
+        return text
+    if end is None:
+        end = len(lines)
+    seen: set[str] = set()
+    for i in range(start + 1, end):
+        st = lines[i].strip()
+        if not st or st[0] in "#;" or "=" not in st:
+            continue
+        k = st.split("=", 1)[0].strip().lower()
+        if k in want and k not in seen:
+            seen.add(k)
+            lines[i] = f"{want[k][0]}={want[k][1]}"
+    add = [f"{name}={value}" for k, (name, value) in want.items() if k not in seen]
+    return "\n".join(lines[:start + 1] + add + lines[start + 1:])
+
+def _cfgr_svx_bridge_pick(node_want: str) -> tuple[str, int, int, list[str]] | str:
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return f"{_CFGR_RPT} not found. Install ASL3 first."
+    sc = _pn_scan(_cfgr_lines(rpt_b.decode("utf-8", "replace")))
+    notes: list[str] = []
+    node = node_want or _CFGR_SVX_BRIDGE_NODE
+    if not node_want and node in sc["used"]:
+        node = _pn_next_free(sc["used"])
+        if not node:
+            return "No free private node number left (1000-1999)."
+        notes.append(f"Node {_CFGR_SVX_BRIDGE_NODE} is already in rpt.conf, so the next free number, {node}, is used.")
+    busy = set(sc["ports"])
+    for port, who, _where in _cfgr_listeners():
+        if who != "SvxLink" and port.isdigit():
+            busy.add(int(port))
+    for k in range(100):
+        tx, rx = _CFGR_SVX_BRIDGE_TX + k, _CFGR_SVX_BRIDGE_RX + k
+        if tx not in busy and rx not in busy:
+            if k:
+                notes.append(f"Ports {_CFGR_SVX_BRIDGE_TX}/{_CFGR_SVX_BRIDGE_RX} are already used, so {tx}/{rx} are used.")
+            return node, tx, rx, notes
+    return "No free USRP port pair was found from 34000/32000 to 34099/32099."
+
+def _cfgr_act_svx_bridge(payload: dict, apply: bool) -> dict:
+    texts = [t for t in (_cfgr_text(_CFGR_SVX_USRP), _cfgr_text(_CFGR_SVX_CONF)) if t is not None]
+    if not any("usrplogic" in _cfgr_id_ini(t) for t in texts):
+        return {"success": False, "output": "SvxLink's [UsrpLogic] was not found under /usr/local/etc/svxlink. Install "
+                "the SvxLink USRP build from the SvxLink tab first (steps 1 to 8)."}
+    wired = [p for p in _cfgr_usrp_scan()["pairs"] if p.get("bridge") == "SvxLink" and p.get("state") == "ok"]
+    if wired:
+        return {"success": True, "changes": [], "node": str(wired[0]["node"]),
+                "output": f"SvxLink is already wired to node {wired[0]['node']} "
+                          f"(USRP/127.0.0.1:{wired[0]['a']}:{wired[0]['b']}). Nothing to change."}
+    node_want = str(payload.get("node", "")).strip()
+    pick = _cfgr_svx_bridge_pick(node_want)
+    if isinstance(pick, str):
+        return {"success": False, "output": pick}
+    node, tx, rx, pick_notes = pick
+
+    def more(changes: dict, notes: list[str]) -> None:
+        notes[:0] = pick_notes
+        n = 0
+        for path in (_CFGR_SVX_USRP, _CFGR_SVX_CONF):
+            b = _cfgr_read(path)
+            if b is None:
+                continue
+            old = b.decode("utf-8", "replace")
+            new = _cfgr_svx_set_ports(old, tx, rx)
+            if new != old:
+                changes[path] = (b, new.encode("utf-8"))
+                n += 1
+        notes.append(f"SvxLink [UsrpLogic]: USRP_HOST=127.0.0.1, USRP_RX_PORT={tx} (SvxLink listens), "
+                     f"USRP_TX_PORT={rx} (SvxLink sends to Asterisk)" + ("." if n else ": already set."))
+        notes.append("SvxLink listens on every interface, not only 127.0.0.1. Keep UDP "
+                     f"{tx} closed in the firewall and out of the tunnel.")
+        notes.append("Restart svxlink-usrp as well as Asterisk for the bridge to come up.")
+
+    return _cfgr_act_pn_add({"node": node, "kind": "usrp", "tx_port": str(tx), "rx_port": str(rx),
+                             "ext": payload.get("ext", True)}, apply, more)
 
 def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
     node = str(payload.get("node", "")).strip()
@@ -18762,6 +18858,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "preset_apply": lambda p: _cfgr_act_preset_apply(p, True),
     "pn_add_preview": lambda p: _cfgr_act_pn_add(p, False),
     "pn_add": lambda p: _cfgr_act_pn_add(p, True),
+    "svx_bridge_preview": lambda p: _cfgr_act_svx_bridge(p, False),
+    "svx_bridge": lambda p: _cfgr_act_svx_bridge(p, True),
     "pn_remove_preview": lambda p: _cfgr_act_pn_remove(p, False),
     "pn_remove": lambda p: _cfgr_act_pn_remove(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
@@ -19063,6 +19161,21 @@ function cfgPnAdd(btn, apply) {
   });
 }
 
+function cfgSvxBridge(btn, apply) {
+  var p = {action: apply ? 'svx_bridge' : 'svx_bridge_preview', node: document.getElementById('cfg-pn-node').value.trim(),
+           ext: document.getElementById('cfg-pn-ext').checked};
+  if (!apply) { cfgPost(p, 'cfg-pn-out', btn); return; }
+  p.action = 'svx_bridge_preview';
+  cfgPost(p, 'cfg-pn-out', btn).then(function(res) {
+    if (!res || !res.success || !(res.changes || []).length) return;
+    if (!confirm('Add SvxLink bridge node ' + res.node + ' and set the SvxLink USRP ports to match?\n\n' +
+                 'An automatic copy of the current files is saved first. Nothing is restarted.')) return;
+    p.action = 'svx_bridge';
+    p.node = res.node;
+    cfgPost(p, 'cfg-pn-out', btn);
+  });
+}
+
 function cfgPnRemove(btn, node, apply) {
   if (apply && !confirm('Remove private node ' + node + ' (its stanza, [nodes] line and exten line)?\n\n' +
                         'An automatic copy of the current files is saved first. Asterisk is not restarted.')) return;
@@ -19172,6 +19285,8 @@ function cfgRender(d) {
   var tp = (d.presets || {}).travel_node || {};
   document.getElementById('cfg-preset-state').textContent = tp.exists ? ('saved ' + tp.saved_at) : 'not saved on this node';
   cfgPnRender(d.private_nodes);
+  var sb = document.getElementById('cfg-svx-bridge');
+  if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
   document.getElementById('cfg-library').textContent = d.library;
   document.getElementById('cfg-checked-at').textContent = 'checked ' + d.checked_at;
 }
@@ -19697,6 +19812,12 @@ def _render_config_panel() -> str:
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPnAdd(this,false)">Preview</button>
       <button class="btn-run" onclick="cfgPnAdd(this,true)">Add node</button>
+    </div>
+    <div class="step-actions" id="cfg-svx-bridge" style="display:none">
+      <span class="cfg-hint">SvxLink USRP is installed. One step: adds the bridge node (1900, ports 34000/32000, or the next free
+        ones; a number typed above is used instead) and sets SvxLink's [UsrpLogic] ports to match.</span>
+      <button class="btn-copy" onclick="cfgSvxBridge(this,false)">Preview SvxLink bridge</button>
+      <button class="btn-run" onclick="cfgSvxBridge(this,true)">Add SvxLink bridge node</button>
     </div>
     <div id="cfg-pn-list"></div>
     <div class="asl3-console shown placeholder" id="cfg-pn-out">(nothing run yet)</div>

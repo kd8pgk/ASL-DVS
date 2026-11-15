@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_36_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_37_20261115.py`. Newest entries first.
+
+## 0.1.37 (2026-11-15)
+
+Config tab, stage 5 of SvxLink USRP: an **Add SvxLink bridge node** button on the Add private node card, shown when the SvxLink USRP build and ASL3 are both installed. One step wires SvxLink to ASL3 through a private node.
+
+- **What it does:** adds the private USRP node (stanza, `[nodes]` line, exten line, `chan_usrp` set to load, Allmon3 entry, the same as Add node) and sets `USRP_HOST`, `USRP_RX_PORT` and `USRP_TX_PORT` in SvxLink's `[UsrpLogic]`, in both `svxlink.d/UsrpLogic.conf` and `svxlink.conf`, to the mirror-image ports. Preview shows every change as a diff and writes nothing; adding saves an automatic copy first. Nothing is restarted; the result names Asterisk and `svxlink-usrp`.
+- **Numbers:** node 1900 with `rxchannel = USRP/127.0.0.1:34000:32000`, so SvxLink listens on 34000 and sends to 32000. If 1900 is taken the next free private number is used; if either port is used by another USRP node or bridge, the next free pair (34001/32001 and up). A number typed in the Node number box is used instead of 1900.
+- **Safe to press again:** when SvxLink is already wired to a node it says so and changes nothing.
+- A port line missing from `[UsrpLogic]` is added under its header; other sections are not touched. The result reminds that SvxLink listens on every interface, so its port must stay closed in the firewall.
+- This is a release: the page and the server gained an action.
 
 ## 0.1.36 (2026-11-15)
 
