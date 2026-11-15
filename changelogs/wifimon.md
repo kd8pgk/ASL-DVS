@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_56_0_20261113.py`. Newest entries first.
+Current file: `wifimon_v5_57_0_20261115.py`. Newest entries first.
+
+## 5.57.0 (2026-11-15)
+
+Error replies (status 400 and up) now carry a `message` key, the same text as `error`, like the other tools. `error` stays, so a page or tool from an older version keeps working. This is a release: what the server sends changed.
 
 ## 5.56.0 (2026-11-13)
 
