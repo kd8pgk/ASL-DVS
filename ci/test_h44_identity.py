@@ -759,5 +759,136 @@ class NodeRename(RenameBase):
         self.assertEqual(saved, ["654321"])
 
 
+SVX = "/usr/local/etc/svxlink/svxlink.conf"
+SVXU = "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"
+SVXE = "/usr/local/etc/svxlink/svxlink.d/ModuleEchoLink.conf"
+SVX_FILES = dict(DMR_FILES)
+SVX_FILES.update({
+    SVX: ("[GLOBAL]\nLOGICS=SimplexLogic,UsrpLogic\nLINKS=LinkToUsrp\n\n[SimplexLogic]\nTYPE=Simplex\nCALLSIGN=AA1AA\n\n"
+          "[RepeaterLogic]\nTYPE=Repeater\nCALLSIGN=AA1AA\n\n[ReflectorLogic]\nTYPE=Reflector\n"
+          "HOSTS=reflector.example.org\nCALLSIGN=\"AA1AA\"\n#AUTH_KEY=\"Change this key now!\"\n\n"
+          "[UsrpLogic]\nTYPE=Usrp\nUSRP_HOST=127.0.0.1\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000\nCALL=AA1AA\n#DMRID=1234567\n\n"
+          "[NetRx]\nTYPE=Net\nAUTH_KEY=\"Change this key now!\"\n\n[LocationInfo]\nCALLSIGN=AA1AA\n"),
+    SVXU: "[UsrpLogic]\nTYPE=Usrp\nUSRP_HOST=127.0.0.1\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000\nCALL=AA1AA\n#DMRID=1234567\n",
+    SVXE: "[ModuleEchoLink]\nNAME=EchoLink\nCALLSIGN=AA1AA-L\nPASSWORD=MyPass\nSYSOPNAME=MyName\nLOCATION=[Svx] Fq, MyTown\n",
+})
+
+
+class SvxBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(SVX_FILES)
+
+    def rows(self):
+        return {r["fid"]: r for r in h44._cfgr_identity_scan()["rows"]}
+
+
+class SvxReadRows(SvxBase):
+    def test_every_field_is_read_from_the_right_place(self):
+        r = self.rows()
+        self.assertEqual(r["svx_simplex_call"]["raw"], "AA1AA")
+        self.assertEqual(r["svx_repeater_call"]["raw"], "AA1AA")
+        self.assertEqual(r["svx_reflector_call"]["raw"], "AA1AA")
+        self.assertEqual(r["svx_usrp_call"]["raw"], "AA1AA")
+        self.assertEqual(r["svx_usrp_call"]["file"], SVX)
+        self.assertEqual(r["svx_usrp_call_d"]["file"], SVXU)
+        self.assertEqual(r["svx_el_call"]["raw"], "AA1AA-L")
+        self.assertEqual(r["svx_el_call"]["value"], "AA1AA")
+        self.assertEqual(r["svx_el_pw"]["raw"], "MyPass")
+        self.assertEqual(r["svx_el_pw"]["kind"], "secret")
+        self.assertEqual(r["svx_el_sysop"]["raw"], "MyName")
+        self.assertEqual(r["svx_el_location"]["raw"], "[Svx] Fq, MyTown")
+
+    def test_commented_out_lines_give_no_row(self):
+        r = self.rows()
+        self.assertNotIn("svx_usrp_dmrid", r)
+        self.assertNotIn("svx_usrp_dmrid_d", r)
+        self.assertNotIn("svx_refl_key", r)
+
+    def test_active_dmrid_and_reflector_key_are_read(self):
+        self.fs.files[SVX] = self.fs.files[SVX].replace("#DMRID=1234567", "DMRID=1234567").replace(
+            '#AUTH_KEY="Change this key now!"\n\n[UsrpLogic]', 'AUTH_KEY="reflkey"\n\n[UsrpLogic]')
+        self.fs.files[SVXU] = self.fs.files[SVXU].replace("#DMRID=1234567", "DMRID=1234567")
+        r = self.rows()
+        self.assertEqual(r["svx_usrp_dmrid"]["raw"], "1234567")
+        self.assertEqual(r["svx_usrp_dmrid_d"]["raw"], "1234567")
+        self.assertEqual(r["svx_refl_key"]["raw"], "reflkey")
+        self.assertEqual(r["svx_refl_key"]["kind"], "secret")
+        self.assertEqual(h44._cfgr_identity_scan()["groups"]["dmr"]["state"], "match")
+
+    def test_other_sections_auth_key_is_not_taken_for_the_reflector(self):
+        self.assertNotIn("svx_refl_key", self.rows())
+
+    def test_location_info_callsign_is_not_read(self):
+        self.fs.files[SVX] = self.fs.files[SVX].replace("[LocationInfo]\nCALLSIGN=AA1AA", "[LocationInfo]\nCALLSIGN=ZZ9ZZ")
+        self.assertEqual(h44._cfgr_identity_scan()["groups"]["callsign"]["state"], "match")
+
+    def test_callsign_group_matches_with_quotes_and_suffix(self):
+        self.assertEqual(h44._cfgr_identity_scan()["groups"]["callsign"]["state"], "match")
+
+    def test_the_two_usrplogic_copies_are_flagged_when_they_differ(self):
+        self.fs.files[SVXU] = self.fs.files[SVXU].replace("CALL=AA1AA", "CALL=BB2BB")
+        d = h44._cfgr_identity_scan()
+        self.assertEqual(d["groups"]["callsign"]["state"], "differs")
+        tags = {r["fid"]: r["tags"].get("callsign") for r in d["rows"]}
+        self.assertNotEqual(tags["svx_usrp_call"], tags["svx_usrp_call_d"])
+
+    def test_stock_template_callsign_shows_as_differs(self):
+        self.fs.files[SVXE] = self.fs.files[SVXE].replace("CALLSIGN=AA1AA-L", "CALLSIGN=MYCALL-L")
+        self.assertEqual(h44._cfgr_identity_scan()["groups"]["callsign"]["state"], "differs")
+
+    def test_no_svxlink_files_means_no_svxlink_rows(self):
+        for p in (SVX, SVXU, SVXE):
+            del self.fs.files[p]
+        self.assertFalse([f for f in self.rows() if f.startswith("svx_")])
+
+    def test_stands_alone_rows_are_not_settable_yet(self):
+        r = self.rows()
+        for fid in ("svx_el_pw", "svx_el_sysop", "svx_el_location"):
+            self.assertFalse(r[fid]["settable"], fid)
+
+    def test_values_are_masked_until_revealed(self):
+        pub = {r["fid"]: r for r in h44._cfgr_identity_public(False)["rows"]}
+        self.assertEqual(pub["svx_el_pw"]["raw"], h44._CFGR_ID_MASK)
+        self.assertEqual(pub["svx_simplex_call"]["raw"], h44._CFGR_ID_MASK)
+        rev = {r["fid"]: r for r in h44._cfgr_identity_public(True)["rows"]}
+        self.assertEqual(rev["svx_el_pw"]["raw"], "MyPass")
+
+
+class SvxSectionWrites(SvxBase):
+    def test_callsign_set_everywhere_writes_svxlink_and_keeps_quotes_and_suffix(self):
+        r = h44._cfgr_act_id_set({"group": "callsign", "callsign": "BB2BB"}, True)
+        self.assertTrue(r["success"], r["output"])
+        f = self.fs.files
+        self.assertIn("[SimplexLogic]\nTYPE=Simplex\nCALLSIGN=BB2BB", f[SVX])
+        self.assertIn("[RepeaterLogic]\nTYPE=Repeater\nCALLSIGN=BB2BB", f[SVX])
+        self.assertIn('CALLSIGN="BB2BB"', f[SVX])
+        self.assertIn("USRP_RX_PORT=34000\nCALL=BB2BB", f[SVX])
+        self.assertIn("CALL=BB2BB", f[SVXU])
+        self.assertIn("CALLSIGN=BB2BB-L", f[SVXE])
+        self.assertIn("[LocationInfo]\nCALLSIGN=AA1AA", f[SVX])
+        self.assertIn("PASSWORD=MyPass", f[SVXE])
+        self.assertIn("svxlink-usrp", r["output"])
+
+    def test_dmr_id_writes_an_active_dmrid_and_leaves_a_commented_one(self):
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("#DMRID=1234567", self.fs.files[SVX])
+        self.assertIn("#DMRID=1234567", self.fs.files[SVXU])
+        self.fs.files[SVXU] = self.fs.files[SVXU].replace("#DMRID=1234567", "DMRID=1234567")
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "1112223"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("\nDMRID=1112223", self.fs.files[SVXU])
+        self.assertIn("svxlink-usrp", r["output"])
+
+    def test_a_node_without_svxlink_lists_it_as_skipped_and_still_works(self):
+        for p in (SVX, SVXU, SVXE):
+            del self.fs.files[p]
+        r = h44._cfgr_act_id_set({"group": "callsign", "callsign": "BB2BB"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Callsign=BB2BB", self.fs.files[MB])
+        self.assertNotIn("svxlink-usrp", r["output"].split("Restart these")[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

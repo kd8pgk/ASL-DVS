@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_33_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_34_20261115.py`. Newest entries first.
+
+## 0.1.34 (2026-11-15)
+
+Config tab, stage 2 of SvxLink USRP: the Identity card reads the source-built SvxLink's files (`/usr/local/etc/svxlink`). A node without SvxLink shows no new rows.
+
+- **Callsign:** `CALLSIGN` in `[SimplexLogic]`, `[RepeaterLogic]` and `[ReflectorLogic]`, `CALL` in `[UsrpLogic]` in both `svxlink.conf` and `svxlink.d/UsrpLogic.conf` (the build installs both, so the card flags them when they differ), and the EchoLink module's `CALLSIGN` (compared without its `-L` or `-R`).
+- **DMR ID:** `[UsrpLogic]` `DMRID`, in both files, when the line is active. The stock line is commented out and gives no row.
+- **Stands alone:** the EchoLink module's `PASSWORD`, `SYSOPNAME` and `LOCATION`, and `[ReflectorLogic]` `AUTH_KEY` when active. These rows are read-only in this release.
+- **Not read:** `[LocationInfo]` `CALLSIGN` (APRS) and the `AUTH_KEY` lines of other sections.
+- **The Callsign and DMR ID fields write the new rows too**, because each section writes every row it shows: Set everywhere now also sets the SvxLink callsigns (quotes and `-L` kept) and an active `DMRID`, and the restart list names `svxlink-usrp`.
+- A value in double quotes (`CALLSIGN="AA1AA"`) is now compared without the quotes, in every `.ini` the card reads.
+- This is a release: the card reads and writes more files.
 
 ## 0.1.33 (2026-11-15)
 
