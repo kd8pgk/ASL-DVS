@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.25"
+APP_VERSION = "0.1.26"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15281,7 +15281,7 @@ def _cfgr_setcall_new(form: str, value: str, old: str) -> str | None:
         return _cfgr_id_render(form, value + (cur[m.start():] if m else ""), old)
     return _cfgr_id_render(form, value, old)
 
-def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str) -> list[dict]:
+def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str, target: tuple[str, str] | None = None) -> list[dict]:
     ast = path.startswith("/etc/asterisk/")
     rx = _CFGR_SETCALL_AST_RE if ast else _CFGR_SETCALL_INI_RE
     mask = _cfgr_managed_mask(lines) if ast else [False] * len(lines)
@@ -15312,6 +15312,8 @@ def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str) -> lis
             ok = sec.isdigit() and k.lower() == key
         else:
             ok = k.lower() == key
+        if ok and target is not None:
+            ok = sec.lower() == target[0].lower() and k.lower() == target[1].lower()
         if not ok or sec in done:
             continue
         done.add(sec)
@@ -15327,11 +15329,64 @@ def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str) -> lis
                     "text": m.group(1) + q + new + q + m.group(3) + raw[len(body):]})
     return out
 
-def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
-    value = str(payload.get("callsign", "")).strip().upper()
+def _cfgr_set_mask(fd: dict, text: str) -> str:
+    if fd.get("kind") == "secret" and text:
+        return _CFGR_ID_MASK
+    return text
+
+def _cfgr_set_callsign_value(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("callsign", payload.get("value", ""))).strip().upper()
     if not _CFGR_SETCALL_RE.match(value):
-        return {"success": False, "output": "A callsign is 3 to 7 letters and digits, with at least one digit."}
-    fields = [fd for fd in _CFGR_ID_FIELDS if "callsign" in fd["groups"]] + _CFGR_SETCALL_EXTRA
+        return None, "A callsign is 3 to 7 letters and digits, with at least one digit."
+    return value, ""
+
+def _cfgr_set_callsign_fields(payload: dict) -> list[dict]:
+    return [fd for fd in _CFGR_ID_FIELDS if "callsign" in fd["groups"]] + _CFGR_SETCALL_EXTRA
+
+def _cfgr_set_callsign_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+    c = globals().get("_cfg")
+    old_helper = c.get("identity", "callsign", fallback="").strip() if c is not None else ""
+    if old_helper == value:
+        return [], None
+    report = [f"  44helper callsign: {CONFIG_FILE} [identity] callsign: {old_helper or '(empty)'} -> {value}"]
+    def commit() -> list[str]:
+        if c is None:
+            return []
+        if not c.has_section("identity"):
+            c.add_section("identity")
+        c.set("identity", "callsign", value)
+        save_config(c)
+        return [f"  {CONFIG_FILE}: written"]
+    return report, commit
+
+def _cfgr_set_callsign_tail(services: list[str], logins: list[str]) -> list[str]:
+    tail: list[str] = []
+    if logins:
+        tail += ["", "Logins changed (" + ", ".join(logins) + "): the ircDDB and DPlus accounts must be registered "
+                 "under the new callsign, or the D-Star gateway will not log in."]
+    if services:
+        tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
+    if "nodecontrol" in services:
+        tail += ["Restart the Dashboard (nodecontrol) first: until then it holds the old callsign, and its next Save "
+                 "or M17 connect puts the old callsign back."]
+    return tail
+
+_CFGR_SET_RULES: dict[str, dict] = {
+    "callsign": {"noun": "callsign", "check": _cfgr_set_callsign_value, "fields": _cfgr_set_callsign_fields,
+                 "extra": _cfgr_set_callsign_extra, "logins": _CFGR_SETCALL_LOGINS, "tail": _cfgr_set_callsign_tail,
+                 "services": _CFGR_SETCALL_SERVICES},
+}
+
+def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
+    group = str(payload.get("group", ""))
+    rule = _CFGR_SET_RULES.get(group)
+    if rule is None:
+        return {"success": False, "output": "This section can't be set from here."}
+    value, why = rule["check"](payload)
+    if value is None:
+        return {"success": False, "output": why}
+    noun = rule["noun"]
+    fields = rule["fields"](payload)
     plan: dict[str, dict] = {}
     report: list[str] = []
     missing: list[str] = []
@@ -15350,7 +15405,7 @@ def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
             p = plan[path]
             if p["lines"] is None:
                 continue
-            found = _cfgr_setcall_file(fd, path, p["lines"], value)
+            found = _cfgr_setcall_file(fd, path, p["lines"], value, rule.get("target"))
             if not found and fd["src"] != "rpt_key":
                 report.append(f"  {fd['label']}: {path}: no {fd['key']} line, left alone")
             for e in found:
@@ -15358,39 +15413,30 @@ def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
                     report.append(f"  {fd['label']}: {path} {e['where']}: {e['skip']}")
                     continue
                 if e["old"] == e["new"]:
-                    report.append(f"  {fd['label']}: {path} {e['where']}: already {e['new']}")
+                    report.append(f"  {fd['label']}: {path} {e['where']}: already {_cfgr_set_mask(fd, e['new'])}")
                     continue
                 p["edits"].append(e)
-                report.append(f"  {fd['label']}: {path} {e['where']}: {e['old'] or '(empty)'} -> {e['new']}")
-                if fd["fid"] in _CFGR_SETCALL_LOGINS:
+                report.append(f"  {fd['label']}: {path} {e['where']}: {_cfgr_set_mask(fd, e['old']) or '(empty)'} -> {_cfgr_set_mask(fd, e['new'])}")
+                if fd["fid"] in rule["logins"]:
                     logins.append(fd["label"])
-    c = globals().get("_cfg")
-    old_helper = c.get("identity", "callsign", fallback="").strip() if c is not None else ""
-    if old_helper != value:
-        report.append(f"  44helper callsign: {CONFIG_FILE} [identity] callsign: {old_helper or '(empty)'} -> {value}")
+    extra_report, extra_commit = rule["extra"](value)
+    report += extra_report
     changed = [path for path, p in plan.items() if p["edits"]]
-    services = sorted({_CFGR_SETCALL_SERVICES[path] for path in changed if path in _CFGR_SETCALL_SERVICES})
-    head = [f"Set the callsign to {value} in every file below.", ""]
+    services = sorted({rule["services"][path] for path in changed if path in rule["services"]})
+    head = [f"Set the {noun} to {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)} in every file below.", ""]
     tail: list[str] = []
     if missing:
         tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
-    if logins:
-        tail += ["", "Logins changed (" + ", ".join(logins) + "): the ircDDB and DPlus accounts must be registered "
-                 "under the new callsign, or the D-Star gateway will not log in."]
-    if services:
-        tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
-    if "nodecontrol" in services:
-        tail += ["Restart the Dashboard (nodecontrol) first: until then it holds the old callsign, and its next Save "
-                 "or M17 connect puts the old callsign back."]
-    if not changed and old_helper == value:
+    tail += rule["tail"](services, logins)
+    if not changed and extra_commit is None:
         return {"success": True, "changes": 0, "output": "\n".join(head + report + tail + ["", "Nothing to change."])}
     if not apply:
-        return {"success": True, "changes": len(changed) + (old_helper != value),
+        return {"success": True, "changes": len(changed) + (extra_commit is not None),
                 "output": "\n".join(head + report + tail)}
     groups = [g for g, d in _CFGR_GROUPS.items() if any(path in d["files"] for path in changed)]
-    lines_out = [f"Callsign set to {value}.", ""]
+    lines_out = [f"{noun[:1].upper()}{noun[1:]} set to {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)}.", ""]
     if groups:
-        sid, pruned = _cfgr_auto_point(f"callsign {value}", groups)
+        sid, pruned = _cfgr_auto_point(f"{noun} {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)}", groups)
         lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = True
@@ -15407,14 +15453,13 @@ def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
         if res.startswith("NOT") or res.startswith("skipped"):
             ok = False
         lines_out.append(f"  {path}: {res}")
-    if c is not None and old_helper != value:
-        if not c.has_section("identity"):
-            c.add_section("identity")
-        c.set("identity", "callsign", value)
-        save_config(c)
-        lines_out.append(f"  {CONFIG_FILE}: written")
-    log(f"{'OK' if ok else 'FAIL'}: CONFIG callsign set to {value} in {len(changed)} file(s)")
+    if extra_commit is not None:
+        lines_out += extra_commit()
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG {noun} set in {len(changed)} file(s)")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
+
+def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
+    return _cfgr_act_id_set(dict(payload, group="callsign"), apply)
 
 def build_config_status() -> dict:
     snap = _cfgr_snap_dir("restore")
@@ -17012,7 +17057,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "gateways_apply", "gateways_revert", "id_set_callsign",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -18137,6 +18182,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "reinstall_dismiss": _cfgr_act_reinstall_dismiss,
     "id_set_callsign_preview": lambda p: _cfgr_act_id_set_callsign(p, False),
     "id_set_callsign": lambda p: _cfgr_act_id_set_callsign(p, True),
+    "id_set_preview": lambda p: _cfgr_act_id_set(p, False),
+    "id_set": lambda p: _cfgr_act_id_set(p, True),
     "usrp_verify": _cfgr_act_usrp_verify,
     "bundle_fetch": _fcr_act_fetch,
     "bundle_preview": _fcr_act_preview,
