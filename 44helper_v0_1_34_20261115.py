@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.33"
+APP_VERSION = "0.1.34"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14865,6 +14865,9 @@ _CFGR_RPT_HTTP = "/etc/asterisk/rpt_http_registrations.conf"
 _CFGR_MANAGER = "/etc/asterisk/manager.conf"
 _CFGR_PH_PJSIP = "/etc/asterisk/dvs_phone_pjsip.conf"
 _CFGR_PH_IAX = "/etc/asterisk/dvs_phone_iax.conf"
+_CFGR_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
+_CFGR_SVX_USRP = "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"
+_CFGR_SVX_EL = "/usr/local/etc/svxlink/svxlink.d/ModuleEchoLink.conf"
 _CFGR_ID_FIELDS: list[dict] = [
     {"fid": "rpt_node", "label": "Public node", "src": "rpt_public", "file": _CFGR_RPT,
      "groups": ("node",), "form": "section_name", "kind": "value", "anchor": True},
@@ -14962,6 +14965,30 @@ _CFGR_ID_FIELDS: list[dict] = [
      "section": "aprs", "key": "Password", "groups": ("alone",), "form": "plain", "kind": "secret"},
     {"fid": "m17_call", "label": "USRP2M17 callsign", "src": "ini", "file": _CFGR_M17INI,
      "section": "m17 network", "key": "Callsign", "groups": ("callsign",), "form": "first", "kind": "value", "expect": True},
+    {"fid": "svx_simplex_call", "label": "SvxLink SimplexLogic callsign", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "simplexlogic", "key": "CALLSIGN", "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "svx_repeater_call", "label": "SvxLink RepeaterLogic callsign", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "repeaterlogic", "key": "CALLSIGN", "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "svx_reflector_call", "label": "SvxLink ReflectorLogic callsign", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "reflectorlogic", "key": "CALLSIGN", "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "svx_usrp_call", "label": "SvxLink UsrpLogic CALL (svxlink.conf)", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "usrplogic", "key": "CALL", "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "svx_usrp_call_d", "label": "SvxLink UsrpLogic CALL", "src": "ini", "file": _CFGR_SVX_USRP,
+     "section": "usrplogic", "key": "CALL", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "svx_el_call", "label": "SvxLink EchoLink callsign", "src": "ini", "file": _CFGR_SVX_EL,
+     "section": "moduleecholink", "key": "CALLSIGN", "groups": ("callsign",), "form": "echolink", "kind": "value"},
+    {"fid": "svx_usrp_dmrid", "label": "SvxLink UsrpLogic DMRID (svxlink.conf)", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "usrplogic", "key": "DMRID", "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "svx_usrp_dmrid_d", "label": "SvxLink UsrpLogic DMRID", "src": "ini", "file": _CFGR_SVX_USRP,
+     "section": "usrplogic", "key": "DMRID", "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "svx_el_pw", "label": "SvxLink EchoLink password", "src": "ini", "file": _CFGR_SVX_EL,
+     "section": "moduleecholink", "key": "PASSWORD", "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "svx_el_sysop", "label": "SvxLink EchoLink sysop name", "src": "ini", "file": _CFGR_SVX_EL,
+     "section": "moduleecholink", "key": "SYSOPNAME", "groups": ("alone",), "form": "plain", "kind": "value"},
+    {"fid": "svx_el_location", "label": "SvxLink EchoLink location", "src": "ini", "file": _CFGR_SVX_EL,
+     "section": "moduleecholink", "key": "LOCATION", "groups": ("alone",), "form": "plain", "kind": "value"},
+    {"fid": "svx_refl_key", "label": "SvxLink reflector key", "src": "ini", "file": _CFGR_SVX_CONF,
+     "section": "reflectorlogic", "key": "AUTH_KEY", "groups": ("alone",), "form": "plain", "kind": "secret"},
     {"fid": "ph_json", "label": "phone.json", "src": "phone_json", "file": _CFGR_PHONE_JSON,
      "groups": ("phone",), "form": "plain", "kind": "value"},
     {"fid": "ph_pjsip", "label": "dvs_phone_pjsip.conf", "src": "phone_pjsip", "file": _CFGR_PH_PJSIP,
@@ -15028,7 +15055,10 @@ def _cfgr_id_ini(text: str) -> dict[str, dict[str, str]]:
         if not s or s[0] in "#;" or "=" not in s:
             continue
         k, v = s.split("=", 1)
-        out[sec].setdefault(k.strip().lower(), _CFGR_INI_TAIL_RE.sub("", v).strip())
+        v = _CFGR_INI_TAIL_RE.sub("", v).strip()
+        if len(v) >= 2 and v[0] == v[-1] == '"':
+            v = v[1:-1]
+        out[sec].setdefault(k.strip().lower(), v)
     return out
 
 def _cfgr_flat(text: str) -> dict[str, str]:
@@ -15285,7 +15315,8 @@ _CFGR_SETCALL_SERVICES: dict[str, str] = {
     _CFGR_RPT: "asterisk", _CFGR_ECHOLINK: "asterisk", "/etc/asterisk/custom/echolink.conf": "asterisk",
     _CFGR_MMDVM: "mmdvm_bridge", _CFGR_IRCDDB: "ircddbgatewayd", _CFGR_YSFGW: "ysfgateway",
     _CFGR_P25GW: "p25gateway", _CFGR_NXDNGW: "nxdngateway", _CFGR_M17INI: "usrp2m17",
-    _CFGR_ASLDVS_CONF: "nodecontrol"}
+    _CFGR_ASLDVS_CONF: "nodecontrol", _CFGR_SVX_CONF: "svxlink-usrp", _CFGR_SVX_USRP: "svxlink-usrp",
+    _CFGR_SVX_EL: "svxlink-usrp"}
 _CFGR_SETCALL_AST_RE = re.compile(r"^(\s*[^=;\s][^=]*?\s*=>?\s*)(.*?)(\s*(?:;.*)?)$")
 _CFGR_SETCALL_INI_RE = re.compile(r"^(\s*[^=;#\s][^=]*?\s*=\s*)(.*?)(\s+;.*|\s*)$")
 
@@ -15395,7 +15426,8 @@ def _cfgr_set_callsign_tail(services: list[str], logins: list[str]) -> list[str]
     return tail
 
 _CFGR_DMR_SERVICES: dict[str, str] = {
-    _CFGR_MMDVM: "mmdvm_bridge", _CFGR_AB: "analog_bridge", _CFGR_DVSINI: "stfu", _CFGR_YSFGW: "ysfgateway"}
+    _CFGR_MMDVM: "mmdvm_bridge", _CFGR_AB: "analog_bridge", _CFGR_DVSINI: "stfu", _CFGR_YSFGW: "ysfgateway",
+    _CFGR_SVX_CONF: "svxlink-usrp", _CFGR_SVX_USRP: "svxlink-usrp"}
 _CFGR_DMR_RPT_KEYS = ("rpt_id", "rpt_id_2", "rpt_id_3")
 
 def _cfgr_set_no_extra(value: str, payload: dict) -> tuple[list[str], Callable[[], list[str]] | None]:
