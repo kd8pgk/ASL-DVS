@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.26"
+APP_VERSION = "0.1.27"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14916,6 +14916,12 @@ _CFGR_ID_FIELDS: list[dict] = [
      "groups": ("callsign",), "form": "plain", "kind": "value"},
     {"fid": "var_dmr", "label": "dvs dmr_id", "src": "flat", "file": _CFGR_VARTXT, "key": "dmr_id",
      "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "var_rpt_id", "label": "dvs rpt_id", "src": "flat", "file": _CFGR_VARTXT, "key": "rpt_id",
+     "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "var_rpt_id_2", "label": "dvs rpt_id_2", "src": "flat", "file": _CFGR_VARTXT, "key": "rpt_id_2",
+     "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "var_rpt_id_3", "label": "dvs rpt_id_3", "src": "flat", "file": _CFGR_VARTXT, "key": "rpt_id_3",
+     "groups": ("dmr",), "form": "plain", "kind": "value"},
     {"fid": "var_bm_pw", "label": "dvs bm_password", "src": "flat", "file": _CFGR_VARTXT, "key": "bm_password",
      "groups": ("bm_pw",), "form": "plain", "kind": "secret"},
     {"fid": "var_tgif_pw", "label": "dvs tgif_password", "src": "flat", "file": _CFGR_VARTXT, "key": "tgif_password",
@@ -15281,7 +15287,8 @@ def _cfgr_setcall_new(form: str, value: str, old: str) -> str | None:
         return _cfgr_id_render(form, value + (cur[m.start():] if m else ""), old)
     return _cfgr_id_render(form, value, old)
 
-def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str, target: tuple[str, str] | None = None) -> list[dict]:
+def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str, target: tuple[str, str] | None = None,
+                       rewrite: Callable[[dict, str, str], object] | None = None) -> list[dict]:
     ast = path.startswith("/etc/asterisk/")
     rx = _CFGR_SETCALL_AST_RE if ast else _CFGR_SETCALL_INI_RE
     mask = _cfgr_managed_mask(lines) if ast else [False] * len(lines)
@@ -15321,7 +15328,10 @@ def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str, target
         q = old[0] if len(old) >= 2 and old[0] == old[-1] and old[0] in "\"'" else ""
         inner = old[1:-1] if q else old
         where = (f"[{sec}] {k}" if sec else k)
-        new = _cfgr_setcall_new(fd["form"], value, inner)
+        new = rewrite(fd, value, inner) if rewrite is not None else _cfgr_setcall_new(fd["form"], value, inner)
+        if isinstance(new, tuple):
+            out.append({"line": i, "where": where, "old": inner, "skip": new[1]})
+            continue
         if new is None:
             out.append({"line": i, "where": where, "old": inner, "skip": "holds a sound file, left alone"})
             continue
@@ -15371,7 +15381,69 @@ def _cfgr_set_callsign_tail(services: list[str], logins: list[str]) -> list[str]
                  "or M17 connect puts the old callsign back."]
     return tail
 
+_CFGR_DMR_SERVICES: dict[str, str] = {
+    _CFGR_MMDVM: "mmdvm_bridge", _CFGR_AB: "analog_bridge", _CFGR_DVSINI: "stfu", _CFGR_YSFGW: "ysfgateway"}
+_CFGR_DMR_RPT_KEYS = ("rpt_id", "rpt_id_2", "rpt_id_3")
+
+def _cfgr_set_no_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+    return [], None
+
+def _cfgr_set_tail_for(*notes: str) -> Callable[[list[str], list[str]], list[str]]:
+    def tail(services: list[str], logins: list[str]) -> list[str]:
+        out: list[str] = []
+        if services:
+            out += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
+        return out + (["", *notes] if notes else [])
+    return tail
+
+def _cfgr_set_dmr_check(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("value", "")).strip()
+    if not re.fullmatch(r"\d{7}", value):
+        return None, "A DMR ID is exactly 7 digits."
+    return value, ""
+
+def _cfgr_set_dmr_fields(payload: dict) -> list[dict]:
+    return [fd for fd in _CFGR_ID_FIELDS if "dmr" in fd["groups"] or "dmr_full" in fd["groups"]]
+
+def _cfgr_set_dmr_rewrite(fd: dict, value: str, old: str) -> object:
+    if not re.fullmatch(r"\d{7,}", old.strip()):
+        return (None, "not a DMR ID of 7 or more digits, left alone")
+    return value + old.strip()[7:]
+
+def _cfgr_set_suffix_check(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("value", "")).strip()
+    if value and not re.fullmatch(r"\d{2}", value):
+        return None, "A suffix is exactly 2 digits, or empty for none."
+    return value, ""
+
+def _cfgr_set_suffix_fields(payload: dict) -> list[dict]:
+    out = [fd for fd in _CFGR_ID_FIELDS if fd["fid"] in ("mb_id", "ab_rpt_id")]
+    b = _cfgr_read(_CFGR_MMDVM)
+    cur = _cfgr_id_ini(b.decode("utf-8", "replace")).get("general", {}).get("id", "") if b is not None else ""
+    for fd in _CFGR_ID_FIELDS:
+        if fd.get("key") in _CFGR_DMR_RPT_KEYS and fd["file"] == _CFGR_VARTXT:
+            out.append(dict(fd, only_if=cur))
+    return out
+
+def _cfgr_set_suffix_rewrite(fd: dict, value: str, old: str) -> object:
+    cur = old.strip()
+    if "only_if" in fd and cur != fd["only_if"]:
+        return (None, "not the node's own ID, left alone")
+    if not re.fullmatch(r"\d{7,}", cur):
+        return (None, "has no 7-digit DMR ID, left alone")
+    return cur[:7] + value
+
 _CFGR_SET_RULES: dict[str, dict] = {
+    "dmr": {"noun": "DMR ID", "check": _cfgr_set_dmr_check, "fields": _cfgr_set_dmr_fields,
+            "rewrite": _cfgr_set_dmr_rewrite, "extra": _cfgr_set_no_extra, "logins": frozenset(),
+            "tail": _cfgr_set_tail_for("Only the first 7 digits are replaced; a suffix after them is kept."),
+            "services": _CFGR_DMR_SERVICES},
+    "dmr_full": {"noun": "DMR ID suffix", "check": _cfgr_set_suffix_check, "fields": _cfgr_set_suffix_fields,
+                 "rewrite": _cfgr_set_suffix_rewrite, "extra": _cfgr_set_no_extra, "logins": frozenset(),
+                 "show": lambda v: v or "(none)",
+                 "tail": _cfgr_set_tail_for("The first 7 digits are not changed. The ID with its suffix must be one "
+                                            "your DMR network accepts for your account."),
+                 "services": _CFGR_DMR_SERVICES},
     "callsign": {"noun": "callsign", "check": _cfgr_set_callsign_value, "fields": _cfgr_set_callsign_fields,
                  "extra": _cfgr_set_callsign_extra, "logins": _CFGR_SETCALL_LOGINS, "tail": _cfgr_set_callsign_tail,
                  "services": _CFGR_SETCALL_SERVICES},
@@ -15405,7 +15477,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
             p = plan[path]
             if p["lines"] is None:
                 continue
-            found = _cfgr_setcall_file(fd, path, p["lines"], value, rule.get("target"))
+            found = _cfgr_setcall_file(fd, path, p["lines"], value, rule.get("target"), rule.get("rewrite"))
             if not found and fd["src"] != "rpt_key":
                 report.append(f"  {fd['label']}: {path}: no {fd['key']} line, left alone")
             for e in found:
@@ -15423,7 +15495,8 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     report += extra_report
     changed = [path for path, p in plan.items() if p["edits"]]
     services = sorted({rule["services"][path] for path in changed if path in rule["services"]})
-    head = [f"Set the {noun} to {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)} in every file below.", ""]
+    shown = rule["show"](value) if rule.get("show") else _cfgr_set_mask({"kind": rule.get("kind", "")}, value)
+    head = [f"Set the {noun} to {shown} in every file below.", ""]
     tail: list[str] = []
     if missing:
         tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
@@ -15434,9 +15507,9 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
         return {"success": True, "changes": len(changed) + (extra_commit is not None),
                 "output": "\n".join(head + report + tail)}
     groups = [g for g, d in _CFGR_GROUPS.items() if any(path in d["files"] for path in changed)]
-    lines_out = [f"{noun[:1].upper()}{noun[1:]} set to {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)}.", ""]
+    lines_out = [f"{noun[:1].upper()}{noun[1:]} set to {shown}.", ""]
     if groups:
-        sid, pruned = _cfgr_auto_point(f"{noun} {_cfgr_set_mask({'kind': rule.get('kind', '')}, value)}", groups)
+        sid, pruned = _cfgr_auto_point(f"{noun} {shown}", groups)
         lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = True
@@ -18739,6 +18812,7 @@ function cfgIdRender(d) {
           ' spellcheck="false" value="' + cfgEsc(CFG_ID_CALL) + '" oninput="cfgIdCallInput(this)"' +
           ' onkeydown="if(event.key===\'Enter\')cfgIdSetCall(document.getElementById(\'cfg-id-call-btn\'));">' +
           ' <button class="btn-run" id="cfg-id-call-btn" onclick="cfgIdSetCall(this)">Set everywhere</button></span></td></tr>';
+        else if (CFG_ID_SET_UI[gid]) h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + cfgIdSetUi(gid) + '</td></tr>';
         else if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
         mine.forEach(function(r) { h += cfgIdRow(r, gid); });
       }
@@ -18751,6 +18825,41 @@ function cfgIdRender(d) {
 
 var CFG_ID_REVEALED = false;
 var CFG_ID_CALL = '';
+var CFG_ID_SET_UI = {
+  dmr: {max: 7, ph: '7 DIGITS', btn: 'Set everywhere', re: /^[0-9]{7}$/, msg: 'A DMR ID is exactly 7 digits.'},
+  dmr_full: {max: 2, ph: '2 DIGITS', btn: 'Set suffix', re: /^[0-9]{2}$/, msg: 'A suffix is exactly 2 digits.', clear: 'No suffix'}
+};
+var CFG_ID_VALS = {};
+
+function cfgIdSetUi(gid) {
+  var u = CFG_ID_SET_UI[gid];
+  return ' <span class="cfg-id-set"><input type="text" id="cfg-id-set-' + gid + '" maxlength="' + u.max + '" placeholder="' + u.ph +
+    '" autocomplete="off" spellcheck="false" inputmode="numeric" value="' + cfgEsc(CFG_ID_VALS[gid] || '') + '" oninput="cfgIdSetInput(this, \'' + gid + '\')"' +
+    ' onkeydown="if(event.key===\'Enter\')cfgIdSetGroup(\'' + gid + '\', document.getElementById(\'cfg-id-set-btn-' + gid + '\'), false);">' +
+    ' <button class="btn-run" id="cfg-id-set-btn-' + gid + '" onclick="cfgIdSetGroup(\'' + gid + '\', this, false)">' + u.btn + '</button>' +
+    (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') + '</span>';
+}
+
+function cfgIdSetInput(el, gid) {
+  var v = el.value.replace(/[^0-9]/g, '').slice(0, CFG_ID_SET_UI[gid].max);
+  if (el.value !== v) el.value = v;
+  CFG_ID_VALS[gid] = v;
+}
+
+function cfgIdSetGroup(gid, btn, clear) {
+  var u = CFG_ID_SET_UI[gid];
+  var el = document.getElementById('cfg-id-set-' + gid);
+  if (el) cfgIdSetInput(el, gid);
+  var val = clear ? '' : (CFG_ID_VALS[gid] || '');
+  if (!clear && !u.re.test(val)) { cfgOut('cfg-id-call-out', u.msg, false); return; }
+  cfgPost({action: 'id_set_preview', group: gid, value: val}, 'cfg-id-call-out', btn).then(function(res) {
+    if (!res.success || !res.changes) return;
+    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    cfgPost({action: 'id_set', group: gid, value: val}, 'cfg-id-call-out', btn).then(function(r) {
+      if (r.success) { CFG_ID_VALS[gid] = ''; var e = document.getElementById('cfg-id-set-' + gid); if (e) e.value = ''; }
+    });
+  });
+}
 
 function cfgIdCallInput(el) {
   var v = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
@@ -19063,7 +19172,7 @@ def _render_config_panel() -> str:
       <span id="cfg-id-err" style="color:var(--red)"></span>
     </div>
     <div id="cfg-id"></div>
-    <div class="asl3-console shown placeholder" id="cfg-id-call-out">(type a callsign on the Callsign line and press Set everywhere)</div>
+    <div class="asl3-console shown placeholder" id="cfg-id-call-out">(type a value on a section line and press its Set button)</div>
   </div>
 
   <div class="step-card">

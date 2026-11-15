@@ -98,7 +98,8 @@ class CallsignStillWorks(Base):
         self.assertEqual(self.fs.written, {})
 
     def test_actions_are_registered(self):
-        src = open(newest("44helper_v[0-9]*.py")).read()
+        with open(newest("44helper_v[0-9]*.py")) as fh:
+            src = fh.read()
         for name in ("id_set_preview", "id_set", "id_set_callsign_preview", "id_set_callsign"):
             self.assertIn('"%s":' % name, src)
         self.assertIn('"id_set",', src)
@@ -127,6 +128,117 @@ class Masking(unittest.TestCase):
         self.assertEqual(h44._cfgr_set_mask({"kind": "secret"}, "hunter2"), h44._CFGR_ID_MASK)
         self.assertEqual(h44._cfgr_set_mask({"kind": "value"}, "AA1AA"), "AA1AA")
         self.assertEqual(h44._cfgr_set_mask({"kind": "secret"}, ""), "")
+
+
+DMR_FILES = dict(SAMPLE)
+DMR_FILES.update({
+    "/opt/MMDVM_Bridge/DVSwitch.ini": "[STFU]  ; Brandmeister Open DMR Terminal\nBMPassword = pw1\nUserID  = 1234567\nTalkerAlias = AA1AA\n",
+    "/opt/YSFGateway/YSFGateway.ini": "[General]\nCallsign=AA1AA\nId=123456799\n",
+    "/var/lib/dvswitch/dvs/var.txt": 'call_sign="AA1AA"\ndmr_id="1234567"\nrpt_id="123456701"\nrpt_id_2="123456702"\nrpt_id_3="123456703"\nrpt_id_now=\nbm_password="pw1"\n',
+})
+MB = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
+AB = "/opt/Analog_Bridge/Analog_Bridge.ini"
+VAR = "/var/lib/dvswitch/dvs/var.txt"
+YSF = "/opt/YSFGateway/YSFGateway.ini"
+DVS = "/opt/MMDVM_Bridge/DVSwitch.ini"
+
+
+class DmrBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(DMR_FILES)
+
+
+class DmrId(DmrBase):
+    def test_bad_input_refused(self):
+        for bad in ("", "123456", "12345678", "12345a7"):
+            self.assertFalse(h44._cfgr_act_id_set({"group": "dmr", "value": bad}, False)["success"], bad)
+        self.assertEqual(self.fs.written, {})
+
+    def test_preview_writes_nothing(self):
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, False)
+        self.assertTrue(r["success"])
+        self.assertGreater(r["changes"], 0)
+        self.assertEqual(self.fs.written, {})
+        for name in ("mmdvm_bridge", "analog_bridge", "stfu", "ysfgateway"):
+            self.assertIn(name, r["output"])
+
+    def test_apply_keeps_suffixes(self):
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        f = self.fs.files
+        self.assertIn("Id=765432101", f[MB])
+        self.assertIn("gatewayDmrId = 7654321", f[AB])
+        self.assertIn("repeaterID = 765432101", f[AB])
+        self.assertIn("UserID  = 7654321", f[DVS])
+        self.assertIn("Id=765432199", f[YSF])
+        self.assertIn('dmr_id="7654321"', f[VAR])
+        self.assertIn('rpt_id="765432101"', f[VAR])
+        self.assertIn('rpt_id_2="765432102"', f[VAR])
+        self.assertIn('rpt_id_3="765432103"', f[VAR])
+        self.assertIn("rpt_id_now=\n", f[VAR])
+        self.assertIn("Callsign=AA1AA", f[MB])
+        self.assertIn("Password=secretpw", f[MB])
+
+    def test_non_numeric_old_value_is_skipped_and_named(self):
+        self.fs.files[YSF] = "[General]\nCallsign=AA1AA\nId=notanumber\n"
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Id=notanumber", self.fs.files[YSF])
+        self.assertIn("left alone", r["output"])
+
+    def test_missing_file_is_skipped(self):
+        del self.fs.files[VAR]
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Not on this node, skipped", r["output"])
+        self.assertIn("Id=765432101", self.fs.files[MB])
+
+
+class DmrSuffix(DmrBase):
+    def test_bad_input_refused(self):
+        for bad in ("1", "123", "ab", "1a"):
+            self.assertFalse(h44._cfgr_act_id_set({"group": "dmr_full", "value": bad}, False)["success"], bad)
+
+    def test_apply_changes_only_the_suffix(self):
+        r = h44._cfgr_act_id_set({"group": "dmr_full", "value": "05"}, True)
+        self.assertTrue(r["success"], r["output"])
+        f = self.fs.files
+        self.assertIn("Id=123456705", f[MB])
+        self.assertIn("repeaterID = 123456705", f[AB])
+        self.assertIn("gatewayDmrId = 1234567\n", f[AB])
+        self.assertIn('rpt_id="123456705"', f[VAR])
+        self.assertIn('rpt_id_2="123456702"', f[VAR])
+        self.assertIn('rpt_id_3="123456703"', f[VAR])
+        self.assertIn("Id=123456799", f[YSF])
+        self.assertIn('dmr_id="1234567"', f[VAR])
+
+    def test_empty_value_removes_the_suffix(self):
+        r = h44._cfgr_act_id_set({"group": "dmr_full", "value": ""}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Id=1234567\n", self.fs.files[MB])
+        self.assertIn("(none)", r["output"])
+
+    def test_var_line_that_is_not_the_nodes_own_id_is_left_alone(self):
+        self.fs.files[VAR] = self.fs.files[VAR].replace('rpt_id="123456701"', 'rpt_id="999999901"')
+        r = h44._cfgr_act_id_set({"group": "dmr_full", "value": "05"}, True)
+        self.assertIn('rpt_id="999999901"', self.fs.files[VAR])
+        self.assertIn("not the node's own ID", r["output"])
+
+    def test_id_without_seven_digits_is_skipped(self):
+        self.fs.files[AB] = "[AMBE_AUDIO]\ngatewayDmrId = 1234567\nrepeaterID = 12345\n"
+        r = h44._cfgr_act_id_set({"group": "dmr_full", "value": "05"}, True)
+        self.assertIn("repeaterID = 12345\n", self.fs.files[AB])
+        self.assertIn("has no 7-digit DMR ID", r["output"])
+
+
+class DmrRows(unittest.TestCase):
+    def test_var_rpt_rows_are_read_by_the_card(self):
+        fids = {fd["fid"] for fd in h44._CFGR_ID_FIELDS}
+        self.assertTrue({"var_rpt_id", "var_rpt_id_2", "var_rpt_id_3"} <= fids)
+        for fd in h44._CFGR_ID_FIELDS:
+            if fd["fid"].startswith("var_rpt_id"):
+                self.assertEqual(fd["groups"], ("dmr",))
 
 
 if __name__ == "__main__":

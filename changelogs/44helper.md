@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_26_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_27_20261115.py`. Newest entries first.
+
+## 0.1.27 (2026-11-15)
+
+Identity card, stage 2 of the write fields: the **DMR ID (7 digits)** and **DMR ID + suffix** sections each get an input and a Set button, like Callsign. Preview first, then an automatic save point, then the write; no service is restarted, and the restart list names `mmdvm_bridge`, `analog_bridge`, `stfu` and `ysfgateway`.
+
+- **DMR ID** (exactly 7 digits) replaces the first 7 digits and keeps any suffix after them, in MMDVM_Bridge `Id`, Analog_Bridge `gatewayDmrId` and `repeaterID`, STFU `UserID`, YSFGateway `Id`, and `var.txt` `dmr_id`, `rpt_id`, `rpt_id_2` and `rpt_id_3`. A value that is not a number of 7 or more digits is left alone and named.
+- **DMR ID + suffix** (2 digits; the No suffix button removes it) changes only what follows the first 7 digits, in MMDVM_Bridge `Id`, Analog_Bridge `repeaterID` and the `var.txt` `rpt_id*` line that matches the node's own MMDVM_Bridge `Id`.
+- The card now also reads `var.txt` `rpt_id`, `rpt_id_2` and `rpt_id_3`.
+- This is a release: the page script and the server gained behaviour.
 
 ## 0.1.26 (2026-11-15)
 
