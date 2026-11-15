@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.28"
+APP_VERSION = "0.1.29"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15321,7 +15321,7 @@ def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str, target
             ok = k.lower() == key
         if ok and target is not None:
             ok = sec.lower() == target[0].lower() and k.lower() == target[1].lower()
-        if not ok or sec in done:
+        if not ok or (sec in done and not fd.get("multi")):
             continue
         done.add(sec)
         old = m.group(2)
@@ -15353,7 +15353,7 @@ def _cfgr_set_callsign_value(payload: dict) -> tuple[str | None, str]:
 def _cfgr_set_callsign_fields(payload: dict) -> list[dict]:
     return [fd for fd in _CFGR_ID_FIELDS if "callsign" in fd["groups"]] + _CFGR_SETCALL_EXTRA
 
-def _cfgr_set_callsign_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+def _cfgr_set_callsign_extra(value: str, payload: dict) -> tuple[list[str], Callable[[], list[str]] | None]:
     c = globals().get("_cfg")
     old_helper = c.get("identity", "callsign", fallback="").strip() if c is not None else ""
     if old_helper == value:
@@ -15385,7 +15385,7 @@ _CFGR_DMR_SERVICES: dict[str, str] = {
     _CFGR_MMDVM: "mmdvm_bridge", _CFGR_AB: "analog_bridge", _CFGR_DVSINI: "stfu", _CFGR_YSFGW: "ysfgateway"}
 _CFGR_DMR_RPT_KEYS = ("rpt_id", "rpt_id_2", "rpt_id_3")
 
-def _cfgr_set_no_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+def _cfgr_set_no_extra(value: str, payload: dict) -> tuple[list[str], Callable[[], list[str]] | None]:
     return [], None
 
 def _cfgr_set_tail_for(*notes: str) -> Callable[[list[str], list[str]], list[str]]:
@@ -15445,7 +15445,7 @@ def _cfgr_set_bm_check(payload: dict) -> tuple[str | None, str]:
 def _cfgr_set_bm_fields(payload: dict) -> list[dict]:
     return [fd for fd in _CFGR_ID_FIELDS if "bm_pw" in fd["groups"]]
 
-def _cfgr_set_bm_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+def _cfgr_set_bm_extra(value: str, payload: dict) -> tuple[list[str], Callable[[], list[str]] | None]:
     d = _cfgr_text(_CFGR_DVSINI)
     m = _cfgr_text(_CFGR_MMDVM)
     old = _cfgr_id_ini(d).get("stfu", {}).get("bmpassword", "") if d is not None else ""
@@ -15481,7 +15481,95 @@ def _cfgr_set_ami_fields(payload: dict) -> list[dict]:
                         "kind": "secret"})
     return out
 
+def _cfgr_nodepw_state(payload: dict) -> tuple[str | None, list[str], str, str]:
+    t = _cfgr_text(_CFGR_RPT_HTTP)
+    nodes: list[str] = []
+    sections: list[str] = []
+    sec = ""
+    for line in (t or "").splitlines():
+        h = _CFGR_HDR_RE.match(line)
+        if h:
+            sec = h.group(1).strip()
+            continue
+        m = _CFGR_REG_RE.match(line)
+        if m and not line.lstrip().startswith(";"):
+            if m.group(2) not in nodes:
+                nodes.append(m.group(2))
+            if sec.lower() not in sections:
+                sections.append(sec.lower())
+    sv = _cfgr_text(_CFGR_SAVENODE)
+    sv_node = _cfgr_flat(sv).get("NODE", "") if sv is not None else ""
+    want = str(payload.get("node", "")).strip()
+    if want:
+        if not re.fullmatch(r"\d{4,7}", want) or (want not in nodes and want != sv_node):
+            return None, nodes, sv_node, "Node " + want + " is not registered on this node."
+        return want, nodes, sv_node, ""
+    if len(nodes) == 1:
+        return nodes[0], nodes, sv_node, ""
+    if not nodes and sv_node:
+        return sv_node, nodes, sv_node, ""
+    if not nodes:
+        return None, nodes, sv_node, "No registered node was found on this node."
+    return None, nodes, sv_node, ("Several nodes are registered here (" + ", ".join(nodes) +
+                                  "). Type the node number in the Node box and press Set again.")
+
+def _cfgr_set_nodepw_check(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("value", ""))
+    if not re.fullmatch(r"[^\s:@;\"'$`\\]{1,64}", value):
+        return None, "A password is 1 to 64 characters with no spaces, quotes, : @ ; $, backtick or backslash."
+    node, _, _, why = _cfgr_nodepw_state(payload)
+    if node is None:
+        return None, why
+    return value, ""
+
+def _cfgr_set_nodepw_fields(payload: dict) -> list[dict]:
+    node, nodes, sv_node, _ = _cfgr_nodepw_state(payload)
+    out: list[dict] = []
+    t = _cfgr_text(_CFGR_RPT_HTTP)
+    seen: list[str] = []
+    sec = ""
+    for line in (t or "").splitlines():
+        h = _CFGR_HDR_RE.match(line)
+        if h:
+            sec = h.group(1).strip()
+            continue
+        if _CFGR_REG_RE.match(line) and not line.lstrip().startswith(";") and sec.lower() not in seen:
+            seen.append(sec.lower())
+            out.append({"fid": "reg_pw_" + sec.lower(), "label": "Registration password", "src": "ini",
+                        "file": _CFGR_RPT_HTTP, "section": sec.lower(), "key": "register", "form": "plain",
+                        "kind": "secret", "multi": True, "only_node": node})
+    if sv_node and sv_node == node:
+        out += [fd for fd in _CFGR_ID_FIELDS if fd["fid"] == "savenode_pw"]
+    return out
+
+def _cfgr_set_nodepw_rewrite(fd: dict, value: str, old: str) -> object:
+    if "only_node" not in fd:
+        return value
+    m = re.fullmatch(r"(\d+):([^@\s]*)(@\S.*)", old.strip())
+    if m is None:
+        return (None, "not a node registration, left alone")
+    if m.group(1) != fd["only_node"]:
+        return (None, "node " + m.group(1) + " is not the chosen node, left alone")
+    return m.group(1) + ":" + value + m.group(3)
+
+def _cfgr_set_nodepw_extra(value: str, payload: dict) -> tuple[list[str], Callable[[], list[str]] | None]:
+    node, nodes, sv_node, _ = _cfgr_nodepw_state(payload)
+    out: list[str] = []
+    if node is not None and sv_node and sv_node != node:
+        out.append(f"  savenode.conf holds node {sv_node}, not {node}, so its PASSWORD is not changed.")
+    if node is not None and not sv_node:
+        out.append("  savenode.conf is not on this node, so its PASSWORD is not changed.")
+    return out, None
+
+_CFGR_NODEPW_SERVICES: dict[str, str] = {_CFGR_RPT_HTTP: "asterisk"}
+
 _CFGR_SET_RULES: dict[str, dict] = {
+    "node_pw": {"noun": "ASL node password", "check": _cfgr_set_nodepw_check, "fields": _cfgr_set_nodepw_fields,
+                "rewrite": _cfgr_set_nodepw_rewrite, "kind": "secret", "extra": _cfgr_set_nodepw_extra,
+                "logins": frozenset(),
+                "tail": _cfgr_set_tail_for("This does not change the password on allstarlink.org. The two must match, "
+                                           "or the node stops registering."),
+                "services": _CFGR_NODEPW_SERVICES},
     "bm_pw": {"noun": "BrandMeister password", "check": _cfgr_set_bm_check, "fields": _cfgr_set_bm_fields,
               "kind": "secret", "extra": _cfgr_set_bm_extra, "logins": frozenset(),
               "tail": _cfgr_set_tail_for("This does not change the password in BrandMeister SelfCare. The two must match."),
@@ -15548,7 +15636,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
                 report.append(f"  {fd['label']}: {path} {e['where']}: {_cfgr_set_mask(fd, e['old']) or '(empty)'} -> {_cfgr_set_mask(fd, e['new'])}")
                 if fd["fid"] in rule["logins"]:
                     logins.append(fd["label"])
-    extra_report, extra_commit = rule["extra"](value)
+    extra_report, extra_commit = rule["extra"](value, payload)
     report += extra_report
     changed = [path for path, p in plan.items() if p["edits"]]
     services = sorted({rule["services"][path] for path in changed if path in rule["services"]})
@@ -18899,6 +18987,8 @@ var CFG_ID_SET_UI = {
   dmr_full: {max: 2, ph: '2 DIGITS', btn: 'Set suffix', re: /^[0-9]{2}$/, msg: 'A suffix is exactly 2 digits.', clear: 'No suffix'},
   bm_pw: {max: 64, ph: 'NEW PASSWORD', btn: 'Set everywhere', secret: true, strip: /[\s"'$`\\]/g, re: /^[^\s"'$`\\]{1,64}$/,
           msg: 'A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash.'},
+  node_pw: {max: 64, ph: 'NEW PASSWORD', btn: 'Set everywhere', secret: true, node: true, strip: /[\s:@;"'$`\\]/g,
+            re: /^[^\s:@;"'$`\\]{1,64}$/, msg: 'A password is 1 to 64 characters with no spaces, quotes, : @ ; $, backtick or backslash.'},
   ami: {max: 64, ph: 'NEW SECRET', btn: 'Set everywhere', secret: true, strip: /[\s"';#%=$`\\]/g, re: /^[^\s"';#%=$`\\]{1,64}$/,
         msg: 'A secret is 1 to 64 characters with no spaces, quotes, ; # % = $, backtick or backslash.'}
 };
@@ -18910,7 +19000,9 @@ function cfgIdSetUi(gid) {
     '" autocomplete="' + (u.secret ? 'new-password' : 'off') + '" spellcheck="false"' + (u.secret ? '' : ' inputmode="numeric"') + ' value="' + (u.secret ? '' : cfgEsc(CFG_ID_VALS[gid] || '')) + '" oninput="cfgIdSetInput(this, \'' + gid + '\')"' +
     ' onkeydown="if(event.key===\'Enter\')cfgIdSetGroup(\'' + gid + '\', document.getElementById(\'cfg-id-set-btn-' + gid + '\'), false);">' +
     ' <button class="btn-run" id="cfg-id-set-btn-' + gid + '" onclick="cfgIdSetGroup(\'' + gid + '\', this, false)">' + u.btn + '</button>' +
-    (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') + '</span>';
+    (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') +
+    (u.node ? ' <input type="text" id="cfg-id-set-node-' + gid + '" maxlength="7" placeholder="NODE (if several)" autocomplete="off" spellcheck="false"' +
+      ' inputmode="numeric" style="width:15ch" oninput="this.value=this.value.replace(/[^0-9]/g,\'\')">' : '') + '</span>';
 }
 
 function cfgIdSetInput(el, gid) {
@@ -18926,10 +19018,12 @@ function cfgIdSetGroup(gid, btn, clear) {
   if (el) cfgIdSetInput(el, gid);
   var val = clear ? '' : (CFG_ID_VALS[gid] || '');
   if (!clear && !u.re.test(val)) { cfgOut('cfg-id-call-out', u.msg, false); return; }
-  cfgPost({action: 'id_set_preview', group: gid, value: val}, 'cfg-id-call-out', btn).then(function(res) {
+  var ne = u.node ? document.getElementById('cfg-id-set-node-' + gid) : null;
+  var extra = ne && ne.value ? {node: ne.value} : {};
+  cfgPost(Object.assign({action: 'id_set_preview', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
     if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
-    cfgPost({action: 'id_set', group: gid, value: val}, 'cfg-id-call-out', btn).then(function(r) {
+    cfgPost(Object.assign({action: 'id_set', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(r) {
       if (r.success) { CFG_ID_VALS[gid] = ''; var e = document.getElementById('cfg-id-set-' + gid); if (e) e.value = ''; }
     });
   });

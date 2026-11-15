@@ -341,5 +341,80 @@ class AmiSecret(SecBase):
         self.assertIn("secret = n3wAMI\n", self.fs.files[MANAGER].split("[otheruser]")[1])
 
 
+REGS = "/etc/asterisk/rpt_http_registrations.conf"
+SAVENODE = "/etc/asterisk/savenode.conf"
+NODE_FILES = dict(SEC_FILES)
+NODE_FILES.update({
+    REGS: "[general]\nregister_interval = 180 ; every 3 minutes\n\n[registrations]\n;register => 123456:commentedpw@register.allstarlink.org\nregister => 123456:oldnodepw@register.allstarlink.org ; main\n",
+    SAVENODE: "NODE=123456\nPASSWORD=oldnodepw\nENABLE=1\n",
+})
+
+
+class NodeBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(NODE_FILES)
+
+
+class NodePassword(NodeBase):
+    def test_bad_input_refused(self):
+        for bad in ("", "has space", "co:lon", "a@t", "semi;colon", 'q"uote', "q'uote", "dol$lar", "x" * 65):
+            self.assertFalse(h44._cfgr_act_id_set({"group": "node_pw", "value": bad}, False)["success"], bad)
+        self.assertEqual(self.fs.written, {})
+
+    def test_one_node_writes_registration_and_savenode(self):
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw"}, True)
+        self.assertTrue(r["success"], r["output"])
+        reg = self.fs.files[REGS]
+        self.assertIn("register => 123456:n3wNodePw@register.allstarlink.org ; main", reg)
+        self.assertIn(";register => 123456:commentedpw@register.allstarlink.org", reg)
+        self.assertIn("PASSWORD=n3wNodePw", self.fs.files[SAVENODE])
+        self.assertIn("NODE=123456", self.fs.files[SAVENODE])
+        for text in (r["output"],):
+            self.assertNotIn("n3wNodePw", text)
+            self.assertNotIn("oldnodepw", text)
+        self.assertIn("asterisk", r["output"])
+        self.assertIn("allstarlink.org", r["output"])
+
+    def test_preview_writes_nothing(self):
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw"}, False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_several_nodes_ask_which(self):
+        self.fs.files[REGS] += "register => 654321:otherpw@register.allstarlink.org\n"
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw"}, False)
+        self.assertFalse(r["success"])
+        self.assertIn("123456", r["output"])
+        self.assertIn("654321", r["output"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_chosen_node_changes_only_its_own_line(self):
+        self.fs.files[REGS] += "register => 654321:otherpw@register.allstarlink.org\n"
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw", "node": "654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        reg = self.fs.files[REGS]
+        self.assertIn("register => 654321:n3wNodePw@register.allstarlink.org", reg)
+        self.assertIn("123456:oldnodepw@", reg)
+        self.assertEqual(self.fs.files[SAVENODE], NODE_FILES[SAVENODE])
+        self.assertIn("savenode.conf holds node 123456", r["output"])
+
+    def test_unregistered_node_refused(self):
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw", "node": "999999"}, False)
+        self.assertFalse(r["success"])
+        self.assertIn("999999", r["output"])
+
+    def test_missing_savenode_is_noted_and_registration_still_written(self):
+        del self.fs.files[SAVENODE]
+        r = h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("123456:n3wNodePw@", self.fs.files[REGS])
+        self.assertIn("savenode.conf is not on this node", r["output"])
+
+    def test_other_files_untouched(self):
+        h44._cfgr_act_id_set({"group": "node_pw", "value": "n3wNodePw"}, True)
+        self.assertEqual(set(self.fs.written), {REGS, SAVENODE})
+
+
 if __name__ == "__main__":
     unittest.main()
