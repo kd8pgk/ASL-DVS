@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_29_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_30_20261115.py`. Newest entries first.
+
+## 0.1.30 (2026-11-15)
+
+Identity card, stage 5 of the write fields: each row under **Stands alone** gets a field and a Set button in its last cell. A row changes its own line only, with the same preview, save point and restart list as the sections; secret rows use a password input and are masked in the preview and the log.
+
+- **EchoLink node number** (1 to 7 digits) and **EchoLink password**: `echolink.conf`. Restart list: `asterisk`.
+- **IAX client secret**, one button per row: the one `secret` line of that row's file and section, so the two `[iaxrpt]` secrets (in `iax.conf` and `iaxrpt-users.conf`) change separately. Restart list: `asterisk`. The client that logs in with it must be given the new secret.
+- **DMR network password**: MMDVM_Bridge `[DMR Network] Password`. Restart list: `mmdvm_bridge`.
+- **NXDN Id** (1 to 5 digits): MMDVM_Bridge `[NXDN] Id` and `var.txt` `nxdn_id` together. The card now also shows `var.txt` `nxdn_id` as its own row, which can be set alone.
+- **STFU TalkerAlias** (1 to 30 characters): `DVSwitch.ini`. Restart list: `stfu`.
+- **dvs tgif_password**: `var.txt`. No service to restart.
+- **ircddbPassword** and **remotePassword**: `/etc/ircddbgateway`. Restart list: `ircddbgatewayd`.
+- A row that is no longer there (the files changed since the card loaded) is refused with a note to reload the card.
+- This is a release: the page script and the server gained behaviour.
 
 ## 0.1.29 (2026-11-15)
 

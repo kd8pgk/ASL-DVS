@@ -416,5 +416,141 @@ class NodePassword(NodeBase):
         self.assertEqual(set(self.fs.written), {REGS, SAVENODE})
 
 
+IAX = "/etc/asterisk/iax.conf"
+IAXRPT = "/etc/asterisk/custom/iax/iaxrpt-users.conf"
+IRCDDB = "/etc/ircddbgateway"
+ECHO = "/etc/asterisk/echolink.conf"
+ALONE_FILES = dict(NODE_FILES)
+ALONE_FILES[MB] = ALONE_FILES[MB] + "\n[NXDN]\nId=12345\n"
+ALONE_FILES[VAR] = ALONE_FILES[VAR] + 'tgif_password="tgifold"\nnxdn_id="12345"\n'
+ALONE_FILES[IAX] = "[general]\nbindport=4569\n\n[iaxrpt]\ntype=user\nsecret=iaxold1\n\n[iaxclient]\ntype=user\nsecret=iaxold2\n"
+ALONE_FILES[IAXRPT] = "[iaxrpt]\ntype=user\nsecret=iaxold3\n"
+ALONE_FILES[IRCDDB] = "gatewayCallsign=AA1AA\nircddbPassword=ircold\nremotePassword=remold\n"
+
+
+class AloneBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(ALONE_FILES)
+
+    def rid(self, fid, file=None):
+        for r in h44._cfgr_identity_scan()["rows"]:
+            if r["fid"] == fid and (file is None or r["file"] == file):
+                return r["rid"]
+        self.fail("no row " + fid)
+
+    def go(self, fid, value, apply=True, file=None):
+        return h44._cfgr_act_id_set({"group": "alone", "rid": self.rid(fid, file), "value": value}, apply)
+
+
+class StandsAlone(AloneBase):
+    def test_rows_are_flagged_settable(self):
+        rows = {r["fid"]: r["settable"] for r in h44._cfgr_identity_scan()["rows"]}
+        for fid in ("el_node", "el_pwd", "iax_secret", "mb_dmr_pw", "mb_nxdn_id", "stfu_ta", "var_tgif_pw",
+                    "ircddb_pw", "ircddb_remote_pw", "var_nxdn_id"):
+            self.assertTrue(rows[fid], fid)
+        self.assertFalse(rows["mb_call"])
+
+    def test_unknown_or_unsettable_row_refused(self):
+        self.assertFalse(h44._cfgr_act_id_set({"group": "alone", "rid": "mb_call#0", "value": "X1X"}, True)["success"])
+        self.assertFalse(h44._cfgr_act_id_set({"group": "alone", "rid": "nope#0", "value": "x"}, True)["success"])
+        self.assertFalse(h44._cfgr_act_id_set({"group": "alone", "rid": "", "value": "x"}, True)["success"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_stale_rid_refused(self):
+        r = h44._cfgr_act_id_set({"group": "alone", "rid": "el_pwd#7", "value": "newpw"}, True)
+        self.assertFalse(r["success"])
+        self.assertIn("Reload", r["output"])
+
+    def test_bad_input_refused_per_row(self):
+        cases = {"el_node": ("12ab", "12345678", ""), "el_pwd": ("a b", "a;b", 'a"b'),
+                 "iax_secret": ("a b", "a$b", "a;b"), "mb_dmr_pw": ("a b", "a#b", "a'b"),
+                 "mb_nxdn_id": ("123456", "12a", ""), "stfu_ta": ("", "a;b", "x" * 31),
+                 "var_tgif_pw": ("a b", "a$b", "a`b"), "ircddb_pw": ("a b", 'a"b', "a\\b"),
+                 "ircddb_remote_pw": ("a b", "a'b", "")}
+        for fid, bads in cases.items():
+            for bad in bads:
+                self.assertFalse(self.go(fid, bad, False)["success"], (fid, bad))
+        self.assertEqual(self.fs.written, {})
+
+    def test_echolink_node_and_password(self):
+        r = self.go("el_node", "88888")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("node = 88888", self.fs.files[ECHO])
+        r = self.go("el_pwd", "newelpw")
+        self.assertIn("pwd = newelpw", self.fs.files[ECHO])
+        self.assertIn("call = AA1AA-L", self.fs.files[ECHO])
+        self.assertNotIn("newelpw", r["output"])
+        self.assertNotIn("hunter2", r["output"])
+
+    def test_each_iax_row_changes_only_its_own_line(self):
+        rows = [r for r in h44._cfgr_identity_scan()["rows"] if r["fid"] == "iax_secret"]
+        self.assertEqual(len(rows), 3)
+        r = h44._cfgr_act_id_set({"group": "alone", "rid": rows[0]["rid"], "value": "brandnew"}, True)
+        self.assertTrue(r["success"], r["output"])
+        before = {k: v for k, v in ALONE_FILES.items() if k in (IAX, IAXRPT)}
+        changed = [k for k in (IAX, IAXRPT) if self.fs.files[k] != before[k]]
+        self.assertEqual(changed, [rows[0]["file"]])
+        self.assertEqual(self.fs.files[rows[0]["file"]].count("brandnew"), 1)
+        self.assertEqual(sum(self.fs.files[k].count("secret=iaxold") for k in (IAX, IAXRPT)), 2)
+
+    def test_same_section_name_in_two_files_is_separate(self):
+        rpt_rows = [r for r in h44._cfgr_identity_scan()["rows"] if r["fid"] == "iax_secret" and "iaxrpt" in r["where"]]
+        self.assertEqual({r["file"] for r in rpt_rows}, {IAX, IAXRPT})
+        row = next(r for r in rpt_rows if r["file"] == IAXRPT)
+        h44._cfgr_act_id_set({"group": "alone", "rid": row["rid"], "value": "fileonly"}, True)
+        self.assertIn("secret=fileonly", self.fs.files[IAXRPT])
+        self.assertIn("secret=iaxold1", self.fs.files[IAX])
+
+    def test_dmr_network_password_only(self):
+        r = self.go("mb_dmr_pw", "dmrnewpw")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Password=dmrnewpw", self.fs.files[MB])
+        self.assertIn("mmdvm_bridge", r["output"])
+        self.assertNotIn("dmrnewpw", r["output"])
+        self.assertIn("BMPassword = pw1", self.fs.files[DVS])
+
+    def test_nxdn_id_also_writes_var_txt(self):
+        r = self.go("mb_nxdn_id", "54321")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("[NXDN]\nId=54321", self.fs.files[MB])
+        self.assertIn('nxdn_id="54321"', self.fs.files[VAR])
+        self.assertIn("Id=123456701", self.fs.files[MB])
+
+    def test_var_nxdn_row_alone_changes_only_var_txt(self):
+        self.go("var_nxdn_id", "11111")
+        self.assertIn('nxdn_id="11111"', self.fs.files[VAR])
+        self.assertIn("[NXDN]\nId=12345", self.fs.files[MB])
+
+    def test_talker_alias_keeps_spaces(self):
+        r = self.go("stfu_ta", "My Node 1")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("TalkerAlias = My Node 1", self.fs.files[DVS])
+        self.assertIn("My Node 1", r["output"])
+        self.assertIn("stfu", r["output"])
+
+    def test_tgif_password_has_no_restart(self):
+        r = self.go("var_tgif_pw", "tgifnew")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn('tgif_password="tgifnew"', self.fs.files[VAR])
+        self.assertNotIn("Restart these", r["output"])
+
+    def test_ircddb_passwords(self):
+        r = self.go("ircddb_pw", "ircnew")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("ircddbPassword=ircnew", self.fs.files[IRCDDB])
+        self.assertIn("remotePassword=remold", self.fs.files[IRCDDB])
+        self.go("ircddb_remote_pw", "remnew")
+        self.assertIn("remotePassword=remnew", self.fs.files[IRCDDB])
+        self.assertIn("ircddbgatewayd", r["output"])
+
+    def test_preview_writes_nothing_and_masks(self):
+        r = self.go("el_pwd", "newelpw", apply=False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
+        self.assertNotIn("newelpw", r["output"])
+        self.assertIn("the line below", r["output"])
+
+
 if __name__ == "__main__":
     unittest.main()

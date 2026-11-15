@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.29"
+APP_VERSION = "0.1.30"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14101,6 +14101,7 @@ header {
 .cfg-id-val{min-width:10ch;overflow-wrap:anywhere}
 .cfg-id-set{display:inline-flex;gap:.4rem;align-items:center;margin-left:.6rem;flex-wrap:wrap}
 .cfg-id-set input{width:10ch;text-transform:uppercase;font-family:var(--sans)}
+.cfg-id-row input{width:14ch;text-transform:none}
 
 .tab-panel {
   border: 1px solid var(--border2);
@@ -14910,6 +14911,8 @@ _CFGR_ID_FIELDS: list[dict] = [
      "section": "stfu", "key": "UserID", "groups": ("dmr",), "form": "plain", "kind": "value"},
     {"fid": "stfu_pw", "label": "STFU BMPassword", "src": "ini", "file": _CFGR_DVSINI,
      "section": "stfu", "key": "BMPassword", "groups": ("bm_pw",), "form": "plain", "kind": "secret"},
+    {"fid": "var_nxdn_id", "label": "dvs nxdn_id", "src": "flat", "file": _CFGR_VARTXT, "key": "nxdn_id",
+     "groups": ("alone",), "form": "plain", "kind": "value"},
     {"fid": "stfu_ta", "label": "STFU TalkerAlias", "src": "ini", "file": _CFGR_DVSINI,
      "section": "stfu", "key": "TalkerAlias", "groups": ("alone",), "form": "plain", "kind": "value"},
     {"fid": "var_call", "label": "dvs call_sign", "src": "flat", "file": _CFGR_VARTXT, "key": "call_sign",
@@ -15192,6 +15195,7 @@ def _cfgr_identity_scan() -> dict:
                          "kind": inst.get("kind", fd["kind"]), "groups": list(fd["groups"]),
                          "scope": inst["scope"], "found": inst["found"], "account": inst.get("account", ""),
                          "anchor": bool(fd.get("anchor")), "any_node": bool(fd.get("any_node")),
+                         "settable": fd["fid"] in _CFGR_ALONE_ROWS,
                          "raw": inst["raw"], "value": value,
                          "set": bool(inst["raw"].strip()), "tags": {}, "states": {},
                          "note": "" if value or not inst["raw"].strip() else "not a callsign (a sound file)"})
@@ -15563,7 +15567,83 @@ def _cfgr_set_nodepw_extra(value: str, payload: dict) -> tuple[list[str], Callab
 
 _CFGR_NODEPW_SERVICES: dict[str, str] = {_CFGR_RPT_HTTP: "asterisk"}
 
+_CFGR_ALONE_RE_PW = r"""[^\s"'\\]{1,64}"""
+_CFGR_ALONE_ROWS: dict[str, dict] = {
+    "el_node": {"re": r"\d{1,7}", "msg": "A node number is 1 to 7 digits.", "secret": False},
+    "el_pwd": {"re": r"""[^\s;"'\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, ; or quotes.", "secret": True},
+    "iax_secret": {"re": r"""[^\s;"'$`\\]{1,64}""", "msg": "A secret is 1 to 64 characters with no spaces, quotes, ; $, backtick or backslash.", "secret": True},
+    "mb_dmr_pw": {"re": r"""[^\s#"'\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, # or quotes.", "secret": True},
+    "mb_nxdn_id": {"re": r"\d{1,5}", "msg": "An NXDN Id is 1 to 5 digits.", "secret": False, "also": "var_nxdn_id"},
+    "var_nxdn_id": {"re": r"\d{1,5}", "msg": "An NXDN Id is 1 to 5 digits.", "secret": False},
+    "stfu_ta": {"re": r"""[^\r\n;#"'\\]{1,30}""", "msg": "A talker alias is 1 to 30 characters with no ; # or quotes.", "secret": False},
+    "var_tgif_pw": {"re": r"""[^\s"'$`\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash.", "secret": True},
+    "ircddb_pw": {"re": _CFGR_ALONE_RE_PW, "msg": "A password is 1 to 64 characters with no spaces, quotes or backslash.", "secret": True},
+    "ircddb_remote_pw": {"re": _CFGR_ALONE_RE_PW, "msg": "A password is 1 to 64 characters with no spaces, quotes or backslash.", "secret": True},
+}
+_CFGR_ALONE_SERVICES: dict[str, str] = {
+    _CFGR_ECHOLINK: "asterisk", "/etc/asterisk/custom/echolink.conf": "asterisk", _CFGR_IAX: "asterisk",
+    "/etc/asterisk/custom/iax.conf": "asterisk", "/etc/asterisk/custom/iax/iaxrpt-users.conf": "asterisk",
+    "/etc/asterisk/custom/iax/iaxclient-users.conf": "asterisk", _CFGR_MMDVM: "mmdvm_bridge",
+    _CFGR_DVSINI: "stfu", _CFGR_IRCDDB: "ircddbgatewayd"}
+_CFGR_WHERE_RE = re.compile(r"^\[(.*)\] (\S+)$")
+
+def _cfgr_alone_row(payload: dict) -> tuple[dict | None, str]:
+    rid = str(payload.get("rid", ""))
+    fid = rid.split("#", 1)[0]
+    if fid not in _CFGR_ALONE_ROWS:
+        return None, "This row can't be set from here."
+    for r in _cfgr_identity_scan()["rows"]:
+        if r["rid"] == rid:
+            return r, ""
+    return None, "That row is not on this node any more. Reload the card."
+
+def _cfgr_alone_fd(r: dict) -> dict:
+    m = _CFGR_WHERE_RE.match(r["where"])
+    base = {"fid": r["fid"], "label": r["label"], "file": r["file"], "form": "plain", "kind": r["kind"]}
+    if m:
+        return dict(base, src="ini", section=m.group(1).lower(), key=m.group(2))
+    return dict(base, src="flat", key=r["where"])
+
+def _cfgr_set_alone_check(payload: dict) -> tuple[str | None, str]:
+    r, why = _cfgr_alone_row(payload)
+    if r is None:
+        return None, why
+    spec = _CFGR_ALONE_ROWS[r["fid"]]
+    value = str(payload.get("value", ""))
+    if spec["secret"] is False and r["fid"] == "stfu_ta":
+        value = value.strip()
+    if not re.fullmatch(spec["re"], value):
+        return None, spec["msg"]
+    return value, ""
+
+def _cfgr_set_alone_fields(payload: dict) -> list[dict]:
+    r, _ = _cfgr_alone_row(payload)
+    if r is None:
+        return []
+    out = [_cfgr_alone_fd(r)]
+    also = _CFGR_ALONE_ROWS[r["fid"]].get("also")
+    if also:
+        for x in _cfgr_identity_scan()["rows"]:
+            if x["fid"] == also:
+                out.append(_cfgr_alone_fd(x))
+                break
+    return out
+
+def _cfgr_set_alone_noun(payload: dict) -> str:
+    r, _ = _cfgr_alone_row(payload)
+    return r["label"] if r else "value"
+
+def _cfgr_set_alone_show(value: str, payload: dict) -> str:
+    r, _ = _cfgr_alone_row(payload)
+    if r is not None and _CFGR_ALONE_ROWS[r["fid"]]["secret"]:
+        return _CFGR_ID_MASK
+    return value
+
 _CFGR_SET_RULES: dict[str, dict] = {
+    "alone": {"noun": "value", "noun_for": _cfgr_set_alone_noun, "check": _cfgr_set_alone_check,
+              "fields": _cfgr_set_alone_fields, "show": _cfgr_set_alone_show, "where": "the line below",
+              "extra": _cfgr_set_no_extra, "logins": frozenset(),
+              "tail": _cfgr_set_tail_for(), "services": _CFGR_ALONE_SERVICES},
     "node_pw": {"noun": "ASL node password", "check": _cfgr_set_nodepw_check, "fields": _cfgr_set_nodepw_fields,
                 "rewrite": _cfgr_set_nodepw_rewrite, "kind": "secret", "extra": _cfgr_set_nodepw_extra,
                 "logins": frozenset(),
@@ -15585,7 +15665,7 @@ _CFGR_SET_RULES: dict[str, dict] = {
             "services": _CFGR_DMR_SERVICES},
     "dmr_full": {"noun": "DMR ID suffix", "check": _cfgr_set_suffix_check, "fields": _cfgr_set_suffix_fields,
                  "rewrite": _cfgr_set_suffix_rewrite, "extra": _cfgr_set_no_extra, "logins": frozenset(),
-                 "show": lambda v: v or "(none)",
+                 "show": lambda v, payload: v or "(none)",
                  "tail": _cfgr_set_tail_for("The first 7 digits are not changed. The ID with its suffix must be one "
                                             "your DMR network accepts for your account."),
                  "services": _CFGR_DMR_SERVICES},
@@ -15602,7 +15682,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     value, why = rule["check"](payload)
     if value is None:
         return {"success": False, "output": why}
-    noun = rule["noun"]
+    noun = rule["noun_for"](payload) if rule.get("noun_for") else rule["noun"]
     fields = rule["fields"](payload)
     plan: dict[str, dict] = {}
     report: list[str] = []
@@ -15640,8 +15720,8 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     report += extra_report
     changed = [path for path, p in plan.items() if p["edits"]]
     services = sorted({rule["services"][path] for path in changed if path in rule["services"]})
-    shown = rule["show"](value) if rule.get("show") else _cfgr_set_mask({"kind": rule.get("kind", "")}, value)
-    head = [f"Set the {noun} to {shown} in every file below.", ""]
+    shown = rule["show"](value, payload) if rule.get("show") else _cfgr_set_mask({"kind": rule.get("kind", "")}, value)
+    head = [f"Set the {noun} to {shown} in {rule.get('where', 'every file below')}.", ""]
     tail: list[str] = []
     if missing:
         tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
@@ -18928,7 +19008,8 @@ function cfgIdRow(r, gid) {
   return '<tr data-fid="' + cfgEsc(r.fid) + '" data-rid="' + cfgEsc(r.rid) + '"><td>' + cfgEsc(r.label) +
     (r.kind === 'secret' ? ' <span class="cfg-hint">(secret)</span>' : '') + '</td><td class="cfg-id-val">' + val +
     (tag ? '<span class="cfg-id-tag">' + cfgEsc(tag) + '</span>' : '') + '</td><td>' + check + '</td><td><span title="' +
-    cfgEsc(r.file) + '">' + cfgEsc(file) + '</span><div class="cfg-hint">' + cfgEsc(r.where) + '</div></td><td class="cfg-id-act"></td></tr>';
+    cfgEsc(r.file) + '">' + cfgEsc(file) + '</span><div class="cfg-hint">' + cfgEsc(r.where) + '</div></td><td class="cfg-id-act">' +
+    (gid === 'alone' && r.settable ? cfgIdRowUi(r) : '') + '</td></tr>';
 }
 
 function cfgIdRender(d) {
@@ -19003,6 +19084,29 @@ function cfgIdSetUi(gid) {
     (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') +
     (u.node ? ' <input type="text" id="cfg-id-set-node-' + gid + '" maxlength="7" placeholder="NODE (if several)" autocomplete="off" spellcheck="false"' +
       ' inputmode="numeric" style="width:15ch" oninput="this.value=this.value.replace(/[^0-9]/g,\'\')">' : '') + '</span>';
+}
+
+function cfgIdRowUi(r) {
+  var secret = r.kind === 'secret';
+  return '<span class="cfg-id-set cfg-id-row"><input type="' + (secret ? 'password' : 'text') + '" maxlength="64" placeholder="new value"' +
+    ' autocomplete="' + (secret ? 'new-password' : 'off') + '" spellcheck="false" data-rid="' + cfgEsc(r.rid) + '"' +
+    ' onkeydown="if(event.key===\'Enter\')cfgIdRowSet(this.parentNode.querySelector(\'button\'));">' +
+    ' <button class="btn-run" data-rid="' + cfgEsc(r.rid) + '" onclick="cfgIdRowSet(this)">Set</button></span>';
+}
+
+function cfgIdRowSet(btn) {
+  var box = btn.parentNode;
+  var el = box.querySelector('input');
+  var rid = btn.getAttribute('data-rid');
+  var val = el ? el.value : '';
+  if (!val.trim()) { cfgOut('cfg-id-call-out', 'Type the new value first.', false); return; }
+  cfgPost({action: 'id_set_preview', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(res) {
+    if (!res.success || !res.changes) return;
+    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write this change?')) return;
+    cfgPost({action: 'id_set', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(r) {
+      if (r.success && el) el.value = '';
+    });
+  });
 }
 
 function cfgIdSetInput(el, gid) {
