@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_24_20261113.py`. Newest entries first.
+Current file: `44helper_v0_1_25_20261115.py`. Newest entries first.
+
+## 0.1.25 (2026-11-15)
+
+Error replies (status 400 and up) now carry a `message` key, the same text as `output` (or `error`), like the other tools. `output` stays, so a page or tool from an older version keeps working. This is a release: what the server sends changed.
 
 ## 0.1.24 (2026-11-13)
 
