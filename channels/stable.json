@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "26d251570502ee3b8b8243c18e33849023af1db4",
-   "commit": "1e8951565c72f6c8ba5234b4c2a41aff74bf8839",
-   "file": "44helper_v0_1_19_20261108.py",
-   "landed": "2026-11-08T22:17:48Z",
-   "promoted": "2026-11-13T04:57:48Z",
+   "blob": "35563bd14d5ab6c94cfa465995a503decda38d3b",
+   "commit": "1e30e6c4f2ab48c8b474ddeb372b4e35ebe47602",
+   "file": "44helper_v0_1_20_20261111.py",
+   "landed": "2026-11-11T22:44:49Z",
+   "promoted": "2026-11-14T22:44:49Z",
    "reason": "count",
-   "version": "0.1.19"
+   "version": "0.1.20"
   },
   "amp_nodetalker": {
    "blob": "3fcda70a6f1a3066afd678087e3a1ca1552b0c5b",
@@ -47,13 +47,13 @@
    "version": "7.4.0"
   },
   "instmon": {
-   "blob": "7b24436c33931f756cddb2aaef77e50550a12417",
-   "commit": "378096206a4e3a4161a87818e5bcfeb26b76461d",
-   "file": "instmon_v2_103_0_20261111.py",
-   "landed": "2026-11-11T11:05:38Z",
-   "promoted": "2026-11-14T11:05:38Z",
+   "blob": "75ca165a1b7e513464315505614b581e6c6edfa3",
+   "commit": "7ad3f903014db16637acf15d47e86cb7c0801955",
+   "file": "instmon_v2_104_0_20261112.py",
+   "landed": "2026-11-12T12:38:16Z",
+   "promoted": "2026-11-15T12:38:16Z",
    "reason": "count",
-   "version": "2.103.0"
+   "version": "2.104.0"
   },
   "nodecontrol": {
    "blob": "d610f5a1a9f2e686eadd835dceb82c839c94ca90",
@@ -83,13 +83,13 @@
    "version": "0.15.0"
   },
   "nodetalker": {
-   "blob": "fa1baa93e186ae9902f8a9b6aca53a32347108df",
-   "commit": "4b5cb00fbedc763634c6b23e954b54211a4577ed",
-   "file": "nodetalker_v0_10_38_20261111.py",
-   "landed": "2026-11-11T10:26:45Z",
-   "promoted": "2026-11-14T10:26:45Z",
+   "blob": "e699729323b31d4dc299f50d3ec8cbdbf6d9a4fb",
+   "commit": "33c2143ecc11ee12752da4c4814b1ee1e1ecb467",
+   "file": "nodetalker_v0_10_41_20261112.py",
+   "landed": "2026-11-12T12:08:26Z",
+   "promoted": "2026-11-15T12:08:26Z",
    "reason": "count",
-   "version": "0.10.38"
+   "version": "0.10.41"
   },
   "pibrary": {
    "blob": "1b0a26971e740a9e6ad5bb7e67b24bb0cc6be15e",
@@ -110,13 +110,13 @@
    "version": "6.13.95"
   },
   "sysmon_pi02w": {
-   "blob": "2c00a9654dc8f99b6360b73e47129d7090f4a5a8",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "sysmon_pi02w_v6_13_83_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-11-11T18:44:35Z",
-   "reason": "age",
-   "version": "6.13.83-pi02w"
+   "blob": "60b6d99ae42a92f92a53a16964a6558d3365b94f",
+   "commit": "a47af7f8bdda597565ae460386ea954510445a13",
+   "file": "sysmon_pi02w_v6_13_84_20261111.py",
+   "landed": "2026-11-11T21:42:38Z",
+   "promoted": "2026-11-14T21:42:38Z",
+   "reason": "count",
+   "version": "6.13.84-pi02w"
   },
   "termon": {
    "blob": "d3f4d73ade58a7dd6efa4b2b731dbcbc01cad745",
