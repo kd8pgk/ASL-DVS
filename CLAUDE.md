@@ -182,12 +182,10 @@
   records each tool's response headers and request guards. A change that
   weakens one fails CI. A change that strengthens one updates the table in the
   same pull request. A known gap is listed in `KNOWN_GAPS` until it is fixed,
-  and fixing it removes the entry. Known today: Pibrary accepts a login request
-  without `X-Requested-With`.
-- **Error replies carry a message.** New tools answer errors with a
-  `message` key. wifimon (`error`) and 44helper (`output`) are recorded in
-  the server tests as they are; move them to `message` in their
-  next release and update `error_keys`.
+  and fixing it removes the entry. None known today.
+- **Error replies carry a message.** Every tool answers errors with a
+  `message` key. wifimon (`error`) and 44helper (`output`) keep their old key
+  beside it while nodes run mixed versions.
 - **Promotion waits for green.** `promote-stable` promotes only when the
   `checks` workflow passed on the newest `main` commit (other than a
   `stable.json` update). Never edit `channels/stable.json` by hand.

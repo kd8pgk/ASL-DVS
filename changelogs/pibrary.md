@@ -1,6 +1,10 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_17_2_20261113.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_17_3_20261115.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.17.3 (2026-11-15)
+
+The login route now refuses a request without the `X-Requested-With: XMLHttpRequest` header, like the other tools (403, with `error` and `message` keys). This is a release: the server's request guard changed. The page's login request already sent the header, so signing in works as before.
 
 ## 0.17.2 (2026-11-13)
 

@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.24"
+APP_VERSION = "0.1.25"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -28988,6 +28988,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, content_type: str, body: bytes, extra_headers: dict | None = None) -> None:
         refresh = self.__dict__.pop("_refresh_cookie_token", None)
+        if status >= 400 and content_type.startswith("application/json"):
+            try:
+                obj = json.loads(body)
+            except ValueError:
+                obj = None
+            if isinstance(obj, dict) and "message" not in obj:
+                text = obj.get("output") if isinstance(obj.get("output"), str) else obj.get("error")
+                if isinstance(text, str):
+                    body = json.dumps(dict(obj, message=text)).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))

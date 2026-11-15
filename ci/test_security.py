@@ -26,7 +26,7 @@ EXPECT = {
                        "proxy_loopback": True, "after_login": ("/api/logout", "xhr")},
     "noderecorder": {"xfo": "SAMEORIGIN", "referrer": "", "csp": False, "login_guard": "xhr",
                      "proxy_loopback": True, "after_login": ("/api/logout", "xhr")},
-    "pibrary": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": None},
+    "pibrary": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr"},
     "instmon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
                 "after_login": ("/api/action", "xhr")},
     "wifimon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
@@ -37,9 +37,7 @@ EXPECT = {
                "after_login": ("/api/term/ticket", "xhr")},
 }
 
-KNOWN_GAPS = {
-    "login_guard": "the login route takes a request with no X-Requested-With header",
-}
+KNOWN_GAPS = {}
 
 
 def raw(server, method, path, body=None, headers=None, timeout=10):
@@ -96,7 +94,7 @@ def make_case(key):
         def test_login_refuses_a_forged_shape(self):
             guard = want["login_guard"]
             if guard is None:
-                self.skipTest(f"known gap in {key}: {KNOWN_GAPS['login_guard']}")
+                self.skipTest(f"known gap in {key}: {KNOWN_GAPS.get('login_guard', 'no login guard')}")
             body = json.dumps({"password": "not-the-password"})
             if guard == "xhr":
                 st, _, b = raw(self.server, "POST", "/api/login", body, {"Content-Type": "application/json"})

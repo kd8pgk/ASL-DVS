@@ -33,7 +33,7 @@ def skip_reason():
 
 def login(server):
     st, h, b = server.request("POST", "/api/login", body=json.dumps({"password": PW}),
-                              headers={"Content-Type": "application/json"}, timeout=15)
+                              headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}, timeout=15)
     if st != 200:
         raise AssertionError(f"login to {server.key} failed: {st} {b[:120]!r}")
     return h.get("Set-Cookie", "").split(";")[0]

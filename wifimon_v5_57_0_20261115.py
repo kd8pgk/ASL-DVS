@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.56.0"
+APP_VERSION = "5.57.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -6392,6 +6392,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, obj: object,
               extra: Optional[List[Tuple[str, str]]] = None) -> None:
+        if status >= 400 and isinstance(obj, dict) and "message" not in obj and isinstance(obj.get("error"), str):
+            obj = dict(obj, message=obj["error"])
         if self._defer:
             self._deferred = (status, obj, extra)
             return
