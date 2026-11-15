@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_27_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_28_20261115.py`. Newest entries first.
+
+## 0.1.28 (2026-11-15)
+
+Identity card, stage 3 of the write fields: the **BrandMeister password** and **AMI secret** sections each get a password input and a Set button, with the same preview, save point and restart list as the other sections. Old and new values are masked in the preview and the log.
+
+- **BrandMeister password** (1 to 64 characters, no spaces, quotes, `$`, backtick or backslash) is written to STFU `BMPassword` in `DVSwitch.ini` and to `var.txt` `bm_password`. If MMDVM_Bridge's `[DMR Network] Password` holds the old BrandMeister password, the preview says so; that line is not changed here. BrandMeister SelfCare is not changed either.
+- **AMI secret** (1 to 64 characters, no spaces, quotes, `; # % = $`, backtick or backslash) is written to `pass` in every numbered Allmon3 node section and to `secret` for the `manager.conf` users Allmon3 logs in as (all users when Allmon3 names none). Other `manager.conf` users are left alone. The two are written together, because they must match.
+- **A failed write now puts the files already written back** for every set action, Callsign and the DMR sections included, and says so. Before, the files written before the failure stayed changed.
+- This is a release: the page script and the server gained behaviour.
 
 ## 0.1.27 (2026-11-15)
 

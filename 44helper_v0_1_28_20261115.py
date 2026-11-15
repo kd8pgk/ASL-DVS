@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.27"
+APP_VERSION = "0.1.28"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15433,7 +15433,64 @@ def _cfgr_set_suffix_rewrite(fd: dict, value: str, old: str) -> object:
         return (None, "has no 7-digit DMR ID, left alone")
     return cur[:7] + value
 
+_CFGR_SECRET_SERVICES: dict[str, str] = {
+    _CFGR_DVSINI: "stfu", _CFGR_ALLMON: "allmon3", _CFGR_MANAGER: "asterisk"}
+
+def _cfgr_set_bm_check(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("value", ""))
+    if not re.fullmatch(r"[^\s\"'$`\\]{1,64}", value):
+        return None, "A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash."
+    return value, ""
+
+def _cfgr_set_bm_fields(payload: dict) -> list[dict]:
+    return [fd for fd in _CFGR_ID_FIELDS if "bm_pw" in fd["groups"]]
+
+def _cfgr_set_bm_extra(value: str) -> tuple[list[str], Callable[[], list[str]] | None]:
+    d = _cfgr_text(_CFGR_DVSINI)
+    m = _cfgr_text(_CFGR_MMDVM)
+    old = _cfgr_id_ini(d).get("stfu", {}).get("bmpassword", "") if d is not None else ""
+    net = _cfgr_id_ini(m).get("dmr network", {}).get("password", "") if m is not None else ""
+    if old and old == net:
+        return ["  NOTE: MMDVM_Bridge [DMR Network] Password holds the old BrandMeister password. It is not changed "
+                "here; change it from its own row under Stands alone."], None
+    return [], None
+
+def _cfgr_set_ami_check(payload: dict) -> tuple[str | None, str]:
+    value = str(payload.get("value", ""))
+    if not re.fullmatch(r"[^\s\"';#%=\\$`]{1,64}", value):
+        return None, "A secret is 1 to 64 characters with no spaces, quotes, ; # % = $, backtick or backslash."
+    return value, ""
+
+def _cfgr_set_ami_fields(payload: dict) -> list[dict]:
+    out: list[dict] = []
+    a = _cfgr_ast_sections(_CFGR_ALLMON)
+    users: set[str] = set()
+    for name, kv in (a[0] if a else []):
+        if name.isdigit():
+            if "user" in kv:
+                users.add(kv["user"])
+            if "pass" in kv:
+                out.append({"fid": "allmon_pass_" + name, "label": f"Allmon3 pass [{name}]", "src": "ini",
+                            "file": _CFGR_ALLMON, "section": name.lower(), "key": "pass", "form": "plain",
+                            "kind": "secret"})
+    m = _cfgr_ast_sections(_CFGR_MANAGER)
+    for name, kv in (m[0] if m else []):
+        if name.lower() != "general" and "secret" in kv and (not users or name in users):
+            out.append({"fid": "manager_secret_" + name, "label": f"AMI user secret [{name}]", "src": "ini",
+                        "file": _CFGR_MANAGER, "section": name.lower(), "key": "secret", "form": "plain",
+                        "kind": "secret"})
+    return out
+
 _CFGR_SET_RULES: dict[str, dict] = {
+    "bm_pw": {"noun": "BrandMeister password", "check": _cfgr_set_bm_check, "fields": _cfgr_set_bm_fields,
+              "kind": "secret", "extra": _cfgr_set_bm_extra, "logins": frozenset(),
+              "tail": _cfgr_set_tail_for("This does not change the password in BrandMeister SelfCare. The two must match."),
+              "services": _CFGR_SECRET_SERVICES},
+    "ami": {"noun": "AMI secret", "check": _cfgr_set_ami_check, "fields": _cfgr_set_ami_fields,
+            "kind": "secret", "extra": _cfgr_set_no_extra, "logins": frozenset(),
+            "tail": _cfgr_set_tail_for("The Allmon3 pass and the manager.conf secret are written together; they must "
+                                       "match or Allmon3 cannot log in to Asterisk."),
+            "services": _CFGR_SECRET_SERVICES},
     "dmr": {"noun": "DMR ID", "check": _cfgr_set_dmr_check, "fields": _cfgr_set_dmr_fields,
             "rewrite": _cfgr_set_dmr_rewrite, "extra": _cfgr_set_no_extra, "logins": frozenset(),
             "tail": _cfgr_set_tail_for("Only the first 7 digits are replaced; a suffix after them is kept."),
@@ -15513,6 +15570,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
         lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = True
+    done: list[str] = []
     for path in changed:
         p = plan[path]
         new = list(p["lines"])
@@ -15523,10 +15581,21 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
             res = _cfgr_write_file(path, "".join(new).encode("utf-8"), uid, gid, fmode)
         except OSError as exc:
             res = f"NOT written: {exc}"
+        lines_out.append(f"  {path}: {res}")
         if res.startswith("NOT") or res.startswith("skipped"):
             ok = False
-        lines_out.append(f"  {path}: {res}")
-    if extra_commit is not None:
+            break
+        done.append(path)
+    if not ok:
+        for path in reversed(done):
+            uid, gid, fmode = _cfgr_meta_of(path)
+            try:
+                back = _cfgr_write_file(path, "".join(plan[path]["lines"]).encode("utf-8"), uid, gid, fmode)
+            except OSError as exc:
+                back = f"NOT put back: {exc}"
+            lines_out.append(f"  {path}: put back ({back})")
+        lines_out += ["", "A file could not be written, so the files already written were put back. Nothing was changed."]
+    elif extra_commit is not None:
         lines_out += extra_commit()
     log(f"{'OK' if ok else 'FAIL'}: CONFIG {noun} set in {len(changed)} file(s)")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
@@ -18827,21 +18896,26 @@ var CFG_ID_REVEALED = false;
 var CFG_ID_CALL = '';
 var CFG_ID_SET_UI = {
   dmr: {max: 7, ph: '7 DIGITS', btn: 'Set everywhere', re: /^[0-9]{7}$/, msg: 'A DMR ID is exactly 7 digits.'},
-  dmr_full: {max: 2, ph: '2 DIGITS', btn: 'Set suffix', re: /^[0-9]{2}$/, msg: 'A suffix is exactly 2 digits.', clear: 'No suffix'}
+  dmr_full: {max: 2, ph: '2 DIGITS', btn: 'Set suffix', re: /^[0-9]{2}$/, msg: 'A suffix is exactly 2 digits.', clear: 'No suffix'},
+  bm_pw: {max: 64, ph: 'NEW PASSWORD', btn: 'Set everywhere', secret: true, strip: /[\s"'$`\\]/g, re: /^[^\s"'$`\\]{1,64}$/,
+          msg: 'A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash.'},
+  ami: {max: 64, ph: 'NEW SECRET', btn: 'Set everywhere', secret: true, strip: /[\s"';#%=$`\\]/g, re: /^[^\s"';#%=$`\\]{1,64}$/,
+        msg: 'A secret is 1 to 64 characters with no spaces, quotes, ; # % = $, backtick or backslash.'}
 };
 var CFG_ID_VALS = {};
 
 function cfgIdSetUi(gid) {
   var u = CFG_ID_SET_UI[gid];
-  return ' <span class="cfg-id-set"><input type="text" id="cfg-id-set-' + gid + '" maxlength="' + u.max + '" placeholder="' + u.ph +
-    '" autocomplete="off" spellcheck="false" inputmode="numeric" value="' + cfgEsc(CFG_ID_VALS[gid] || '') + '" oninput="cfgIdSetInput(this, \'' + gid + '\')"' +
+  return ' <span class="cfg-id-set"><input type="' + (u.secret ? 'password' : 'text') + '" id="cfg-id-set-' + gid + '" maxlength="' + u.max + '" placeholder="' + u.ph +
+    '" autocomplete="' + (u.secret ? 'new-password' : 'off') + '" spellcheck="false"' + (u.secret ? '' : ' inputmode="numeric"') + ' value="' + (u.secret ? '' : cfgEsc(CFG_ID_VALS[gid] || '')) + '" oninput="cfgIdSetInput(this, \'' + gid + '\')"' +
     ' onkeydown="if(event.key===\'Enter\')cfgIdSetGroup(\'' + gid + '\', document.getElementById(\'cfg-id-set-btn-' + gid + '\'), false);">' +
     ' <button class="btn-run" id="cfg-id-set-btn-' + gid + '" onclick="cfgIdSetGroup(\'' + gid + '\', this, false)">' + u.btn + '</button>' +
     (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') + '</span>';
 }
 
 function cfgIdSetInput(el, gid) {
-  var v = el.value.replace(/[^0-9]/g, '').slice(0, CFG_ID_SET_UI[gid].max);
+  var u = CFG_ID_SET_UI[gid];
+  var v = (u.strip ? el.value.replace(u.strip, '') : el.value.replace(/[^0-9]/g, '')).slice(0, u.max);
   if (el.value !== v) el.value = v;
   CFG_ID_VALS[gid] = v;
 }

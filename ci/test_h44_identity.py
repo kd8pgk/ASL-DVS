@@ -241,5 +241,105 @@ class DmrRows(unittest.TestCase):
                 self.assertEqual(fd["groups"], ("dmr",))
 
 
+ALLMON = "/etc/allmon3/allmon3.ini"
+MANAGER = "/etc/asterisk/manager.conf"
+SEC_FILES = dict(DMR_FILES)
+SEC_FILES.update({
+    ALLMON: "[123456]\nhost=127.0.0.1\nuser=amiuser\npass=oldami\n\n[1999]\nhost=127.0.0.1\nuser=amiuser\npass=oldami\n\n[1917]\nhost=127.0.0.1\nuser=amiuser\npass=oldami\n",
+    MANAGER: "[general]\nenabled = yes\n\n[amiuser]\nsecret = oldami\nread = all\n\n[otheruser]\nsecret = keepme\n",
+})
+
+
+class SecBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(SEC_FILES)
+
+
+class WriteFailure(SecBase):
+    def test_a_failed_write_puts_the_earlier_files_back(self):
+        real = self.fs.write
+        calls = []
+
+        def flaky(path, data, uid, gid, mode):
+            calls.append(path)
+            if path == MANAGER and len([c for c in calls if c == MANAGER]) == 1:
+                return "NOT written: disk full"
+            return real(path, data, uid, gid, mode)
+
+        with mock.patch.object(h44, "_cfgr_write_file", flaky):
+            r = h44._cfgr_act_id_set({"group": "ami", "value": "n3wAMI"}, True)
+        self.assertFalse(r["success"])
+        self.assertEqual(self.fs.files[ALLMON], SEC_FILES[ALLMON])
+        self.assertEqual(self.fs.files[MANAGER], SEC_FILES[MANAGER])
+        self.assertIn("put back", r["output"])
+
+
+class BmPassword(SecBase):
+    def test_bad_input_refused(self):
+        for bad in ("", "has space", 'q"uote', "q'uote", "dol$lar", "back`tick", "back\\slash", "x" * 65):
+            self.assertFalse(h44._cfgr_act_id_set({"group": "bm_pw", "value": bad}, False)["success"], bad)
+
+    def test_apply_writes_both_files_and_masks_the_output(self):
+        r = h44._cfgr_act_id_set({"group": "bm_pw", "value": "n3wBMpass"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("BMPassword = n3wBMpass", self.fs.files[DVS])
+        self.assertIn('bm_password="n3wBMpass"', self.fs.files[VAR])
+        self.assertNotIn("n3wBMpass", r["output"])
+        self.assertNotIn("pw1", r["output"])
+        self.assertIn(h44._CFGR_ID_MASK, r["output"])
+        self.assertIn("stfu", r["output"])
+        self.assertIn("Password=secretpw", self.fs.files[MB])
+
+    def test_preview_writes_nothing(self):
+        r = h44._cfgr_act_id_set({"group": "bm_pw", "value": "n3wBMpass"}, False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
+        self.assertNotIn("n3wBMpass", r["output"])
+
+    def test_note_when_the_dmr_network_password_holds_the_old_one(self):
+        self.fs.files[MB] = self.fs.files[MB].replace("Password=secretpw", "Password=pw1")
+        r = h44._cfgr_act_id_set({"group": "bm_pw", "value": "n3wBMpass"}, True)
+        self.assertIn("holds the old BrandMeister password", r["output"])
+        self.assertIn("Password=pw1", self.fs.files[MB])
+
+    def test_no_note_when_they_differ(self):
+        r = h44._cfgr_act_id_set({"group": "bm_pw", "value": "n3wBMpass"}, False)
+        self.assertNotIn("holds the old BrandMeister password", r["output"])
+
+
+class AmiSecret(SecBase):
+    def test_bad_input_refused(self):
+        for bad in ("", "has space", "semi;colon", "ha#sh", "per%cent", "eq=ual", "dol$lar", "x" * 65):
+            self.assertFalse(h44._cfgr_act_id_set({"group": "ami", "value": bad}, False)["success"], bad)
+
+    def test_apply_writes_every_allmon_section_and_the_manager_user(self):
+        r = h44._cfgr_act_id_set({"group": "ami", "value": "n3wAMI"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertEqual(self.fs.files[ALLMON].count("pass=n3wAMI"), 3)
+        self.assertNotIn("oldami", self.fs.files[ALLMON])
+        self.assertIn("secret = n3wAMI", self.fs.files[MANAGER])
+        self.assertNotIn("n3wAMI", r["output"])
+        self.assertNotIn("oldami", r["output"])
+        self.assertIn("allmon3", r["output"])
+        self.assertIn("asterisk", r["output"])
+
+    def test_manager_user_not_in_allmon_is_left_alone(self):
+        h44._cfgr_act_id_set({"group": "ami", "value": "n3wAMI"}, True)
+        self.assertIn("secret = keepme", self.fs.files[MANAGER])
+
+    def test_other_keys_are_untouched(self):
+        h44._cfgr_act_id_set({"group": "ami", "value": "n3wAMI"}, True)
+        self.assertIn("user=amiuser", self.fs.files[ALLMON])
+        self.assertIn("read = all", self.fs.files[MANAGER])
+
+    def test_missing_allmon_still_writes_manager_for_every_user(self):
+        del self.fs.files[ALLMON]
+        r = h44._cfgr_act_id_set({"group": "ami", "value": "n3wAMI"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("secret = n3wAMI", self.fs.files[MANAGER])
+        self.assertIn("secret = n3wAMI\n", self.fs.files[MANAGER].split("[otheruser]")[1])
+
+
 if __name__ == "__main__":
     unittest.main()
