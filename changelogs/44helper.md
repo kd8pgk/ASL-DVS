@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_32_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_33_20261115.py`. Newest entries first.
+
+## 0.1.33 (2026-11-15)
+
+Config tab, stage 1 of SvxLink USRP: the source-built SvxLink (the SvxLink tab's USRP variant, under `/usr/local/etc/svxlink`) is now a system the Config tab knows, next to ASL3, DVSwitch, USRP2M17 and Phone.
+
+- **Save Restore point, Create point, Restore, Diff and the automatic save points** cover `svxlink.conf`, `svxlink.d/UsrpLogic.conf`, `svxlink.d/ModuleEchoLink.conf`, every other `.conf` in `svxlink.d`, `dv_users.json`, `node_info.json`, `gpio.conf` and the `svxlink-usrp.service` unit. `svxlink.conf` and `UsrpLogic.conf` are the two files it expects; a missing one is listed.
+- It counts as installed when `/usr/local/etc/svxlink/svxlink.conf` is there. The apt package's `/etc/svxlink` is not covered.
+- **Restart** for this system restarts `svxlink-usrp`, and skips it when the unit is not on the node.
+- The Identity card does not read SvxLink yet; that comes in the next release.
+- This is a release: the server saves and restores more files.
 
 ## 0.1.32 (2026-11-15)
 

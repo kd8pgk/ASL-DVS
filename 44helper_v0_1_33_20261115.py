@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.32"
+APP_VERSION = "0.1.33"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14573,6 +14573,13 @@ _CFGR_GROUPS: dict[str, dict] = {
             "optional": [],
             "globs": [],
             "services": ["usrp2m17", "asterisk"]},
+    "svx": {"label": "SvxLink USRP", "markers": ["/usr/local/etc/svxlink/svxlink.conf"],
+            "core": ["/usr/local/etc/svxlink/svxlink.conf", "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"],
+            "optional": ["/usr/local/etc/svxlink/svxlink.d/ModuleEchoLink.conf", "/usr/local/etc/svxlink/dv_users.json",
+                         "/usr/local/etc/svxlink/node_info.json", "/usr/local/etc/svxlink/gpio.conf",
+                         "/etc/systemd/system/svxlink-usrp.service"],
+            "globs": [("/usr/local/etc/svxlink/svxlink.d", ".conf")],
+            "services": ["svxlink-usrp"]},
     "phone": {"label": "Phone", "markers": ["/etc/asl_dvs/phone.json"],
               "core": ["/etc/asl_dvs/phone.json"],
               "optional": ["/etc/asterisk/dvs_phone_extensions.conf", "/etc/asterisk/dvs_phone_pjsip.conf",
@@ -16008,7 +16015,7 @@ def _cfgr_files_line(entry: dict) -> str:
 def _cfgr_act_save_restore(payload: dict) -> dict:
     installed = _cfgr_installed()
     if not any(installed.values()):
-        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17, SvxLink USRP or Phone) is installed on this node."}
     snap = _cfgr_snap_dir("restore")
     m = _cfgr_read_manifest(snap)
     have = set(m["groups"]) if m else set()
@@ -16033,7 +16040,7 @@ def _cfgr_act_retake_restore(payload: dict) -> dict:
     installed = _cfgr_installed()
     groups = [g for g in _CFGR_GROUPS if installed[g]]
     if not groups:
-        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17, SvxLink USRP or Phone) is installed on this node."}
     _cfgr_ensure_root_dir()
     snap = _cfgr_snap_dir("restore")
     lines = []
@@ -16071,7 +16078,7 @@ def _cfgr_act_create_point(payload: dict) -> dict:
     installed = _cfgr_installed()
     groups = [g for g in _CFGR_GROUPS if installed[g]]
     if not groups:
-        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17, SvxLink USRP or Phone) is installed on this node."}
     users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
     if len(users) >= _CFGR_MAX_POINTS:
         return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} save points. Delete one first."}
@@ -18767,7 +18774,7 @@ function cfgSaveRestore(btn, outId) {
                  (have[g] ? '  (already in Restore point, kept)' : ''));
     });
     lines.push('');
-    lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node?');
+    lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 / SvxLink USRP on this node?');
     lines.push('If yes, press Cancel and wait until after the last install.');
     lines.push('You do not need all three: save once everything you plan to use is installed.');
     lines.push('A phone set up later is added by pressing this button again.');
@@ -18783,7 +18790,7 @@ function cfgRetake(btn) {
     lines.push('   ' + (d.installed[g] ? '[x] ' : '[ ] ') + cfgLabel(g) + (d.installed[g] ? '' : '  (not installed)'));
   });
   lines.push('');
-  lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node? If yes, cancel and wait until after the last install. A phone set up later is added with Save Restore point.');
+  lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 / SvxLink USRP on this node? If yes, cancel and wait until after the last install. A phone set up later is added with Save Restore point.');
   lines.push('The old Restore point is kept as a save point named restore_replaced_<date>.');
   lines.push('');
   lines.push('Type RETAKE to confirm:');
