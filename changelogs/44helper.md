@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_30_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_31_20261115.py`. Newest entries first.
+
+## 0.1.31 (2026-11-15)
+
+Identity card fix, found by running the write fields against a real ASL3 and DVSwitch install: `Analog_Bridge.ini` and `DVSwitch.ini` put a comment after the value on the same line (`gatewayDmrId = 1234567    ; ID to use ...`), and the card took the comment as part of the value.
+
+- **Reading:** the card now shows the value without the trailing `; comment`. Before, Analog_Bridge `gatewayDmrId` and `repeaterID` and the STFU `UserID`, `BMPassword` and `TalkerAlias` rows held the comment too, so the DMR ID and BrandMeister password sections showed "differs" on a stock install when the values matched.
+- **Writing:** the DMR ID and DMR ID + suffix fields now change those lines (0.1.27 skipped them as "not a DMR ID"), and every set field keeps the comment and its spacing (0.1.28 and 0.1.30 wrote over the comment on `BMPassword` and `TalkerAlias`). The BrandMeister preview's note about the DMR network password now sees the old value.
+- This is a release: what the card reads and writes changed.
 
 ## 0.1.30 (2026-11-15)
 

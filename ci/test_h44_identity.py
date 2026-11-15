@@ -552,5 +552,58 @@ class StandsAlone(AloneBase):
         self.assertIn("the line below", r["output"])
 
 
+class InlineComments(DmrBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files[AB] = ("[AMBE_AUDIO]\ngatewayDmrId = 1234567                  ; ID to use when transmitting\n"
+                             "repeaterID = 123456701                  ; ID of source repeater\n")
+        self.fs.files[DVS] = ("[STFU]                          ; Brandmeister Open DMR Terminal\n"
+                              "BMPassword = pw1           ; Your Brandmeister password\n"
+                              "UserID  = 1234567               ; Your DMR ID\n"
+                              "TalkerAlias = N0CALL Name City  ; Max 27 characters\n")
+
+    def test_the_card_reads_the_value_without_the_comment(self):
+        rows = {r["fid"]: r["raw"] for r in h44._cfgr_identity_scan()["rows"]}
+        self.assertEqual(rows["ab_gw_id"], "1234567")
+        self.assertEqual(rows["ab_rpt_id"], "123456701")
+        self.assertEqual(rows["stfu_id"], "1234567")
+        self.assertEqual(rows["stfu_pw"], "pw1")
+        self.assertEqual(rows["stfu_ta"], "N0CALL Name City")
+
+    def test_dmr_groups_match_when_only_comments_differ(self):
+        g = h44._cfgr_identity_scan()["groups"]
+        self.assertEqual(g["dmr"]["state"], "match")
+        self.assertEqual(g["bm_pw"]["state"], "match")
+
+    def test_dmr_id_is_written_and_the_comment_kept(self):
+        r = h44._cfgr_act_id_set({"group": "dmr", "value": "7654321"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("gatewayDmrId = 7654321                  ; ID to use when transmitting", self.fs.files[AB])
+        self.assertIn("repeaterID = 765432101                  ; ID of source repeater", self.fs.files[AB])
+        self.assertIn("UserID  = 7654321               ; Your DMR ID", self.fs.files[DVS])
+        self.assertNotIn("left alone", r["output"])
+
+    def test_suffix_is_written_and_the_comment_kept(self):
+        h44._cfgr_act_id_set({"group": "dmr_full", "value": "05"}, True)
+        self.assertIn("repeaterID = 123456705                  ; ID of source repeater", self.fs.files[AB])
+
+    def test_bm_password_keeps_the_comment_and_sees_the_old_value(self):
+        self.fs.files[MB] = self.fs.files[MB].replace("Password=secretpw", "Password=pw1")
+        r = h44._cfgr_act_id_set({"group": "bm_pw", "value": "n3wBMpass"}, True)
+        self.assertIn("BMPassword = n3wBMpass           ; Your Brandmeister password", self.fs.files[DVS])
+        self.assertIn("holds the old BrandMeister password", r["output"])
+
+    def test_talker_alias_row_keeps_the_comment(self):
+        rid = next(r["rid"] for r in h44._cfgr_identity_scan()["rows"] if r["fid"] == "stfu_ta")
+        r = h44._cfgr_act_id_set({"group": "alone", "rid": rid, "value": "My Node"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("TalkerAlias = My Node  ; Max 27 characters", self.fs.files[DVS])
+
+    def test_callsign_values_without_comments_are_unchanged(self):
+        r = h44._cfgr_act_id_set({"group": "callsign", "callsign": "BB2BB"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Callsign=BB2BB\n", self.fs.files[MB])
+
+
 if __name__ == "__main__":
     unittest.main()

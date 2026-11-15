@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.30"
+APP_VERSION = "0.1.31"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15006,6 +15006,8 @@ def _cfgr_id_norm(norm: str, value: str) -> str:
         return v[:7] if v.isdigit() and len(v) >= 7 else v
     return v
 
+_CFGR_INI_TAIL_RE = re.compile(r"\s+;.*$")
+
 def _cfgr_id_ini(text: str) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {"": {}}
     sec = ""
@@ -15019,7 +15021,7 @@ def _cfgr_id_ini(text: str) -> dict[str, dict[str, str]]:
         if not s or s[0] in "#;" or "=" not in s:
             continue
         k, v = s.split("=", 1)
-        out[sec].setdefault(k.strip().lower(), v.strip())
+        out[sec].setdefault(k.strip().lower(), _CFGR_INI_TAIL_RE.sub("", v).strip())
     return out
 
 def _cfgr_flat(text: str) -> dict[str, str]:
@@ -15278,7 +15280,7 @@ _CFGR_SETCALL_SERVICES: dict[str, str] = {
     _CFGR_P25GW: "p25gateway", _CFGR_NXDNGW: "nxdngateway", _CFGR_M17INI: "usrp2m17",
     _CFGR_ASLDVS_CONF: "nodecontrol"}
 _CFGR_SETCALL_AST_RE = re.compile(r"^(\s*[^=;\s][^=]*?\s*=>?\s*)(.*?)(\s*(?:;.*)?)$")
-_CFGR_SETCALL_INI_RE = re.compile(r"^(\s*[^=;#\s][^=]*?\s*=\s*)(.*?)(\s*)$")
+_CFGR_SETCALL_INI_RE = re.compile(r"^(\s*[^=;#\s][^=]*?\s*=\s*)(.*?)(\s+;.*|\s*)$")
 
 def _cfgr_setcall_new(form: str, value: str, old: str) -> str | None:
     if form == "idrec":
