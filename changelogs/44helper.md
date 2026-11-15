@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_25_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_26_20261115.py`. Newest entries first.
+
+## 0.1.26 (2026-11-15)
+
+Identity card, stage 1 of the write fields: the set action behind the Callsign field is now one generic action (`id_set_preview` and `id_set`, with a `group`), so the other sections can use it in the next releases. Nothing changes on the page yet, and the Callsign field works exactly as before; the old `id_set_callsign` actions still answer. Secret values are masked in previews and the log. A write can now be limited to one exact line (file, section, key). This is a release: the server gained actions.
 
 ## 0.1.25 (2026-11-15)
 
