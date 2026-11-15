@@ -945,5 +945,110 @@ class SvxStandsAlone(SvxBase):
         self.assertEqual(self.fs.written, {})
 
 
+RPT_WIRED = ("[nodes]\n123456 = radio@127.0.0.1/123456,NONE\n1900 = radio@127.0.0.1/1900,NONE\n\n"
+             "[123456](node-main)\nrxchannel = SimpleUSB/123456\n\n"
+             "[1900](node-main)\nrxchannel = USRP/127.0.0.1:34000:32000\n")
+
+
+class SvxWiring(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_WIRED, SVX: SVX_FILES[SVX], SVXU: SVX_FILES[SVXU]}
+
+    def test_mirror_image_ports_pair_up(self):
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, ["SvxLink ↔ node 1900 (34000/32000)"])
+        self.assertEqual(warn, [])
+
+    def test_swapped_ports_are_caught(self):
+        for p in (SVX, SVXU):
+            self.fs.files[p] = self.fs.files[p].replace("USRP_TX_PORT=32000", "USRP_TX_PORT=34000").replace(
+                "USRP_RX_PORT=34000", "USRP_RX_PORT=32000", 1)
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, [])
+        self.assertTrue(any("no bridge listens on 34000" in w for w in warn), warn)
+        self.assertTrue(any("SvxLink" in w and "has no rpt.conf node" in w for w in warn), warn)
+
+    def test_wrong_send_port_is_a_mismatch(self):
+        for p in (SVX, SVXU):
+            self.fs.files[p] = self.fs.files[p].replace("USRP_TX_PORT=32000", "USRP_TX_PORT=32999")
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, [])
+        self.assertTrue(any("expects SvxLink to send to 32000, but it sends to 32999" in w for w in warn), warn)
+
+    def test_no_node_for_svxlink_is_reported(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] = RPT_WIRED.split("[1900]")[0]
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertTrue(any("USRP_RX_PORT/USRP_TX_PORT 34000/32000 has no rpt.conf node" in w for w in warn), warn)
+
+    def test_two_copies_that_differ_are_flagged(self):
+        self.fs.files[SVX] = self.fs.files[SVX].replace("USRP_RX_PORT=34000", "USRP_RX_PORT=41233")
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, ["SvxLink ↔ node 1900 (34000/32000)"])
+        self.assertTrue(any("two [UsrpLogic] copies differ" in w and "41233" in w for w in warn), warn)
+
+    def test_only_one_copy_is_enough(self):
+        del self.fs.files[SVX]
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, ["SvxLink ↔ node 1900 (34000/32000)"])
+        self.assertEqual(warn, [])
+
+    def test_host_other_than_loopback_is_flagged(self):
+        for p in (SVX, SVXU):
+            self.fs.files[p] = self.fs.files[p].replace("USRP_HOST=127.0.0.1", "USRP_HOST=10.0.0.5")
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertTrue(any("USRP_HOST is 10.0.0.5" in w for w in warn), warn)
+
+    def test_no_svxlink_changes_nothing(self):
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_WIRED}
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(ok, [])
+        self.assertEqual(len(warn), 1)
+        self.assertIn("no bridge listens on 34000", warn[0])
+
+    def test_svxlink_listen_port_is_in_the_clash_check(self):
+        found = h44._cfgr_listeners()
+        self.assertIn(("34000", "SvxLink", "SvxLink svxlink.d/UsrpLogic.conf [UsrpLogic] USRP_RX_PORT"), found)
+        self.fs.files[AB] = "[USRP]\naddress = 127.0.0.1\ntxPort = 32001\nrxPort = 34000\n"
+        clashes, _n = h44._cfgr_port_clashes()
+        self.assertTrue(any("34000" in c and "SvxLink" in c for c in clashes), clashes)
+
+    def test_other_bridges_still_pair(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] += "\n[1999](node-main)\nrxchannel = USRP/127.0.0.1:34001:32001\n"
+        self.fs.files[AB] = "[USRP]\naddress = 127.0.0.1\ntxPort = 32001\nrxPort = 34001\n"
+        ok, warn = h44._cfgr_usrp_pairs()
+        self.assertEqual(sorted(ok), ["Analog_Bridge ↔ node 1999 (34001/32001)", "SvxLink ↔ node 1900 (34000/32000)"])
+        self.assertEqual(warn, [])
+
+
+class SvxSysmonCompare(SvxWiring):
+    def verify(self, theirs):
+        line = "USRP-PAIRS-JSON:" + h44.json.dumps(theirs)
+        with mock.patch.object(h44.os.path, "exists", lambda p: True), \
+                mock.patch.object(h44, "_run_argv", lambda argv, **kw: {"success": True, "output": line}):
+            return h44._cfgr_act_usrp_verify({})
+
+    def test_sysmon_seeing_no_bridge_for_the_svxlink_node_is_agreement(self):
+        r = self.verify({"version": "6.13.88-pi02w", "unpaired": [],
+                         "pairs": [{"node": "1900", "a": "34000", "b": "32000", "bridge": "", "state": "no_bridge"}]})
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("SysMon agrees", r["output"])
+        self.assertIn("SysMon does not read SvxLink", r["output"])
+        self.assertIn("node 1900", r["output"])
+        self.assertIn("paired: SvxLink ↔ node 1900", r["output"])
+
+    def test_a_real_disagreement_is_still_reported(self):
+        r = self.verify({"version": "6.13.88-pi02w", "unpaired": [], "pairs": []})
+        self.assertFalse(r["success"])
+        self.assertIn("SysMon DISAGREES", r["output"])
+
+    def test_no_svxlink_gives_no_svxlink_note(self):
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_WIRED}
+        r = self.verify({"version": "x", "unpaired": [],
+                         "pairs": [{"node": "1900", "a": "34000", "b": "32000", "bridge": "", "state": "no_bridge"}]})
+        self.assertTrue(r["success"], r["output"])
+        self.assertNotIn("does not read SvxLink", r["output"])
+
+
 if __name__ == "__main__":
     unittest.main()
