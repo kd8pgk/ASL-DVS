@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_31_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_32_20261115.py`. Newest entries first.
+
+## 0.1.32 (2026-11-15)
+
+Identity card, stage 6 of the write fields: the **ASL node number** section gets a **Rename** button, with a box for the old node when several public nodes are on the node. It renames one public node, with the same preview, automatic save point and restart list as the other sections, and puts every file back if one write fails. This release is held in `channels/overrides.json` until it has been tried on a Pi Zero 2 W.
+
+- **Changed:** the `[OLD]` stanza header in `rpt.conf` (the template suffix is kept) and the node's line in `[nodes]`; the node part of the `register =>` line in `rpt_http_registrations.conf` (the password is kept); `NODE` in `savenode.conf`; the `[OLD]` header in `allmon3.ini`; `astnode` in `echolink.conf`; `NODE` and `exten =>` lines for the node in `extensions.conf`; `asl_node` in `asl_dvs.conf`; `node =` in `nodetalker.conf`, `nodelisten.conf` and `sysmon.conf`; and 44helper's own `[identity] node`.
+- **Listed in the preview, not changed:** every other line that still names the old number, including `rxchannel = SimpleUSB/OLD` and its stanza in `simpleusb.conf`, the SysMon label, the Allmon3 page title, the hostname and `/etc/hosts`. A line that may hold a secret is shown as hidden.
+- **Refused:** a new number that is not 4 to 7 digits, is in the private range 1000 to 1999, equals the old one, or is already used in `rpt.conf`, `allmon3.ini`, the registrations or `savenode.conf`; an old node that is not a public node in `rpt.conf`.
+- The restart list names `asterisk`, `allmon3`, `nodecontrol`, `nodetalker`, `nodelisten` and `sysmon`. The registration for the new number must already exist on allstarlink.org with the same password.
+- This is a release: the page script and the server gained behaviour.
 
 ## 0.1.31 (2026-11-15)
 

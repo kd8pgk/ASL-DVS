@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.31"
+APP_VERSION = "0.1.32"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15676,8 +15676,211 @@ _CFGR_SET_RULES: dict[str, dict] = {
                  "services": _CFGR_SETCALL_SERVICES},
 }
 
+def _cfgr_write_plan(plan: dict[str, dict], changed: list[str], lines_out: list[str]) -> bool:
+    done: list[str] = []
+    for path in changed:
+        p = plan[path]
+        new = list(p["lines"])
+        for e in p["edits"]:
+            new[e["line"]] = e["text"]
+        uid, gid, fmode = _cfgr_meta_of(path)
+        try:
+            res = _cfgr_write_file(path, "".join(new).encode("utf-8"), uid, gid, fmode)
+        except OSError as exc:
+            res = f"NOT written: {exc}"
+        lines_out.append(f"  {path}: {res}")
+        if res.startswith("NOT") or res.startswith("skipped"):
+            for back_path in reversed(done):
+                uid, gid, fmode = _cfgr_meta_of(back_path)
+                try:
+                    back = _cfgr_write_file(back_path, "".join(plan[back_path]["lines"]).encode("utf-8"), uid, gid, fmode)
+                except OSError as exc:
+                    back = f"NOT put back: {exc}"
+                lines_out.append(f"  {back_path}: put back ({back})")
+            lines_out += ["", "A file could not be written, so the files already written were put back. Nothing was changed."]
+            return False
+        done.append(path)
+    return True
+
+_CFGR_NODE_FILES_ASL = (_CFGR_RPT, _CFGR_RPT_HTTP, _CFGR_SAVENODE, _CFGR_ALLMON, _CFGR_ECHOLINK,
+                        "/etc/asterisk/custom/echolink.conf", _CFGR_EXT)
+_CFGR_NODE_FILES_TOOLS = (_CFGR_ASLDVS_CONF, "/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodelisten.conf",
+                          "/etc/sysmon/sysmon.conf")
+_CFGR_NODE_NAMED_FILES = ("/etc/asterisk/simpleusb.conf", "/etc/asterisk/usbradio.conf", "/etc/asterisk/voter.conf",
+                          "/etc/allmon3/web.ini", "/etc/hostname", "/etc/hosts")
+_CFGR_NODE_SERVICES: dict[str, str] = {
+    _CFGR_RPT: "asterisk", _CFGR_RPT_HTTP: "asterisk", _CFGR_ECHOLINK: "asterisk",
+    "/etc/asterisk/custom/echolink.conf": "asterisk", _CFGR_EXT: "asterisk", _CFGR_ALLMON: "allmon3",
+    _CFGR_ASLDVS_CONF: "nodecontrol", "/etc/asl_dvs/nodetalker.conf": "nodetalker",
+    "/etc/asl_dvs/nodelisten.conf": "nodelisten", "/etc/sysmon/sysmon.conf": "sysmon"}
+_CFGR_NODE_SECRET_HINT = re.compile(r"(?i)pass|secret|pwd|register|key|token")
+
+def _cfgr_node_public(rpt_text: str | None) -> list[str]:
+    out: list[str] = []
+    for line in (rpt_text or "").splitlines():
+        h = _CFGR_HDR_RE.match(line)
+        if h and h.group(1).strip().isdigit() and not _cfgr_is_private(h.group(1).strip()) and h.group(1).strip() not in out:
+            out.append(h.group(1).strip())
+    return out
+
+def _cfgr_node_edit_lines(path: str, lines: list[str], old: str, new: str) -> list[dict]:
+    num = re.compile(r"(?<!\d)" + re.escape(old) + r"(?!\d)")
+    ast = path.startswith("/etc/asterisk/")
+    mask = _cfgr_managed_mask(lines) if ast else [False] * len(lines)
+    sec = ""
+    out: list[dict] = []
+    seen_header = False
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        eol = raw[len(body):]
+        st = body.strip()
+        if mask[i]:
+            continue
+        h = _CFGR_HDR_RE.match(body)
+        if h:
+            sec = h.group(1).strip()
+            if path in (_CFGR_RPT, _CFGR_ALLMON) and sec == old and not seen_header:
+                seen_header = True
+                out.append({"line": i, "text": body.replace("[" + old + "]", "[" + new + "]", 1) + eol,
+                            "what": "section header [" + old + "] -> [" + new + "]"})
+            continue
+        if not st or st[0] in "#;":
+            continue
+        text = None
+        what = ""
+        if path == _CFGR_RPT and sec.lower() == "nodes" and re.match(r"^\s*" + re.escape(old) + r"\s*=", body):
+            text, what = num.sub(new, body), "[nodes] line"
+        elif path == _CFGR_RPT_HTTP and _CFGR_REG_RE.match(body):
+            m = _CFGR_REG_RE.match(body)
+            if m and m.group(2) == old:
+                text, what = m.group(1) + new + m.group(3) + body[m.end(3):], "registration line (password kept)"
+        elif path == _CFGR_SAVENODE and re.match(r"^\s*NODE\s*=\s*" + re.escape(old) + r"\s*$", body):
+            text, what = num.sub(new, body), "NODE"
+        elif path in (_CFGR_ECHOLINK, "/etc/asterisk/custom/echolink.conf") and re.match(r"^\s*astnode\s*=\s*" + re.escape(old) + r"\s*(;.*)?$", body):
+            text, what = num.sub(new, body), "astnode"
+        elif path == _CFGR_EXT and (re.match(r"^\s*NODE\d*\s*=\s*" + re.escape(old) + r"\s*(;.*)?$", body)
+                                    or re.match(r"^\s*exten\s*=>\s*" + re.escape(old) + r"\s*,", body)):
+            text, what = num.sub(new, body), "node number"
+        elif path == _CFGR_ASLDVS_CONF and re.match(r"^\s*asl_node\s*=\s*" + re.escape(old) + r"\s*$", body):
+            text, what = num.sub(new, body), "asl_node"
+        elif path in ("/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodelisten.conf", "/etc/sysmon/sysmon.conf") \
+                and re.match(r"^\s*node\s*=\s*" + re.escape(old) + r"\s*$", body):
+            text, what = num.sub(new, body), "[" + sec + "] node"
+        if text is not None and text != body:
+            out.append({"line": i, "text": text + eol, "what": what})
+    return out
+
+def _cfgr_node_leftovers(plan: dict[str, dict], old: str) -> list[str]:
+    num = re.compile(r"(?<!\d)" + re.escape(old) + r"(?!\d)")
+    out: list[str] = []
+    files = list(_CFGR_NODE_FILES_ASL) + list(_CFGR_NODE_FILES_TOOLS) + list(_CFGR_NODE_NAMED_FILES)
+    for path in files:
+        if path in plan and plan[path]["lines"] is not None:
+            lines = plan[path]["lines"]
+            edited = {e["line"] for e in plan[path]["edits"]}
+        else:
+            b = _cfgr_read(path)
+            if b is None:
+                continue
+            lines = b.decode("utf-8", "replace").splitlines(keepends=True)
+            edited = set()
+        for i, raw in enumerate(lines):
+            if i in edited or not num.search(raw):
+                continue
+            body = raw.rstrip("\r\n").strip()
+            shown = "(line hidden: may hold a secret)" if _CFGR_NODE_SECRET_HINT.search(body) else body[:110]
+            out.append(f"  {path}:{i + 1}: {shown}")
+    return out
+
+def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
+    new = str(payload.get("value", "")).strip()
+    if not re.fullmatch(r"\d{4,7}", new) or _cfgr_is_private(new):
+        return {"success": False, "output": "A node number is 4 to 7 digits and not in the private range 1000 to 1999."}
+    rpt_text = _cfgr_text(_CFGR_RPT)
+    if rpt_text is None:
+        return {"success": False, "output": "rpt.conf is not on this node."}
+    public = _cfgr_node_public(rpt_text)
+    old = str(payload.get("node", "")).strip()
+    if old:
+        if old not in public:
+            return {"success": False, "output": "Node " + old + " is not a public node in rpt.conf."}
+    elif len(public) == 1:
+        old = public[0]
+    elif not public:
+        return {"success": False, "output": "No public node was found in rpt.conf."}
+    else:
+        return {"success": False, "output": "Several public nodes are here (" + ", ".join(public) +
+                "). Type the node to rename in the Node box and press Rename again."}
+    if new == old:
+        return {"success": False, "output": "That is already the node number."}
+    taken: list[str] = []
+    for path in (_CFGR_RPT, _CFGR_ALLMON, _CFGR_RPT_HTTP, _CFGR_SAVENODE):
+        t = _cfgr_text(path)
+        if t is not None and re.search(r"(?m)^\s*(\[" + new + r"\]|" + new + r"\s*=|NODE\s*=\s*" + new + r"\s*$|register\s*=>\s*" + new + r":)", t):
+            taken.append(path)
+    if taken:
+        return {"success": False, "output": "Node " + new + " is already used in " + ", ".join(taken) + ". Nothing was changed."}
+    plan: dict[str, dict] = {}
+    report: list[str] = []
+    missing: list[str] = []
+    for path in list(_CFGR_NODE_FILES_ASL) + list(_CFGR_NODE_FILES_TOOLS):
+        b = _cfgr_read(path)
+        if b is None:
+            if path not in ("/etc/asterisk/custom/echolink.conf",):
+                missing.append(path)
+            continue
+        lines = b.decode("utf-8", "replace").splitlines(keepends=True)
+        plan[path] = {"lines": lines, "edits": _cfgr_node_edit_lines(path, lines, old, new)}
+        for e in plan[path]["edits"]:
+            report.append(f"  {path}: {e['what']}")
+    c = globals().get("_cfg")
+    helper_node = c.get("identity", "node", fallback="").strip() if c is not None else ""
+    helper_change = helper_node == old
+    if helper_change:
+        report.append(f"  {CONFIG_FILE}: [identity] node")
+    if "/etc/asterisk/rpt.conf" in plan and not any(e["what"].startswith("section header") for e in plan[_CFGR_RPT]["edits"]):
+        return {"success": False, "output": "rpt.conf has no [" + old + "] stanza to rename. Nothing was changed."}
+    changed = [path for path, p in plan.items() if p["edits"]]
+    services = sorted({_CFGR_NODE_SERVICES[x] for x in changed if x in _CFGR_NODE_SERVICES})
+    head = [f"Rename node {old} to {new}.", ""]
+    if not changed:
+        return {"success": True, "changes": 0, "output": "\n".join(head + ["Nothing to change."])}
+    left = _cfgr_node_leftovers(plan, old)
+    tail: list[str] = []
+    if left:
+        tail += ["", "Lines that still name " + old + " and are NOT changed (look at each; some may need the same change):"] + left
+    if missing:
+        tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
+    tail += ["", "The registration on allstarlink.org must already exist for node " + new + " with the same password, "
+             "or the node stops registering. The Asterisk and Allmon3 files are in the automatic save point; the "
+             "Node Controller, Node Talker, Node Listen and SysMon settings files are not."]
+    if services:
+        tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
+    if "nodecontrol" in services:
+        tail += ["Restart the Dashboard (nodecontrol) first: until then it holds the old node, and its next Save puts it back."]
+    if not apply:
+        return {"success": True, "changes": len(changed) + (1 if helper_change else 0),
+                "output": "\n".join(head + ["Changes:"] + report + tail)}
+    groups = [g for g, d in _CFGR_GROUPS.items() if any(x in d["files"] for x in changed)]
+    lines_out = [f"Node {old} renamed to {new}.", ""]
+    if groups:
+        sid, pruned = _cfgr_auto_point(f"node {old} to {new}", groups)
+        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append("")
+    ok = _cfgr_write_plan(plan, changed, lines_out)
+    if ok and helper_change and c is not None:
+        if not c.has_section("identity"):
+            c.add_section("identity")
+        c.set("identity", "node", new)
+        save_config(c)
+        lines_out.append(f"  {CONFIG_FILE}: written")
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG node {old} renamed to {new} in {len(changed)} file(s)")
+    return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
+
 def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     group = str(payload.get("group", ""))
+    if group == "node":
+        return _cfgr_act_node_rename(payload, apply)
     rule = _CFGR_SET_RULES.get(group)
     if rule is None:
         return {"success": False, "output": "This section can't be set from here."}
@@ -15739,33 +15942,8 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
         sid, pruned = _cfgr_auto_point(f"{noun} {shown}", groups)
         lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
-    ok = True
-    done: list[str] = []
-    for path in changed:
-        p = plan[path]
-        new = list(p["lines"])
-        for e in p["edits"]:
-            new[e["line"]] = e["text"]
-        uid, gid, fmode = _cfgr_meta_of(path)
-        try:
-            res = _cfgr_write_file(path, "".join(new).encode("utf-8"), uid, gid, fmode)
-        except OSError as exc:
-            res = f"NOT written: {exc}"
-        lines_out.append(f"  {path}: {res}")
-        if res.startswith("NOT") or res.startswith("skipped"):
-            ok = False
-            break
-        done.append(path)
-    if not ok:
-        for path in reversed(done):
-            uid, gid, fmode = _cfgr_meta_of(path)
-            try:
-                back = _cfgr_write_file(path, "".join(plan[path]["lines"]).encode("utf-8"), uid, gid, fmode)
-            except OSError as exc:
-                back = f"NOT put back: {exc}"
-            lines_out.append(f"  {path}: put back ({back})")
-        lines_out += ["", "A file could not be written, so the files already written were put back. Nothing was changed."]
-    elif extra_commit is not None:
+    ok = _cfgr_write_plan(plan, changed, lines_out)
+    if ok and extra_commit is not None:
         lines_out += extra_commit()
     log(f"{'OK' if ok else 'FAIL'}: CONFIG {noun} set in {len(changed)} file(s)")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
@@ -19070,6 +19248,7 @@ var CFG_ID_SET_UI = {
   dmr_full: {max: 2, ph: '2 DIGITS', btn: 'Set suffix', re: /^[0-9]{2}$/, msg: 'A suffix is exactly 2 digits.', clear: 'No suffix'},
   bm_pw: {max: 64, ph: 'NEW PASSWORD', btn: 'Set everywhere', secret: true, strip: /[\s"'$`\\]/g, re: /^[^\s"'$`\\]{1,64}$/,
           msg: 'A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash.'},
+  node: {max: 7, ph: 'NEW NODE', btn: 'Rename', re: /^[0-9]{4,7}$/, msg: 'A node number is 4 to 7 digits.', node: true, nodePh: 'OLD NODE (if several)'},
   node_pw: {max: 64, ph: 'NEW PASSWORD', btn: 'Set everywhere', secret: true, node: true, strip: /[\s:@;"'$`\\]/g,
             re: /^[^\s:@;"'$`\\]{1,64}$/, msg: 'A password is 1 to 64 characters with no spaces, quotes, : @ ; $, backtick or backslash.'},
   ami: {max: 64, ph: 'NEW SECRET', btn: 'Set everywhere', secret: true, strip: /[\s"';#%=$`\\]/g, re: /^[^\s"';#%=$`\\]{1,64}$/,
@@ -19084,7 +19263,7 @@ function cfgIdSetUi(gid) {
     ' onkeydown="if(event.key===\'Enter\')cfgIdSetGroup(\'' + gid + '\', document.getElementById(\'cfg-id-set-btn-' + gid + '\'), false);">' +
     ' <button class="btn-run" id="cfg-id-set-btn-' + gid + '" onclick="cfgIdSetGroup(\'' + gid + '\', this, false)">' + u.btn + '</button>' +
     (u.clear ? ' <button class="btn-copy" onclick="cfgIdSetGroup(\'' + gid + '\', this, true)">' + u.clear + '</button>' : '') +
-    (u.node ? ' <input type="text" id="cfg-id-set-node-' + gid + '" maxlength="7" placeholder="NODE (if several)" autocomplete="off" spellcheck="false"' +
+    (u.node ? ' <input type="text" id="cfg-id-set-node-' + gid + '" maxlength="7" placeholder="' + (u.nodePh || 'NODE (if several)') + '" autocomplete="off" spellcheck="false"' +
       ' inputmode="numeric" style="width:15ch" oninput="this.value=this.value.replace(/[^0-9]/g,\'\')">' : '') + '</span>';
 }
 

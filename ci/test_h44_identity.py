@@ -603,6 +603,160 @@ class InlineComments(DmrBase):
         r = h44._cfgr_act_id_set({"group": "callsign", "callsign": "BB2BB"}, True)
         self.assertTrue(r["success"], r["output"])
         self.assertIn("Callsign=BB2BB\n", self.fs.files[MB])
+ASLDVS = "/etc/asl_dvs/asl_dvs.conf"
+NT = "/etc/asl_dvs/nodetalker.conf"
+NL = "/etc/asl_dvs/nodelisten.conf"
+SYSMON = "/etc/sysmon/sysmon.conf"
+EXT = "/etc/asterisk/extensions.conf"
+RPT = "/etc/asterisk/rpt.conf"
+SIMPLEUSB = "/etc/asterisk/simpleusb.conf"
+WEBINI = "/etc/allmon3/web.ini"
+RENAME_FILES = dict(NODE_FILES)
+RENAME_FILES.update({
+    RPT: "[general]\nx = 1\n\n[nodes]\n123456 = radio@127.0.0.1/123456,NONE\n1999 = radio@127.0.0.1/1999,NONE\n\n"
+         "[123456](node-main)\nrxchannel = SimpleUSB/123456\nidrecording = |iAA1AA\nnote_pass = see 123456 pass\n\n"
+         "[1999](node-main)\nrxchannel = USRP/127.0.0.1:34008:32008\n",
+    ALLMON: "[123456]\nhost=127.0.0.1\nuser=amiuser\npass=oldami\n\n[1999]\nhost=127.0.0.1\nuser=amiuser\npass=oldami\n",
+    ECHO: "[el0]\ncall = AA1AA-L\nastnode = 123456\nnode = 99999\npwd = hunter2\n",
+    EXT: "[globals]\nNODE = 123456\nHOMENPA = 330\n\n[radio-secure]\nexten => 123456,1,rpt,123456\nexten => 1999,1,rpt,1999\n",
+    ASLDVS: "[CONFIG]\nasl_node=123456\nbridge_node=1999\nport=8989\n",
+    NT: "[nodetalker]\nport = 8993\nnode = 123456\n",
+    NL: "[nodetalker]\nport = 8993\nnode = 123456\n\n[nodelisten]\nport = 8993\nnode = 123456\n",
+    SYSMON: "[identity]\ncallsign = AA1AA\nnode = 123456\nlabel = Radio Node 123456\n",
+    SIMPLEUSB: "[123456](node-main)\ndevstr = x\n",
+    WEBINI: "CONFIG_HEADER_TITLE = Allmon3 123456 Radio Node\n",
+})
+
+
+class RenameBase(Base):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(RENAME_FILES)
+
+    def rename(self, value, apply=True, node=None):
+        p = {"group": "node", "value": value}
+        if node:
+            p["node"] = node
+        return h44._cfgr_act_id_set(p, apply)
+
+
+class NodeRename(RenameBase):
+    def test_bad_new_number_refused(self):
+        for bad in ("", "123", "12345678", "12ab56", "1500", "1000", "1999"):
+            self.assertFalse(self.rename(bad, False)["success"], bad)
+        self.assertEqual(self.fs.written, {})
+
+    def test_same_number_refused(self):
+        self.assertFalse(self.rename("123456", False)["success"])
+
+    def test_number_already_used_refused(self):
+        self.fs.files[ALLMON] += "\n[654321]\nhost=x\nuser=u\npass=p\n"
+        r = self.rename("654321", True)
+        self.assertFalse(r["success"])
+        self.assertIn("already used", r["output"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_preview_writes_nothing_and_lists_leftovers(self):
+        r = self.rename("654321", False)
+        self.assertTrue(r["success"], r["output"])
+        self.assertEqual(self.fs.written, {})
+        self.assertIn("rpt.conf", r["output"])
+        self.assertIn("rxchannel = SimpleUSB/123456", r["output"])
+        self.assertIn("label = Radio Node 123456", r["output"])
+        self.assertIn("simpleusb.conf", r["output"])
+        self.assertIn("web.ini", r["output"])
+        self.assertIn("(line hidden: may hold a secret)", r["output"])
+        self.assertNotIn("oldnodepw", r["output"])
+        self.assertNotIn("oldami", r["output"])
+        self.assertIn("allstarlink.org", r["output"])
+
+    def test_apply_renames_every_listed_line(self):
+        r = self.rename("654321", True)
+        self.assertTrue(r["success"], r["output"])
+        f = self.fs.files
+        self.assertIn("[654321](node-main)\nrxchannel = SimpleUSB/123456", f[RPT])
+        self.assertIn("654321 = radio@127.0.0.1/654321,NONE", f[RPT])
+        self.assertNotIn("123456 = radio", f[RPT])
+        self.assertIn("1999 = radio@127.0.0.1/1999,NONE", f[RPT])
+        self.assertIn("register => 654321:oldnodepw@register.allstarlink.org ; main", f[REGS])
+        self.assertIn(";register => 123456:commentedpw@", f[REGS])
+        self.assertIn("NODE=654321\nPASSWORD=oldnodepw", f[SAVENODE])
+        self.assertIn("[654321]\nhost=127.0.0.1", f[ALLMON])
+        self.assertIn("[1999]\nhost", f[ALLMON])
+        self.assertIn("astnode = 654321", f[ECHO])
+        self.assertIn("node = 99999", f[ECHO])
+        self.assertIn("NODE = 654321", f[EXT])
+        self.assertIn("exten => 654321,1,rpt,654321", f[EXT])
+        self.assertIn("exten => 1999,1,rpt,1999", f[EXT])
+        self.assertIn("asl_node=654321", f[ASLDVS])
+        self.assertIn("node = 654321", f[NT])
+        self.assertEqual(f[NL].count("node = 654321"), 2)
+        self.assertIn("node = 654321\nlabel = Radio Node 123456", f[SYSMON])
+        self.assertEqual(f[SIMPLEUSB], RENAME_FILES[SIMPLEUSB])
+        self.assertEqual(f[WEBINI], RENAME_FILES[WEBINI])
+        self.assertNotIn("oldnodepw", r["output"])
+        for name in ("asterisk", "allmon3", "nodecontrol", "nodetalker", "nodelisten", "sysmon"):
+            self.assertIn(name, r["output"])
+
+    def test_two_public_nodes_ask_which(self):
+        self.fs.files[RPT] += "\n[222222](node-main)\nrxchannel = SimpleUSB/222222\n"
+        r = self.rename("654321", False)
+        self.assertFalse(r["success"])
+        self.assertIn("123456", r["output"])
+        self.assertIn("222222", r["output"])
+        r = self.rename("654321", True, node="222222")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("[654321](node-main)", self.fs.files[RPT])
+        self.assertIn("[123456](node-main)", self.fs.files[RPT])
+        self.assertEqual(self.fs.files[SAVENODE], RENAME_FILES[SAVENODE])
+        self.assertEqual(self.fs.files[ASLDVS], RENAME_FILES[ASLDVS])
+
+    def test_private_or_unknown_node_refused_as_the_old_one(self):
+        self.assertFalse(self.rename("654321", False, node="1999")["success"])
+        self.assertFalse(self.rename("654321", False, node="999999")["success"])
+
+    def test_missing_tool_files_are_skipped(self):
+        for path in (NT, NL, SYSMON, ASLDVS):
+            del self.fs.files[path]
+        r = self.rename("654321", True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("Not on this node, skipped", r["output"])
+        self.assertIn("[654321](node-main)", self.fs.files[RPT])
+
+    def test_no_stanza_in_rpt_conf_changes_nothing(self):
+        self.fs.files[RPT] = "[nodes]\n123456 = radio@127.0.0.1/123456,NONE\n[123456]\n"
+        self.fs.files[RPT] = self.fs.files[RPT].replace("[123456]", "[1999]")
+        r = self.rename("654321", True)
+        self.assertFalse(r["success"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_a_failed_write_puts_everything_back(self):
+        real = self.fs.write
+        calls = []
+
+        def flaky(path, data, uid, gid, mode):
+            calls.append(path)
+            if path == NL and calls.count(NL) == 1:
+                return "NOT written: disk full"
+            return real(path, data, uid, gid, mode)
+
+        with mock.patch.object(h44, "_cfgr_write_file", flaky):
+            r = self.rename("654321", True)
+        self.assertFalse(r["success"])
+        for path, text in RENAME_FILES.items():
+            self.assertEqual(self.fs.files[path], text, path)
+        self.assertIn("put back", r["output"])
+
+    def test_the_helpers_own_node_is_updated(self):
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg["identity"] = {"callsign": "AA1AA", "node": "123456"}
+        saved = []
+        with mock.patch.dict(h44.__dict__, {"_cfg": cfg}), mock.patch.object(h44, "save_config", lambda c: saved.append(c.get("identity", "node"))):
+            r = self.rename("654321", True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertEqual(cfg.get("identity", "node"), "654321")
+        self.assertEqual(saved, ["654321"])
 
 
 if __name__ == "__main__":
