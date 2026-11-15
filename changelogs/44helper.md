@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_28_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_29_20261115.py`. Newest entries first.
+
+## 0.1.29 (2026-11-15)
+
+Identity card, stage 4 of the write fields: the **ASL node password** section gets a password input, a Node box and a Set button, with the same preview, save point and restart list (`asterisk`) as the other sections. Old and new values are masked.
+
+- The password (1 to 64 characters, no spaces, quotes, `: @ ; $`, backtick or backslash) is written to the password part of the `register => NODE:password@host` line in `rpt_http_registrations.conf`, keeping the node, host and any trailing comment, and to `PASSWORD` in `savenode.conf` when its `NODE` is the chosen node. A commented-out `register` line is left alone.
+- With one registered node it is used automatically. With several, the preview names them and asks for the node number in the Node box; only that node's line changes. A node that is not registered here is refused.
+- The preview says that the password on allstarlink.org is not changed: the two must match, or the node stops registering.
+- This is a release: the page script and the server gained behaviour.
 
 ## 0.1.28 (2026-11-15)
 
