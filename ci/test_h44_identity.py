@@ -842,10 +842,10 @@ class SvxReadRows(SvxBase):
             del self.fs.files[p]
         self.assertFalse([f for f in self.rows() if f.startswith("svx_")])
 
-    def test_stands_alone_rows_are_not_settable_yet(self):
+    def test_stands_alone_rows_are_settable(self):
         r = self.rows()
         for fid in ("svx_el_pw", "svx_el_sysop", "svx_el_location"):
-            self.assertFalse(r[fid]["settable"], fid)
+            self.assertTrue(r[fid]["settable"], fid)
 
     def test_values_are_masked_until_revealed(self):
         pub = {r["fid"]: r for r in h44._cfgr_identity_public(False)["rows"]}
@@ -888,6 +888,61 @@ class SvxSectionWrites(SvxBase):
         self.assertTrue(r["success"], r["output"])
         self.assertIn("Callsign=BB2BB", self.fs.files[MB])
         self.assertNotIn("svxlink-usrp", r["output"].split("Restart these")[-1])
+
+
+class SvxStandsAlone(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files[SVX] = self.fs.files[SVX].replace(
+            '#AUTH_KEY="Change this key now!"\n\n[UsrpLogic]', 'AUTH_KEY="oldreflkey"\n\n[UsrpLogic]')
+
+    def go(self, fid, value, apply=True):
+        return h44._cfgr_act_id_set({"group": "alone", "rid": self.rows()[fid]["rid"], "value": value}, apply)
+
+    def test_bad_input_refused(self):
+        cases = {"svx_el_pw": ("", "a b", "a#b", 'a"b'), "svx_el_sysop": ("", "a#b", "x" * 41),
+                 "svx_el_location": ("", 'a"b', "x" * 28), "svx_refl_key": ("", "a b", "a'b", "x" * 65)}
+        for fid, bads in cases.items():
+            for bad in bads:
+                self.assertFalse(self.go(fid, bad, False)["success"], (fid, bad))
+        self.assertEqual(self.fs.written, {})
+
+    def test_echolink_password_only(self):
+        r = self.go("svx_el_pw", "newsvxpw")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("PASSWORD=newsvxpw\n", self.fs.files[SVXE])
+        self.assertIn("CALLSIGN=AA1AA-L", self.fs.files[SVXE])
+        self.assertIn("SYSOPNAME=MyName", self.fs.files[SVXE])
+        self.assertNotIn("newsvxpw", r["output"])
+        self.assertNotIn("MyPass", r["output"])
+        self.assertIn("svxlink-usrp", r["output"])
+        self.assertEqual(set(self.fs.written), {SVXE})
+
+    def test_sysop_name_and_location_keep_spaces_and_brackets(self):
+        r = self.go("svx_el_sysop", "  Jane Doe ")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("SYSOPNAME=Jane Doe\n", self.fs.files[SVXE])
+        r = self.go("svx_el_location", "[Svx] 146.52, Anytown")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("LOCATION=[Svx] 146.52, Anytown\n", self.fs.files[SVXE])
+        self.assertIn("PASSWORD=MyPass", self.fs.files[SVXE])
+
+    def test_reflector_key_keeps_its_quotes_and_leaves_other_sections(self):
+        r = self.go("svx_refl_key", "newreflkey")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn('AUTH_KEY="newreflkey"', self.fs.files[SVX])
+        self.assertIn('[NetRx]\nTYPE=Net\nAUTH_KEY="Change this key now!"', self.fs.files[SVX])
+        self.assertNotIn("newreflkey", r["output"])
+        self.assertNotIn("oldreflkey", r["output"])
+
+    def test_commented_reflector_key_has_no_row_to_set(self):
+        self.fs.files = dict(SVX_FILES)
+        self.assertNotIn("svx_refl_key", self.rows())
+
+    def test_preview_writes_nothing(self):
+        r = self.go("svx_el_pw", "newsvxpw", apply=False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
 
 
 if __name__ == "__main__":
