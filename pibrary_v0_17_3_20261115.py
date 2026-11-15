@@ -31,7 +31,7 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.17.2"
+VERSION = "0.17.3"
 DATE_STR = "2026-11-13"
 APP_NAME = "Pibrary"
 
@@ -5340,7 +5340,7 @@ async function _doLogin(ev) {
   try {
     const r = await _rawFetch('/api/login', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
       body: JSON.stringify({password: pw ? pw.value : ''}),
     });
     const data = await r.json();
@@ -10192,6 +10192,11 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
             self._error_json(409, "Restart unavailable (not running as a root systemd service)")
 
     def _handle_login(self):
+        if not self._check_csrf():
+            msg = "Missing or invalid X-Requested-With header"
+            log_event(f"HTTP 403: {msg} ({self.command} {self.path})", "err")
+            self._send_json(403, {"ok": False, "error": msg, "message": msg})
+            return
         client_ip = self.client_address[0]
         if not _cfg_get("auth_enabled"):
             self._send_json(200, {"ok": True})
