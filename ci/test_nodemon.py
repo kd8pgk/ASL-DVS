@@ -263,6 +263,7 @@ class FakeAmi(socketserver.ThreadingTCPServer):
         self.replies = kw
         self.seen = []
         self.cmds = []
+        self.fail = set()
         super().__init__(("127.0.0.1", 0), FakeAmiHandler)
 
 
@@ -293,7 +294,7 @@ class FakeAmiHandler(socketserver.StreamRequestHandler):
             elif msg.get("Command", "").startswith("rpt cmd "):
                 self.server.cmds.append(msg["Command"])
                 body = ["Response: Success", "ActionID: " + aid, "Message: Command output follows"]
-                if msg["Command"].endswith(" 777"):
+                if msg["Command"].endswith(" 777") or msg["Command"] in self.server.fail:
                     body.append("Output: Unknown node number 777.")
             elif msg.get("Command") == "XStat":
                 lines = self.server.replies.get(msg.get("Node"))
@@ -570,34 +571,6 @@ class SystemBar(AmiCase):
             self.assertFalse(nm.system_power("halt")["ok"])
             popen.assert_not_called()
 
-    def snap(self, links):
-        return {"nodes": {"654321": {"links": links}}, "ok": True, "error": "", "at": time.time(), "banner": "",
-                "loaded": [], "regs": {}}
-
-    def test_disconnect_all_drops_every_link_and_keeps_node_talkers_transmit_node(self):
-        links = [{"node": "1900"}, {"node": "1921"}, {"node": "45192"}]
-        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap(links)), \
-                unittest.mock.patch.object(nm.time, "sleep", lambda s: None):
-            r = nm.disconnect_all("192.0.2.5")
-        self.assertTrue(r["ok"], r)
-        self.assertEqual(self.ami.cmds, ["rpt cmd 654321 ilink 6", "rpt cmd 654321 ilink 3 1921"])
-        self.assertIn("Disconnected every link on node 654321", r["message"])
-        self.assertIn("Node Talker's transmit node 1921 was linked again", r["message"])
-
-    def test_disconnect_all_with_no_transmit_node_only_drops(self):
-        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap([{"node": "1900"}])):
-            r = nm.disconnect_all()
-        self.assertTrue(r["ok"])
-        self.assertEqual(self.ami.cmds, ["rpt cmd 654321 ilink 6"])
-        self.assertNotIn("Node Talker", r["message"])
-
-    def test_disconnect_all_reports_a_failure_and_does_not_relink(self):
-        nm.AMI_PORT = 1
-        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap([{"node": "1921"}])):
-            r = nm.disconnect_all()
-        self.assertFalse(r["ok"])
-        self.assertEqual(self.ami.cmds, [])
-
     def test_the_page_has_the_system_bar_and_its_routes_are_guarded(self):
         self.assertIn('id="sys-disc"', nm._HTML_TEMPLATE)
         self.assertIn('id="sys-reboot"', nm._HTML_TEMPLATE)
@@ -606,7 +579,105 @@ class SystemBar(AmiCase):
             src = fh.read()
         post = src.split("    def do_POST(self):", 1)[1].split("class Server", 1)[0]
         self.assertLess(post.index("if not self._authed():"), post.index('"/api/system/reboot"'))
-        self.assertLess(post.index("if not self._authed():"), post.index('"/api/disconnect-all"'))
+        self.assertLess(post.index("if not self._authed():"), post.index('"/api/node-discon"'))
+
+
+class NodeDiscon(AmiCase):
+    def setUp(self):
+        super().setUp()
+        with open(nm.RPT_CONF, "a") as fh:
+            fh.write("\n[1917](node-main)\nrxchannel = USRP/127.0.0.1:34008:32008\n")
+        nm._config["main_node"] = ""
+
+    def state(self, loaded=("654321", "1999", "1900", "1917", "1921"), links=("1900", "1921", "45192")):
+        nodes = {n: {"ok": True, "links": [], "txkeyed": False, "rxkeyed": False} for n in loaded}
+        nodes["654321"]["links"] = [{"node": x} for x in links]
+        snap = {"ok": True, "error": "", "at": time.time(), "banner": "", "loaded": list(loaded), "regs": {},
+                "nodes": nodes, "idle": False}
+        return unittest.mock.patch.object(nm.MON, "state", lambda: snap)
+
+    def test_a_private_node_drops_all_its_links_and_nothing_else(self):
+        for node in ("1900", "1999", "1917"):
+            self.ami.cmds.clear()
+            r = nm.node_discon(node, "192.0.2.5")
+            self.assertTrue(r["ok"], r)
+            self.assertEqual(self.ami.cmds, [f"rpt cmd {node} ilink 6"])
+            self.assertEqual(r["message"], f"Node {node}: links dropped.")
+
+    def test_node_talkers_transmit_node_only_drops_its_links_and_says_so(self):
+        r = nm.node_discon("1921")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.ami.cmds, ["rpt cmd 1921 ilink 6"])
+        self.assertIn("transmit link stays down until Node Talker links it again", r["message"])
+
+    def test_the_main_node_does_all_in_order_and_links_the_transmit_node_again(self):
+        with self.state(), unittest.mock.patch.object(nm.time, "sleep", lambda s: None):
+            r = nm.node_discon("654321", "192.0.2.5")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.ami.cmds, ["rpt cmd 1999 ilink 6", "rpt cmd 1900 ilink 6", "rpt cmd 1917 ilink 6",
+                                         "rpt cmd 654321 ilink 6", "rpt cmd 654321 ilink 3 1921"])
+        self.assertIn("Everything disconnected.", r["message"])
+        self.assertIn("1900: links dropped", r["message"])
+        self.assertIn("654321: links dropped", r["message"])
+        self.assertIn("Node Talker's transmit node 1921 linked again", r["message"])
+
+    def test_a_node_that_is_not_loaded_is_skipped_by_the_main_node(self):
+        with self.state(loaded=("654321", "1900"), links=("1900",)), \
+                unittest.mock.patch.object(nm.time, "sleep", lambda s: None):
+            r = nm.node_discon("654321")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.ami.cmds, ["rpt cmd 1900 ilink 6", "rpt cmd 654321 ilink 6"])
+
+    def test_the_main_node_keeps_going_when_one_step_fails_and_reports_it(self):
+        self.ami.fail.add("rpt cmd 1900 ilink 6")
+        with self.state(), unittest.mock.patch.object(nm.time, "sleep", lambda s: None):
+            r = nm.node_discon("654321")
+        self.assertFalse(r["ok"])
+        self.assertIn("Not everything could be disconnected.", r["error"])
+        self.assertIn("1900: links not dropped", r["error"])
+        self.assertIn("rpt cmd 654321 ilink 6", self.ami.cmds)
+        self.assertIn("rpt cmd 654321 ilink 3 1921", self.ami.cmds)
+
+    def test_a_refused_single_node_is_reported(self):
+        self.ami.fail.add("rpt cmd 1999 ilink 6")
+        r = nm.node_discon("1999")
+        self.assertFalse(r["ok"])
+        self.assertIn("Node 1999: links not dropped", r["error"])
+
+    def test_unknown_node_and_asterisk_down(self):
+        self.assertIn("not a node", nm.node_discon("999")["error"])
+        self.assertIn("not a node", nm.node_discon("654321; rpt")["error"])
+        self.assertIn("not a node", nm.node_discon(None)["error"])
+        nm.AMI_PORT = 1
+        r = nm.node_discon("1900")
+        self.assertFalse(r["ok"])
+        self.assertIn("could not be reached", r["error"])
+
+    def test_the_overview_has_the_discon_column_and_the_button_never_asks(self):
+        js = nm._JS
+        self.assertIn("'DisCon'", js)
+        self.assertIn("[5]", js)
+        body = js.split("async function disconNode(node) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("confirm", body)
+        self.assertIn("/api/node-discon", body)
+        self.assertIn("'Disconnect All'", js)
+        bar = js.split("async function sysAction(kind) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(bar.index("disconNode(node)"), bar.index("window.confirm"))
+        self.assertIn(".r{text-align:right}", nm._CSS)
+
+    def test_on_a_portrait_phone_only_node_what_state_and_the_button_remain(self):
+        css = nm._CSS
+        self.assertIn("@media (max-width:600px) and (orientation:portrait)", css)
+        rule = css.split("@media (max-width:600px) and (orientation:portrait){", 1)[1].split("}}", 1)[0]
+        self.assertIn(".nodes-tbl th:nth-child(4)", rule)
+        self.assertIn(".nodes-tbl td:nth-child(5)", rule)
+        self.assertIn("display:none", rule)
+        self.assertNotIn("nth-child(6)", rule)
+        self.assertNotIn("nth-child(3)", rule)
+
+    def test_allmon3_is_no_longer_offered(self):
+        self.assertNotIn("allmon3", [x[0] for x in nm.WEB_PAGES])
+        self.assertNotIn("Allmon3", nm._JS)
 
 
 class QuickLinks(unittest.TestCase):
@@ -623,13 +694,14 @@ class QuickLinks(unittest.TestCase):
         nm._config["port"] = 7777
         up = {8989, 8993, 7878, 9090, 7777}
         with unittest.mock.patch.object(nm, "port_open", lambda port, timeout=0.3: port in up), \
-                unittest.mock.patch.object(nm, "page_answers", lambda path, port=80, timeout=0.5: path == "/allmon3/"):
+                unittest.mock.patch.object(nm, "page_answers", lambda path, port=80, timeout=0.5: path in ("/allmon3/", "/dvswitch/")):
             got = nm.quick_links()
-        self.assertEqual([x["key"] for x in got], ["nodecontrol", "nodetalker", "termon", "cockpit", "allmon3"])
+        self.assertEqual([x["key"] for x in got], ["nodecontrol", "nodetalker", "termon", "cockpit", "dvswitch"])
+        self.assertNotIn("allmon3", [x["key"] for x in got])
         by = {x["key"]: x for x in got}
         self.assertEqual((by["termon"]["scheme"], by["termon"]["port"]), ("https", 7878))
         self.assertEqual((by["nodecontrol"]["scheme"], by["nodecontrol"]["port"], by["nodecontrol"]["path"]), ("http", 8989, "/"))
-        self.assertEqual((by["allmon3"]["port"], by["allmon3"]["path"]), (80, "/allmon3/"))
+        self.assertEqual((by["dvswitch"]["port"], by["dvswitch"]["path"]), (80, "/dvswitch/"))
 
     def test_the_answer_is_kept_for_a_short_while(self):
         calls = []
@@ -657,8 +729,9 @@ class QuickLinks(unittest.TestCase):
         self.assertIn("current = 'ov'", nm._JS)
         self.assertIn('<section id="pg-main" class="hidden">', html)
     def test_active_nodes_are_lit_in_the_overview(self):
-        self.assertIn("tr.lit td:first-child", nm._CSS)
-        self.assertIn("rgba(255,208,64", nm._CSS)
+        self.assertIn("tr.lit td{background:rgba(255,61,90,.15);color:var(--amber)", nm._CSS)
+        self.assertIn("tr.hot td{background:rgba(255,61,90,.3)}", nm._CSS)
+        self.assertNotIn("tr.lit td:first-child{border-left", nm._CSS)
         self.assertIn("classList.add('lit')", nm._JS)
         self.assertIn("classList.add('hot')", nm._JS)
 
