@@ -58,6 +58,8 @@ jobs:
         run: python3 ci/test_nodetalker_links.py
       - name: Services card tests (Node Talker)
         run: python3 ci/test_nodetalker_services.py
+      - name: SvxLink badge tests (Node Talker)
+        run: python3 ci/test_nodetalker_svx.py
       - name: Link, tune and disconnect tests (Node Recorder)
         run: python3 ci/test_noderecorder_links.py
       - name: Slow link tests (Node Recorder)
