@@ -107,6 +107,39 @@ def make_bar_case(key, pattern):
     return BarCase
 
 
+GROUP_TOOLS = {"nodecontrol": "nodecontrol_v[0-9]*.py"}
+
+
+def make_group_case(key, pattern):
+    class GroupCase(unittest.TestCase):
+        @classmethod
+        def setUpClass(cls):
+            with open(newest(pattern), encoding="utf-8") as fh:
+                cls.src = fh.read()
+            cls.group = cls.src.split('<div class="ql-group ql-left">', 1)[1].split("</div>", 1)[0]
+
+        def test_the_left_group_has_nodemon_first_then_dvswitch_and_cockpit(self):
+            labels = re.findall(r">([^<]+)</a>", self.group)
+            self.assertEqual(labels, ["Nodemon", "DVSwitch", "Cockpit"])
+
+        def test_the_button_opens_node_monitor_by_port(self):
+            self.assertIn('<a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>', self.group)
+            self.assertNotIn('data-ql-path="/allmon3"', self.src)
+            self.assertNotIn(">Allmon3</a>", self.src)
+
+        def test_the_page_builds_the_address_from_the_port(self):
+            self.assertIn("document.querySelectorAll('.ql[data-ql-path],.ql[data-ql-port]').forEach(a => {", self.src)
+            self.assertIn("a.href = a.dataset.qlPath ? `http://${host}${a.dataset.qlPath}`", self.src)
+
+    GroupCase.__name__ = f"QuickGroup_{key}"
+    GroupCase.__qualname__ = f"QuickGroup_{key}"
+    return GroupCase
+
+
+for _key, _pattern in GROUP_TOOLS.items():
+    globals()[f"QuickGroup_{_key}"] = make_group_case(_key, _pattern)
+
+
 for _key, _pattern in STATIC_BAR_TOOLS.items():
     globals()[f"QuickBar_{_key}"] = make_bar_case(_key, _pattern)
 
