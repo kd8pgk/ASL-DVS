@@ -23,6 +23,7 @@ NC_PI02W_TABS = {"tab-asl", "tab-dmr", "tab-dstar", "tab-echo", "tab-edit", "tab
 NC_FULL_TABS = NC_PI02W_TABS | {"tab-svx"}
 NT_TABS = {"nav-connect", "nav-listen", "nav-setup"}
 NR_TABS = {"nav-connect", "nav-record", "nav-setup"}
+NM_TABS = {"tab-main", "tab-conn", "tab-priv", "tab-log"}
 
 PAGE_CASES = {
     "sysmon": {"title": "System Monitor", "tabs": SYSMON_FULL_TABS,
@@ -33,10 +34,12 @@ PAGE_CASES = {
     "nodecontrol_pi02w": {"title": "Node Controller", "tabs": None, "click": []},
     "nodetalker": {"title": "Node Talker", "tabs": None, "click": []},
     "noderecorder": {"title": "Node Recorder", "tabs": None, "click": []},
+    "nodemon": {"title": "Node Monitor", "tabs": None, "click": []},
     "nodecontrol_login": {"server": "nodecontrol", "title": "Node Controller", "tabs": NC_FULL_TABS, "click": [], "login": True},
     "nodecontrol_pi02w_login": {"server": "nodecontrol_pi02w", "title": "Node Controller", "tabs": NC_PI02W_TABS, "click": [], "login": True},
     "nodetalker_login": {"server": "nodetalker", "title": "Node Talker", "tabs": NT_TABS, "click": [], "login": True},
     "noderecorder_login": {"server": "noderecorder", "title": "Node Recorder", "tabs": NR_TABS, "click": [], "login": True},
+    "nodemon_login": {"server": "nodemon", "title": "Node Monitor", "tabs": NM_TABS, "click": [], "login": True},
 }
 
 
@@ -49,6 +52,8 @@ LOGIN_FORMS = {
                    "readySelector": "#nav:not(.hidden)", "tabSelector": "#nav button, #nav a"},
     "noderecorder": {"passwordSelector": "#pw", "submitSelector": "#login-btn",
                      "readySelector": "#nav:not(.hidden)", "tabSelector": "#nav button, #nav a"},
+    "nodemon": {"passwordSelector": "#pw", "submitSelector": "#login-btn",
+                "readySelector": "#app:not(.hidden)", "tabSelector": '.tabs .tab[id^="tab-"]'},
 }
 
 
