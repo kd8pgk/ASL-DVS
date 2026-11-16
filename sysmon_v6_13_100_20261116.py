@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.99"
+VERSION      = "6.13.100"
 BUILD_DATE   = "20261113"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -3024,8 +3024,8 @@ body.tab-edit #zone-content{
 </header>
 
 <div id="ql-bar">
-  <a id="lnk-allmon3" class="ql-btn" href="http://localhost:8080/" target="_blank" rel="noopener"
-     title="Allmon3 web monitor">Allmon3</a>
+  <a id="lnk-nodemon" class="ql-btn" href="http://localhost:7777/" target="_blank" rel="noopener"
+     title="Node Monitor">Nodemon</a>
   <a id="lnk-dvswitch" class="ql-btn" href="/dvswitch" target="_blank" rel="noopener"
      title="DVSwitch dashboard">DVSwitch</a>
   <a id="lnk-cockpit" class="ql-btn" href="http://localhost:9090/" target="_blank" rel="noopener"
@@ -8435,7 +8435,7 @@ function _startApp() {
   }
 
   const qlHost = window.location.hostname;
-  const qlPorts = {"lnk-allmon3": 8080, "lnk-cockpit": 9090, "lnk-wifimon": 8991};
+  const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};
   for (const [id, port] of Object.entries(qlPorts)) {
     const el = document.getElementById(id);
     if (el) el.href = `http://${qlHost}:${port}/`;
