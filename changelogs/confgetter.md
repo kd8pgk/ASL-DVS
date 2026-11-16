@@ -1,6 +1,30 @@
 # Config getter (confgetter) changelog
 
-Current file: `confgetter_v1_0_2_20261027.sh`. Newest entries first.
+Current file: `confgetter_v1_0_3_20261116.sh`. Newest entries first.
+
+## 1.0.3 (2026-11-16)
+
+- **SvxLink USRP fork and SvxReflector.**
+  - The `svxlink-usrp` and `svxreflector` units are copied with the others.
+  - A new "service states" list shows whether each unit is active.
+  - The snapshot lists `/var/lib/svxlink` and `/var/lib/svxreflector`, with
+    their `pki` folders, so the control device and the certificate files can
+    be checked.
+  - It adds the last 80 lines of `/var/log/svxlink` and
+    `/var/log/svxreflector`, which hold the reflector login result.
+- **SvxReflector passwords are redacted.** The values in the
+  `[PASSWORDS]` section of `svxreflector.conf` sit under group names that the
+  secret-key check does not match, so they were copied as they were. Every
+  value in a `[PASSWORDS]` section is now redacted.
+- **Link state.** `rpt lstats` is run for each local node, so the snapshot
+  shows what each node is linked to.
+- **`radio@127.0.0.1` is no longer taken for an email address.** The email
+  check redacted the host in every `[nodes]` line of rpt.conf, which hid
+  the address and port a node links through. An address now needs a domain
+  that ends in letters.
+- **Backup copies are skipped.** The `.44helper-bak` and `.bak-<stamp>`
+  copies (for example of `svxlink.conf`) are listed under Skipped instead of
+  being copied in full.
 
 ## 1.0.2 (2026-10-27)
 

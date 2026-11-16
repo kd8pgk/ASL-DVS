@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# confgetter.sh  v1.0.2  (2026-10-27)
+# confgetter.sh  v1.0.3  (2026-11-16)
 set -u
 
-CONFGETTER_VERSION="1.0.2"
+CONFGETTER_VERSION="1.0.3"
 ROOT="${CONFGETTER_ROOT:-}"
 OUT_DIR="${ROOT}/etc/asl_dvs/instmon_library/snapshots"
 KEEP=10
@@ -11,7 +11,7 @@ FILE_MAX=200000
 
 usage() {
     echo "Usage: confgetter.sh [--out DIR] [--keep N]"
-    echo "Copies the node's ASL3, DVSwitch, USRP2M17, Allmon3, SvxLink, firewall, 44Net and tool"
+    echo "Copies the node's ASL3, DVSwitch, USRP2M17, Allmon3, SvxLink, SvxReflector, firewall, 44Net and tool"
     echo "config files, with secrets redacted, into one Markdown file for Claude to read."
     echo "  --out DIR   where to write the snapshot (default ${OUT_DIR})"
     echo "  --keep N    keep the newest N snapshots in DIR (default ${KEEP})"
@@ -41,7 +41,7 @@ WORK="$(mktemp -d)" || { echo "Cannot make a temporary folder" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
 UNITS=(nodecontrol sysmon instmon wifimon 44helper nodetalker amp_nodetalker asl_dvs_watchdog.timer
-       asterisk allmon3 analog_bridge mmdvm_bridge md380-emu usrp2m17 svxlink stfu asl-zello-bridge
+       asterisk allmon3 analog_bridge mmdvm_bridge md380-emu usrp2m17 svxlink svxlink-usrp svxreflector stfu asl-zello-bridge
        44net-tunnel 44helper-netready wg-quick@wg0 firewalld fail2ban cloudflared)
 
 n=0
@@ -70,6 +70,22 @@ if [[ -z "$ROOT" ]]; then
     run "ip route show table all" ip route show table all
     run "asterisk -rx 'core show version'" asterisk -rx "core show version"
     run "asterisk -rx 'rpt localnodes'" asterisk -rx "rpt localnodes"
+    if command -v asterisk >/dev/null 2>&1; then
+        for nd in $(timeout 20 asterisk -rx "rpt localnodes" 2>/dev/null | grep -oE '^[[:space:]]*[0-9]{4,7}[[:space:]]*$'); do
+            run "asterisk -rx 'rpt lstats $nd'" asterisk -rx "rpt lstats $nd"
+        done
+    fi
+    n=$((n + 1))
+    printf '%s\t%s\n' "$n" "service states" >> "$WORK/labels.tsv"
+    for u in "${UNITS[@]}"; do
+        printf '%s: %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null)"
+    done > "$WORK/cmd_$n.txt"
+    for d in /var/lib/svxlink /var/lib/svxlink/pki /var/lib/svxreflector /var/lib/svxreflector/pki; do
+        [[ -d "$d" ]] && run "ls -la $d" ls -la "$d"
+    done
+    for f in /var/log/svxlink /var/log/svxreflector; do
+        [[ -f "$f" ]] && run "tail -n 80 $f" tail -n 80 "$f"
+    done
     for u in "${UNITS[@]}"; do
         if systemctl cat "$u" > "$WORK/unit.tmp" 2>/dev/null; then
             n=$((n + 1))
@@ -131,7 +147,7 @@ ASTERISK_KEY = {"rpt.conf", "extensions.conf", "iax.conf", "modules.conf", "mana
                 "savenode.conf", "simpleusb.conf", "usbradio.conf", "pjsip.conf", "rpt_http_registrations.conf",
                 "voter.conf", "logger.conf"}
 SKIP_NAME = re.compile(r"(\.key|\.pem|\.p12|\.pfx|\.crt|\.der|\.csr|privatekey|credentials|token|secret|"
-                       r"auth\.txt|\.bak|\.swp|~)$", re.I)
+                       r"auth\.txt|\.bak|\.bak-[\w.-]+|[.-]bak|-tmp|\.swp|~)$", re.I)
 ALLOWED_TREES = ("/etc/", "/opt/", "/var/lib/dvswitch/", "/usr/local/etc/", "/usr/lib/os-release",
                  "/run/systemd/resolve/")
 DENY = re.compile(r"^/etc/(shadow|gshadow|sudoers|ssh/ssh_host_|ssl/private/|cloudflared/|ampersand/)")
@@ -141,11 +157,12 @@ KV = re.compile(r"^(\s*(?:export\s+)?)([A-Za-z0-9_.\-]+)(\s*(?:=>|=|:)\s*)(.*?)(
 REGISTER = re.compile(r"(register\s*=>?\s*[^:@\s]+:)(?!<redacted:)([^@\s]+)(@)", re.I)
 URLQ = re.compile(r"([?&](?:pass|password|pwd|secret|token|key)=)(?!<redacted:)([^&\s\"']+)", re.I)
 FLAG = re.compile(r"(--(?:token|password|pass|secret)[=\s]+)(?!<redacted:)(\S+)", re.I)
-EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z][A-Za-z0-9-]*\b")
 MAC = re.compile(r"\b([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}):[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\b")
 PIPE_PASS = re.compile(r"^(password|passwd|pass|pwd)$", re.I)
 PRIVATE_KEY = re.compile(r"^e_?mail$", re.I)
 ENVKV = re.compile(r"\b([A-Za-z_]*(?:PASS|SECRET|TOKEN|PSK|PRIVATE_?KEY)[A-Za-z_]*=)(?!<redacted:)([^\s\"']+)", re.I)
+SECRET_SECTIONS = {"PASSWORDS"}
 counts = {"redacted": 0}
 
 
@@ -203,13 +220,28 @@ def redact_pipes(lines):
     return out
 
 
+def redact_sections(lines):
+    sec = ""
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("[") and s.endswith("]"):
+            sec = s[1:-1].strip().upper()
+        elif sec in SECRET_SECTIONS and s[:1] not in ("#", ";"):
+            m = KV.match(ln)
+            if m and m.group(4) and not m.group(4).startswith("<redacted:"):
+                ln = m.group(1) + m.group(2) + m.group(3) + tag(m.group(4)) + m.group(5)
+        out.append(ln)
+    return out
+
+
 def redact_text(text, path=""):
     if path.endswith(".json"):
         try:
             return json.dumps(redact_json(json.loads(text)), indent=1, sort_keys=True) + "\n"
         except ValueError:
             pass
-    return "\n".join(redact_line(ln) for ln in redact_pipes(text.split("\n")))
+    return "\n".join(redact_line(ln) for ln in redact_sections(redact_pipes(text.split("\n"))))
 
 
 def real(rel):
@@ -360,7 +392,7 @@ for label, out in commands:
 
 head = ["# Node config snapshot: %s" % host, "",
         "A read-only copy of a ham radio node's configuration: AllStarLink 3 (Asterisk app_rpt), DVSwitch, "
-        "USRP2M17, Allmon3, SvxLink, firewalld, WireGuard (44Net Connect) and the Node Controller tools. "
+        "USRP2M17, Allmon3, SvxLink (with the USRP fork) and SvxReflector, firewalld, WireGuard (44Net Connect) and the Node Controller tools. "
         "Use it to find errors and differences. Nothing on the node was changed to make it.", "",
         "- Taken: %s" % now.strftime("%Y-%m-%d %H:%M:%S %Z"),
         "- Made by: confgetter.sh %s" % VERSION,

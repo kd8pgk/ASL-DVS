@@ -1254,6 +1254,33 @@ class ConfgetterTests(unittest.TestCase):
         self.assertIn("trimmed to 200000 bytes", text)
         self.assertIn("unit file /etc/systemd/system/cloudflared.service", text)
 
+    def test_svxlink_files(self):
+        files = {
+            "usr/local/etc/svxlink/svxreflector.conf": ("[USERS]\nKD8PGK=MyNodes\n[PASSWORDS]\nMyNodes=\"REFLPW\"\n"
+                                                        "#Sample=\"Change this key now!\"\n"),
+            "usr/local/etc/svxlink/svxlink.conf": "[ReflectorLogic]\nAUTH_KEY=\"SVXAUTHPW\"\nHOSTS=north.america.svxlink.net\n",
+            "usr/local/etc/svxlink/svxlink.conf.44helper-bak": "AUTH_KEY=\"BAKPW\"\n",
+            "usr/local/etc/svxlink/svxlink.conf.bak-hid-202611070426": "AUTH_KEY=\"BAK2PW\"\n",
+            "etc/asterisk/extensions.conf": "[radio-secure]\nexten => 1900,1,Rpt(1900)\n",
+            "etc/asterisk/rpt.conf": "[nodes]\n1900 = radio@127.0.0.1:4574/1900,NONE\n652705 = radio@127.0.0.1/652705,NONE\n",
+            "etc/systemd/system/svxlink-usrp.service": "[Service]\nExecStart=/usr/local/bin/svxlink\n",
+        }
+        for rel, body in files.items():
+            path = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(body)
+        text, _ = self.run_it()
+        for s in ("REFLPW", "SVXAUTHPW", "BAKPW", "BAK2PW"):
+            self.assertNotIn(s, text, s)
+        self.assertIn("MyNodes=<redacted:", text)
+        self.assertIn("KD8PGK=MyNodes", text)
+        self.assertIn("1900 = radio@127.0.0.1:4574/1900,NONE", text)
+        self.assertIn("652705 = radio@127.0.0.1/652705,NONE", text)
+        self.assertIn("| /usr/local/etc/svxlink/svxlink.conf.44helper-bak | secret or backup file, never copied |", text)
+        self.assertIn("| /usr/local/etc/svxlink/svxlink.conf.bak-hid-202611070426 | secret or backup file, never copied |", text)
+        self.assertIn("unit file /etc/systemd/system/svxlink-usrp.service", text)
+
     def test_private_and_retention(self):
         os.makedirs(self.out)
         for i in range(3):
