@@ -102,6 +102,10 @@ class Validate(Base):
     def test_hash_inside_quotes_is_fine(self):
         self.assertEqual(SM._svx_validate("svxlink.conf", BASE + 'AUTH_KEY="a #b"\n'), [])
 
+    def test_numeric_macro_keys_and_device_ports_are_fine(self):
+        extra = "\n[Macros]\n1=EchoLink:9999#\n03400=EchoLink:9999#\n\n[Rx1]\nSERIAL_PORT=/dev/ttyUSB0\nPTT_PORT=/dev/ttyS0\n"
+        self.assertEqual(SM._svx_validate("svxlink.conf", BASE + extra), [])
+
     def test_hash_inside_a_word_is_fine(self):
         self.assertEqual(SM._svx_validate("svxlink.conf", BASE + "AUTH_KEY=ab#cd\n"), [])
 

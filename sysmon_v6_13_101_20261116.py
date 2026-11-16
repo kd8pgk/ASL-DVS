@@ -4331,19 +4331,19 @@ body.tab-edit #zone-content{
         <table class="dvsm-fields">
           <tr><td class="dvsm-lbl">Reflector host</td>
             <td class="dvsm-val-cell"><input class="find-inp" id="svx-host" type="text" spellcheck="false"
-              autocomplete="off" placeholder="127.0.0.1 for a test reflector"></td></tr>
+              autocomplete="off" placeholder="127.0.0.1 = test reflector"></td></tr>
           <tr><td class="dvsm-lbl">Reflector port</td>
             <td class="dvsm-val-cell"><input class="find-inp" id="svx-port" type="text" spellcheck="false"
               autocomplete="off" value="5300"></td></tr>
           <tr><td class="dvsm-lbl">Password (AUTH_KEY)</td>
             <td class="dvsm-val-cell"><input class="find-inp" id="svx-key" type="password" spellcheck="false"
-              autocomplete="new-password" placeholder="from the reflector's sysop"></td></tr>
+              autocomplete="new-password" placeholder="from the sysop"></td></tr>
           <tr><td class="dvsm-lbl">Default talkgroup (0 = none)</td>
             <td class="dvsm-val-cell"><input class="find-inp" id="svx-tg" type="text" spellcheck="false"
               autocomplete="off" value="0"></td></tr>
           <tr><td class="dvsm-lbl">Monitored talkgroups</td>
             <td class="dvsm-val-cell"><input class="find-inp" id="svx-mon" type="text" spellcheck="false"
-              autocomplete="off" placeholder="comma separated, + for priority, blank = none"></td></tr>
+              autocomplete="off" placeholder="91,240+ (blank = none)"></td></tr>
         </table>
         <div id="svx-conn-note" class="dvsm-note src" style="display:none;margin-top:.5rem"></div>
       </div>
@@ -11707,7 +11707,7 @@ function _svxRenderConn(d) {
     _svxFormFilled = true;
   }
   const key = document.getElementById("svx-key");
-  if (key) key.placeholder = r.key_set ? "blank keeps the password already set" : "from the reflector's sysop";
+  if (key) key.placeholder = r.key_set ? "blank = keep current" : "from the sysop";
   const sub = document.getElementById("svx-conn-sub");
   if (sub) sub.textContent = r.host ? `Now: ${r.host}:${r.port} as ${r.callsign || "?"}` : "Not set up yet";
   _dvsmSetBadge("svx-badge-conn", r.host ? "pass" : "info", r.host ? "SET" : "NOT SET");
@@ -27411,7 +27411,8 @@ _SVX_BAK_EXT = ".sysmon-bak"
 _SVX_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
 _SVX_MAX_BYTES = 262144
 _SVX_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
-_SVX_KV_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+_SVX_KV_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+_SVX_NUMERIC_KEYS = frozenset(("HOST_PORT", "USRP_TX_PORT", "USRP_RX_PORT"))
 _SVX_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 _SVX_MON_RE = re.compile(r"^$|^\d{1,8}\+?(,\d{1,8}\+?)*$")
 _SVX_LOGIN_OK_RE = re.compile(r"ReflectorLogic.*Authentication OK")
@@ -27515,7 +27516,7 @@ def _svx_validate(label: str, text: str) -> "list[str]":
         if _svx_inline_comment(val):
             problems.append(f"Line {n}: {key} has a comment after the value; SvxLink reads it as part of the value. "
                             "Put the comment on its own line.")
-        if key.endswith("_PORT") and not _svx_unquote(val).isdigit():
+        if key in _SVX_NUMERIC_KEYS and not _svx_unquote(val).isdigit():
             problems.append(f"Line {n}: {key} must be a number.")
     if label == "svxlink.conf":
         secs = _svx_parse(text)
@@ -27652,7 +27653,7 @@ def _svx_checks() -> dict:
         rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
 
     installed = _SVX_BIN.exists()
-    unit_state = get_service_state(_SVX_UNIT)
+    unit_state = get_service_state(_SVX_UNIT + ".service")
     if not installed:
         row(str(_SVX_BIN), "SvxLink USRP build installed", "fail",
             "Not found. Build it from 44helper, SvxLink tab, steps 1 to 8.")
