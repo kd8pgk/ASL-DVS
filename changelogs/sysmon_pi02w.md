@@ -1,6 +1,16 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_88_20261113.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_89_20261116.py`. Newest entries first.
+
+## 6.13.89-pi02w (2026-11-16)
+
+The Allmon3 quick-link button in the bar under the header is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page's link table changed.
+
+- **Nodemon** takes the first place in the bar and opens `http://<this node>:7777/`, like WifiMon and Cockpit, which are fixed buttons too. It does not check whether Node Monitor is running first.
+- **Allmon3** is no longer offered in this bar. SysMon's Allmon3 settings editor is unchanged.
+- The DVSwitch, Cockpit, USRP2M17, WifiMon and Node Controller buttons are unchanged.
+- This is the Pi Zero 2 W build. The full build gets the same change in its own release, 6.13.100.
+- Nothing else changes.
 
 ## 6.13.88-pi02w (2026-11-13)
 
