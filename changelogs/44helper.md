@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_35_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_36_20261115.py`. Newest entries first.
+
+## 0.1.36 (2026-11-15)
+
+Config tab, stage 4 of SvxLink USRP: the USRP pair check now reads SvxLink's `[UsrpLogic]` ports and matches them, mirror-image, against the private node's `rxchannel` in `rpt.conf`, the way it already does for Analog_Bridge and USRP2M17.
+
+- **Paired:** `rxchannel = USRP/127.0.0.1:A:B` with `USRP_RX_PORT=A` and `USRP_TX_PORT=B` shows as "SvxLink ↔ node N (A/B)". With node 1900 that is `34000:32000`, `USRP_RX_PORT=34000`, `USRP_TX_PORT=32000`.
+- **Warned:** SvxLink sending to a port other than the one Asterisk listens on; no bridge listening on the node's port (swapped ports show up this way); SvxLink ports with no `rpt.conf` node; `USRP_HOST` other than `127.0.0.1`; and the two `[UsrpLogic]` copies (`svxlink.conf` and `svxlink.d/UsrpLogic.conf`) holding different ports. With two copies the check uses `svxlink.d/UsrpLogic.conf`.
+- **Port clash check:** SvxLink's listen port is included.
+- **Verify with SysMon:** SysMon does not read SvxLink, so a SvxLink pair is checked by 44helper only and no longer counts as a disagreement; the result says so.
+- This is a release: the check reads more files.
 
 ## 0.1.35 (2026-11-15)
 

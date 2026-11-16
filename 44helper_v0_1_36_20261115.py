@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.35"
+APP_VERSION = "0.1.36"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -16941,6 +16941,9 @@ def _cfgr_listeners(override: dict[str, bytes] | None = None) -> list[tuple[str,
             v = ini.get(sec.lower(), {}).get("localport", "")
             if _CFGR_PORT_RE.match(v):
                 found.append((v, "USRP2M17", f"USRP2M17.ini [{sec}] LocalPort"))
+    sv = _cfgr_svx_usrp(override)
+    if sv is not None and _CFGR_PORT_RE.match(sv["listen"]):
+        found.append((sv["listen"], "SvxLink", f"{sv['where']} USRP_RX_PORT"))
     t = _cfgr_text(_CFGR_IRCDDB, override)
     if t is not None:
         d = _cfgr_ini_sections(t).get("", {})
@@ -17005,6 +17008,25 @@ def _cfgr_ambe_state(override: dict[str, bytes] | None = None) -> tuple[str, str
 
 _CFGR_SYSMON_BIN = "/usr/local/bin/sysmon.py"
 
+def _cfgr_svx_usrp(override: dict[str, bytes] | None = None) -> dict | None:
+    copies: list[dict] = []
+    for path, name in ((_CFGR_SVX_USRP, "svxlink.d/UsrpLogic.conf"), (_CFGR_SVX_CONF, "svxlink.conf")):
+        t = _cfgr_text(path, override)
+        if t is None:
+            continue
+        d = _cfgr_id_ini(t).get("usrplogic")
+        if d is None or not ("usrp_rx_port" in d or "usrp_tx_port" in d):
+            continue
+        copies.append({"where": f"SvxLink {name} [UsrpLogic]", "listen": d.get("usrp_rx_port", ""),
+                       "send": d.get("usrp_tx_port", ""), "host": d.get("usrp_host", "")})
+    if not copies:
+        return None
+    out = dict(copies[0])
+    out["differs"] = (len(copies) > 1 and (copies[0]["listen"], copies[0]["send"], copies[0]["host"]) !=
+                      (copies[1]["listen"], copies[1]["send"], copies[1]["host"]))
+    out["other"] = copies[1] if len(copies) > 1 else None
+    return out
+
 def _cfgr_usrp_scan(override: dict[str, bytes] | None = None) -> dict:
     chans: list[dict] = []
     t = _cfgr_text(_CFGR_RPT, override)
@@ -17032,6 +17054,10 @@ def _cfgr_usrp_scan(override: dict[str, bytes] | None = None) -> dict:
         d = _cfgr_ini_sections(t).get("usrp network", {})
         bridges.append({"bridge": "USRP2M17", "where": "USRP2M17.ini [USRP Network] LocalPort/DstPort",
                         "listen": d.get("localport", ""), "send": d.get("dstport", "")})
+    sv = _cfgr_svx_usrp(override)
+    if sv is not None:
+        bridges.append({"bridge": "SvxLink", "where": f"{sv['where']} USRP_RX_PORT/USRP_TX_PORT",
+                        "listen": sv["listen"], "send": sv["send"]})
     bridges = [b for b in bridges if _CFGR_PORT_RE.match(b["listen"]) or _CFGR_PORT_RE.match(b["send"])]
     pairs: list[dict] = []
     used: set[str] = set()
@@ -17060,11 +17086,23 @@ def _cfgr_usrp_pairs(override: dict[str, bytes] | None = None) -> tuple[list[str
             warn.append(f"USRP pair: {rx} expects {p['bridge']} to send to {p['b']}, but it sends to {p['send'] or '(not set)'}. "
                         "Audio from the bridge would not reach Asterisk")
         else:
-            warn.append(f"USRP pair: {rx}: no bridge listens on {p['a']} (Analog_Bridge [USRP] rxPort or "
-                        "USRP2M17 [USRP Network] LocalPort). Audio from Asterisk on this node goes nowhere")
+            warn.append(f"USRP pair: {rx}: no bridge listens on {p['a']} (Analog_Bridge [USRP] rxPort, "
+                        "USRP2M17 [USRP Network] LocalPort or SvxLink [UsrpLogic] USRP_RX_PORT). Audio from "
+                        "Asterisk on this node goes nowhere")
     for b in d["unpaired"]:
         warn.append(f"USRP pair: {b['where']} {b['listen'] or '(not set)'}/{b['send'] or '(not set)'} has no rpt.conf node "
                     f"with rxchannel USRP/127.0.0.1:{b['listen'] or '?'}:{b['send'] or '?'}")
+    sv = _cfgr_svx_usrp(override)
+    if sv is not None:
+        if sv["differs"]:
+            o = sv["other"]
+            warn.append(f"SvxLink USRP: the two [UsrpLogic] copies differ: {sv['where']} has "
+                        f"{sv['listen'] or '(not set)'}/{sv['send'] or '(not set)'} (host {sv['host'] or '(not set)'}), "
+                        f"{o['where']} has {o['listen'] or '(not set)'}/{o['send'] or '(not set)'} "
+                        f"(host {o['host'] or '(not set)'}). Make them the same; the check above used the first")
+        if sv["host"] and sv["host"] != "127.0.0.1":
+            warn.append(f"SvxLink USRP: {sv['where']} USRP_HOST is {sv['host']}, not 127.0.0.1. Asterisk's USRP node "
+                        "only talks to this machine")
     return ok, warn
 
 def _cfgr_usrp_key(d: dict) -> set[tuple]:
@@ -17073,6 +17111,18 @@ def _cfgr_usrp_key(d: dict) -> set[tuple]:
     out |= {("unpaired", str(b.get("bridge", "")), str(b.get("listen", "")), str(b.get("send", "")))
             for b in d.get("unpaired", []) if isinstance(b, dict)}
     return out
+
+def _cfgr_usrp_without_svx(d: dict) -> dict:
+    pairs: list[dict] = []
+    seen: set[str] = set()
+    others = {str(p["node"]) for p in d["pairs"] if p.get("bridge") not in ("SvxLink", "")}
+    for p in d["pairs"]:
+        if p.get("bridge") != "SvxLink":
+            pairs.append(p)
+        elif str(p["node"]) not in others and str(p["node"]) not in seen:
+            seen.add(str(p["node"]))
+            pairs.append({"node": p["node"], "a": p["a"], "b": p["b"], "bridge": "", "state": "no_bridge"})
+    return {"pairs": pairs, "unpaired": [u for u in d["unpaired"] if u.get("bridge") != "SvxLink"]}
 
 def _cfgr_usrp_describe(k: tuple) -> str:
     if k[0] == "pair":
@@ -17100,8 +17150,13 @@ def _cfgr_act_usrp_verify(payload: dict) -> dict:
         return {"success": False, "output": "\n".join(head + ["", "SysMon could not run the check. The SysMon on this "
                 "node may be older than the first versions with --usrp-pairs: 6.13.67.16-pi02w (Pi Zero 2 W build) "
                 "or 6.13.82 (full build).", "", out[-600:]])}
-    a, b = _cfgr_usrp_key(mine), _cfgr_usrp_key(theirs)
+    svx_nodes = sorted({str(p["node"]) for p in mine["pairs"] if p.get("bridge") == "SvxLink"})
+    has_svx = bool(svx_nodes) or any(u.get("bridge") == "SvxLink" for u in mine["unpaired"])
+    a, b = _cfgr_usrp_key(_cfgr_usrp_without_svx(mine)), _cfgr_usrp_key(theirs)
     tail = ["", f"SysMon {theirs.get('version', '?')} checked the same files on its own."]
+    if has_svx:
+        tail.append("SysMon does not read SvxLink, so the SvxLink pair" +
+                    (f" (node {', '.join(svx_nodes)})" if svx_nodes else "") + " is checked by 44helper only.")
     if a == b:
         tail.append("SysMon agrees: " + (f"{len(a)} item(s), same result." if a else "nothing to pair."))
         return {"success": True, "output": "\n".join(head + tail)}
