@@ -1,6 +1,21 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_4_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_5_0_20261116.py`. Newest entries first.
+
+## 0.5.0 (2026-11-16)
+
+A **DisCon** button for every node on the Overview tab. This is a release: there is a new action.
+
+- **DisCon column**, right-justified, on the Nodes card. Every node that is up has a button; a node that is down or not loaded has none. It acts at once and asks nothing.
+- **A private node's button** drops every link on that node (ilink 6). It does not touch the gateway behind the node: a SvxLink talkgroup or a DVSwitch tuning stays as it was.
+- **The main node's button, "Disconnect All", does all.** It drops every link on each private node that is loaded, then every link on the main node, then links Node Talker's transmit node again if it was linked, so Node Talker keeps working.
+- **Node Talker's transmit node** (1921 by default): its own button drops its links, and the result line says its transmit link stays down until Node Talker links it again.
+- **The System bar's Disconnect All** now does the same as the main node's button, and no longer asks first. Reboot and Shutdown still ask.
+- **The result** shows under the table (on the System bar when the button on it is used from another tab) for a few seconds, in green or red. If a step fails the others still run, and the message names what did not work. A button turns off while its command is running.
+- **Active nodes look like Node Controller's favorites:** an active node's row on the Nodes card has the red background and amber text of Node Controller's quick-link and favorite buttons, instead of 0.4.0's gold edge and glow. A node that is transmitting or receiving has a deeper red. A node that is down or not loaded keeps the plain look. The Status boxes are unchanged.
+- **Phone, portrait:** the Nodes card shows only Node, What, State and DisCon, so the button is always on screen. Landscape and wider screens show every column.
+- **The Allmon3 button is gone** from the Links card, which now lists the other tools and DVSwitch. The Nodemon buttons in the other tools come in their own releases.
+- Every press is written to the Log tab and the journal with the address that pressed it.
 
 ## 0.4.0 (2026-11-16)
 

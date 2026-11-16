@@ -536,7 +536,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_3_20261115.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
-| `nodemon_v0_4_0_20261116.py` | common |
+| `nodemon_v0_5_0_20261116.py` | common |
 | `install_all_v7_8_0_20261116.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |

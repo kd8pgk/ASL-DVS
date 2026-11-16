@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1279,7 +1279,7 @@ TOOL_LINKS = (
     ("termon", "Terminal Monitor", 7878, "https", "/"),
     ("cockpit", "Cockpit", 9090, "https", "/"),
 )
-WEB_PAGES = (("allmon3", "Allmon3", "/allmon3/"), ("dvswitch", "DVSwitch", "/dvswitch/"))
+WEB_PAGES = (("dvswitch", "DVSwitch", "/dvswitch/"),)
 LINK_TTL_SEC = 15.0
 _links_cache = {"t": -1e9, "v": []}
 
@@ -1495,30 +1495,64 @@ def system_power(what, who="?"):
     return {"ok": True, "message": message}
 
 
-def disconnect_all(who="?"):
-    plan = node_plan()
-    if not plan["ok"]:
-        return {"ok": False, "error": plan["error"]}
+def _discon_one(plan, node, who):
+    kind = (plan["kind"].get(node) or ("", ""))[0]
+    r = run_command({"node": node, "op": 6}, who)
+    if not r["ok"]:
+        return False, "links not dropped: " + r["error"]
+    text = "links dropped"
+    if kind == "nodetalker":
+        text += "; Node Talker's transmit link stays down until Node Talker links it again"
+    return True, text
+
+
+def discon_all(plan, who):
     main = plan["main"]
-    if not main:
-        return {"ok": False, "error": "No node was found in rpt.conf."}
+    snap = MON.state()
     keep = []
-    st = MON.state()["nodes"].get(main) or {}
-    for link in st.get("links", []):
+    for link in (snap["nodes"].get(main) or {}).get("links", []):
         kind = plan["kind"].get(link["node"])
         if kind and kind[0] == "nodetalker" and link["node"] not in keep:
             keep.append(link["node"])
+    parts = []
+    bad = False
+    for node in plan["private"]:
+        kind = (plan["kind"].get(node) or ("", ""))[0]
+        if kind == "nodetalker" or (snap["ok"] and node not in snap["loaded"]):
+            continue
+        ok, text = _discon_one(plan, node, who)
+        bad = bad or not ok
+        parts.append(f"{node}: {text}")
     r = run_command({"node": main, "op": 6}, who)
-    if not r["ok"]:
-        return r
-    note = ""
-    if keep:
+    if r["ok"]:
+        parts.append(f"{main}: links dropped")
+    else:
+        bad = True
+        parts.append(f"{main}: links not dropped: {r['error']}")
+    if keep and r["ok"]:
         time.sleep(1.0)
         again = [n for n in keep if run_command({"node": main, "op": 3, "target": n}, who)["ok"]]
         if again:
-            note = " Node Talker's transmit node " + ", ".join(again) + " was linked again."
-    log_event(f"Disconnect All on node {main} from {who}", "warn")
-    return {"ok": True, "message": f"Disconnected every link on node {main}." + note}
+            parts.append("Node Talker's transmit node " + ", ".join(again) + " linked again")
+    return not bad, "; ".join(parts)
+
+
+def node_discon(node, who="?"):
+    plan = node_plan()
+    if not plan["ok"]:
+        return {"ok": False, "error": plan["error"]}
+    node = str(node or "").strip()
+    if node not in plan["public"] + plan["private"]:
+        return {"ok": False, "error": f"Node {node[:12] or '?'} is not a node on this server."}
+    if node == plan["main"]:
+        ok, text = discon_all(plan, who)
+        log_event(f"Disconnect all from {who}: {text}", "warn")
+        return {"ok": True, "message": "Everything disconnected. " + text + "."} if ok else \
+            {"ok": False, "error": "Not everything could be disconnected. " + text + "."}
+    ok, text = _discon_one(plan, node, who)
+    log_event(f"Disconnect node {node} from {who}: {text}", "warn")
+    return {"ok": True, "message": f"Node {node}: {text}."} if ok else \
+        {"ok": False, "error": f"Node {node}: {text}."}
 
 
 _CSS = r""":root{--bg:#0d1117;--surface:#161e2e;--surface2:#1e2a3f;--border:#2e4060;--border2:#3a5278;--amber:#ffd040;--green:#00ffb0;--red:#ff3d5a;--blue:#22d4ff;--teal:#00ffe5;--lime:#d4ff00;--orange:#ffaa22;--text:#ffffff;--text-bright:#f0f8ff;--sans:"Readex Pro",Arial,Helvetica,sans-serif;--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem}
@@ -1565,6 +1599,9 @@ th{color:var(--amber);font-size:var(--fs-sm);letter-spacing:.06em;text-transform
 td.mono{font-family:var(--mono)}
 .empty{color:#aab8cc;padding:.4rem 0}
 .keyed{color:var(--lime)}
+.r{text-align:right}
+.btn.discon{padding:.3rem .8rem;font-size:var(--fs-sm)}
+@media (max-width:600px) and (orientation:portrait){.nodes-tbl{min-width:0;width:100%}.nodes-tbl th,.nodes-tbl td{padding:.35rem .3rem}.nodes-tbl td:nth-child(2){white-space:normal}.nodes-tbl .btn.discon{padding:.3rem .5rem;font-size:.7rem}.nodes-tbl th:nth-child(4),.nodes-tbl td:nth-child(4),.nodes-tbl th:nth-child(5),.nodes-tbl td:nth-child(5){display:none}}
 .sec-lbl{font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:#fff;margin:1rem 0 .3rem}
 .btn{padding:.48rem 1rem;border-radius:4px;border:1px solid;background:transparent;cursor:pointer;transition:all .14s;white-space:nowrap;font-size:var(--fs-base)}
 .btn:hover{filter:brightness(1.6);box-shadow:0 0 12px currentColor}
@@ -1587,10 +1624,10 @@ td.mono{font-family:var(--mono)}
 .sum .box .n{font-size:1.15rem;font-weight:bold;color:var(--text-bright)}
 .sum .box.lit{border-color:#b8860b;background:rgba(255,208,64,.12);box-shadow:0 0 18px rgba(255,208,64,.22)}
 .sum .box.lit .n{color:var(--amber);text-shadow:0 0 14px rgba(255,208,64,1)}
-tr.lit td{background:rgba(255,208,64,.10)}
-tr.lit td:first-child{border-left:3px solid #b8860b;color:var(--amber);font-weight:bold;text-shadow:0 0 14px rgba(255,208,64,1)}
-tr.hot td{background:rgba(255,208,64,.24)}
-tr.hot td:first-child{border-left-color:var(--amber)}
+tr.lit td{background:rgba(255,61,90,.15);color:var(--amber);text-shadow:0 0 8px rgba(255,208,64,.4)}
+tr.lit td:first-child{font-weight:bold}
+tr.lit .badge,tr.lit .btn{text-shadow:none}
+tr.hot td{background:rgba(255,61,90,.3)}
 .sum .box .t{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;color:#9db4d0}
 .cmdbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cmdbar select,.cmdbar input{background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:5px;padding:.3rem .5rem;font-size:var(--fs-base);max-width:100%}
@@ -1666,6 +1703,8 @@ __CSS__</style>
 _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, current = 'ov', status = null, logSince = 0, timer = null, COMMANDS = [];
 const bars = {};
+const discoBusy = {};
+let disconMsg = null;
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -1720,17 +1759,18 @@ function stateOf(n) {
   if (!n.ok) return ['err', n.error || 'no status'];
   return ['ok', 'up'];
 }
-function table(cols, rows, empty) {
+function table(cols, rows, empty, right) {
+  const rt = right || [];
   if (!rows.length) return el('div', 'empty', empty);
   const wrap = el('div', 'scroll');
   const t = el('table');
   const hr = el('tr');
-  cols.forEach((c) => hr.appendChild(el('th', '', c)));
+  cols.forEach((c, i) => hr.appendChild(el('th', rt.includes(i) ? 'r' : '', c)));
   t.appendChild(hr);
   rows.forEach((cells) => {
     const tr = el('tr');
-    cells.forEach((c) => {
-      const td = el('td', c && c.mono ? 'mono' : '');
+    cells.forEach((c, i) => {
+      const td = el('td', (c && c.mono ? 'mono' : '') + (rt.includes(i) ? ' r' : ''));
       if (c && c.node) td.appendChild(c.node); else td.textContent = c && c.text !== undefined ? c.text : (c === null ? '' : c);
       tr.appendChild(td);
     });
@@ -1841,6 +1881,27 @@ function nodeCard(n, title) {
   card.appendChild(table(LINK_COLS, linkRows(n), 'No links.'));
   return card;
 }
+async function disconNode(node) {
+  if (discoBusy[node]) return;
+  discoBusy[node] = true;
+  if (status) renderOv(status);
+  const d = await api('/api/node-discon', {method: 'POST', body: {node: node}});
+  delete discoBusy[node];
+  disconMsg = {text: d.ok ? d.message : (d.error || 'It failed.'), cls: d.ok ? 'ok' : 'err', at: Date.now()};
+  if (current !== 'ov') { const sm = $('sysmsg'); sm.className = 'sysmsg ' + disconMsg.cls; sm.textContent = disconMsg.text; }
+  if (status) renderOv(status);
+  poll();
+  setTimeout(poll, 1500);
+}
+function disconCell(n) {
+  if (!n.ok || n.loaded === false) return '';
+  const b = el('button', 'btn btn-muted discon', n.role === 'main' ? 'Disconnect All' : 'Disconnect');
+  b.type = 'button';
+  b.disabled = !!discoBusy[n.node];
+  b.setAttribute('aria-label', (n.role === 'main' ? 'Disconnect everything: node ' : 'Disconnect node ') + n.node);
+  b.addEventListener('click', () => disconNode(n.node));
+  return {node: b};
+}
 function nodeSummary(n) {
   const st = stateOf(n);
   const linked = n.links.map((l) => l.node);
@@ -1854,6 +1915,7 @@ function nodeSummary(n) {
   if (n.gateway) note += (note ? '; ' : '') + n.gateway.text;
   if (reg) note += (note ? '; ' : '') + 'ASL3 ' + reg.state.toLowerCase();
   cells.push(note || '-');
+  cells.push(disconCell(n));
   return cells;
 }
 function renderOv(d) {
@@ -1882,7 +1944,9 @@ function renderOv(d) {
   root.appendChild(c1);
   const c2 = el('div', 'card');
   c2.appendChild(el('h2', '', 'Nodes'));
-  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes'], nodes.map(nodeSummary), 'No nodes were found in rpt.conf.');
+  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes', 'DisCon'], nodes.map(nodeSummary), 'No nodes were found in rpt.conf.', [5]);
+  const tb = tbl.querySelector('table');
+  if (tb) tb.classList.add('nodes-tbl');
   const trs = tbl.querySelectorAll('tr');
   nodes.forEach((n, i) => {
     if (!trs[i + 1] || !n.ok || n.loaded === false) return;
@@ -1890,6 +1954,7 @@ function renderOv(d) {
     if (n.txkeyed || n.rxkeyed) trs[i + 1].classList.add('hot');
   });
   c2.appendChild(tbl);
+  if (disconMsg && Date.now() - disconMsg.at < 15000) c2.appendChild(el('div', 'sysmsg ' + disconMsg.cls, disconMsg.text));
   root.appendChild(c2);
   const c3 = el('div', 'card');
   c3.appendChild(el('h2', '', 'Links'));
@@ -2014,8 +2079,9 @@ $('sys-shutdown').addEventListener('click', () => sysAction('shutdown'));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'hidden') poll(); });
 async function sysAction(kind) {
   const node = status && status.main ? status.main.node : '';
-  const ask = {disc: 'Disconnect every link on node ' + node + '?', reboot: 'Reboot the system?', shutdown: 'Shut down the system?'};
-  const path = {disc: '/api/disconnect-all', reboot: '/api/system/reboot', shutdown: '/api/system/shutdown'};
+  if (kind === 'disc') { disconNode(node); return; }
+  const ask = {reboot: 'Reboot the system?', shutdown: 'Shut down the system?'};
+  const path = {reboot: '/api/system/reboot', shutdown: '/api/system/shutdown'};
   if (!window.confirm(ask[kind])) return;
   const msg = $('sysmsg');
   ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = true; });
@@ -2025,7 +2091,6 @@ async function sysAction(kind) {
   ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = false; });
   msg.className = 'sysmsg ' + (d.ok ? 'ok' : 'err');
   msg.textContent = d.ok ? d.message : (d.error || 'It failed.');
-  if (kind === 'disc') { poll(); setTimeout(poll, 1500); }
 }
 async function loadCommands() {
   const d = await api('/api/commands');
@@ -2257,8 +2322,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/command":
             self._json(200, run_command(body, ip))
             return
-        if path == "/api/disconnect-all":
-            self._json(200, disconnect_all(ip))
+        if path == "/api/node-discon":
+            self._json(200, node_discon(body.get("node"), ip))
             return
         if path in ("/api/system/reboot", "/api/system/shutdown"):
             self._json(200, system_power(path.rsplit("/", 1)[1], ip))
