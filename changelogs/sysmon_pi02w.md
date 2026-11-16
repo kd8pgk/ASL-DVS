@@ -2,6 +2,13 @@
 
 Current file: `sysmon_pi02w_v6_13_89_20261116.py`. Newest entries first.
 
+## 6.13.89.1-pi02w (2026-11-16)
+
+The Node Monitor quick-link button reads **Node Mon** instead of Nodemon. This is a cosmetic build: the button's text changed and nothing else, so the file name stays and it does not go to stable on its own.
+
+- The button still opens Node Monitor on port 7777, in the same place. Node Monitor's own title stays "Node Monitor".
+- Nothing else changes.
+
 ## 6.13.89-pi02w (2026-11-16)
 
 The Allmon3 quick-link button in the bar under the header is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page's link table changed.
