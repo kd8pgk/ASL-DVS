@@ -56,13 +56,13 @@
    "version": "2.106.0"
   },
   "nodecontrol": {
-   "blob": "d2dc8c1368ddc99591e696c56889961df9a82897",
-   "commit": "39a4bf50d6e64c6708385e7538347c8cac5b69f0",
-   "file": "nodecontrol_v9_3_108_20261111.py",
-   "landed": "2026-11-11T01:12:59Z",
-   "promoted": "2026-11-16T08:44:08Z",
+   "blob": "ee08098d06464883731ba73c2a36b48c9b884ae9",
+   "commit": "456ab334782934b4bb120886ce49cf9d0fd63a54",
+   "file": "nodecontrol_v9_3_109_20261113.py",
+   "landed": "2026-11-13T03:21:18Z",
+   "promoted": "2026-11-16T17:33:20Z",
    "reason": "count",
-   "version": "9.3.108"
+   "version": "9.3.109"
   },
   "nodecontrol_pi02w": {
    "blob": "95f540f52d251541523ddb662d9ceea2b9ecaf04",
