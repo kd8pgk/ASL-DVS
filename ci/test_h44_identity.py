@@ -1,4 +1,5 @@
 import glob
+import json
 import importlib.util
 import os
 import re
@@ -1194,6 +1195,95 @@ class SvxStep8Defaults(unittest.TestCase):
     def test_step_8_and_the_bridge_button_agree(self):
         self.assertEqual(h44._CFGR_SVX_BRIDGE_NODE, "1900")
         self.assertIn("1900", self.step()["note"])
+
+
+NI = "/usr/local/etc/svxlink/node_info.json"
+NI_STOCK = '{\n  "nodeLocation": "MyTownOrArea",\n  "nodeClass": "one of repeater|simplex|hotspot|bridge",\n  "hidden": false,\n  "sysop": "CALL1 CALL2",\n  "toneToTalkgroup": {"136.5": 0, "88.5": 999, "123.0": 9990},\n  "qth": [\n    {\n      "name": "My QTH Name",\n      "pos": {\n        "lat": 60.12345,\n        "long": 17.12345,\n        "loc": "AA88BB"\n      },\n      "rx": {\n        "A": {\n          "name": "Rx1",\n          "freq": 433.450,\n          "sqlType": "CTCSS",\n          "ctcssFreq": [136.5,88.5,123.0],\n          "ant": [\n            {\n              "comment": "Yagi south",\n              "height": 50,\n              "dir": 180\n            },\n            {\n              "comment": "Yagi north",\n              "height": 50,\n              "dir": 0\n            }\n          ]\n        },\n        "B": {\n          "name": "Rx2",\n          "freq": 145.500,\n          "sqlType": "COS",\n          "ant": [\n            {\n              "comment": "Diamond X310 Omni",\n              "height": 10\n            }\n          ]\n        }\n      },\n      "tx": {\n        "A": {\n          "name": "Tx1",\n          "freq": 433.450,\n          "pwr": 20,\n          "ctcssFreq": 136.5,\n          "ant": [\n            {\n              "comment": "Yagi south",\n              "height": 50,\n              "dir": 180\n            },\n            {\n              "comment": "Yagi north",\n              "height": 50,\n              "dir": 0\n            }\n          ]\n        }\n      }\n    }\n  ]\n}\n'
+SVX_WITH_NI = SVX_FILES[SVX].replace("[UsrpLogic]", "#NODE_INFO_FILE=/usr/local/etc/svxlink/node_info.json\n\n[UsrpLogic]", 1)
+
+
+class SvxNodeInfo(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = dict(SVX_FILES)
+        self.fs.files[SVX] = SVX_WITH_NI
+        self.fs.files[NI] = NI_STOCK
+
+    def go(self, fid, value, apply=True):
+        return h44._cfgr_act_id_set({"group": "alone", "rid": self.rows()[fid]["rid"], "value": value}, apply)
+
+    def doc(self):
+        return json.loads(self.fs.files[NI])
+
+    def test_rows_are_read_and_settable(self):
+        r = self.rows()
+        self.assertEqual(r["svx_ni_loc"]["raw"], "AA88BB")
+        self.assertEqual(r["svx_ni_loc"]["where"], "qth[0].pos.loc")
+        self.assertEqual(r["svx_ni_hidden"]["raw"], "no")
+        for fid in h44._CFGR_SVX_NI:
+            self.assertTrue(r[fid]["settable"], fid)
+            self.assertEqual(r[fid]["groups"], ["alone"])
+
+    def test_bad_input_refused(self):
+        cases = {"svx_ni_class": ("router",), "svx_ni_hidden": ("maybe",), "svx_ni_lat": ("91", "45.1234567", "x"),
+                 "svx_ni_lon": ("181", "-180.5"), "svx_ni_loc": ("ZZ99", "EN8", "EN81x"), "svx_ni_sysop": ("a\"b",),
+                 "svx_ni_location": ('a"b', "x" * 41)}
+        for fid, bads in cases.items():
+            for bad in bads:
+                self.assertFalse(self.go(fid, bad, False)["success"], (fid, bad))
+        self.assertEqual(self.fs.written, {})
+
+    def test_first_write_replaces_the_sample_with_a_clean_bridge_entry(self):
+        r = self.go("svx_ni_loc", "en81XM")
+        self.assertTrue(r["success"], r["output"])
+        d = self.doc()
+        self.assertEqual(d["qth"][0]["pos"]["loc"], "EN81xm")
+        self.assertEqual(d["nodeClass"], "bridge")
+        self.assertNotIn("rx", d["qth"][0])
+        self.assertNotIn("tx", d["qth"][0])
+        self.assertNotIn("toneToTalkgroup", d)
+        self.assertNotIn("MyTownOrArea", self.fs.files[NI])
+        self.assertIn("sample", r["output"])
+        self.assertIn("svxlink-usrp", r["output"])
+
+    def test_node_info_file_is_switched_on_only_when_the_position_is_set(self):
+        self.go("svx_ni_location", "Toledo, OH")
+        self.assertIn("#NODE_INFO_FILE=", self.fs.files[SVX])
+        r = self.go("svx_ni_lat", "41.65", False)
+        self.assertIn("stays off", r["output"])
+        self.go("svx_ni_lat", "41.65")
+        self.assertIn("#NODE_INFO_FILE=", self.fs.files[SVX])
+        r = self.go("svx_ni_lon", "-83.53")
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("\nNODE_INFO_FILE=/usr/local/etc/svxlink/node_info.json\n", self.fs.files[SVX])
+        self.assertIn("switched on", r["output"])
+        d = self.doc()
+        self.assertEqual((d["nodeLocation"], d["qth"][0]["pos"]["lat"], d["qth"][0]["pos"]["long"]), ("Toledo, OH", 41.65, -83.53))
+
+    def test_types_are_kept_and_later_writes_keep_other_fields(self):
+        self.go("svx_ni_hidden", "YES")
+        self.go("svx_ni_sysop", "aa1aa")
+        self.go("svx_ni_class", "Hotspot")
+        d = self.doc()
+        self.assertIs(d["hidden"], True)
+        self.assertEqual(d["sysop"], "AA1AA")
+        self.assertEqual(d["nodeClass"], "hotspot")
+
+    def test_a_file_that_is_not_json_is_left_alone(self):
+        self.fs.files[NI] = "{not json"
+        r = h44._cfgr_act_id_set({"group": "alone", "rid": "svx_ni_loc#0", "value": "EN81"}, True)
+        self.assertFalse(r["success"])
+        self.assertEqual(self.fs.written, {})
+
+    def test_a_clean_file_keeps_extra_fields(self):
+        self.fs.files[NI] = json.dumps({"nodeLocation": "X", "nodeClass": "repeater", "hidden": False, "sysop": "AA1AA",
+                                        "qth": [{"name": "Hill", "pos": {"lat": 41.0, "long": -83.0, "loc": "EN81"},
+                                                 "rx": {"A": {"freq": 146.52}}}]})
+        self.go("svx_ni_qth", "Big Hill")
+        d = self.doc()
+        self.assertEqual(d["qth"][0]["name"], "Big Hill")
+        self.assertEqual(d["qth"][0]["rx"], {"A": {"freq": 146.52}})
+        self.assertEqual(d["nodeClass"], "repeater")
 
 
 if __name__ == "__main__":

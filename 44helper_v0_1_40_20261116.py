@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.39"
+APP_VERSION = "0.1.40"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15187,6 +15187,17 @@ _CFGR_PH_IAX = "/etc/asterisk/dvs_phone_iax.conf"
 _CFGR_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
 _CFGR_SVX_USRP = "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"
 _CFGR_SVX_EL = "/usr/local/etc/svxlink/svxlink.d/ModuleEchoLink.conf"
+_CFGR_SVX_NODEINFO = "/usr/local/etc/svxlink/node_info.json"
+_CFGR_SVX_NI: dict[str, tuple[str, tuple]] = {
+    "svx_ni_location": ("Location", ("nodeLocation",)),
+    "svx_ni_class": ("Node type", ("nodeClass",)),
+    "svx_ni_sysop": ("Sysop", ("sysop",)),
+    "svx_ni_hidden": ("Hidden from the map", ("hidden",)),
+    "svx_ni_qth": ("QTH name", ("qth", 0, "name")),
+    "svx_ni_lat": ("Latitude", ("qth", 0, "pos", "lat")),
+    "svx_ni_lon": ("Longitude", ("qth", 0, "pos", "long")),
+    "svx_ni_loc": ("QTH locator", ("qth", 0, "pos", "loc")),
+}
 _CFGR_ID_FIELDS: list[dict] = [
     {"fid": "rpt_node", "label": "Public node", "src": "rpt_public", "file": _CFGR_RPT,
      "groups": ("node",), "form": "section_name", "kind": "value", "anchor": True},
@@ -15308,6 +15319,9 @@ _CFGR_ID_FIELDS: list[dict] = [
      "section": "moduleecholink", "key": "LOCATION", "groups": ("alone",), "form": "plain", "kind": "value"},
     {"fid": "svx_refl_key", "label": "SvxLink reflector key", "src": "ini", "file": _CFGR_SVX_CONF,
      "section": "reflectorlogic", "key": "AUTH_KEY", "groups": ("alone",), "form": "plain", "kind": "secret"},
+    *[{"fid": fid, "label": "SvxLink node info: " + label, "src": "svx_nodeinfo", "file": _CFGR_SVX_NODEINFO,
+       "path": path, "groups": ("alone",), "form": "plain", "kind": "value"}
+      for fid, (label, path) in _CFGR_SVX_NI.items()],
     {"fid": "ph_json", "label": "phone.json", "src": "phone_json", "file": _CFGR_PHONE_JSON,
      "groups": ("phone",), "form": "plain", "kind": "value"},
     {"fid": "ph_pjsip", "label": "dvs_phone_pjsip.conf", "src": "phone_pjsip", "file": _CFGR_PH_PJSIP,
@@ -15503,6 +15517,22 @@ def _cfgr_id_instances(fd: dict, cache: dict) -> list[dict]:
             for name, kv in r[0]:
                 if "secret" in kv and name.lower() not in ("general", "allstar-public"):
                     add(path, f"[{name}] secret", kv["secret"])
+        return out
+    if src == "svx_nodeinfo":
+        t = text(fd["file"])
+        try:
+            doc = json.loads(t) if t is not None else None
+        except ValueError:
+            doc = None
+        if doc is None:
+            return out
+        val = _cfgr_ni_get(doc, fd["path"])
+        if val is not None:
+            if isinstance(val, bool):
+                raw = "yes" if val else "no"
+            else:
+                raw = str(val)
+            add(fd["file"], _cfgr_ni_where(fd["path"]), raw)
         return out
     if src == "phone_json":
         t = text(fd["file"])
@@ -15942,6 +15972,14 @@ _CFGR_ALONE_ROWS: dict[str, dict] = {
     "svx_el_pw": {"re": r"""[^\s#"'\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, # or quotes.", "secret": True},
     "svx_el_sysop": {"re": r"""[^\r\n#"'\\]{1,40}""", "msg": "A sysop name is 1 to 40 characters with no # or quotes.", "secret": False, "trim": True},
     "svx_el_location": {"re": r"""[^\r\n#"'\\]{1,27}""", "msg": "A location is 1 to 27 characters with no # or quotes.", "secret": False, "trim": True},
+    "svx_ni_location": {"re": r"""[^\r\n"\\]{1,40}""", "msg": "A location is 1 to 40 characters with no quotes.", "secret": False, "trim": True},
+    "svx_ni_class": {"re": r"(?i)repeater|simplex|hotspot|bridge", "msg": "Use repeater, simplex, hotspot or bridge.", "secret": False, "trim": True},
+    "svx_ni_sysop": {"re": r"[A-Za-z0-9/ -]{3,40}", "msg": "Use 3 to 40 letters, digits, spaces, / and - (for example your callsign).", "secret": False, "trim": True},
+    "svx_ni_hidden": {"re": r"(?i)yes|no", "msg": "Use yes or no.", "secret": False, "trim": True},
+    "svx_ni_qth": {"re": r"""[^\r\n"\\]{1,40}""", "msg": "A QTH name is 1 to 40 characters with no quotes.", "secret": False, "trim": True},
+    "svx_ni_lat": {"re": r"-?(90(\.0{1,6})?|[1-8]?[0-9](\.[0-9]{1,6})?)", "msg": "Use a latitude from -90 to 90, up to 6 decimals.", "secret": False, "trim": True},
+    "svx_ni_lon": {"re": r"-?(180(\.0{1,6})?|(1[0-7][0-9]|[1-9]?[0-9])(\.[0-9]{1,6})?)", "msg": "Use a longitude from -180 to 180, up to 6 decimals.", "secret": False, "trim": True},
+    "svx_ni_loc": {"re": r"(?i)[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?", "msg": "Use a Maidenhead locator such as EN81 or EN81xm.", "secret": False, "trim": True},
     "svx_refl_key": {"re": r"""[^\s#"'\\]{1,64}""", "msg": "A key is 1 to 64 characters with no spaces, # or quotes.", "secret": True},
 }
 _CFGR_ALONE_SERVICES: dict[str, str] = {
@@ -16240,10 +16278,152 @@ def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
     log(f"{'OK' if ok else 'FAIL'}: CONFIG node {old} renamed to {new} in {len(changed)} file(s)")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
 
+_CFGR_NI_TEMPLATE_MARKS = ("MyTownOrArea", "My QTH Name", "CALL1 CALL2")
+
+def _cfgr_ni_get(doc: object, path: tuple) -> object:
+    cur = doc
+    for k in path:
+        if isinstance(k, int):
+            if not isinstance(cur, list) or len(cur) <= k:
+                return None
+        elif not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur[k]
+    return cur if isinstance(cur, (str, int, float, bool)) else None
+
+def _cfgr_ni_where(path: tuple) -> str:
+    out = ""
+    for k in path:
+        out += f"[{k}]" if isinstance(k, int) else ("." if out else "") + k
+    return out
+
+def _cfgr_ni_value(fid: str, value: str) -> object:
+    if fid == "svx_ni_hidden":
+        return value.lower() == "yes"
+    if fid in ("svx_ni_lat", "svx_ni_lon"):
+        return float(value)
+    if fid == "svx_ni_class":
+        return value.lower()
+    if fid == "svx_ni_loc":
+        v = value
+        return v[:2].upper() + v[2:4] + v[4:6].lower() + v[6:8]
+    if fid == "svx_ni_sysop":
+        return value.upper()
+    return value
+
+def _cfgr_ni_clean(doc: dict) -> dict:
+    qth = doc.get("qth") if isinstance(doc.get("qth"), list) and doc["qth"] else [{}]
+    q = qth[0] if isinstance(qth[0], dict) else {}
+    pos = q.get("pos") if isinstance(q.get("pos"), dict) else {}
+    keep = {"nodeLocation": doc.get("nodeLocation"), "nodeClass": "bridge", "hidden": bool(doc.get("hidden", False)),
+            "sysop": doc.get("sysop"), "qth": [{"name": q.get("name"), "pos": dict(pos)}]}
+    for k in ("nodeLocation", "sysop"):
+        if keep[k] in _CFGR_NI_TEMPLATE_MARKS:
+            keep[k] = ""
+    if keep["qth"][0]["name"] in _CFGR_NI_TEMPLATE_MARKS:
+        keep["qth"][0]["name"] = ""
+    p = keep["qth"][0]["pos"]
+    if (p.get("lat"), p.get("long"), p.get("loc")) == (60.12345, 17.12345, "AA88BB"):
+        keep["qth"][0]["pos"] = {"lat": 0.0, "long": 0.0, "loc": ""}
+    return keep
+
+def _cfgr_ni_set(doc: dict, path: tuple, value: object) -> None:
+    cur = doc
+    for i, k in enumerate(path[:-1]):
+        nxt = path[i + 1]
+        if isinstance(k, int):
+            while len(cur) <= k:
+                cur.append({})
+            cur = cur[k]
+        else:
+            if k not in cur or not isinstance(cur[k], (dict, list)):
+                cur[k] = [] if isinstance(nxt, int) else {}
+            cur = cur[k]
+    cur[path[-1]] = value
+
+def _cfgr_act_svx_nodeinfo(payload: dict, apply: bool, row: dict) -> dict:
+    fid = row["fid"]
+    spec = _CFGR_ALONE_ROWS[fid]
+    value = str(payload.get("value", "")).strip()
+    if not re.fullmatch(spec["re"], value):
+        return {"success": False, "output": spec["msg"]}
+    b = _cfgr_read(_CFGR_SVX_NODEINFO)
+    try:
+        doc = json.loads(b.decode("utf-8")) if b is not None else None
+    except (ValueError, UnicodeDecodeError):
+        doc = None
+    if not isinstance(doc, dict):
+        return {"success": False, "output": f"{_CFGR_SVX_NODEINFO} is missing or is not valid JSON, so it was left alone."}
+    old_text = b.decode("utf-8")
+    template = any(m in old_text for m in _CFGR_NI_TEMPLATE_MARKS)
+    new_doc = _cfgr_ni_clean(doc) if template else json.loads(old_text)
+    label, path = _CFGR_SVX_NI[fid]
+    new_val = _cfgr_ni_value(fid, value)
+    old_val = _cfgr_ni_get(doc, path)
+    _cfgr_ni_set(new_doc, path, new_val)
+    new_text = json.dumps(new_doc, indent=2) + "\n"
+    shown = (lambda v: "yes" if v is True else "no" if v is False else str(v))
+    report = [f"  SvxLink node info: {_CFGR_SVX_NODEINFO} {_cfgr_ni_where(path)}: "
+              f"{shown(old_val) if old_val is not None else '(empty)'} -> {shown(new_val)}"]
+    if template:
+        report.append("  The file is still SvxLink's sample (a made-up repeater with sample receivers, transmitters and a "
+                      "tone list). It is replaced by a plain bridge-node entry holding only the values set here, so "
+                      "the reflector's map does not show the sample.")
+    plan: dict[str, dict] = {}
+    if new_text != old_text:
+        plan[_CFGR_SVX_NODEINFO] = {"lines": [old_text], "edits": [{"line": 0, "text": new_text}]}
+    cb = _cfgr_read(_CFGR_SVX_CONF)
+    if cb is not None:
+        lines = cb.decode("utf-8", "replace").splitlines(keepends=True)
+        sec = ""
+        active = False
+        hit = None
+        for i, raw in enumerate(lines):
+            h = _CFGR_HDR_RE.match(raw)
+            if h:
+                sec = h.group(1).strip().lower()
+                continue
+            if sec != "reflectorlogic":
+                continue
+            if re.match(r"^\s*NODE_INFO_FILE\s*=", raw):
+                active = True
+            elif hit is None and re.match(r"^\s*#\s*NODE_INFO_FILE\s*=", raw):
+                hit = i
+        lat, lon = _cfgr_ni_get(new_doc, ("qth", 0, "pos", "lat")), _cfgr_ni_get(new_doc, ("qth", 0, "pos", "long"))
+        ready = bool(str(_cfgr_ni_get(new_doc, ("nodeLocation",)) or "").strip()) and \
+            isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and lat != 0 and lon != 0
+        if not active and hit is not None and ready:
+            plan[_CFGR_SVX_CONF] = {"lines": lines, "edits": [{"line": hit, "text": f"NODE_INFO_FILE={_CFGR_SVX_NODEINFO}\n"}]}
+            report.append(f"  {_CFGR_SVX_CONF} [ReflectorLogic]: NODE_INFO_FILE switched on, so SvxLink sends this to "
+                          "the reflector.")
+        elif not active and hit is not None:
+            report.append("  NODE_INFO_FILE stays off in svxlink.conf until Location, Latitude and Longitude are all set, "
+                          "so the reflector's map never shows the node at 0.")
+    head = [f"Set the {row['label']} to {shown(new_val)} in the file below.", ""]
+    tail = ["", "No service is restarted. Restart these for the change to take effect: svxlink-usrp."]
+    changed = list(plan)
+    if not changed:
+        return {"success": True, "changes": 0, "output": "\n".join(head + report + ["", "Nothing to change."])}
+    if not apply:
+        return {"success": True, "changes": len(changed), "output": "\n".join(head + report + tail)}
+    groups = [g for g, d in _CFGR_GROUPS.items() if any(x in d["files"] for x in changed)]
+    lines_out = [f"{row['label']} set to {shown(new_val)}.", ""]
+    if groups:
+        sid, pruned = _cfgr_auto_point(f"{row['label']} {shown(new_val)}", groups)
+        lines_out += [f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""), ""]
+    ok = _cfgr_write_plan(plan, changed, lines_out)
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG {row['label']} set")
+    return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
+
 def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     group = str(payload.get("group", ""))
     if group == "node":
         return _cfgr_act_node_rename(payload, apply)
+    if group == "alone" and str(payload.get("rid", "")).split("#", 1)[0] in _CFGR_SVX_NI:
+        row, why = _cfgr_alone_row(payload)
+        if row is None:
+            return {"success": False, "output": why}
+        return _cfgr_act_svx_nodeinfo(payload, apply, row)
     rule = _CFGR_SET_RULES.get(group)
     if rule is None:
         return {"success": False, "output": "This section can't be set from here."}
