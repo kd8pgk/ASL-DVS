@@ -1,6 +1,22 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_41_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_42_20261116.py`. Newest entries first.
+
+## 0.1.42 (2026-11-16)
+
+Checks and tidies the `[nodes]` lines in rpt.conf. Found on a node where links to private nodes failed. Three of its local node lines had no host and the old port (`652705 = :4569/652705,NONE` while iax.conf had `bindport = 4574`), and node 1921 had a second, broken line.
+
+- **The Add private node card warns** about any of these in `[nodes]`:
+  - a line with no host;
+  - a line that ends in another node number;
+  - a node on this server whose port differs from the iax.conf `bindport`;
+  - two lines for the same node;
+  - a node stanza with no `[nodes]` line.
+- **Fix [nodes] lines** (with Preview fix) rewrites this server's node lines as `N = radio@127.0.0.1[:bindport]/N,NONE`. It keeps the line that works when a node has two, and adds a missing line. Trailing comments are kept, so the M17 tag still works. An automatic copy is saved first, and Asterisk is not restarted.
+- **Lines for nodes on other servers** are never rewritten, since their address is not known here. A problem with one is named so it can be fixed by hand.
+- **Tidying on write:** every write to rpt.conf from the Config tab also tidies `[nodes]`. That covers Add private node, Add SvxLink bridge node, Remove and the ASL3 preset apply. This server's node lines are put together in one block where the public node's line was: the public node first, then the private nodes in order. Repeated blank lines inside `[nodes]` are dropped. Comments, sample lines and the dashboard's managed Phone block stay where they are.
+- Node Talker's 1921 line is written in the same form Node Talker writes and checks, so Node Talker still finds it.
+- 44helper is a common tool; this affects both builds.
 
 ## 0.1.41 (2026-11-16)
 

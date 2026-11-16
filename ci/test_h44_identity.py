@@ -1357,5 +1357,117 @@ class ExtenLineFix(SvxBase):
         self.assertEqual(n2, ["extension already there"])
 
 
+RPT_MESSY = ("[general]\nx = 1\n\n[nodes]\n1921 = radio@127.0.0.1:4574/1921,NONE\n1921 = /1921,NONE\n\n"
+             "; samples\n;1001 = radio@1.2.3.4:4568/1001,NONE\n\n652705 = :4569/652705,NONE\n\n; more text\n;\n\n"
+             "1999 = :4569/1999,NONE\n1917 = radio@127.0.0.1:4574/1917,NONE ; 44helper M17\n"
+             "1900 = radio@127.0.0.1:4574/1900,NONE\n2000 = /2000,NONE\n\n[node-main](!)\nduplex = 1\n\n"
+             "[652705](node-main)\nrxchannel = SimpleUSB/652705\n\n[1999](node-main)\nrxchannel = USRP/127.0.0.1:34001:32001\n\n"
+             "[1917](node-main)\nrxchannel = USRP/127.0.0.1:34008:32008\n\n[1921](node-main)\nrxchannel = USRP/127.0.0.1:34018:32018\n\n"
+             "[1900](node-main)\nrxchannel = USRP/127.0.0.1:34000:32000\n")
+IAX_4574 = "[general]\nbindport = 4574\n"
+
+
+class NodesLineTidy(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_MESSY, "/etc/asterisk/iax.conf": IAX_4574,
+                         "/etc/asterisk/extensions.conf": EXT_BARE.replace("rpt,123456", "Rpt(123456)"),
+                         "/etc/asterisk/modules.conf": MOD_BARE}
+        p = mock.patch.object(h44, "_cfgr_installed", lambda: {g: g == "asl3" for g in h44._CFGR_GROUPS})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def nodes_lines(self, text):
+        sec = text.split("[nodes]\n", 1)[1].split("\n[node-main]", 1)[0]
+        return [x for x in sec.splitlines() if x and not x.startswith(";")]
+
+    def test_status_names_each_problem(self):
+        st = h44._pn_status()
+        text = " | ".join(st["nodes_issues"])
+        self.assertIn("1921: 2 lines for this node", text)
+        self.assertIn("652705: it has no host", text)
+        self.assertIn("652705: its port is 4569, but Asterisk listens on 4574", text)
+        self.assertIn("1999: it has no host", text)
+        self.assertIn("2000: not a node on this server", text)
+        self.assertNotIn("1900:", text)
+        self.assertTrue(st["nodes_fixable"])
+
+    def test_fix_rewrites_local_lines_in_one_ordered_block(self):
+        r = h44._cfgr_act_pn_fix_nodes({}, False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
+        r = h44._cfgr_act_pn_fix_nodes({}, True)
+        self.assertTrue(r["success"], r["output"])
+        t = self.fs.files["/etc/asterisk/rpt.conf"]
+        self.assertEqual(self.nodes_lines(t), [
+            "652705 = radio@127.0.0.1:4574/652705,NONE",
+            "1900 = radio@127.0.0.1:4574/1900,NONE",
+            "1917 = radio@127.0.0.1:4574/1917,NONE ; 44helper M17",
+            "1921 = radio@127.0.0.1:4574/1921,NONE",
+            "1999 = radio@127.0.0.1:4574/1999,NONE",
+            "2000 = /2000,NONE"])
+        self.assertIn(";1001 = radio@1.2.3.4:4568/1001,NONE", t)
+        self.assertIn("; more text", t)
+        self.assertNotIn("\n\n\n", t)
+        self.assertIn("2000: not a node on this server", r["output"])
+        st = h44._pn_status()
+        self.assertFalse(st["nodes_fixable"])
+        self.assertEqual(st["nodes_issues"], ["[nodes] 2000: it has no host",
+                                              "[nodes] 2000: not a node on this server, so its address is not known "
+                                              "here; fix it by hand"])
+        again = h44._cfgr_act_pn_fix_nodes({}, True)
+        self.assertEqual(again["changes"], [])
+
+    def test_node_talker_line_is_the_one_it_writes(self):
+        h44._cfgr_act_pn_fix_nodes({}, True)
+        lines = self.fs.files["/etc/asterisk/rpt.conf"].splitlines()
+        self.assertEqual([x for x in lines if x.startswith("1921 ")], ["1921 = radio@127.0.0.1:4574/1921,NONE"])
+
+    def test_missing_line_for_a_local_node_is_added(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] = RPT_MESSY.replace("1900 = radio@127.0.0.1:4574/1900,NONE\n", "")
+        self.assertIn("[nodes] 1900: node [1900] has no [nodes] line, so links to it fail",
+                      h44._pn_status()["nodes_issues"])
+        h44._cfgr_act_pn_fix_nodes({}, True)
+        self.assertIn("1900 = radio@127.0.0.1:4574/1900,NONE", self.nodes_lines(self.fs.files["/etc/asterisk/rpt.conf"]))
+
+    def test_add_node_tidies_while_it_writes(self):
+        r = h44._cfgr_act_pn_add({"node": "1500", "kind": "plain"}, True)
+        self.assertTrue(r["success"], r["output"])
+        got = self.nodes_lines(self.fs.files["/etc/asterisk/rpt.conf"])
+        self.assertEqual(got[:6], ["652705 = radio@127.0.0.1:4574/652705,NONE",
+                                   "1500 = radio@127.0.0.1:4574/1500,NONE",
+                                   "1900 = radio@127.0.0.1:4574/1900,NONE",
+                                   "1917 = radio@127.0.0.1:4574/1917,NONE ; 44helper M17",
+                                   "1921 = radio@127.0.0.1:4574/1921,NONE",
+                                   "1999 = radio@127.0.0.1:4574/1999,NONE"])
+        self.assertIn("[nodes] tidied as well", r["output"])
+
+    def test_remove_node_tidies_while_it_writes(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] = RPT_MESSY.replace("[1900](node-main)", h44._PN_NOTE + "\n[1900](node-main)")
+        r = h44._cfgr_act_pn_remove({"node": "1900"}, True)
+        self.assertTrue(r["success"], r["output"])
+        got = self.nodes_lines(self.fs.files["/etc/asterisk/rpt.conf"])
+        self.assertNotIn("1900 = radio@127.0.0.1:4574/1900,NONE", got)
+        self.assertIn("652705 = radio@127.0.0.1:4574/652705,NONE", got)
+
+    def test_clean_file_is_left_alone(self):
+        clean = ("[general]\n\n[nodes]\n652705 = radio@127.0.0.1/652705,NONE\n1999 = radio@127.0.0.1/1999,NONE\n\n"
+                 "[652705]\nrxchannel = SimpleUSB/652705\n\n[1999]\nrxchannel = Local/pseudo\n")
+        t = h44._pn_nodes_tidy(clean.splitlines(), "4569")
+        self.assertEqual(t["issues"], [])
+        self.assertEqual(t["lines"], clean.splitlines())
+
+    def test_managed_block_is_not_touched(self):
+        text = ("[nodes]\n652705 = radio@127.0.0.1/652705,NONE\n; BEGIN ASL-DVS PHONE (managed)\n1800 = /1800,NONE\n"
+                "; END ASL-DVS PHONE\n\n[652705]\nrxchannel = SimpleUSB/652705\n")
+        lines = text.splitlines()
+        with mock.patch.object(h44, "_cfgr_managed_mask",
+                               lambda ls: [x.startswith("; BEGIN") or x == "1800 = /1800,NONE" or x.startswith("; END")
+                                           for x in ls]):
+            t = h44._pn_nodes_tidy(lines, "4569")
+        self.assertEqual(t["lines"], lines)
+        self.assertEqual(t["issues"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
