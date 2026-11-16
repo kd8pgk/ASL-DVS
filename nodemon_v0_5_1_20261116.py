@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1624,10 +1624,11 @@ td.mono{font-family:var(--mono)}
 .sum .box .n{font-size:1.15rem;font-weight:bold;color:var(--text-bright)}
 .sum .box.lit{border-color:#b8860b;background:rgba(255,208,64,.12);box-shadow:0 0 18px rgba(255,208,64,.22)}
 .sum .box.lit .n{color:var(--amber);text-shadow:0 0 14px rgba(255,208,64,1)}
-tr.lit td{background:rgba(255,61,90,.15);color:var(--amber);text-shadow:0 0 8px rgba(255,208,64,.4)}
-tr.lit td:first-child{font-weight:bold}
-tr.lit .badge,tr.lit .btn{text-shadow:none}
-tr.hot td{background:rgba(255,61,90,.3)}
+tr.lit td{background:rgba(255,208,64,.10)}
+tr.lit td:first-child{border-left:3px solid #b8860b;color:var(--amber);font-weight:bold;text-shadow:0 0 14px rgba(255,208,64,1)}
+tr.hot td{background:rgba(255,61,90,.7);color:var(--amber);text-shadow:0 0 8px rgba(255,208,64,.4)}
+tr.hot td:first-child{border-left-color:var(--amber)}
+tr.hot .badge,tr.hot .btn{text-shadow:none}
 .sum .box .t{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;color:#9db4d0}
 .cmdbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cmdbar select,.cmdbar input{background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:5px;padding:.3rem .5rem;font-size:var(--fs-base);max-width:100%}
@@ -1906,10 +1907,11 @@ function nodeSummary(n) {
   const st = stateOf(n);
   const linked = n.links.map((l) => l.node);
   const reg = n.registration;
+  const down = st[0] !== 'ok';
   const cells = [{text: n.node, mono: true}, n.role === 'main' ? 'Main node' : (n.bridge || 'Private node'),
-                 {node: badge(st[0], st[1])},
+                 {node: badge(st[0], down ? 'down' : 'up')},
                  linked.length ? linked.length + ': ' + linked.join(', ') : 'none'];
-  let note = '';
+  let note = down ? st[1] : '';
   if (n.txkeyed) note = 'transmitting';
   else if (n.rxkeyed) note = 'receiving';
   if (n.gateway) note += (note ? '; ' : '') + n.gateway.text;

@@ -665,6 +665,20 @@ class NodeDiscon(AmiCase):
         self.assertLess(bar.index("disconNode(node)"), bar.index("window.confirm"))
         self.assertIn(".r{text-align:right}", nm._CSS)
 
+    def test_the_state_badge_is_short_and_the_reason_moves_to_the_notes(self):
+        js = nm._JS
+        body = js.split("function nodeSummary(n) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("badge(st[0], down ? 'down' : 'up')", body)
+        self.assertIn("let note = down ? st[1] : '';", body)
+        card = js.split("function nodeCard(n, title) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("badge(st[0], st[1])", card)
+
+    def test_the_rows_are_marked_by_state(self):
+        body = nm._JS.split("const tbl = table(['Node', 'What', 'State'", 1)[1].split("c2.appendChild(tbl);", 1)[0]
+        self.assertIn("if (!trs[i + 1] || !n.ok || n.loaded === false) return;", body)
+        self.assertIn("classList.add('lit')", body)
+        self.assertIn("if (n.txkeyed || n.rxkeyed) trs[i + 1].classList.add('hot')", body)
+
     def test_on_a_portrait_phone_only_node_what_state_and_the_button_remain(self):
         css = nm._CSS
         self.assertIn("@media (max-width:600px) and (orientation:portrait)", css)
@@ -729,9 +743,11 @@ class QuickLinks(unittest.TestCase):
         self.assertIn("current = 'ov'", nm._JS)
         self.assertIn('<section id="pg-main" class="hidden">', html)
     def test_active_nodes_are_lit_in_the_overview(self):
-        self.assertIn("tr.lit td{background:rgba(255,61,90,.15);color:var(--amber)", nm._CSS)
-        self.assertIn("tr.hot td{background:rgba(255,61,90,.3)}", nm._CSS)
-        self.assertNotIn("tr.lit td:first-child{border-left", nm._CSS)
+        self.assertIn("tr.lit td{background:rgba(255,208,64,.10)}", nm._CSS)
+        self.assertIn("tr.lit td:first-child{border-left:3px solid #b8860b;color:var(--amber)", nm._CSS)
+        self.assertIn("tr.hot td{background:rgba(255,61,90,.7);color:var(--amber)", nm._CSS)
+        self.assertIn("tr.hot td:first-child{border-left-color:var(--amber)}", nm._CSS)
+        self.assertNotIn("tr.lit td{background:rgba(255,61,90", nm._CSS)
         self.assertIn("classList.add('lit')", nm._JS)
         self.assertIn("classList.add('hot')", nm._JS)
 

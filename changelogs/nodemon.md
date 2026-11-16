@@ -1,6 +1,16 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_5_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_5_1_20261116.py`. Newest entries first.
+
+## 0.5.1 (2026-11-16)
+
+The look of the Nodes card rows on the Overview tab, in three states. This is a release: the State column's text changed.
+
+- **Up:** the light gold of 0.4.0: a gold edge, an amber glowing node number and a pale gold row.
+- **Transmitting or receiving:** a bright red background with amber text and an amber edge, as on Node Controller's favorites, instead of 0.5.0's pale red.
+- **Down or not loaded:** clear, with no colour and no button, as before.
+- **A short State badge:** a node that is down shows **DOWN** and the reason (not loaded in Asterisk, or what Asterisk said) moves into the Notes column. The long text in the badge pushed the DisCon button off a portrait phone. The Main node and Private nodes tabs still give the full reason in their headings.
+- The Status boxes are unchanged.
 
 ## 0.5.0 (2026-11-16)
 
