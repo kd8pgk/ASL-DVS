@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.113"
+VERSION      = "9.3.113.1"
 BUILD_DATE   = "2026-11-13"
 
 ASL_NODE        = "652702"
@@ -9899,7 +9899,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
   <div>
     <div class="sec-lbl-row">
       <div class="ql-group ql-left">
-        <a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>
+        <a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">Node Mon</a>
         <a class="ql" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
         <a class="ql" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
       </div>
