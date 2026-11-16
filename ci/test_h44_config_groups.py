@@ -35,7 +35,7 @@ class SvxGroupShape(unittest.TestCase):
         self.assertEqual(g["markers"], [ETC + "/svxlink.conf"])
         self.assertIn(ETC + "/svxlink.conf", g["core"])
         self.assertIn(ETC + "/svxlink.d/UsrpLogic.conf", g["core"])
-        self.assertEqual(g["services"], ["svxlink-usrp"])
+        self.assertEqual(g["services"], ["svxlink-usrp", "svxreflector"])
         self.assertEqual(g["files"], g["core"] + g["optional"])
         for key in ("label", "markers", "core", "optional", "globs", "services", "files"):
             for other in h44._CFGR_GROUPS.values():
@@ -84,7 +84,7 @@ class SvxGroupShape(unittest.TestCase):
             st = h44.build_config_status()
         self.assertIn("svx", st["order"])
         self.assertEqual(st["groups_meta"]["svx"]["label"], "SvxLink USRP")
-        self.assertEqual(st["groups_meta"]["svx"]["services"], ["svxlink-usrp"])
+        self.assertEqual(st["groups_meta"]["svx"]["services"], ["svxlink-usrp", "svxreflector"])
         self.assertIn("svx", st["installed"])
 
 
@@ -154,6 +154,7 @@ class SvxRestart(unittest.TestCase):
             r = h44._cfgr_act_restart({"groups": ["svx"]})
         self.assertTrue(any("svxlink-usrp" in a for a in calls))
         self.assertIn("svxlink-usrp: not on this node, skipped", r["output"])
+        self.assertIn("svxreflector: not on this node, skipped", r["output"])
 
 
 if __name__ == "__main__":
