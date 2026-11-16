@@ -1,6 +1,11 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_10_0_20261110.sh`. Newest entries first.
+Current file: `uninstall_all_v1_11_0_20261116.sh`. Newest entries first.
+
+## 1.11.0 (2026-11-16)
+
+- **Node Monitor is removed too.** If `/usr/local/bin/nodemon.py` is there, its own `--uninstall` runs: the service, the install folder and the link are removed and its firewall port is closed. Its settings (`/etc/asl_dvs/nodemon.conf`) stay, and the closing text says so.
+- Nothing else changes.
 
 ## 1.10.0 (2026-11-10)
 

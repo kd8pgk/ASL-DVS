@@ -843,6 +843,21 @@ class UninstallerTests(InstallerBase):
         self.assertEqual(rc, 0, out[-1500:])
         self.assertIn("Not installed at /usr/local/bin/termon.py, skipping", out)
 
+    def test_node_monitor_is_uninstalled_with_its_own_command(self):
+        self.install_old("nodemon", "9.9.0")
+        self.state("nodemon", "active", "enabled")
+        rc, out = self.run_installer()
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertIn("-- nodemon --", out)
+        self.assertIn("nodemon uninstalled", out)
+        self.assertFalse(self.installed("nodemon"))
+        self.assertIn("nodemon.conf", out)
+
+    def test_it_says_when_node_monitor_is_not_installed(self):
+        rc, out = self.run_installer()
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertIn("Not installed at /usr/local/bin/nodemon.py, skipping", out)
+
     def test_the_banner_has_no_product_prefix(self):
         rc, out = self.run_installer()
         self.assertIn("== Suite — Mass Uninstall", out)
