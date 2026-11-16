@@ -262,6 +262,7 @@ class FakeAmi(socketserver.ThreadingTCPServer):
     def __init__(self, **kw):
         self.replies = kw
         self.seen = []
+        self.cmds = []
         super().__init__(("127.0.0.1", 0), FakeAmiHandler)
 
 
@@ -289,6 +290,11 @@ class FakeAmiHandler(socketserver.StreamRequestHandler):
                 body = LOCAL[:1] + ["ActionID: " + aid] + LOCAL[1:]
             elif msg.get("Command") == "rpt show registrations":
                 body = REGS[:1] + ["ActionID: " + aid] + REGS[1:]
+            elif msg.get("Command", "").startswith("rpt cmd "):
+                self.server.cmds.append(msg["Command"])
+                body = ["Response: Success", "ActionID: " + aid, "Message: Command output follows"]
+                if msg["Command"].endswith(" 777"):
+                    body.append("Output: Unknown node number 777.")
             elif msg.get("Command") == "XStat":
                 lines = self.server.replies.get(msg.get("Node"))
                 body = (lines[:1] + ["ActionID: " + aid] + lines[1:]) if lines else \
@@ -393,6 +399,94 @@ class LivePoll(unittest.TestCase):
         self.assertIn("AMI", nm.build_status()["ami"]["error"])
         self.ami = FakeAmi()
         threading.Thread(target=self.ami.serve_forever, daemon=True).start()
+
+
+class Commands(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (nm.RPT_CONF, nm.AMI_CONF, nm.AMI_PORT)
+        self.ami = FakeAmi()
+        threading.Thread(target=self.ami.serve_forever, daemon=True).start()
+        for name, text in (("rpt.conf", RPT), ("manager.conf", "[admin]\nsecret = pw\n")):
+            with open(os.path.join(self.tmp.name, name), "w") as f:
+                f.write(text)
+        nm.RPT_CONF = os.path.join(self.tmp.name, "rpt.conf")
+        nm.AMI_CONF = os.path.join(self.tmp.name, "manager.conf")
+        nm.AMI_PORT = self.ami.server_address[1]
+        nm._config["main_node"] = ""
+
+    def tearDown(self):
+        self.ami.shutdown()
+        self.ami.server_close()
+        nm.RPT_CONF, nm.AMI_CONF, nm.AMI_PORT = self.saved
+        self.tmp.cleanup()
+
+    def line(self, **body):
+        return nm.command_line(body)[0]
+
+    def err(self, **body):
+        line, why = nm.command_line(body)
+        self.assertIsNone(line, line)
+        return why
+
+    def test_every_ilink_operation_of_rpt_conf_is_offered_except_the_unused_one(self):
+        self.assertEqual(sorted(c["op"] for c in nm.COMMANDS), [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18])
+        for c in nm.COMMANDS:
+            self.assertIn(c["target"], ("node", "node0", "none"))
+            self.assertTrue(c["label"] and c["group"])
+
+    def test_lines_are_built_from_validated_parts(self):
+        self.assertEqual(self.line(node="654321", op=3, target="1900"), "rpt cmd 654321 ilink 3 1900")
+        self.assertEqual(self.line(node="654321", op="1", target="45192"), "rpt cmd 654321 ilink 1 45192")
+        self.assertEqual(self.line(node="654321", op=6), "rpt cmd 654321 ilink 6")
+        self.assertEqual(self.line(node="1900", op=16), "rpt cmd 1900 ilink 16")
+        self.assertEqual(self.line(node="654321", op=9, target="0", text="Net starts at 8"),
+                         "rpt cmd 654321 ilink 9 0 Net starts at 8")
+
+    def test_bad_input_is_refused_before_asterisk_sees_it(self):
+        self.assertIn("not a node", self.err(node="999", op=3, target="1900"))
+        self.assertIn("not a node", self.err(node="654321; rpt", op=3, target="1900"))
+        self.assertIn("Unknown command", self.err(node="654321", op=10, target="1"))
+        self.assertIn("Unknown command", self.err(node="654321", op=99))
+        self.assertIn("Pick a command", self.err(node="654321", op="x"))
+        self.assertIn("Type or pick", self.err(node="654321", op=3, target=""))
+        self.assertIn("Type or pick", self.err(node="654321", op=3, target="19 00"))
+        self.assertIn("Type or pick", self.err(node="654321", op=3, target="0"))
+        self.assertIn("itself", self.err(node="654321", op=3, target="654321"))
+        self.assertIn("takes no node", self.err(node="654321", op=6, target="1900"))
+        self.assertIn("message", self.err(node="654321", op=9, target="0", text=""))
+        self.assertIn("message", self.err(node="654321", op=9, target="0", text='hi"; core stop now'))
+        self.assertIn("message", self.err(node="654321", op=9, target="0", text="x" * 101))
+
+    def test_a_command_goes_to_asterisk_and_is_logged(self):
+        r = nm.run_command({"node": "654321", "op": 3, "target": "1900"}, "192.0.2.5")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.ami.cmds, ["rpt cmd 654321 ilink 3 1900"])
+        self.assertIn("Connect: transceive", r["message"])
+        with nm._log_lock:
+            last = list(nm._log)[-1]
+        self.assertIn("192.0.2.5", last["msg"])
+        self.assertIn("rpt cmd 654321 ilink 3 1900", last["msg"])
+
+    def test_asterisk_answering_with_text_is_an_error(self):
+        with open(nm.RPT_CONF, "a") as f:
+            f.write("\n[777](node-main)\nrxchannel = SimpleUSB/777\n")
+        r = nm.run_command({"node": "654321", "op": 3, "target": "777"})
+        self.assertFalse(r["ok"])
+        self.assertIn("Unknown node number 777", r["error"])
+
+    def test_no_manager_login_and_asterisk_down(self):
+        with open(nm.AMI_CONF, "w") as f:
+            f.write("[general]\nenabled = yes\n")
+        r = nm.run_command({"node": "654321", "op": 6})
+        self.assertFalse(r["ok"])
+        self.assertIn("no AMI login", r["error"])
+        with open(nm.AMI_CONF, "w") as f:
+            f.write("[admin]\nsecret = pw\n")
+        nm.AMI_PORT = 1
+        r = nm.run_command({"node": "654321", "op": 6})
+        self.assertFalse(r["ok"])
+        self.assertIn("could not be reached", r["error"])
 
 
 if __name__ == "__main__":
