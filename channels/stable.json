@@ -65,13 +65,13 @@
    "version": "9.3.109"
   },
   "nodecontrol_pi02w": {
-   "blob": "95f540f52d251541523ddb662d9ceea2b9ecaf04",
-   "commit": "80af06349b2cc9fc792980be7d177051a8e2ef22",
-   "file": "nodecontrol_pi02w_v9_3_113_20261112.py",
-   "landed": "2026-11-12T16:11:39Z",
-   "promoted": "2026-11-15T16:11:39Z",
+   "blob": "71f4cb90974fc3634f61b840fb079b262b44fa98",
+   "commit": "456ab334782934b4bb120886ce49cf9d0fd63a54",
+   "file": "nodecontrol_pi02w_v9_3_114_20261113.py",
+   "landed": "2026-11-13T03:21:18Z",
+   "promoted": "2026-11-16T17:56:31Z",
    "reason": "count",
-   "version": "9.3.113-pi02w"
+   "version": "9.3.114-pi02w"
   },
   "noderecorder": {
    "blob": "d17b463d6539fe04f18fc9252dfe4273ea85e184",
