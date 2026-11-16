@@ -15,7 +15,7 @@ os.environ.setdefault("NODETALKER_SUITELOG_FLAG", os.path.join(WORK, "nt_suitelo
 os.environ.setdefault("NODERECORDER_CONFIG_DIR", os.path.join(WORK, "nr"))
 
 PILL = '<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>'
-QL_ROW_TOOLS = {"nodetalker": "nodetalker_v[0-9]*.py"}
+QL_ROW_TOOLS = {"nodetalker": "nodetalker_v[0-9]*.py", "noderecorder": "noderecorder_v[0-9]*.py"}
 
 
 def newest(pattern):
