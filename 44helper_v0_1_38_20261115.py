@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.37"
+APP_VERSION = "0.1.38"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3415,9 +3415,11 @@ TIMEOUT=0
 DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json
 CALL=YOURCALL
 USRP_HOST=127.0.0.1
-#    USRP_TX_PORT = the port Analog_Bridge LISTENS on (fork default 41234)
-#    USRP_RX_PORT = the port Analog_Bridge SENDS to  (fork default 41233)
-#    Match them to Analog_Bridge.ini -- the two ends are mirror images.
+#    USRP_TX_PORT = the port the other end LISTENS on (32000 for ASL3 node 1900)
+#    USRP_RX_PORT = the port the other end SENDS to   (34000 for ASL3 node 1900)
+#    The other end is ASL3's private node: rxchannel = USRP/127.0.0.1:34000:32000
+#    in rpt.conf -- the two ends are mirror images. The fork's own defaults are
+#    41234 and 41233.
 #    Keep everything on 127.0.0.1; never open these ports in a firewall."""
 
 _SVX_USRP_CONF = f"{_SVX_USRP_ETC}/svxlink.conf"
@@ -3576,8 +3578,8 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "'succeeds', which is why this is checked on its own). For this build the USRP settings live in "
                  "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf — not /etc/svxlink/..., which is where "
                  "guides that install into /usr put it. Port matching: the port SvxLink SENDS to must be the port "
-                 "Analog_Bridge LISTENS on, and the port SvxLink listens on must be the one Analog_Bridge sends "
-                 "to — the two ends are mirror images. Keep both on 127.0.0.1. Use the key names in the template "
+                 "the other end (ASL3's private node) LISTENS on, and the port SvxLink listens on must be the one "
+                 "it sends to — the two ends are mirror images. Keep both on 127.0.0.1. Use the key names in the template "
                  "the build installed, not ones copied from a web page."},
         {"id": "usrp_locate", "num": 7, "title": "Locate installed files (read-only)",
          "cmd": f"which svxlink; ls -la {_SVX_USRP_ETC} 2>/dev/null; "
@@ -3587,12 +3589,12 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "starts the binary from there."},
         {"id": "usrp_logic_conf", "num": 8, "title": "Switch UsrpLogic on and set its ports",
          "fields": [{"id": "callsign", "label": "Callsign", "type": "text", "default": ""},
-                    {"id": "port", "label": "Port Analog_Bridge LISTENS on (SvxLink sends to it)", "type": "text",
-                     "default": "41234"},
-                    {"id": "rx_port", "label": "Port Analog_Bridge SENDS to (SvxLink listens on it)", "type": "text",
-                     "default": "41233"}],
+                    {"id": "port", "label": "Port the ASL3 node LISTENS on (SvxLink sends to it)", "type": "text",
+                     "default": "32000"},
+                    {"id": "rx_port", "label": "Port the ASL3 node SENDS to (SvxLink listens on it)", "type": "text",
+                     "default": "34000"}],
          "cmd_template": _svx_usrp_wire_cmd("{{callsign}}", "{{port}}", "{{rx_port}}"),
-         "cmd": _svx_usrp_wire_cmd("YOURCALL", "41234", "41233"),
+         "cmd": _svx_usrp_wire_cmd("YOURCALL", "32000", "34000"),
          "timeout": 60,
          "note": "Edits the build's config (a copy of the first version is kept as svxlink.conf.44helper-bak). In "
                  "[GLOBAL] it adds UsrpLogic to LOGICS and LinkToUsrp to LINKS, and adds a [LinkToUsrp] section "
@@ -3600,8 +3602,12 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "[LinkToUsrp] section alone does nothing: SvxLink only uses links listed in LINKS=. It sets the "
                  "callsign everywhere, and in UsrpLogic the callsign, USRP_HOST=127.0.0.1, the two ports and "
                  "DV_USER_INFOFILE (the fork's template points at /etc/svxlink, this build installs it under "
-                 "/usr/local/etc/svxlink). The ports are mirror images of Analog_Bridge.ini's [USRP] txPort and "
-                 "rxPort. Keep everything on 127.0.0.1; never open these ports in a firewall."},
+                 "/usr/local/etc/svxlink). The other end is ASL3's private node 1900 (rxchannel = "
+                 "USRP/127.0.0.1:34000:32000 in rpt.conf), so the defaults are its mirror image: SvxLink sends to "
+                 "32000 and listens on 34000. The node itself is added on the Config tab: Add SvxLink bridge node "
+                 "does it in one step and sets these two ports again to match, picking other numbers if 1900 or the "
+                 "ports are taken. To bridge to something else, enter that program's ports here. Keep everything on "
+                 "127.0.0.1; never open these ports in a firewall."},
         {"id": "usrp_service_unit", "num": 9, "title": "Install & start the svxlink-usrp service",
          "cmd": _SVX_USRP_SERVICE_CMD,
          "timeout": 60,
