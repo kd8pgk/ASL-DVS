@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.100"
+VERSION      = "6.13.101"
 BUILD_DATE   = "20261113"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -115,7 +115,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,reg,phone,tune,hardware,net,dvsm,stfu,m17,zello,sdcard,security,console,edit",
+        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,reg,phone,tune,hardware,net,dvsm,stfu,m17,zello,svx,sdcard,security,console,edit",
     },
 }
 
@@ -2820,7 +2820,7 @@ body.tab-edit #zone-content{
 
 .stfu-editor-wrap{overflow:hidden;transition:max-height .3s ease;max-height:0}
 .stfu-editor-wrap.open{max-height:600px}
-#stfu-textarea{width:100%;background:#0a1020;color:#ffffff;
+#stfu-textarea,#svx-textarea{width:100%;background:#0a1020;color:#ffffff;
   font-family:var(--sans);font-size:var(--fs-base);line-height:1.65;
   border:none;outline:none;padding:.8rem 1rem;
   resize:none;tab-size:4;white-space:pre;overflow:auto;
@@ -3079,6 +3079,8 @@ body.tab-edit #zone-content{
     onclick="switchTab('m17','124,255,60')">M17</button>
   <button class="tab-btn"        id="tbtn-zello"
     onclick="switchTab('zello','255,140,0')">Zello</button>
+  <button class="tab-btn"        id="tbtn-svx"
+    onclick="switchTab('svx','163,230,53')">SVX</button>
   <button class="tab-btn"        id="tbtn-sdcard"
     onclick="switchTab('sdcard','180,140,255')">SD Card</button>
   <button class="tab-btn"        id="tbtn-security"
@@ -4281,6 +4283,116 @@ body.tab-edit #zone-content{
 
   </div>
 
+  <div id="panel-svx" class="tab-panel">
+
+    <div class="stfu-tab-hdr">
+      <span class="stfu-tab-title">SVX — SvxLink Reflector Bridge</span>
+      <button class="btn btn-blue btn-sm" onclick="loadSvx()">↻ Refresh</button>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr" style="padding-left:.6rem">
+        <div style="display:flex;align-items:center;gap:.55rem">
+          <div class="dvsm-accent" style="background:var(--red)"></div>
+          <div>
+            <div class="dvsm-card-title" style="color:var(--red)">Checks</div>
+            <div class="dvsm-card-sub" id="svx-checks-sub">svxlink.conf · rpt.conf · extensions.conf · log</div>
+          </div>
+        </div>
+        <span class="dpbadge" id="svx-badge-checks">—</span>
+      </div>
+      <div id="svx-body-checks">
+        <div class="stub-panel" style="min-height:80px">Loading…</div>
+      </div>
+      <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06)">
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
+          onclick="svxRestart()">↺ Restart svxlink-usrp</button>
+      </div>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr" style="padding-left:.6rem">
+        <div style="display:flex;align-items:center;gap:.55rem">
+          <div class="dvsm-accent" style="background:var(--blue)"></div>
+          <div>
+            <div class="dvsm-card-title" style="color:var(--blue)">Connect to a reflector</div>
+            <div class="dvsm-card-sub" id="svx-conn-sub">svxlink.conf [ReflectorLogic]</div>
+          </div>
+        </div>
+        <span class="dpbadge" id="svx-badge-conn">—</span>
+      </div>
+      <div style="padding:.6rem">
+        <div style="font-family:var(--sans);font-size:var(--fs-xs);color:#fff;margin-bottom:.6rem">
+          Logs SvxLink in to a reflector so the bridge node can reach its talkgroups. It sets
+          [ReflectorLogic] with your callsign from the file, adds the control logic Node Controller's SVX tab
+          uses, joins it all in [ReflectorLink], and restarts svxlink-usrp. Safe to run again. Leave the password
+          blank to keep the one already set.
+        </div>
+        <table class="dvsm-fields">
+          <tr><td class="dvsm-lbl">Reflector host</td>
+            <td class="dvsm-val-cell"><input class="find-inp" id="svx-host" type="text" spellcheck="false"
+              autocomplete="off" placeholder="127.0.0.1 = test reflector"></td></tr>
+          <tr><td class="dvsm-lbl">Reflector port</td>
+            <td class="dvsm-val-cell"><input class="find-inp" id="svx-port" type="text" spellcheck="false"
+              autocomplete="off" value="5300"></td></tr>
+          <tr><td class="dvsm-lbl">Password (AUTH_KEY)</td>
+            <td class="dvsm-val-cell"><input class="find-inp" id="svx-key" type="password" spellcheck="false"
+              autocomplete="new-password" placeholder="from the sysop"></td></tr>
+          <tr><td class="dvsm-lbl">Default talkgroup (0 = none)</td>
+            <td class="dvsm-val-cell"><input class="find-inp" id="svx-tg" type="text" spellcheck="false"
+              autocomplete="off" value="0"></td></tr>
+          <tr><td class="dvsm-lbl">Monitored talkgroups</td>
+            <td class="dvsm-val-cell"><input class="find-inp" id="svx-mon" type="text" spellcheck="false"
+              autocomplete="off" placeholder="91,240+ (blank = none)"></td></tr>
+        </table>
+        <div id="svx-conn-note" class="dvsm-note src" style="display:none;margin-top:.5rem"></div>
+      </div>
+      <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06)">
+        <button class="btn btn-blue btn-sm" id="svx-conn-btn" onclick="svxConnect()">⚡ Connect and restart</button>
+      </div>
+    </div>
+
+    <div class="s3-card" style="margin-bottom:1rem">
+      <div class="s3-card-hdr" style="padding-left:.6rem">
+        <div style="display:flex;align-items:center;gap:.55rem">
+          <div class="dvsm-accent" style="background:var(--amber)"></div>
+          <div>
+            <div class="dvsm-card-title" style="color:var(--amber)">Config editor</div>
+            <div class="dvsm-card-sub" id="svx-editor-path">/usr/local/etc/svxlink</div>
+          </div>
+        </div>
+        <button class="btn btn-muted btn-sm" id="svx-editor-toggle"
+          onclick="svxToggleEditor()">▼ Expand</button>
+      </div>
+      <div class="stfu-editor-wrap" id="svx-editor-wrap">
+        <div style="padding:.5rem .6rem;border-bottom:1px solid rgba(255,255,255,.06)">
+          <select id="svx-file" class="find-inp" onchange="svxOpenEditor()"></select>
+        </div>
+        <textarea id="svx-textarea" spellcheck="false"></textarea>
+        <div class="find-bar" style="margin-top:0;padding:.38rem .9rem;background:#131c2d;border-top:1px solid var(--border)">
+          <input class="find-inp" id="svx-find-inp" type="text" placeholder="Find in the file"
+            spellcheck="false" autocomplete="off"
+            oninput="findStart('svx')" onkeydown="findKey(event, 'svx')">
+          <span class="find-count" id="svx-find-count"></span>
+          <button class="btn btn-muted btn-sm" id="svx-find-prev" onclick="findStep('svx', -1)"
+            title="Previous match (Shift+Enter)" disabled>▲ Prev</button>
+          <button class="btn btn-muted btn-sm" id="svx-find-next" onclick="findStep('svx', 1)"
+            title="Next match (Enter)" disabled>▼ Next</button>
+        </div>
+        <div class="stfu-editor-bar">
+          <button class="btn btn-blue btn-sm" onclick="svxSave()">💾 Save</button>
+          <button class="btn btn-muted btn-sm" id="svx-restore-btn" onclick="svxRestore()">↶ Restore previous</button>
+          <button class="btn btn-muted btn-sm" onclick="svxCopy()">⎘ Copy</button>
+          <button class="btn btn-muted btn-sm" onclick="svxDiscardEdit()">✕ Close</button>
+          <span style="font-family:var(--sans);font-size:var(--fs-xs);color:#fff;margin-left:auto">
+            Save keeps the previous version. Restart svxlink-usrp from the Checks card to apply.
+          </span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
   <div id="panel-zello" class="tab-panel">
 
     <div class="stfu-tab-hdr">
@@ -4654,6 +4766,8 @@ body.tab-edit #zone-content{
           <input type="checkbox" id="tabchk-m17" value="m17" onchange="edTabVisChanged()">M17</label>
         <label class="tab-vis-lbl" title="Only shown while asl-zello-bridge is actually installed, regardless of this checkbox">
           <input type="checkbox" id="tabchk-zello" value="zello" onchange="edTabVisChanged()">Zello</label>
+        <label class="tab-vis-lbl">
+          <input type="checkbox" id="tabchk-svx" value="svx" onchange="edTabVisChanged()">SVX</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-sdcard" value="sdcard" onchange="edTabVisChanged()">SD Card</label>
         <label class="tab-vis-lbl">
@@ -5146,7 +5260,7 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","net","dvsm","stfu","m17","zello","sdcard","security","console","edit"];
+const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","net","dvsm","stfu","m17","zello","svx","sdcard","security","console","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
@@ -5800,7 +5914,7 @@ const TAB_RGB = {
   firewall:"255,170,34", journal:"212,102,255", asldvs:"255,61,90",
   reg:"120,180,255", phone:"0,255,176",
   tune:"255,68,204", hardware:"0,200,120", net:"64,224,208", dvsm:"255,170,34",
-  stfu:"0,191,255", m17:"124,255,60", zello:"255,140,0", sdcard:"180,140,255",
+  stfu:"0,191,255", m17:"124,255,60", zello:"255,140,0", svx:"163,230,53", sdcard:"180,140,255",
   security:"255,90,120", console:"120,255,140", edit:"255,208,64"
 };
 
@@ -11554,6 +11668,185 @@ async function m17Copy() {
 }
 
 // ========================================================================
+// TAB: SVX
+// ========================================================================
+let _svxLoadedContent = null;
+let _svxLoadedLabel = "";
+let _svxFormFilled = false;
+let _svxRecheck = null;
+
+window.loadTab_svx = function() { loadSvx(); };
+
+function _svxRenderChecks(d) {
+  const body = document.getElementById("svx-body-checks");
+  if (body) {
+    const rows = d.checks || [];
+    let html = `<table class="dvsm-compat-tbl">`;
+    rows.forEach(c => { html += _compatRowHtml(c.key, c.enables, c.status, c.fix); });
+    body.innerHTML = html + `</table>`;
+  }
+  const n = d.count || {};
+  const parts = [];
+  if (n.pass) parts.push(n.pass + " pass");
+  if (n.fail) parts.push(n.fail + " fail");
+  if (n.warn) parts.push(n.warn + " warn");
+  const sub = document.getElementById("svx-checks-sub");
+  if (sub) sub.textContent = parts.join(", ") || "svxlink.conf · rpt.conf · extensions.conf · log";
+  const status = !d.installed ? "fail" : n.fail ? "fail" : n.warn ? "warn" : "pass";
+  _dvsmSetBadge("svx-badge-checks", status, !d.installed ? "MISSING" : n.fail ? n.fail + " FAIL" : n.warn ? "WARN" : "PASS");
+}
+
+function _svxRenderConn(d) {
+  const r = d.reflector || {};
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== "") el.value = v; };
+  if (!_svxFormFilled) {
+    set("svx-host", r.host);
+    set("svx-port", r.port);
+    set("svx-tg", r.tg);
+    set("svx-mon", r.monitor);
+    _svxFormFilled = true;
+  }
+  const key = document.getElementById("svx-key");
+  if (key) key.placeholder = r.key_set ? "blank = keep current" : "from the sysop";
+  const sub = document.getElementById("svx-conn-sub");
+  if (sub) sub.textContent = r.host ? `Now: ${r.host}:${r.port} as ${r.callsign || "?"}` : "Not set up yet";
+  _dvsmSetBadge("svx-badge-conn", r.host ? "pass" : "info", r.host ? "SET" : "NOT SET");
+  const btn = document.getElementById("svx-conn-btn");
+  if (btn) btn.disabled = !d.installed;
+}
+
+function _svxFillFiles(files) {
+  const sel = document.getElementById("svx-file");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = (files || []).map(f => `<option value="${_esc(f)}">${_esc(f)}</option>`).join("");
+  if (cur && (files || []).includes(cur)) sel.value = cur;
+  else if ((files || []).includes("svxlink.conf")) sel.value = "svxlink.conf";
+}
+
+async function loadSvx() {
+  _dvsmSetBadge("svx-badge-checks", "info", "...");
+  _dvsmSetBadge("svx-badge-conn", "info", "...");
+  const d = await api("/api/svx");
+  if (!d || !d.ok) {
+    _dvsmSetBadge("svx-badge-checks", "fail", "ERR");
+    _dvsmSetBadge("svx-badge-conn", "fail", "ERR");
+    toast("SVX: failed to load", "warn");
+    return;
+  }
+  _svxRenderChecks(d);
+  _svxRenderConn(d);
+  _svxFillFiles(d.files);
+}
+
+async function svxRestart() {
+  if (!await confirm("Restart svxlink-usrp?")) return;
+  const d = await api("/api/svx", "POST", {action: "restart"});
+  if (!d || !d.ok) { toast(d?.message || "Restart failed", "err"); return; }
+  toast("svxlink-usrp restarted", "ok");
+  setTimeout(loadSvx, 6000);
+}
+
+async function svxConnect() {
+  const v = id => (document.getElementById(id) || {}).value || "";
+  const host = v("svx-host").trim(), port = v("svx-port").trim();
+  if (!await confirm(`Connect SvxLink to ${host}:${port}?\n\nThis changes svxlink.conf (a copy of the first version is kept) and restarts svxlink-usrp.`)) return;
+  const btn = document.getElementById("svx-conn-btn");
+  if (btn) btn.disabled = true;
+  const note = document.getElementById("svx-conn-note");
+  const d = await api("/api/svx", "POST", {action: "connect", host, port, key: v("svx-key"),
+                                           tg: v("svx-tg").trim(), monitor: v("svx-mon").trim()});
+  if (btn) btn.disabled = false;
+  if (note) {
+    note.style.display = "";
+    note.textContent = (d && d.message) || "No answer";
+    note.className = "dvsm-note " + (d && d.ok ? "src" : "err");
+  }
+  if (!d || !d.ok) { toast(d?.message || "Connect failed", "err"); return; }
+  const key = document.getElementById("svx-key");
+  if (key) key.value = "";
+  toast("Reflector set; restarting", "ok");
+  _svxFormFilled = false;
+  clearTimeout(_svxRecheck);
+  _svxRecheck = setTimeout(loadSvx, 9000);
+}
+
+async function svxOpenEditor() {
+  const sel = document.getElementById("svx-file");
+  const label = sel ? sel.value : "";
+  if (!label) return;
+  const ta = document.getElementById("svx-textarea");
+  if (ta && _svxLoadedContent !== null && ta.value !== _svxLoadedContent && label !== _svxLoadedLabel) {
+    if (!await confirm(`Discard unsaved changes to ${_svxLoadedLabel}?`)) { sel.value = _svxLoadedLabel; return; }
+  }
+  const d = await api("/api/svx", "POST", {action: "read", label});
+  if (!d || !d.ok) { toast(d?.message || "Could not load the file", "err"); return; }
+  if (ta) ta.value = d.content || "";
+  findReset("svx");
+  _svxLoadedContent = d.content || "";
+  _svxLoadedLabel = label;
+  const pathEl = document.getElementById("svx-editor-path");
+  if (pathEl) pathEl.textContent = d.path;
+  const rb = document.getElementById("svx-restore-btn");
+  if (rb) rb.disabled = !d.has_backup;
+  const wrap = document.getElementById("svx-editor-wrap");
+  const tog = document.getElementById("svx-editor-toggle");
+  if (wrap) wrap.classList.add("open");
+  if (tog) tog.textContent = "▲ Collapse";
+}
+
+function svxToggleEditor() {
+  const wrap = document.getElementById("svx-editor-wrap");
+  const tog = document.getElementById("svx-editor-toggle");
+  if (!wrap) return;
+  const opening = !wrap.classList.contains("open");
+  wrap.classList.toggle("open", opening);
+  if (tog) tog.textContent = opening ? "▲ Collapse" : "▼ Expand";
+  if (opening) svxOpenEditor();
+}
+
+function svxDiscardEdit() {
+  const wrap = document.getElementById("svx-editor-wrap");
+  const tog = document.getElementById("svx-editor-toggle");
+  const ta = document.getElementById("svx-textarea");
+  if (wrap) wrap.classList.remove("open");
+  if (tog) tog.textContent = "▼ Expand";
+  if (ta) ta.value = "";
+  _svxLoadedContent = null;
+  findReset("svx");
+}
+
+async function svxSave() {
+  const ta = document.getElementById("svx-textarea");
+  if (!ta || !_svxLoadedLabel) return;
+  if (!await confirm(`Save changes to ${_svxLoadedLabel}?\n\nThe previous version is kept so you can restore it.`)) return;
+  const d = await api("/api/svx", "POST", {action: "save", label: _svxLoadedLabel, content: ta.value});
+  if (!d || !d.ok) { toast(d?.message || "Save failed", "err"); return; }
+  _svxLoadedContent = ta.value;
+  const rb = document.getElementById("svx-restore-btn");
+  if (rb) rb.disabled = false;
+  toast(d.message, "ok");
+  loadSvx();
+}
+
+async function svxRestore() {
+  if (!_svxLoadedLabel) return;
+  if (!await confirm(`Go back to the previous version of ${_svxLoadedLabel}?`)) return;
+  const d = await api("/api/svx", "POST", {action: "restore", label: _svxLoadedLabel});
+  if (!d || !d.ok) { toast(d?.message || "Restore failed", "err"); return; }
+  toast(d.message, "ok");
+  _svxLoadedContent = null;
+  svxOpenEditor();
+  loadSvx();
+}
+
+async function svxCopy() {
+  const ta = document.getElementById("svx-textarea");
+  if (!ta || !ta.value) { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(ta.value);
+}
+
+// ========================================================================
 // TAB: Zello
 // ========================================================================
 // ---- general ----
@@ -12569,7 +12862,7 @@ function edToggleAslDvs() {
   }
 }
 
-const FIND_TEXTAREA = { ed: "ed-pinned", uf: "uf-textarea", allconf: "allconf-textarea", stfu: "stfu-textarea", m17: "m17-textarea", zello: "zello-textarea" };
+const FIND_TEXTAREA = { ed: "ed-pinned", uf: "uf-textarea", allconf: "allconf-textarea", stfu: "stfu-textarea", m17: "m17-textarea", zello: "zello-textarea", svx: "svx-textarea" };
 const _findIdx = {};
 
 function findHits(ta, needle) {
@@ -12828,6 +13121,7 @@ async function edSave() {
 
   const visTabs = edGetTabVis();
   payload["ui.enabled_tabs"] = visTabs.join(",");
+  payload["ui.svx_tab"] = "1";
 
   const d = await api("/api/config", "POST", payload);
   if (btn) btn.disabled = false;
@@ -27107,6 +27401,625 @@ def _route_zello_post(h: Handler, data: dict) -> None:
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
+_SVX_ETC = Path("/usr/local/etc/svxlink")
+_SVX_CONF = _SVX_ETC / "svxlink.conf"
+_SVX_UNIT = "svxlink-usrp"
+_SVX_BIN = Path("/usr/local/bin/svxlink")
+_SVX_LOG = Path("/var/log/svxlink")
+_SVX_PTY = Path("/var/lib/svxlink/dtmf_ctrl")
+_SVX_BAK_EXT = ".sysmon-bak"
+_SVX_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
+_SVX_MAX_BYTES = 262144
+_SVX_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_SVX_KV_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+_SVX_NUMERIC_KEYS = frozenset(("HOST_PORT", "USRP_TX_PORT", "USRP_RX_PORT"))
+_SVX_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+_SVX_MON_RE = re.compile(r"^$|^\d{1,8}\+?(,\d{1,8}\+?)*$")
+_SVX_LOGIN_OK_RE = re.compile(r"ReflectorLogic.*Authentication OK")
+_SVX_LOGIN_BAD_RE = re.compile(
+    r"ReflectorLogic.*(Disconnected from|Authentication failed|Access denied|Connection timed out|"
+    r"Failed to connect|Heartbeat timeout|Unable to connect)")
+_SVX_TG_RE = re.compile(r"Selecting TG #(\d+)")
+_SVX_LINK_RE = re.compile(r"(?:(De)a|A)ctivating link '?ReflectorLink'?")
+_SVX_CERT_RE = re.compile(r"certificate.*(pending|not signed|waiting|awaiting)|(pending|awaiting).*certificate", re.I)
+
+
+def _svx_files() -> "list[str]":
+    out = []
+    try:
+        for p in sorted(_SVX_ETC.iterdir()):
+            if p.is_file() and p.suffix in (".conf", ".json"):
+                out.append(p.name)
+        sub = _SVX_ETC / "svxlink.d"
+        if sub.is_dir():
+            for p in sorted(sub.iterdir()):
+                if p.is_file() and p.suffix in (".conf", ".json"):
+                    out.append("svxlink.d/" + p.name)
+    except OSError as exc:
+        log.debug("_svx_files: %s", exc)
+    return out
+
+
+def _svx_path(label: str) -> "Path | None":
+    if not isinstance(label, str) or not _SVX_FILE_RE.match(label) or ".." in label:
+        return None
+    if label not in _svx_files():
+        return None
+    return _SVX_ETC / label
+
+
+def _svx_unquote(v: str) -> str:
+    v = v.strip()
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        return v[1:-1]
+    return v
+
+
+def _svx_parse(text: str) -> "dict[str, dict]":
+    out: "dict[str, dict]" = {}
+    cur = None
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = _SVX_SECTION_RE.match(line)
+        if m:
+            cur = m.group(1).strip()
+            out.setdefault(cur, {})
+            continue
+        m = _SVX_KV_RE.match(line)
+        if m and cur is not None and m.group(1) not in out[cur]:
+            out[cur][m.group(1)] = _svx_unquote(m.group(2))
+    return out
+
+
+def _svx_inline_comment(value: str) -> bool:
+    inside = False
+    prev = " "
+    for ch in value:
+        if ch == '"':
+            inside = not inside
+        elif ch == "#" and not inside and prev in " \t":
+            return True
+        prev = ch
+    return False
+
+
+def _svx_validate(label: str, text: str) -> "list[str]":
+    if not isinstance(text, str) or not text.strip():
+        return ["The file is empty."]
+    if len(text.encode("utf-8", "replace")) > _SVX_MAX_BYTES:
+        return ["The file is larger than 256 KB."]
+    if "\r" in text:
+        return ["The file has Windows line endings; SvxLink reads Unix ones only."]
+    if "\0" in text:
+        return ["The file has a null character."]
+    if label.endswith(".json"):
+        try:
+            json.loads(text)
+        except ValueError as exc:
+            return [f"Not valid JSON: {exc}"]
+        return []
+    problems: "list[str]" = []
+    for n, line in enumerate(text.split("\n"), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("["):
+            if not _SVX_SECTION_RE.match(line):
+                problems.append(f"Line {n}: a section header needs a closing bracket.")
+            continue
+        m = _SVX_KV_RE.match(line)
+        if not m:
+            problems.append(f"Line {n}: not a setting (NAME=value).")
+            continue
+        key, val = m.group(1), m.group(2)
+        if _svx_inline_comment(val):
+            problems.append(f"Line {n}: {key} has a comment after the value; SvxLink reads it as part of the value. "
+                            "Put the comment on its own line.")
+        if key in _SVX_NUMERIC_KEYS and not _svx_unquote(val).isdigit():
+            problems.append(f"Line {n}: {key} must be a number.")
+    if label == "svxlink.conf":
+        secs = _svx_parse(text)
+        glob_ = secs.get("GLOBAL")
+        if glob_ is None:
+            problems.append("There is no [GLOBAL] section.")
+        else:
+            for key in ("LOGICS", "LINKS"):
+                for name in [x.strip() for x in glob_.get(key, "").split(",") if x.strip()]:
+                    if name not in secs:
+                        problems.append(f"{key} names {name}, but there is no [{name}] section.")
+    return problems
+
+
+def _svx_read(path: Path) -> "tuple[str, str]":
+    try:
+        return path.read_text(errors="replace"), ""
+    except OSError as exc:
+        return "", str(exc)
+
+
+def _svx_swap_write(path: Path, text: str) -> None:
+    bak = path.with_name(path.name + _SVX_BAK_EXT)
+    if path.exists():
+        shutil.copy2(path, bak)
+    tmp = path.with_name(path.name + ".sysmon-tmp")
+    tmp.write_text(text)
+    try:
+        shutil.copystat(path, tmp)
+    except OSError as exc:
+        log.debug("_svx_swap_write: %s", exc)
+    os.replace(tmp, path)
+
+
+def _svx_restore(path: Path) -> "tuple[bool, str]":
+    bak = path.with_name(path.name + _SVX_BAK_EXT)
+    if not bak.exists():
+        return False, "There is no earlier version of this file to go back to."
+    cur, err = _svx_read(path)
+    old, err2 = _svx_read(bak)
+    if err or err2:
+        return False, err or err2
+    tmp = path.with_name(path.name + ".sysmon-tmp")
+    tmp.write_text(old)
+    try:
+        shutil.copystat(path, tmp)
+    except OSError as exc:
+        log.debug("_svx_restore: %s", exc)
+    os.replace(tmp, path)
+    bak.write_text(cur)
+    return True, "Went back to the earlier version. The version you replaced is kept, so you can go back again."
+
+
+def _svx_log_lines(n: int = 400) -> "list[str]":
+    try:
+        with open(_SVX_LOG, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 131072))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return data.splitlines()[-n:]
+
+
+def _svx_login_state(lines: "list[str]") -> str:
+    state = ""
+    for ln in lines:
+        if _SVX_LOGIN_OK_RE.search(ln):
+            state = "ok"
+        elif _SVX_LOGIN_BAD_RE.search(ln):
+            state = "bad:" + ln.strip()[:160]
+    return state
+
+
+def _svx_talkgroup(lines: "list[str]") -> "tuple[str, str]":
+    tg = ""
+    link = ""
+    for ln in lines:
+        m = _SVX_TG_RE.search(ln)
+        if m:
+            tg = m.group(1)
+        m = _SVX_LINK_RE.search(ln)
+        if m:
+            link = "off" if m.group(1) else "on"
+    return tg, link
+
+
+def _svx_rpt_nodes() -> "tuple[dict, str, str]":
+    text, err = read_path_file(_RPT_CONF)
+    if err:
+        return {}, "", err
+    secs: "dict[str, dict]" = {}
+    cur = None
+    nodes_lines: "dict[str, str]" = {}
+    for line in text.splitlines():
+        s = line.split(";", 1)[0].strip()
+        if not s:
+            continue
+        m = _SVX_SECTION_RE.match(s)
+        if m:
+            cur = m.group(1).split("(")[0].strip()
+            secs.setdefault(cur, {})
+            continue
+        if cur is None or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k = k.strip()
+        v = v.strip().lstrip(">").strip()
+        if cur == "nodes":
+            nodes_lines[k] = v
+        else:
+            secs[cur].setdefault(k.lower(), v)
+    return secs, json.dumps(nodes_lines), ""
+
+
+def _svx_iax_bindport() -> str:
+    text, err = read_path_file(Path("/etc/asterisk/iax.conf"))
+    if err:
+        return "4569"
+    m = re.search(r"(?m)^\s*bindport\s*=\s*(\d+)", text)
+    return m.group(1) if m else "4569"
+
+
+def _svx_listeners() -> "list[str]":
+    out = _run(["ss", "-ulnH"], timeout=4)
+    return [ln.split()[3] for ln in out.splitlines() if len(ln.split()) >= 4]
+
+
+def _svx_checks() -> dict:
+    rows: list = []
+
+    def row(key, enables, status, fix=None):
+        rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
+
+    installed = _SVX_BIN.exists()
+    unit_state = get_service_state(_SVX_UNIT + ".service")
+    if not installed:
+        row(str(_SVX_BIN), "SvxLink USRP build installed", "fail",
+            "Not found. Build it from 44helper, SvxLink tab, steps 1 to 8.")
+        return {"installed": False, "state": unit_state, "rows": rows, "reflector": {}}
+    row(f"{_SVX_UNIT}: {unit_state}", "SvxLink service running",
+        "pass" if unit_state == "active" else "fail",
+        None if unit_state == "active" else f"Start it: sudo systemctl start {_SVX_UNIT} (log: {_SVX_LOG})")
+
+    text, err = _svx_read(_SVX_CONF)
+    cfg: "dict[str, dict]" = {}
+    refl: dict = {}
+    if err:
+        row(str(_SVX_CONF), "svxlink.conf readable", "fail", err)
+    else:
+        cfg = _svx_parse(text)
+        problems = _svx_validate("svxlink.conf", text)
+        if problems:
+            row("svxlink.conf", "Config reads cleanly", "fail", problems[0] + (
+                f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""))
+        else:
+            row("svxlink.conf", "Config reads cleanly", "pass")
+        refl = cfg.get("ReflectorLogic", {})
+        need = [k for k in ("HOSTS", "HOST_PORT", "CALLSIGN", "AUTH_KEY") if not refl.get(k)]
+        if "ReflectorLogic" not in cfg:
+            row("[ReflectorLogic]", "Reflector settings", "info",
+                "No reflector set up yet: use the Connect to a reflector card below.")
+        elif need:
+            row("[ReflectorLogic]", "Reflector settings", "fail", "Missing: " + ", ".join(need))
+        else:
+            ident = str(_cfg.get("identity", "callsign", fallback="")).strip().upper()
+            call = refl["CALLSIGN"].upper()
+            if ident and call != ident:
+                row(f"{refl['HOSTS']}:{refl['HOST_PORT']} as {call}", "Reflector settings", "warn",
+                    f"The reflector callsign differs from this node's ({ident}).")
+            else:
+                row(f"{refl['HOSTS']}:{refl['HOST_PORT']} as {call}", "Reflector settings", "pass")
+
+    lines = _svx_log_lines()
+    if refl.get("HOSTS") and refl.get("HOST_PORT", "").isdigit():
+        host, port = refl["HOSTS"].split(",")[0].strip(), int(refl["HOST_PORT"])
+        try:
+            with _socket.create_connection((host, port), timeout=3):
+                row(f"{host}:{port}", "Reflector reachable", "pass")
+        except OSError as exc:
+            row(f"{host}:{port}", "Reflector reachable", "fail",
+                f"No connection ({exc.__class__.__name__}). Check the host, the port and any firewall or router.")
+        state = _svx_login_state(lines)
+        if state == "ok":
+            row("Authentication OK", "Logged in to the reflector", "pass")
+        elif state.startswith("bad:"):
+            row(state[4:], "Logged in to the reflector", "fail",
+                "A wrong password, a blocked port or an unsigned certificate all show here.")
+        else:
+            row("(nothing in the log)", "Logged in to the reflector", "warn",
+                f"No login line in the last {len(lines)} log lines. Restart {_SVX_UNIT} and read the log.")
+        if any(_SVX_CERT_RE.search(ln) for ln in lines):
+            row("certificate", "Reflector has signed this node", "warn",
+                "The log mentions a certificate that is still pending: the reflector's sysop signs it.")
+
+    usrp = dict(cfg.get("UsrpLogic", {}))
+    ulc, uerr = _svx_read(_SVX_ETC / "svxlink.d" / "UsrpLogic.conf")
+    if not uerr:
+        for k, v in _svx_parse(ulc).get("UsrpLogic", {}).items():
+            usrp.setdefault(k, v)
+    rx, tx = usrp.get("USRP_RX_PORT", ""), usrp.get("USRP_TX_PORT", "")
+    secs, nodes_json, rerr = _svx_rpt_nodes()
+    bridge = ""
+    if not (rx.isdigit() and tx.isdigit()):
+        row("UsrpLogic", "SvxLink USRP ports set", "fail",
+            "USRP_RX_PORT and USRP_TX_PORT are not both set. Use 44helper, SvxLink tab, step 8.")
+    elif rerr:
+        row(f"RX {rx}, TX {tx}", "USRP ports mirror rpt.conf", "info", rerr)
+    else:
+        want = f"USRP/127.0.0.1:{rx}:{tx}"
+        for name, sec in secs.items():
+            if name.isdigit() and sec.get("rxchannel", "").replace(" ", "") == want:
+                bridge = name
+                break
+        if bridge:
+            row(f"RX {rx}, TX {tx} = node {bridge}", "USRP ports mirror rpt.conf", "pass")
+        else:
+            row(f"RX {rx}, TX {tx}", "USRP ports mirror rpt.conf", "fail",
+                f"No node in rpt.conf has rxchannel = {want}. Use 44helper, Config tab, Add SvxLink bridge node.")
+
+    if bridge:
+        asl = shutil.which("asterisk")
+        if asl:
+            local = _run(["asterisk", "-rx", "rpt localnodes"], timeout=6)
+            ok = bridge in re.findall(r"\b\d+\b", local)
+            row(f"node {bridge}", "Bridge node loaded in Asterisk", "pass" if ok else "fail",
+                None if ok else "Restart Asterisk: the node is in rpt.conf but not loaded.")
+        ext, eerr = read_path_file(Path("/etc/asterisk/extensions.conf"))
+        if eerr:
+            row("extensions.conf", "Dialplan line for the bridge", "info", eerr)
+        else:
+            good = re.search(rf"(?m)^\s*exten\s*=>\s*{bridge}\s*,\s*1\s*,\s*Rpt\(\s*{bridge}\s*\)", ext)
+            old = re.search(rf"(?m)^\s*exten\s*=>\s*{bridge}\s*,\s*1\s*,\s*rpt\s*,", ext, re.I)
+            if good:
+                row(f"exten => {bridge},1,Rpt({bridge})", "Dialplan line for the bridge", "pass")
+            elif old:
+                row(f"exten => {bridge},1,rpt,{bridge}", "Dialplan line for the bridge", "fail",
+                    f"Asterisk rejects this form. Change it to Rpt({bridge}) (44helper, Config tab, fix extensions).")
+            else:
+                row(f"exten => {bridge}", "Dialplan line for the bridge", "fail",
+                    f"Add: exten => {bridge},1,Rpt({bridge})")
+        try:
+            nodes = json.loads(nodes_json)
+        except ValueError:
+            nodes = {}
+        line = nodes.get(bridge, "")
+        m = re.match(r"^radio@([^:/\s,]+)(?::(\d+))?/", line)
+        bind = _svx_iax_bindport()
+        if not m:
+            row(f"[nodes] {bridge}", "Node line has a host and port", "fail",
+                f"Add: {bridge} = radio@127.0.0.1/{bridge},NONE")
+        elif (m.group(2) or "4569") != bind:
+            row(line, "Node line has a host and port", "fail",
+                f"Asterisk listens on {bind}. Use radio@{m.group(1)}:{bind}/{bridge},NONE")
+        else:
+            row(line, "Node line has a host and port", "pass")
+
+    if "SvxCtrlLogic" in cfg:
+        ok = _SVX_PTY.exists()
+        row(str(_SVX_PTY), "Control device for Node Controller", "pass" if ok else "warn",
+            None if ok else f"Not there yet: restart {_SVX_UNIT}.")
+
+    if rx.isdigit():
+        ports = {rx, tx}
+        wild = [a for a in _svx_listeners() if a.rsplit(":", 1)[-1] in ports and not a.startswith("127.")]
+        ufw = _run(["ufw", "status"], timeout=4) if shutil.which("ufw") else ""
+        allowed = [p for p in ports if re.search(rf"(?m)^{p}(/udp)?\s+ALLOW", ufw)]
+        if allowed:
+            row("UDP " + ", ".join(sorted(allowed)), "Bridge ports closed to the network", "fail",
+                "The firewall allows them. Remove the rule: only this node needs these ports.")
+        elif wild:
+            row("UDP " + ", ".join(sorted(a.rsplit(':', 1)[-1] for a in wild)), "Bridge ports closed to the network",
+                "warn", "SvxLink listens on all interfaces. Keep these UDP ports closed in the firewall.")
+        else:
+            row("UDP " + ", ".join(sorted(ports)), "Bridge ports closed to the network", "pass")
+
+    bad = [ln for ln in lines[-200:] if re.search(r"\*\*\*|WARNING|ERROR", ln)]
+    row(f"{len(bad)} in the last 200 lines", "Warnings in the SvxLink log", "info",
+        bad[-1].strip()[:200] if bad else None)
+    tg, link = _svx_talkgroup(lines)
+    if tg or link:
+        row(("TG " + tg) if tg else "no talkgroup", "Talkgroup now selected", "info",
+            {"on": "The reflector link is on.", "off": "The reflector link is off."}.get(link))
+    return {"installed": True, "state": unit_state, "rows": rows, "reflector": refl}
+
+
+def _build_svx_payload() -> dict:
+    res = _svx_checks()
+    count = {"pass": 0, "fail": 0, "warn": 0, "info": 0}
+    for r in res["rows"]:
+        count[r["status"]] = count.get(r["status"], 0) + 1
+    refl = res["reflector"]
+    return {
+        "ok": True,
+        "installed": res["installed"],
+        "state": res["state"],
+        "checks": res["rows"],
+        "count": count,
+        "files": _svx_files(),
+        "reflector": {
+            "host": refl.get("HOSTS", ""),
+            "port": refl.get("HOST_PORT", ""),
+            "callsign": refl.get("CALLSIGN", ""),
+            "tg": refl.get("DEFAULT_TG", ""),
+            "monitor": refl.get("MONITOR_TGS", ""),
+            "key_set": bool(refl.get("AUTH_KEY")),
+        },
+    }
+
+
+def _route_svx_get(h: Handler) -> None:
+    h.send_json(_build_svx_payload())
+
+
+def _svx_section(lines: list, name: str) -> "tuple[int, int] | None":
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*\[" + re.escape(name) + r"\]\s*$", line):
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def _svx_setkeys(lines: list, name: str, pairs: list, drop: tuple = ()) -> list:
+    sec = _svx_section(lines, name)
+    if sec is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines + ["", "[" + name + "]"] + [k + "=" + v for k, v in pairs] + [""]
+    s, e = sec
+    seen = set()
+    want = dict(pairs)
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*(#?)\s*([A-Z_]+)\s*=", lines[i])
+        if not m:
+            continue
+        k = m.group(2)
+        if k in want and k not in seen:
+            seen.add(k)
+            lines[i] = k + "=" + want[k]
+        elif k in drop and not m.group(1):
+            lines[i] = "#" + lines[i]
+    add = [k + "=" + v for k, v in pairs if k not in seen]
+    return lines[:s + 1] + add + lines[s + 1:]
+
+
+def _svx_addlist(lines: list, key: str, names: list) -> list:
+    sec = _svx_section(lines, "GLOBAL")
+    if sec is None:
+        raise ValueError(f"{_SVX_CONF} has no [GLOBAL] section.")
+    s, e = sec
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*" + key + r"\s*=\s*(.*)$", lines[i])
+        if m:
+            have = [x.strip() for x in m.group(1).split(",") if x.strip()]
+            lines[i] = key + "=" + ",".join(have + [n for n in names if n not in have])
+            return lines
+    return lines[:s + 1] + [key + "=" + ",".join(names)] + lines[s + 1:]
+
+
+def _svx_connect_text(old: str, host: str, port: str, key: str, tg: str, mon: str) -> "tuple[str, str]":
+    if "\r" in old:
+        raise ValueError(f"{_SVX_CONF} uses Windows line endings.")
+    calls = re.findall(r"(?m)^\s*(?:CALLSIGN|CALL)\s*=\s*\"?([A-Za-z0-9-]+)\"?", old)
+    call = next((c.upper() for c in calls if c.upper() not in ("MYCALL", "N0CALL", "OBJECT_NAME")), "")
+    if not call:
+        raise ValueError("No callsign is set in svxlink.conf. Use 44helper, SvxLink tab, step 8 first.")
+    lines = old.split("\n")
+    pairs = [("TYPE", "Reflector"), ("HOSTS", host), ("HOST_PORT", port), ("CALLSIGN", '"' + call + '"'),
+             ("AUTH_KEY", '"' + key + '"'), ("DEFAULT_TG", tg), ("TG_SELECT_TIMEOUT", "3600")]
+    if mon:
+        pairs.append(("MONITOR_TGS", mon))
+    lines = _svx_setkeys(lines, "ReflectorLogic", pairs, drop=() if mon else ("MONITOR_TGS",))
+    lines = _svx_setkeys(lines, "SvxCtrlLogic", [
+        ("TYPE", "Simplex"), ("RX", "SvxCtrlRx"), ("TX", "SvxCtrlTx"), ("CALLSIGN", call),
+        ("DTMF_CTRL_PTY", str(_SVX_PTY)), ("SHORT_IDENT_INTERVAL", "0"), ("LONG_IDENT_INTERVAL", "0")])
+    lines = _svx_setkeys(lines, "SvxCtrlRx", [("TYPE", "Dummy")])
+    lines = _svx_setkeys(lines, "SvxCtrlTx", [("TYPE", "Dummy")])
+    lines = _svx_setkeys(lines, "ReflectorLink", [
+        ("CONNECT_LOGICS", "SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic"), ("DEFAULT_ACTIVE", "1")],
+        drop=("TIMEOUT", "ACTIVATE_ON_ACTIVITY", "ACTIVATE_ON_TG"))
+    lines = _svx_addlist(lines, "LOGICS", ["ReflectorLogic", "SvxCtrlLogic"])
+    lines = _svx_addlist(lines, "LINKS", ["ReflectorLink"])
+    return "\n".join(lines), call
+
+
+def _svx_connect_args(data: dict, current_key: str) -> "tuple[tuple, str]":
+    host = str(data.get("host", "")).strip()
+    port = str(data.get("port", "")).strip()
+    key = str(data.get("key", ""))
+    tg = str(data.get("tg", "0")).strip() or "0"
+    mon = str(data.get("monitor", "")).replace(" ", "")
+    if not _SVX_HOST_RE.match(host):
+        return (), "The reflector host is not a valid host name or address."
+    if not (port.isdigit() and 1 <= int(port) <= 65535):
+        return (), "The reflector port must be a number from 1 to 65535."
+    if not key:
+        key = current_key
+    if not key:
+        return (), "Enter the password (AUTH_KEY) the reflector's sysop gave you."
+    if len(key) > 128 or any(c in key for c in '"\\\n\r\0#'):
+        return (), 'The password may not contain a quote, a backslash, a "#" or a line break, and is at most 128 characters.'
+    if not (tg.isdigit() and len(tg) <= 8):
+        return (), "The default talkgroup must be a number (0 for none)."
+    if not _SVX_MON_RE.match(mon):
+        return (), "Monitored talkgroups are numbers separated by commas, with + after a number for priority."
+    return (host, port, key, tg, mon), ""
+
+
+def _route_svx_post(h: Handler, data: dict) -> None:
+    if os.geteuid() != 0:
+        h.send_json({"ok": False, "message": "root required"}); return
+
+    action = str(data.get("action", "")).strip().lower()
+
+    if action == "restart":
+        try:
+            _run(["systemctl", "restart", _SVX_UNIT], timeout=15)
+            h.send_json({"ok": True, "message": f"{_SVX_UNIT} restarted"})
+        except Exception as exc:
+            h.send_json({"ok": False, "message": str(exc)})
+        return
+
+    if action in ("read", "save", "restore"):
+        path = _svx_path(str(data.get("label", "")))
+        if path is None:
+            h.send_json({"ok": False, "message": "That file is not one of the SvxLink files."}, 400)
+            return
+        label = str(data.get("label"))
+        if action == "read":
+            text, err = _svx_read(path)
+            if err:
+                h.send_json({"ok": False, "message": err})
+                return
+            bak = path.with_name(path.name + _SVX_BAK_EXT)
+            h.send_json({"ok": True, "label": label, "path": str(path), "content": text,
+                         "has_backup": bak.exists()})
+            return
+        if action == "restore":
+            ok, msg = _svx_restore(path)
+            h.send_json({"ok": ok, "message": msg})
+            return
+        content = data.get("content", "")
+        if isinstance(content, str) and not content.endswith("\n"):
+            content += "\n"
+        problems = _svx_validate(label, content)
+        if problems:
+            h.send_json({"ok": False, "message": "Not saved. " + " ".join(problems[:4]), "problems": problems}, 400)
+            return
+        try:
+            _svx_swap_write(path, content)
+        except OSError as exc:
+            h.send_json({"ok": False, "message": f"Write failed: {exc}"})
+            return
+        h.send_json({"ok": True, "message": f"Saved {label}. Restart {_SVX_UNIT} to apply."})
+        return
+
+    if action == "connect":
+        text, err = _svx_read(_SVX_CONF)
+        if err:
+            h.send_json({"ok": False, "message": err})
+            return
+        cur = _svx_parse(text).get("ReflectorLogic", {}).get("AUTH_KEY", "")
+        args, bad = _svx_connect_args(data, cur)
+        if bad:
+            h.send_json({"ok": False, "message": bad}, 400)
+            return
+        try:
+            new, call = _svx_connect_text(text, *args)
+        except ValueError as exc:
+            h.send_json({"ok": False, "message": str(exc)})
+            return
+        problems = _svx_validate("svxlink.conf", new)
+        if problems:
+            h.send_json({"ok": False, "message": "Nothing changed. " + " ".join(problems[:3])})
+            return
+        bak = _SVX_CONF.with_name(_SVX_CONF.name + ".44helper-bak")
+        try:
+            if not bak.exists():
+                shutil.copy2(_SVX_CONF, bak)
+            if new != text:
+                _svx_swap_write(_SVX_CONF, new)
+            _SVX_PTY.parent.mkdir(parents=True, exist_ok=True)
+            _run(["chown", "svxlink:svxlink", str(_SVX_PTY.parent)], timeout=5)
+            _run(["systemctl", "restart", _SVX_UNIT], timeout=20)
+        except OSError as exc:
+            h.send_json({"ok": False, "message": f"Write failed: {exc}"})
+            return
+        _log(f"SVX: reflector set to {args[0]}:{args[1]} as {call}")
+        h.send_json({"ok": True, "message": f"Reflector set to {args[0]}:{args[1]} as {call}; "
+                                            f"{_SVX_UNIT} restarted. The login shows in the checks in a few seconds."})
+        return
+
+    h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
+
 _SD_MANFID = {
     0x01: "Panasonic", 0x02: "Toshiba", 0x03: "SanDisk", 0x08: "Silicon Power",
     0x18: "Infineon",  0x1b: "Samsung", 0x1c: "Transcend", 0x1d: "ADATA",
@@ -33967,7 +34880,7 @@ _SELFCHECK_ROUTES = (
     ("Firewall", "/api/firewall"), ("Journal", "/api/journal/list"), ("ASL-DVS", "/api/status"),
     ("Reg", "/api/reg/iax"), ("Phone", "/api/phone"), ("Tune", "/api/simpleusb/tune"),
     ("Tune", "/api/rpt/nodesettings"), ("Hardware", "/api/hardware"), ("Net", "/api/net"),
-    ("DVSM", "/api/dvsm"), ("STFU", "/api/stfu"), ("M17", "/api/m17"), ("Zello", "/api/zello"),
+    ("DVSM", "/api/dvsm"), ("STFU", "/api/stfu"), ("M17", "/api/m17"), ("Zello", "/api/zello"), ("SVX", "/api/svx"),
     ("ASL-DVS", "/api/dstar-gw"),
     ("ASL-DVS", "/api/nodelisten"),
     ("SD Card", "/api/sdcard"), ("Security", "/api/security/checks"), ("Console", "/api/console/tcatalog"),
@@ -34100,7 +35013,7 @@ def unpin_service(unit: str) -> bool:
     return ok
 
 _ALL_TABS = ("overview", "services", "ports", "firewall", "journal",
-             "asldvs", "reg", "phone", "tune", "hardware", "net", "dvsm", "stfu", "m17", "zello", "sdcard",
+             "asldvs", "reg", "phone", "tune", "hardware", "net", "dvsm", "stfu", "m17", "zello", "svx", "sdcard",
              "security", "console", "edit")
 
 _LOCKED_TABS = ("overview", "edit")
@@ -34119,7 +35032,10 @@ def _sanitize_enabled_tabs(raw) -> list:
 def _get_enabled_tabs() -> list:
     raw = _cfg.get("ui", "enabled_tabs",
                    fallback=_DEFAULT_CONFIG["ui"]["enabled_tabs"])
-    return _sanitize_enabled_tabs(raw)
+    tabs = _sanitize_enabled_tabs(raw)
+    if _cfg.get("ui", "svx_tab", fallback="") != "1" and "svx" not in tabs:
+        tabs = [t for t in _ALL_TABS if t in set(tabs) | {"svx"}]
+    return tabs
 
 def validate_config(updates: dict) -> list:
     errors = []
@@ -35672,6 +36588,7 @@ _GET_ROUTES = {
     "/api/dstar-gw":           _route_dstar_gw_get,
     "/api/nodelisten":         _route_nodelisten_get,
     "/api/zello":              _route_zello_get,
+    "/api/svx":                _route_svx_get,
     "/api/sdcard":             _route_sdcard_get,
     "/api/sdcard/test":        _route_sdcard_test_get,
     "/api/security/checks":    _route_security_checks,
@@ -35701,6 +36618,7 @@ _POST_ROUTES = {
     "/api/dstar-gw":        _route_dstar_gw_post,
     "/api/nodelisten":      _route_nodelisten_post,
     "/api/zello":           _route_zello_post,
+    "/api/svx":             _route_svx_post,
     "/api/sdcard/test":     _route_sdcard_test_post,
     "/api/net/run":         _route_net_run_post,
     "/api/net/cancel":      _route_net_cancel_post,
