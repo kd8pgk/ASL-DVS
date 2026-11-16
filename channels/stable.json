@@ -128,13 +128,13 @@
    "version": "0.1.7"
   },
   "uninstall_all": {
-   "blob": "16cd391501762ad0b7b851dd02c1cff26ea7adf3",
-   "commit": "1183f65f7d9c74484bc9b112968d316471498997",
-   "file": "uninstall_all_v1_6_0_20261018.sh",
-   "landed": "2026-10-18T23:52:00Z",
-   "promoted": "2026-11-10T04:45:22Z",
+   "blob": "a121790fac7dc23325f8019160866b3bad1bbaae",
+   "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
+   "file": "uninstall_all_v1_7_0_20261020.sh",
+   "landed": "2026-10-20T15:25:49Z",
+   "promoted": "2026-11-16T13:59:56Z",
    "reason": "count",
-   "version": "1.6.0"
+   "version": "1.7.0"
   },
   "wifi_menu": {
    "blob": "2db1975c837b94b80fa52dd7016b52c3ea943ad3",
