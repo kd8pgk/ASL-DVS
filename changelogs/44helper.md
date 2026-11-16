@@ -1,6 +1,21 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_43_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_44_20261116.py`. Newest entries first.
+
+## 0.1.44 (2026-11-16)
+
+SvxLink install: a question, "How will SvxLink be used here?", on step 8 of the SvxLink USRP install. Step 8 applies the answer: a bridge under ASL3 has no radio, and a radio install gets its radio.
+
+- **Bridge under ASL3 (no radio)**, the default and what 0.1.43 did: any radio logic and the links that joined it come out of `LOGICS` and `LINKS`.
+- **With its own radio:** step 8 keeps the radio logic (SimplexLogic as installed), joins it to UsrpLogic in `[LinkToUsrp]`, and writes the radio settings into its receiver and transmitter sections. Three interfaces: a USB sound card with CM108 HID pins (`/dev/hidraw`), serial port pins, or Raspberry Pi GPIO. Leave the fields at **auto** to use the first USB sound card and the usual device and pins (VOL_DN and GPIO3 for CM108, CTS and DTRRTS for serial, lines 22 and 17 for GPIO).
+- **The radio fields appear only for the radio answer.** The step cards get drop-down lists (select fields) for this.
+- **Radio also joins the reflector** (off by default): adds the radio to the reflector link, so you can pick a talkgroup from the radio. The reflector step (step 11) reads the answer, so the radio is in the link whichever step runs first.
+- **It never takes a radio from Asterisk.** The step stops, changing nothing, when Asterisk's SimpleUSB or USBRadio node uses the same USB device (its `devstr` matches), or has an empty `devstr` while the node has only one USB sound card. With two cards and an empty `devstr` it warns instead.
+- **Switching later:** run step 8 again with the other answer. The radio sections are never deleted, only listed or unlisted in `LOGICS`, so going back to radio restores the earlier radio settings. The version before each change is kept as `svxlink.conf.44helper-prev`, next to the first-version `svxlink.conf.44helper-bak`.
+- **The answer is saved** in `/etc/44helper/44helper.conf` under `[svxlink]` (`use=` and `radio_reflector=`). A node with no saved answer is treated as a bridge.
+- The apt installs (bookworm, trixie) are plain SvxLink with its own radio and are not asked.
+- 44helper is a common tool; this affects both builds.
+- This is a release: step 8 writes more, the reflector step reads a new setting, and the step cards have a new kind of field.
 
 ## 0.1.43 (2026-11-16)
 

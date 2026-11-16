@@ -505,7 +505,8 @@ STEP_SAMPLES = {"callsign": "W1TEST", "dmrid": "3123456", "port": "8080", "rx_po
                 "username": "admin", "version": "20260610", "node": "1234", "hubpassword": "", "authmode": "OPEN",
                 "allowlist": "", "cruser": "pi", "crfolder": "~/claude-remote", "password": "Secret1",
                 "refl_host": "127.0.0.1", "refl_port": "5300", "refl_key": "TestKey123", "refl_tg": "0",
-                "refl_monitor": "91,240+"}
+                "refl_monitor": "91,240+", "svx_use": "bridge", "svx_rtype": "cm108", "svx_audio": "auto",
+                "svx_rdev": "auto", "svx_sqlpin": "auto", "svx_pttpin": "auto", "svx_rrefl": "no"}
 STEP_TABLES = ("_ASL3_SCRIPTS", "_DVSWITCH_SCRIPTS", "_SVXLINK_SCRIPTS", "_M17_SCRIPTS", "_AMP_SCRIPTS",
                "_CF_SCRIPTS", "_CR_SCRIPTS")
 
