@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.7.0  (2026-11-14)
+# install_all.sh  v7.8.0  (2026-11-16)
 
 set -euo pipefail
 
@@ -69,8 +69,9 @@ if [[ -n "${TOOLS_LIST}" ]]; then
             nodetalker) INSTALL_NODETALKER=1 ;;
             noderecorder) INSTALL_NODERECORDER=1 ;;
             pibrary) INSTALL_PIBRARY=1 ;;
+            nodemon) INSTALL_NODEMON=1 ;;
             termon) INSTALL_TERMON=1 ;;
-            *) echo "--tools: unknown item '${_t}' (use instmon, dashboard, sysmon, wifimon, 44helper, nodetalker, noderecorder, pibrary, termon, manuals)" >&2; exit 1 ;;
+            *) echo "--tools: unknown item '${_t}' (use instmon, dashboard, sysmon, wifimon, 44helper, nodetalker, noderecorder, pibrary, nodemon, termon, manuals)" >&2; exit 1 ;;
         esac
     done
     [[ -z "${ACTION}" ]] && ACTION="components"
@@ -899,17 +900,18 @@ hold_end() {
     return 0
 }
 
-OPT_KEYS=(noderecorder pibrary termon)
-declare -A OPT_LABEL=([noderecorder]="Node Recorder" [pibrary]="Pibrary" [termon]="Terminal Monitor")
-declare -A OPT_BIN=([noderecorder]="/usr/local/bin/noderecorder.py" [pibrary]="/usr/local/bin/pibrary.py" [termon]="/usr/local/bin/termon.py")
-declare -A OPT_SERVICE=([noderecorder]="noderecorder" [pibrary]="pibrary" [termon]="termon")
-declare -A OPT_PORT=([noderecorder]=8995 [pibrary]=9000 [termon]=7878)
-declare -A OPT_SCHEME=([noderecorder]="https" [pibrary]="http" [termon]="https")
-declare -A OPT_PATTERN=([noderecorder]="noderecorder*.py" [pibrary]="pibrary*.py" [termon]="termon*.py")
-declare -A OPT_LIB=([noderecorder]="${INSTMON_LIBRARY_DIR}/noderecorder" [pibrary]="${INSTMON_LIBRARY_DIR}/pibrary" [termon]="${INSTMON_LIBRARY_DIR}/termon")
+OPT_KEYS=(noderecorder pibrary nodemon termon)
+declare -A OPT_LABEL=([noderecorder]="Node Recorder" [pibrary]="Pibrary" [nodemon]="Node Monitor" [termon]="Terminal Monitor")
+declare -A OPT_BIN=([noderecorder]="/usr/local/bin/noderecorder.py" [pibrary]="/usr/local/bin/pibrary.py" [nodemon]="/usr/local/bin/nodemon.py" [termon]="/usr/local/bin/termon.py")
+declare -A OPT_SERVICE=([noderecorder]="noderecorder" [pibrary]="pibrary" [nodemon]="nodemon" [termon]="termon")
+declare -A OPT_PORT=([noderecorder]=8995 [pibrary]=9000 [nodemon]=7777 [termon]=7878)
+declare -A OPT_SCHEME=([noderecorder]="https" [pibrary]="http" [nodemon]="http" [termon]="https")
+declare -A OPT_PATTERN=([noderecorder]="noderecorder*.py" [pibrary]="pibrary*.py" [nodemon]="nodemon*.py" [termon]="termon*.py")
+declare -A OPT_LIB=([noderecorder]="${INSTMON_LIBRARY_DIR}/noderecorder" [pibrary]="${INSTMON_LIBRARY_DIR}/pibrary" [nodemon]="${INSTMON_LIBRARY_DIR}/nodemon" [termon]="${INSTMON_LIBRARY_DIR}/termon")
 declare -A OPT_ASK=(
     [noderecorder]="Node Recorder is optional: it records this node's audio on a schedule (port 8995)."
     [pibrary]="Pibrary is optional: a media library for a USB or SD drive (port 9000)."
+    [nodemon]="Node Monitor is optional: the node's registration and links on one page, with link commands (port 7777). Anyone on your LAN who knows the root password can link and unlink the node."
     [termon]="Terminal Monitor is optional: top, htop or btop and a shell in the browser (port 7878). It gives a root shell to anyone on your LAN who knows the password."
 )
 declare -A OPT_EXISTS=() OPT_CHOSEN=()
@@ -986,7 +988,7 @@ discover_optional() {
     return 0
 }
 
-REG_KEYS=(dashboard sysmon wifimon 44helper pibrary nodetalker noderecorder termon instmon)
+REG_KEYS=(dashboard sysmon wifimon 44helper pibrary nodetalker noderecorder nodemon termon instmon)
 LEGACY=false
 ONLY_INSTALLED=false
 STEP_C=false
@@ -1017,7 +1019,7 @@ reg_label() {
         44helper) echo "44helper" ;;
         nodetalker) echo "Node Talker" ;;
         instmon) echo "instmon" ;;
-        noderecorder|pibrary|termon) echo "${OPT_LABEL[$1]}" ;;
+        noderecorder|pibrary|nodemon|termon) echo "${OPT_LABEL[$1]}" ;;
     esac
 }
 
@@ -1036,7 +1038,7 @@ reg_svc() {
             fi
             ;;
         instmon) echo "${INSTMON_SERVICE}" ;;
-        noderecorder|pibrary|termon) echo "${OPT_SERVICE[$1]}" ;;
+        noderecorder|pibrary|nodemon|termon) echo "${OPT_SERVICE[$1]}" ;;
     esac
 }
 
@@ -1048,7 +1050,7 @@ reg_bin() {
         44helper) echo "${HELPER_BIN}" ;;
         nodetalker) echo "${NODELISTEN_BIN}" ;;
         instmon) echo "${INSTMON_BIN}" ;;
-        noderecorder|pibrary|termon) echo "${OPT_BIN[$1]}" ;;
+        noderecorder|pibrary|nodemon|termon) echo "${OPT_BIN[$1]}" ;;
     esac
 }
 
@@ -1072,6 +1074,10 @@ reg_port() {
             p="$(conf_port "${ASL_DVS_ETC}/termon.conf")"
             echo "${p:-${OPT_PORT[termon]}}"
             ;;
+        nodemon)
+            p="$(conf_port "${ASL_DVS_ETC}/nodemon.conf")"
+            echo "${p:-${OPT_PORT[nodemon]}}"
+            ;;
         noderecorder|pibrary) echo "${OPT_PORT[$1]}" ;;
     esac
 }
@@ -1082,6 +1088,7 @@ reg_conf() {
         sysmon) echo "${SYSMON_CONF_DIR}/sysmon.conf" ;;
         nodetalker) echo "${NODELISTEN_CONF}" ;;
         termon) echo "${ASL_DVS_ETC}/termon.conf" ;;
+        nodemon) echo "${ASL_DVS_ETC}/nodemon.conf" ;;
         *) echo "" ;;
     esac
 }
@@ -1099,7 +1106,7 @@ reg_chosen() {
         44helper) echo "${HELPER_CHOSEN:-}" ;;
         nodetalker) echo "${NODELISTEN_CHOSEN:-}" ;;
         instmon) echo "${INSTMON_CHOSEN:-}" ;;
-        noderecorder|pibrary|termon) echo "${OPT_CHOSEN[$1]:-}" ;;
+        noderecorder|pibrary|nodemon|termon) echo "${OPT_CHOSEN[$1]:-}" ;;
     esac
 }
 
@@ -1111,7 +1118,7 @@ reg_unchoose() {
         44helper) HELPER_CHOSEN="" ;;
         nodetalker) NODELISTEN_CHOSEN="" ;;
         instmon) INSTMON_CHOSEN="" ;;
-        noderecorder|pibrary|termon) OPT_CHOSEN["$1"]="" ;;
+        noderecorder|pibrary|nodemon|termon) OPT_CHOSEN["$1"]="" ;;
     esac
 }
 
@@ -2037,7 +2044,7 @@ if [[ "${FRESH}" != "true" ]]; then
 elif [[ "${LEGACY}" == "true" ]]; then
     info "No existing installation found — proceeding with fresh install"
     MODE="install"
-    _suite_list="Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder and Pibrary"
+    _suite_list="Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary and Node Monitor"
     if [[ "${CORE}" == "true" ]]; then
         SUITE=false
         info "--core: the Dashboard, SysMon, wifimon and 44helper; the optional tools only when asked for"
@@ -2258,11 +2265,11 @@ fi
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]] && ! opt_any_chosen; then
     if [[ "${DOWNLOAD}" != "true" ]]; then
-        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary or Terminal Monitor files found (offline: nothing downloaded)."
+        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Node Monitor or Terminal Monitor files found (offline: nothing downloaded)."
     elif [[ "${FETCH_STATE}" == "failed" ]]; then
         die "Nothing to install — no files found here, and the download from GitHub failed."
     fi
-    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary or Terminal Monitor files found."
+    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Node Monitor or Terminal Monitor files found."
 fi
 
 hdr "Up-to-date check"
@@ -2502,6 +2509,10 @@ for _k in "${OPT_KEYS[@]}"; do
     if [[ "${_k}" == "termon" ]]; then
         _tm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/termon.conf" 2>/dev/null | head -1 || true)"
         OPT_PORT["termon"]="${_tm_port:-${OPT_PORT[termon]}}"
+    fi
+    if [[ "${_k}" == "nodemon" ]]; then
+        _nm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/nodemon.conf" 2>/dev/null | head -1 || true)"
+        OPT_PORT["nodemon"]="${_nm_port:-${OPT_PORT[nodemon]}}"
     fi
 done
 
