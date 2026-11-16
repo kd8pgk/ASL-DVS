@@ -537,7 +537,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
 | `install_all_v7_7_0_20261114.sh` | common |
 | `uninstall_all_v1_10_0_20261110.sh` | common |
-| `confgetter_v1_0_2_20261027.sh` | common |
+| `confgetter_v1_0_3_20261116.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
