@@ -17,7 +17,7 @@ os.environ.setdefault("NODERECORDER_CONFIG_DIR", os.path.join(WORK, "nr"))
 LABELS = {
     "nodetalker": "Node Mon",
 
-    "noderecorder": "Nodemon",
+    "noderecorder": "Node Mon",
 
     "sysmon": "Nodemon",
 
