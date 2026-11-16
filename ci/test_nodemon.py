@@ -401,7 +401,7 @@ class LivePoll(unittest.TestCase):
         threading.Thread(target=self.ami.serve_forever, daemon=True).start()
 
 
-class Commands(unittest.TestCase):
+class AmiCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = (nm.RPT_CONF, nm.AMI_CONF, nm.AMI_PORT)
@@ -421,6 +421,8 @@ class Commands(unittest.TestCase):
         nm.RPT_CONF, nm.AMI_CONF, nm.AMI_PORT = self.saved
         self.tmp.cleanup()
 
+
+class Commands(AmiCase):
     def line(self, **body):
         return nm.command_line(body)[0]
 
@@ -487,6 +489,78 @@ class Commands(unittest.TestCase):
         r = nm.run_command({"node": "654321", "op": 6})
         self.assertFalse(r["ok"])
         self.assertIn("could not be reached", r["error"])
+
+
+class SystemBar(AmiCase):
+    def test_reboot_and_shutdown_start_the_right_command_after_a_pause(self):
+        started = []
+        done = threading.Event()
+
+        class FakePopen:
+            def __init__(self, cmd, **kw):
+                started.append(cmd)
+                done.set()
+
+        with unittest.mock.patch.object(nm.subprocess, "Popen", FakePopen), \
+                unittest.mock.patch.object(nm.time, "sleep", lambda s: None), \
+                unittest.mock.patch.object(nm.os, "geteuid", lambda: 0):
+            r = nm.system_power("reboot", "192.0.2.5")
+            self.assertTrue(done.wait(3))
+            self.assertEqual((r["ok"], r["message"]), (True, "Rebooting..."))
+            done.clear()
+            r = nm.system_power("shutdown", "192.0.2.5")
+            self.assertTrue(done.wait(3))
+            self.assertEqual(r["message"], "Shutting down...")
+        self.assertEqual(started, [["reboot"], ["shutdown", "-h", "now"]])
+        with nm._log_lock:
+            lines = [x["msg"] for x in nm._log]
+        self.assertTrue(any("System reboot requested from 192.0.2.5" in x for x in lines))
+
+    def test_power_needs_root_and_a_known_action(self):
+        with unittest.mock.patch.object(nm.os, "geteuid", lambda: 1000), \
+                unittest.mock.patch.object(nm.subprocess, "Popen") as popen:
+            self.assertFalse(nm.system_power("reboot")["ok"])
+            self.assertIn("root", nm.system_power("reboot")["error"])
+            self.assertFalse(nm.system_power("halt")["ok"])
+            popen.assert_not_called()
+
+    def snap(self, links):
+        return {"nodes": {"654321": {"links": links}}, "ok": True, "error": "", "at": time.time(), "banner": "",
+                "loaded": [], "regs": {}}
+
+    def test_disconnect_all_drops_every_link_and_keeps_node_talkers_transmit_node(self):
+        links = [{"node": "1900"}, {"node": "1921"}, {"node": "45192"}]
+        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap(links)), \
+                unittest.mock.patch.object(nm.time, "sleep", lambda s: None):
+            r = nm.disconnect_all("192.0.2.5")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.ami.cmds, ["rpt cmd 654321 ilink 6", "rpt cmd 654321 ilink 3 1921"])
+        self.assertIn("Disconnected every link on node 654321", r["message"])
+        self.assertIn("Node Talker's transmit node 1921 was linked again", r["message"])
+
+    def test_disconnect_all_with_no_transmit_node_only_drops(self):
+        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap([{"node": "1900"}])):
+            r = nm.disconnect_all()
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.ami.cmds, ["rpt cmd 654321 ilink 6"])
+        self.assertNotIn("Node Talker", r["message"])
+
+    def test_disconnect_all_reports_a_failure_and_does_not_relink(self):
+        nm.AMI_PORT = 1
+        with unittest.mock.patch.object(nm.MON, "state", lambda: self.snap([{"node": "1921"}])):
+            r = nm.disconnect_all()
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.ami.cmds, [])
+
+    def test_the_page_has_the_system_bar_and_its_routes_are_guarded(self):
+        self.assertIn('id="sys-disc"', nm._HTML_TEMPLATE)
+        self.assertIn('id="sys-reboot"', nm._HTML_TEMPLATE)
+        self.assertIn('id="sys-shutdown"', nm._HTML_TEMPLATE)
+        with open(PATH, encoding="utf-8") as fh:
+            src = fh.read()
+        post = src.split("    def do_POST(self):", 1)[1].split("class Server", 1)[0]
+        self.assertLess(post.index("if not self._authed():"), post.index('"/api/system/reboot"'))
+        self.assertLess(post.index("if not self._authed():"), post.index('"/api/disconnect-all"'))
 
 
 if __name__ == "__main__":

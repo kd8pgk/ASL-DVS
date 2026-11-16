@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1388,6 +1388,54 @@ def run_command(body, who="?"):
     return {"ok": True, "message": f"Sent: {cmd['label']}. The link table shows what happened.", "line": line}
 
 
+POWER_CMDS = {"reboot": (["reboot"], "Rebooting..."), "shutdown": (["shutdown", "-h", "now"], "Shutting down...")}
+
+
+def system_power(what, who="?"):
+    if what not in POWER_CMDS:
+        return {"ok": False, "error": "Unknown action."}
+    cmd, message = POWER_CMDS[what]
+    if os.geteuid() != 0:
+        return {"ok": False, "error": f"root required for {what}"}
+    log_event(f"System {what} requested from {who}", "warn")
+
+    def go():
+        time.sleep(1)
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            log_event(f"System {what} failed: {exc}", "err")
+
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True, "message": message}
+
+
+def disconnect_all(who="?"):
+    plan = node_plan()
+    if not plan["ok"]:
+        return {"ok": False, "error": plan["error"]}
+    main = plan["main"]
+    if not main:
+        return {"ok": False, "error": "No node was found in rpt.conf."}
+    keep = []
+    st = MON.state()["nodes"].get(main) or {}
+    for link in st.get("links", []):
+        kind = plan["kind"].get(link["node"])
+        if kind and kind[0] == "nodetalker" and link["node"] not in keep:
+            keep.append(link["node"])
+    r = run_command({"node": main, "op": 6}, who)
+    if not r["ok"]:
+        return r
+    note = ""
+    if keep:
+        time.sleep(1.0)
+        again = [n for n in keep if run_command({"node": main, "op": 3, "target": n}, who)["ok"]]
+        if again:
+            note = " Node Talker's transmit node " + ", ".join(again) + " was linked again."
+    log_event(f"Disconnect All on node {main} from {who}", "warn")
+    return {"ok": True, "message": f"Disconnected every link on node {main}." + note}
+
+
 _CSS = r""":root{--bg:#0d1117;--surface:#161e2e;--surface2:#1e2a3f;--border:#2e4060;--border2:#3a5278;--amber:#ffd040;--green:#00ffb0;--red:#ff3d5a;--blue:#22d4ff;--teal:#00ffe5;--lime:#d4ff00;--orange:#ffaa22;--text:#ffffff;--text-bright:#f0f8ff;--sans:"Readex Pro",Arial,Helvetica,sans-serif;--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:var(--fs-base);min-height:100vh;padding-bottom:3rem}
@@ -1431,6 +1479,19 @@ th{color:var(--amber);font-size:var(--fs-sm);letter-spacing:.06em;text-transform
 td.mono{font-family:var(--mono)}
 .empty{color:#aab8cc;padding:.4rem 0}
 .keyed{color:var(--lime)}
+.sec-lbl{font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:#fff;margin:1rem 0 .3rem}
+.btn{padding:.48rem 1rem;border-radius:4px;border:1px solid;background:transparent;cursor:pointer;transition:all .14s;white-space:nowrap;font-size:var(--fs-base)}
+.btn:hover{filter:brightness(1.6);box-shadow:0 0 12px currentColor}
+.btn:active{transform:scale(.95)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-red{color:var(--red);border-color:#6b0e20}
+.btn-muted{color:#fff;border-color:var(--border2)}
+.act-bar{padding:.65rem .9rem;display:flex;flex-wrap:wrap;gap:.4rem;border-top:1px solid var(--border);background:#131c2d;position:sticky;bottom:0;border-radius:6px}
+.act-bar .btn{flex:1;min-width:8rem;text-align:center}
+.sysmsg{font-size:var(--fs-sm);min-height:1.2em;margin-top:.3rem}
+.sysmsg.ok{color:var(--green)}
+.sysmsg.err{color:var(--red)}
+@media (max-width:560px){.act-bar{flex-direction:column}.act-bar .btn{min-width:0}}
 .cmdbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cmdbar select,.cmdbar input{background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:5px;padding:.3rem .5rem;font-size:var(--fs-base);max-width:100%}
 .cmdbar input{width:9rem}
@@ -1485,6 +1546,15 @@ __CSS__</style>
 <section id="pg-conn" class="hidden"></section>
 <section id="pg-priv" class="hidden"></section>
 <section id="pg-log" class="hidden"><div class="card"><h2>Node Monitor log</h2><div class="logbox" id="logbox"></div></div></section>
+<div id="sysbar">
+<div class="sec-lbl">System</div>
+<div class="act-bar">
+<button class="btn btn-muted" id="sys-disc" type="button">Disconnect All</button>
+<button class="btn btn-red" id="sys-reboot" type="button">Reboot</button>
+<button class="btn btn-muted" id="sys-shutdown" type="button">Shutdown</button>
+</div>
+<div class="sysmsg" id="sysmsg" role="status"></div>
+</div>
 </main>
 <script nonce="__NONCE__">__JS__</script>
 </body>
@@ -1747,6 +1817,10 @@ async function poll() {
   if (document.visibilityState !== 'hidden') {
     const d = await api('/api/status');
     if (d && d.ok !== false && d.ami) renderAll(d);
+    else if (d && d.error === 'Server unreachable.') {
+      $('status-banner').textContent = '';
+      $('status-banner').appendChild(el('div', 'banner err', 'Node Monitor is not answering. Retrying every few seconds.'));
+    }
     if (current === 'log') pollLog();
   }
   const ms = Math.max(1000, ((status && status.poll_sec) || 3) * 1000);
@@ -1767,7 +1841,25 @@ async function pollLog() {
 document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 $('login-form').addEventListener('submit', login);
 $('logout').addEventListener('click', logout);
+$('sys-disc').addEventListener('click', () => sysAction('disc'));
+$('sys-reboot').addEventListener('click', () => sysAction('reboot'));
+$('sys-shutdown').addEventListener('click', () => sysAction('shutdown'));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'hidden') poll(); });
+async function sysAction(kind) {
+  const node = status && status.main ? status.main.node : '';
+  const ask = {disc: 'Disconnect every link on node ' + node + '?', reboot: 'Reboot the system?', shutdown: 'Shut down the system?'};
+  const path = {disc: '/api/disconnect-all', reboot: '/api/system/reboot', shutdown: '/api/system/shutdown'};
+  if (!window.confirm(ask[kind])) return;
+  const msg = $('sysmsg');
+  ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = true; });
+  msg.className = 'sysmsg';
+  msg.textContent = 'Sending...';
+  const d = await api(path[kind], {method: 'POST', body: {}});
+  ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = false; });
+  msg.className = 'sysmsg ' + (d.ok ? 'ok' : 'err');
+  msg.textContent = d.ok ? d.message : (d.error || 'It failed.');
+  if (kind === 'disc') { poll(); setTimeout(poll, 1500); }
+}
 async function loadCommands() {
   const d = await api('/api/commands');
   COMMANDS = d.commands || [];
@@ -1997,6 +2089,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/command":
             self._json(200, run_command(body, ip))
+            return
+        if path == "/api/disconnect-all":
+            self._json(200, disconnect_all(ip))
+            return
+        if path in ("/api/system/reboot", "/api/system/shutdown"):
+            self._json(200, system_power(path.rsplit("/", 1)[1], ip))
             return
         self._json(404, {"ok": False, "error": "Not found."})
 

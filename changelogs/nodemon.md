@@ -1,6 +1,15 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_2_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_3_0_20261116.py`. Newest entries first.
+
+## 0.3.0 (2026-11-16)
+
+A **System** bar at the bottom of the page, like Node Controller's: Disconnect All, Reboot and Shutdown. This is a release: there are three new actions.
+
+- **Disconnect All** drops every link on the main node (ilink 6) and asks first. If Node Talker's transmit node (the one on USRP port 34018, 1921 by default) was linked, it is linked again a second later, as Node Controller does, so Node Talker keeps working. It does not restart any service, unlike Node Controller's Disconnect All; the Command row's "Disconnect all links" does the same without the relinking.
+- **Reboot** and **Shutdown** ask first, then run `reboot` or `shutdown -h now` a second after the reply is sent, as Node Recorder does. They need root, and are logged with the address that asked.
+- **When the node goes away** the page now says "Node Monitor is not answering" and keeps trying, instead of staying frozen.
+- The three buttons need the login and the same guards as every other action.
 
 ## 0.2.0 (2026-11-16)
 
