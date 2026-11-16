@@ -1184,12 +1184,12 @@ class SvxStep8Defaults(unittest.TestCase):
     def test_default_command_uses_the_same_ports(self):
         st = self.step()
         self.assertIn("TX='32000' RX='34000'", st["cmd"])
-        cmd, why = h44._step_command(st, {"callsign": "AA1AA", "port": "32000", "rx_port": "34000"})
+        cmd, why = h44._step_command(st, {"callsign": "AA1AA", "port": "32000", "rx_port": "34000", "svx_use": "bridge", "svx_rtype": "cm108", "svx_audio": "auto", "svx_rdev": "auto", "svx_sqlpin": "auto", "svx_pttpin": "auto", "svx_rrefl": "no"})
         self.assertEqual(why, "")
         self.assertIn("CALL='AA1AA' TX='32000' RX='34000'", cmd)
 
     def test_other_ports_can_still_be_entered(self):
-        cmd, why = h44._step_command(self.step(), {"callsign": "AA1AA", "port": "41234", "rx_port": "41233"})
+        cmd, why = h44._step_command(self.step(), {"callsign": "AA1AA", "port": "41234", "rx_port": "41233", "svx_use": "bridge", "svx_rtype": "cm108", "svx_audio": "auto", "svx_rdev": "auto", "svx_sqlpin": "auto", "svx_pttpin": "auto", "svx_rrefl": "no"})
         self.assertEqual(why, "")
         self.assertIn("TX='41234' RX='41233'", cmd)
 

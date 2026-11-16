@@ -109,6 +109,11 @@ class ScriptBase(unittest.TestCase):
         self.rbin = os.path.join(self.tmp, "svxreflector")
         self.log = os.path.join(self.tmp, "svxlink.log")
         self.unit = os.path.join(self.tmp, "svxreflector.service")
+        self.h44conf = os.path.join(self.tmp, "44helper.conf")
+        self.cards = os.path.join(self.tmp, "cards")
+        self.simpleusb = os.path.join(self.tmp, "simpleusb.conf")
+        self.usbradio = os.path.join(self.tmp, "usbradio.conf")
+        self.rptconf = os.path.join(self.tmp, "rpt.conf")
         for p, t in ((self.conf, SVXLINK_CONF), (self.rconf, REFLECTOR_CONF), (self.rbin, ""), (self.log, "")):
             with open(p, "w") as fh:
                 fh.write(t)
@@ -122,7 +127,14 @@ class ScriptBase(unittest.TestCase):
                .replace('"/var/lib/svxlink/dtmf_ctrl"', repr(os.path.join(self.tmp, "dtmf_ctrl")))
                .replace('"/var/lib/svxreflector/pki/"', repr(os.path.join(self.tmp, "pki") + "/"))
                .replace('"/etc/systemd/system/svxreflector.service"', repr(self.unit))
-               .replace('"/var/lib/svxlink"', repr(self.tmp)))
+               .replace('"/var/lib/svxlink"', repr(self.tmp))
+               .replace('"/etc/44helper/44helper.conf"', repr(self.h44conf))
+               .replace('"/proc/asound/cards"', repr(self.cards))
+               .replace('"/dev/hidraw*"', repr(os.path.join(self.tmp, "hidraw*")))
+               .replace('"/sys/class/hidraw/"', repr(os.path.join(self.tmp, "sys") + "/"))
+               .replace('"/etc/asterisk/simpleusb.conf"', repr(self.simpleusb))
+               .replace('"/etc/asterisk/usbradio.conf"', repr(self.usbradio))
+               .replace('"/etc/asterisk/rpt.conf"', repr(self.rptconf)))
         fake = types.ModuleType("subprocess")
         fake.run = self.proc.run
         out = io.StringIO()
@@ -317,15 +329,218 @@ class WireStep(ScriptBase):
         self.assertEqual(self.read(self.conf), before)
         self.assertFalse(os.path.exists(self.conf + ".44helper-bak"))
 
-    def test_the_step_and_the_guide_text_say_no_radio(self):
+    def test_the_step_asks_bridge_or_radio_and_the_guide_text_covers_both(self):
         step = {s["id"]: s for s in h44._SVXLINK_SCRIPTS["install"]["usrp"]}["usrp_logic_conf"]
-        self.assertIn("no radio", step["note"])
-        self.assertNotIn("LinkToUsrp to LINKS", step["note"])
+        self.assertIn("bridge under ASL3", step["note"])
+        self.assertIn("with its own radio", step["note"].lower())
         self.assertIn("LOGICS=UsrpLogic", h44._SVX_USRP_LOGIC_SNIPPET)
-        self.assertNotIn("LinkToUsrp", h44._SVX_USRP_LOGIC_SNIPPET)
-        cmd, why = h44._step_command(step, {"callsign": "KD8PGK", "port": "32000", "rx_port": "34000"})
+        self.assertIn("With a radio of its own", h44._SVX_USRP_LOGIC_SNIPPET)
+        fields = {f["id"]: f for f in step["fields"]}
+        self.assertEqual(fields["svx_use"]["default"], "bridge")
+        self.assertEqual([o[0] for o in fields["svx_use"]["options"]], ["bridge", "radio"])
+        for fid in ("svx_rtype", "svx_audio", "svx_rdev", "svx_sqlpin", "svx_pttpin", "svx_rrefl"):
+            self.assertEqual(fields[fid]["show_if"], "svx_use=radio", fid)
+        cmd, why = h44._step_command(step, {"callsign": "KD8PGK", "port": "32000", "rx_port": "34000",
+                                            "svx_use": "bridge", "svx_rtype": "cm108", "svx_audio": "auto",
+                                            "svx_rdev": "auto", "svx_sqlpin": "auto", "svx_pttpin": "auto",
+                                            "svx_rrefl": "no"})
         self.assertEqual(why, "")
-        self.assertIn("CALL='KD8PGK'", cmd)
+        self.assertIn("CALL='KD8PGK' TX='32000' RX='34000' USE='bridge' RTYPE='cm108'", cmd)
+
+    def test_the_new_fields_are_checked(self):
+        step = {s["id"]: s for s in h44._SVXLINK_SCRIPTS["install"]["usrp"]}["usrp_logic_conf"]
+        good = {"callsign": "KD8PGK", "port": "32000", "rx_port": "34000", "svx_use": "radio", "svx_rtype": "serial",
+                "svx_audio": "alsa:plughw:CARD=Device", "svx_rdev": "/dev/ttyUSB0", "svx_sqlpin": "CTS",
+                "svx_pttpin": "DTRRTS", "svx_rrefl": "yes"}
+        self.assertEqual(h44._step_command(step, good)[1], "")
+        for k, bad in (("svx_use", "both"), ("svx_rtype", "usb"), ("svx_audio", "plughw:0"), ("svx_audio", "alsa:x;rm"),
+                       ("svx_rdev", "ttyUSB0"), ("svx_rdev", "/dev/../etc/x y"), ("svx_sqlpin", "a b"),
+                       ("svx_pttpin", "'x'"), ("svx_rrefl", "maybe")):
+            self.assertNotEqual(h44._step_command(step, dict(good, **{k: bad}))[1], "", (k, bad))
+
+    def test_the_page_draws_selects_and_hides_radio_fields_until_radio_is_chosen(self):
+        with open(h44.__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("function svxFieldVis(sel)", src)
+        self.assertIn("'<select class=\"asl3-cmd-input\" id=\"svx-field-'", src)
+        self.assertIn("hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';", src)
+        self.assertIn("style=\"display:' + hide + ';font-family", src)
+
+
+RADIO_CONF = SVXLINK_CONF + """
+[Rx1]
+TYPE=Local
+AUDIO_DEV=alsa:plughw:CARD=Old
+SQL_DET=VOX
+SERIAL_PORT=/dev/ttyS0
+
+[Tx1]
+TYPE=Local
+AUDIO_DEV=alsa:plughw:CARD=Old
+PTT_TYPE=Dummy
+"""
+CARDS_ONE = " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n 1 [Device          ]: USB-Audio - USB Audio Device\n"
+CARDS_TWO = CARDS_ONE + " 2 [Spare           ]: USB-Audio - USB PnP Sound Device\n"
+RADIO_ENV = dict(WIRE_ENV, USE="radio", RTYPE="cm108", AUDIO="auto", RDEV="auto", SQLPIN="auto", PTTPIN="auto",
+                 RREFL="no")
+
+
+class WireRadio(ScriptBase):
+    def setUp(self):
+        super().setUp()
+        with open(self.conf, "w") as fh:
+            fh.write(RADIO_CONF)
+        with open(self.cards, "w") as fh:
+            fh.write(CARDS_ONE)
+        self.hid = os.path.join(self.tmp, "hidraw0")
+        with open(self.hid, "w") as fh:
+            fh.write("")
+        usb = os.path.join(self.tmp, "usb", "1-1.2", "1-1.2:1.3")
+        os.makedirs(usb)
+        os.makedirs(os.path.join(self.tmp, "sys", "hidraw0"))
+        os.symlink(usb, os.path.join(self.tmp, "sys", "hidraw0", "device"))
+
+    def section(self, text, name):
+        return text.split("[" + name + "]")[1].split("\n[")[0]
+
+    def test_cm108_radio_is_applied_with_auto_values(self):
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 0, out)
+        t = self.read(self.conf)
+        self.assertIn("LOGICS=SimplexLogic,UsrpLogic\n", t)
+        self.assertIn("LINKS=LinkToUsrp\n", t)
+        link = self.section(t, "LinkToUsrp") + "\n"
+        for line in ("CONNECT_LOGICS=SimplexLogic:9:USRP,UsrpLogic", "DEFAULT_ACTIVE=1", "TIMEOUT=0"):
+            self.assertIn(line + "\n", link)
+        rx = self.section(t, "Rx1")
+        for line in ("AUDIO_DEV=alsa:plughw:CARD=Device", "SQL_DET=HIDRAW", "HID_DEVICE=" + self.hid, "HID_SQL_PIN=VOL_DN"):
+            self.assertIn(line + "\n", rx + "\n")
+        tx = self.section(t, "Tx1")
+        for line in ("AUDIO_DEV=alsa:plughw:CARD=Device", "PTT_TYPE=Hidraw", "HID_DEVICE=" + self.hid, "HID_PTT_PIN=GPIO3"):
+            self.assertIn(line + "\n", tx + "\n")
+        self.assertIn("SvxLink is set up with its own radio.", out)
+        self.assertIn("[svxlink]", self.read(self.h44conf))
+        self.assertIn("use = radio", self.read(self.h44conf))
+
+    def test_serial_and_gpio_radios_write_their_own_keys(self):
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, dict(RADIO_ENV, RTYPE="serial", RDEV="/dev/ttyUSB1",
+                                                                 SQLPIN="DSR", PTTPIN="RTS"))
+        self.assertEqual(code, 0, out)
+        t = self.read(self.conf)
+        self.assertIn("SQL_DET=SERIAL\n", self.section(t, "Rx1") + "\n")
+        self.assertIn("SERIAL_PORT=/dev/ttyUSB1\n", self.section(t, "Rx1") + "\n")
+        self.assertIn("SERIAL_PIN=DSR\n", self.section(t, "Rx1") + "\n")
+        self.assertIn("PTT_TYPE=SerialPin\n", self.section(t, "Tx1") + "\n")
+        self.assertIn("PTT_PORT=/dev/ttyUSB1\n", self.section(t, "Tx1") + "\n")
+        self.assertIn("PTT_PIN=RTS\n", self.section(t, "Tx1") + "\n")
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, dict(RADIO_ENV, RTYPE="gpio"))
+        self.assertEqual(code, 0, out)
+        t = self.read(self.conf)
+        for line in ("SQL_DET=GPIOD", "SQL_GPIOD_CHIP=/dev/gpiochip0", "SQL_GPIOD_LINE=22"):
+            self.assertIn(line + "\n", self.section(t, "Rx1") + "\n")
+        for line in ("PTT_TYPE=GPIOD", "PTT_GPIOD_CHIP=/dev/gpiochip0", "PTT_GPIOD_LINE=17"):
+            self.assertIn(line + "\n", self.section(t, "Tx1") + "\n")
+
+    def test_switching_to_bridge_and_back_keeps_the_radio_settings(self):
+        self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        radio = self.read(self.conf)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0, out)
+        bridge = self.read(self.conf)
+        self.assertIn("LOGICS=UsrpLogic\n", bridge)
+        self.assertIn("LINKS=\n", bridge)
+        self.assertIn("SQL_DET=HIDRAW", bridge)
+        self.assertIn("use = bridge", self.read(self.h44conf))
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(self.conf), radio)
+        self.assertTrue(os.path.exists(self.conf + ".44helper-prev"))
+
+    def test_radio_run_twice_changes_nothing(self):
+        self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        once = self.read(self.conf)
+        code, _out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.read(self.conf), once)
+
+    def test_no_usb_sound_card_or_no_hid_device_stops_without_changes(self):
+        before = self.read(self.conf)
+        with open(self.cards, "w") as fh:
+            fh.write(" 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n")
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 1)
+        self.assertIn("No USB sound card found", out)
+        with open(self.cards, "w") as fh:
+            fh.write(CARDS_ONE)
+        os.remove(self.hid)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 1)
+        self.assertIn("No /dev/hidraw device found", out)
+        self.assertEqual(self.read(self.conf), before)
+        self.assertFalse(os.path.exists(self.conf + ".44helper-bak"))
+
+    def test_an_asterisk_node_on_the_same_usb_device_stops_it(self):
+        with open(self.rptconf, "w") as fh:
+            fh.write("[652705]\nrxchannel = SimpleUSB/652705\n")
+        with open(self.simpleusb, "w") as fh:
+            fh.write("[652705]\ndevstr = 1-1.2\n")
+        before = self.read(self.conf)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 1, out)
+        self.assertIn("uses the same USB device", out)
+        self.assertEqual(self.read(self.conf), before)
+
+    def test_an_empty_devstr_stops_it_with_one_usb_card_and_warns_with_two(self):
+        with open(self.rptconf, "w") as fh:
+            fh.write("[652705]\nrxchannel = SimpleUSB/652705\n")
+        with open(self.simpleusb, "w") as fh:
+            fh.write("[652705]\ndevstr = \n")
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 1, out)
+        self.assertIn("takes the only USB sound card", out)
+        with open(self.cards, "w") as fh:
+            fh.write(CARDS_TWO)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 0, out)
+        self.assertIn("Make sure SvxLink uses a different one", out)
+
+    def test_a_node_without_asterisk_radio_nodes_is_never_stopped(self):
+        with open(self.rptconf, "w") as fh:
+            fh.write("[1999]\nrxchannel = USRP/127.0.0.1:34001:32001\n")
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, RADIO_ENV)
+        self.assertEqual(code, 0, out)
+
+    def test_the_radio_can_join_the_reflector_link_and_leave_it(self):
+        conf = RADIO_CONF.replace("CONNECT_LOGICS=SimplexLogic:9:TG,ReflectorLogic", "CONNECT_LOGICS=SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic")
+        with open(self.conf, "w") as fh:
+            fh.write(conf)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, dict(RADIO_ENV, RREFL="yes"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("CONNECT_LOGICS=SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic,SimplexLogic:9:TG",
+                      self.section(self.read(self.conf), "ReflectorLink"))
+        self.assertIn("The radio joins the reflector link.", out)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, dict(RADIO_ENV, RREFL="no"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("CONNECT_LOGICS=SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic\n",
+                      self.section(self.read(self.conf), "ReflectorLink") + "\n")
+
+    def test_the_reflector_step_adds_the_radio_when_the_answer_says_so(self):
+        with open(self.h44conf, "w") as fh:
+            fh.write("[svxlink]\nuse = radio\nradio_reflector = yes\n")
+        code, out = self.run_script(h44._SVX_REFL_CONN_PY, CONN_ENV)
+        self.assertEqual(code, 0, out)
+        link = self.section(self.read(self.conf), "ReflectorLink")
+        self.assertIn("CONNECT_LOGICS=SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic,SimplexLogic:9:TG", link)
+        again = self.read(self.conf)
+        self.run_script(h44._SVX_REFL_CONN_PY, CONN_ENV)
+        self.assertEqual(self.read(self.conf), again)
+
+    def test_the_reflector_step_is_unchanged_for_a_bridge(self):
+        with open(self.h44conf, "w") as fh:
+            fh.write("[svxlink]\nuse = bridge\nradio_reflector = yes\n")
+        self.run_script(h44._SVX_REFL_CONN_PY, CONN_ENV)
+        self.assertIn("CONNECT_LOGICS=SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic\n",
+                      self.section(self.read(self.conf), "ReflectorLink") + "\n")
 
 
 class StepsAndFields(unittest.TestCase):

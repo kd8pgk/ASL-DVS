@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.43"
+APP_VERSION = "0.1.44"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3400,11 +3400,20 @@ _SVX_USRP_PREFIX = "/usr/local"
 _SVX_USRP_ETC = "/usr/local/etc/svxlink"
 _SVX_USRP_SRC_DIR = "~/svxlink-usrp-src"
 
-_SVX_USRP_LOGIC_SNIPPET = f"""# 1) {_SVX_USRP_ETC}/svxlink.conf -- in the [GLOBAL] section, set
-#    LOGICS=UsrpLogic
-#    SvxLink used with ASL3 has no radio of its own: ASL3 owns the radio, so no
-#    SimplexLogic or RepeaterLogic is listed. The reflector step adds the
-#    reflector logic and the link that joins it to UsrpLogic.
+_SVX_USRP_LOGIC_SNIPPET = f"""# 1) {_SVX_USRP_ETC}/svxlink.conf -- in the [GLOBAL] section.
+#    Bridge under ASL3 (the usual case): set
+LOGICS=UsrpLogic
+#    ASL3 owns the radio, so no SimplexLogic or RepeaterLogic is listed. The
+#    reflector step adds the reflector logic and the link that joins it to UsrpLogic.
+#
+#    With a radio of its own on SvxLink: keep the radio logic and join it:
+LOGICS=SimplexLogic,UsrpLogic
+LINKS=LinkToUsrp
+[LinkToUsrp]
+CONNECT_LOGICS=SimplexLogic:9:USRP,UsrpLogic
+DEFAULT_ACTIVE=1
+TIMEOUT=0
+#    and set the sound card and the squelch and PTT pins in [Rx1] and [Tx1].
 
 # 2) {_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf -- change these lines:
 DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json
@@ -3420,7 +3429,9 @@ USRP_HOST=127.0.0.1
 _SVX_USRP_CONF = f"{_SVX_USRP_ETC}/svxlink.conf"
 _SVX_USRP_LOGIC_CONF = f"{_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf"
 
-_SVX_USRP_WIRE_PY = r"""import os
+_SVX_USRP_WIRE_PY = r"""import configparser
+import glob
+import os
 import re
 import shutil
 import sys
@@ -3428,9 +3439,23 @@ import sys
 F = "/usr/local/etc/svxlink/svxlink.conf"
 U = "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"
 DV = "/usr/local/etc/svxlink/dv_users.json"
-call = os.environ.get("CALL", "")
-tx = os.environ.get("TX", "")
-rx = os.environ.get("RX", "")
+H44CONF = "/etc/44helper/44helper.conf"
+CARDS = "/proc/asound/cards"
+HIDRAW_GLOB = "/dev/hidraw*"
+SYS_HIDRAW = "/sys/class/hidraw/"
+ASTERISK_USB = ["/etc/asterisk/simpleusb.conf", "/etc/asterisk/usbradio.conf"]
+RPT = "/etc/asterisk/rpt.conf"
+env = os.environ.get
+call = env("CALL", "")
+tx = env("TX", "")
+rx = env("RX", "")
+use = env("USE", "bridge")
+rtype = env("RTYPE", "cm108")
+audio = env("AUDIO", "auto")
+rdev = env("RDEV", "auto")
+sqlpin = env("SQLPIN", "auto")
+pttpin = env("PTTPIN", "auto")
+rrefl = env("RREFL", "no")
 
 
 def stop(msg):
@@ -3491,6 +3516,71 @@ def setkeys(lines, name, pairs):
     return lines[:s + 1] + add + lines[s + 1:]
 
 
+def addsection(lines, name, pairs):
+    if name in sections(lines):
+        return setkeys(lines, name, pairs)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines + ["", "[" + name + "]"] + [k + "=" + v for k, v in pairs] + [""]
+
+
+def usb_cards():
+    out = []
+    try:
+        with open(CARDS, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"^\s*\d+\s+\[(\S+)\s*\]:\s*USB-Audio", line)
+                if m:
+                    out.append(m.group(1))
+    except OSError:
+        pass
+    return out
+
+
+def hid_usb_path(dev):
+    name = os.path.basename(dev)
+    try:
+        return os.path.realpath(os.path.join(SYS_HIDRAW, name, "device"))
+    except OSError:
+        return ""
+
+
+def asterisk_radio_clash(hid):
+    notes = []
+    uses = False
+    try:
+        with open(RPT, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if re.match(r"^\s*rxchannel\s*=\s*(SimpleUSB|Radio)/", line, re.I):
+                    uses = True
+    except OSError:
+        return notes, False
+    if not uses:
+        return notes, False
+    path = hid_usb_path(hid) if hid else ""
+    empty = False
+    for conf in ASTERISK_USB:
+        try:
+            with open(conf, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = re.match(r"^\s*devstr\s*=\s*(\S*)", line)
+                    if m:
+                        if not m.group(1):
+                            empty = True
+                        elif path and any("/" + m.group(1).split(":")[0] + sep in path for sep in (":", "/")):
+                            return ["Asterisk's " + os.path.basename(conf) + " uses the same USB device (devstr="
+                                    + m.group(1) + ")."], True
+        except OSError:
+            continue
+    if empty and len(usb_cards()) <= 1:
+        return ["Asterisk's SimpleUSB or USBRadio node has an empty devstr, so it takes the only USB sound "
+                "card on this node. SvxLink cannot use it too."], True
+    if empty:
+        notes.append("Asterisk's SimpleUSB or USBRadio node has an empty devstr, so it takes the first USB "
+                     "sound card. Make sure SvxLink uses a different one.")
+    return notes, False
+
+
 if not os.path.exists(F):
     stop(F + " is missing: run step 5 first.")
 for p in (tx, rx):
@@ -3500,6 +3590,8 @@ if tx == rx:
     stop("The two ports must be different.")
 if not re.match(r"^[A-Za-z0-9-]{3,12}$", call):
     stop("Enter your callsign.")
+if use not in ("bridge", "radio"):
+    stop("Choose bridge or radio.")
 with open(F, encoding="utf-8") as fh:
     old = fh.read()
 if "\r" in old:
@@ -3508,28 +3600,108 @@ lines = old.split("\n")
 secs = sections(lines)
 _i, logics = getlist(lines, "LOGICS")
 _k, links = getlist(lines, "LINKS")
-radio = []
-for name in logics:
+
+
+def is_radio(name):
     kv = secs.get(name, {}).get("kv", {})
-    if kv.get("TYPE") in ("Simplex", "Repeater"):
-        rxsec = secs.get(kv.get("RX", ""), {}).get("kv", {})
-        if rxsec.get("TYPE") != "Dummy":
-            radio.append(name)
-keep = [n for n in logics if n not in radio]
-if "UsrpLogic" not in keep:
-    keep.append("UsrpLogic")
-dropped = []
-kept_links = []
-for link in links:
-    joined = secs.get(link, {}).get("kv", {}).get("CONNECT_LOGICS", "")
-    names = [x.split(":")[0].strip() for x in joined.split(",")]
-    if any(n in radio for n in names):
-        dropped.append(link)
+    if kv.get("TYPE") not in ("Simplex", "Repeater"):
+        return False
+    return secs.get(kv.get("RX", ""), {}).get("kv", {}).get("TYPE") != "Dummy"
+
+
+report = []
+if use == "bridge":
+    radio = [n for n in logics if is_radio(n)]
+    keep = [n for n in logics if n not in radio]
+    if "UsrpLogic" not in keep:
+        keep.append("UsrpLogic")
+    kept_links = []
+    dropped = []
+    for link in links:
+        joined = secs.get(link, {}).get("kv", {}).get("CONNECT_LOGICS", "")
+        names = [x.split(":")[0].strip() for x in joined.split(",")]
+        if any(n in radio for n in names):
+            dropped.append(link)
+        else:
+            kept_links.append(link)
+    lines = setlist(lines, "LOGICS", keep)
+    if links or dropped:
+        lines = setlist(lines, "LINKS", kept_links)
+    if radio:
+        report.append("Radio logic taken out (ASL3 owns the radio): " + ", ".join(radio))
+    if dropped:
+        report.append("Links that joined it taken out: " + ", ".join(dropped))
+else:
+    cand = [n for n in logics if is_radio(n)] or [n for n in ("SimplexLogic", "RepeaterLogic") if is_radio(n)]
+    if not cand:
+        stop("There is no radio logic (SimplexLogic) in " + F + " to set up.")
+    radio_logic = cand[0]
+    kvl = secs[radio_logic]["kv"]
+    rxname, txname = kvl.get("RX", "Rx1"), kvl.get("TX", "Tx1")
+    if rtype == "cm108":
+        dev = rdev
+        if dev == "auto":
+            found = sorted(glob.glob(HIDRAW_GLOB))
+            if not found:
+                stop("No /dev/hidraw device found. Plug in the radio interface or type its device.")
+            dev = found[0]
+        s_keys = [("SQL_DET", "HIDRAW"), ("HID_DEVICE", dev),
+                  ("HID_SQL_PIN", "VOL_DN" if sqlpin == "auto" else sqlpin)]
+        t_keys = [("PTT_TYPE", "Hidraw"), ("HID_DEVICE", dev),
+                  ("HID_PTT_PIN", "GPIO3" if pttpin == "auto" else pttpin)]
+    elif rtype == "serial":
+        dev = rdev
+        if dev == "auto":
+            dev = "/dev/ttyUSB0" if os.path.exists("/dev/ttyUSB0") else "/dev/ttyS0"
+        s_keys = [("SQL_DET", "SERIAL"), ("SERIAL_PORT", dev),
+                  ("SERIAL_PIN", "CTS" if sqlpin == "auto" else sqlpin)]
+        t_keys = [("PTT_TYPE", "SerialPin"), ("PTT_PORT", dev),
+                  ("PTT_PIN", "DTRRTS" if pttpin == "auto" else pttpin)]
     else:
-        kept_links.append(link)
-lines = setlist(lines, "LOGICS", keep)
-if links or dropped:
+        dev = "/dev/gpiochip0" if rdev == "auto" else rdev
+        s_keys = [("SQL_DET", "GPIOD"), ("SQL_GPIOD_CHIP", dev),
+                  ("SQL_GPIOD_LINE", "22" if sqlpin == "auto" else sqlpin)]
+        t_keys = [("PTT_TYPE", "GPIOD"), ("PTT_GPIOD_CHIP", dev),
+                  ("PTT_GPIOD_LINE", "17" if pttpin == "auto" else pttpin)]
+    adev = audio
+    if adev == "auto":
+        cards = usb_cards()
+        if not cards:
+            stop("No USB sound card found. Plug in the radio interface, or type its device (arecord -l lists them).")
+        adev = "alsa:plughw:CARD=" + cards[0]
+    notes, clash = asterisk_radio_clash(dev if rtype == "cm108" else "")
+    if clash:
+        stop(" ".join(notes))
+    report.extend(notes)
+    keep = list(logics)
+    if radio_logic not in keep:
+        keep.insert(0, radio_logic)
+    if "UsrpLogic" not in keep:
+        keep.append("UsrpLogic")
+    lines = setlist(lines, "LOGICS", keep)
+    kept_links = list(links)
+    if "LinkToUsrp" not in kept_links:
+        kept_links.insert(0, "LinkToUsrp")
     lines = setlist(lines, "LINKS", kept_links)
+    lines = addsection(lines, "LinkToUsrp", [("CONNECT_LOGICS", radio_logic + ":9:USRP,UsrpLogic"),
+                                              ("DEFAULT_ACTIVE", "1"), ("TIMEOUT", "0")])
+    if "RX" not in kvl or "TX" not in kvl:
+        lines = setkeys(lines, radio_logic, [("RX", rxname), ("TX", txname)])
+    lines = addsection(lines, rxname, [("TYPE", "Local"), ("AUDIO_DEV", adev)] + s_keys)
+    lines = addsection(lines, txname, [("TYPE", "Local"), ("AUDIO_DEV", adev)] + t_keys)
+    secs2 = sections(lines)
+    if "ReflectorLink" in secs2:
+        cl = secs2["ReflectorLink"]["kv"].get("CONNECT_LOGICS", "")
+        names = [x.strip() for x in cl.split(",") if x.strip()]
+        have = any(x.split(":")[0] == radio_logic for x in names)
+        if rrefl == "yes" and not have and cl:
+            lines = setkeys(lines, "ReflectorLink", [("CONNECT_LOGICS", cl + "," + radio_logic + ":9:TG")])
+            report.append("The radio joins the reflector link.")
+        elif rrefl == "no" and have:
+            lines = setkeys(lines, "ReflectorLink", [("CONNECT_LOGICS", ",".join(
+                x for x in names if x.split(":")[0] != radio_logic))])
+            report.append("The radio no longer joins the reflector link.")
+    report.append("Radio set up on " + radio_logic + ": " + rtype + ", audio " + adev + ", device " + dev + ".")
 lines = [re.sub(r"^CALLSIGN=.*$", "CALLSIGN=" + call, x) for x in lines]
 lines = setkeys(lines, "UsrpLogic", [("CALL", call), ("USRP_HOST", "127.0.0.1"), ("USRP_TX_PORT", tx),
                                      ("USRP_RX_PORT", rx), ("DV_USER_INFOFILE", DV)])
@@ -3537,6 +3709,7 @@ new = "\n".join(lines)
 if not os.path.exists(F + ".44helper-bak"):
     shutil.copy2(F, F + ".44helper-bak")
 if new != old:
+    shutil.copy2(F, F + ".44helper-prev")
     with open(F + ".44helper-tmp", "w", encoding="utf-8") as fh:
         fh.write(new)
     shutil.copystat(F, F + ".44helper-tmp")
@@ -3550,20 +3723,41 @@ if os.path.exists(U):
         fh.write("\n".join(ulines))
     shutil.copystat(U, U + ".44helper-tmp")
     os.replace(U + ".44helper-tmp", U)
+try:
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(H44CONF)
+    if not cp.has_section("svxlink"):
+        cp.add_section("svxlink")
+    cp.set("svxlink", "use", use)
+    cp.set("svxlink", "radio_reflector", rrefl if use == "radio" else "no")
+    os.makedirs(os.path.dirname(H44CONF), exist_ok=True)
+    with open(H44CONF + ".tmp", "w", encoding="utf-8") as fh:
+        cp.write(fh)
+    os.replace(H44CONF + ".tmp", H44CONF)
+except OSError as exc:
+    report.append("(The answer could not be saved in " + H44CONF + ": " + str(exc) + ")")
+_i, now_logics = getlist(new.split("\n"), "LOGICS")
+_k, now_links = getlist(new.split("\n"), "LINKS")
 print("--- " + F + ":")
-print("LOGICS=" + ",".join(keep))
-print("LINKS=" + ",".join(kept_links))
-if radio:
-    print("Radio logic taken out (ASL3 owns the radio): " + ", ".join(radio))
-if dropped:
-    print("Links that joined it taken out: " + ", ".join(dropped))
+print("LOGICS=" + ",".join(now_logics))
+print("LINKS=" + ",".join(now_links))
+for r in report:
+    print(r)
 print("--- UsrpLogic: CALL=" + call + " USRP_HOST=127.0.0.1 USRP_TX_PORT=" + tx + " USRP_RX_PORT=" + rx)
-print("SvxLink is set up as a bridge with no radio. Backup of the first version: " + F + ".44helper-bak")
+if use == "bridge":
+    print("SvxLink is set up as a bridge with no radio.")
+else:
+    print("SvxLink is set up with its own radio.")
+print("Backup of the first version: " + F + ".44helper-bak; the version before this run: " + F + ".44helper-prev")
 print("If svxlink-usrp is running, restart it for this to take effect.")
 """
 
-def _svx_usrp_wire_cmd(call: str, tx: str, rx: str) -> str:
-    return (f"sudo env CALL='{call}' TX='{tx}' RX='{rx}' python3 - <<'PYEOF'\n{_SVX_USRP_WIRE_PY}PYEOF")
+def _svx_usrp_wire_cmd(call: str, tx: str, rx: str, use: str = "bridge", rtype: str = "cm108",
+                       audio: str = "auto", rdev: str = "auto", sqlpin: str = "auto", pttpin: str = "auto",
+                       rrefl: str = "no") -> str:
+    return (f"sudo env CALL='{call}' TX='{tx}' RX='{rx}' USE='{use}' RTYPE='{rtype}' AUDIO='{audio}' "
+            f"RDEV='{rdev}' SQLPIN='{sqlpin}' PTTPIN='{pttpin}' RREFL='{rrefl}' python3 - <<'PYEOF'\n{_SVX_USRP_WIRE_PY}PYEOF")
+
 
 _SVX_REFL_TEST_PY = r"""import os
 import re
@@ -3688,7 +3882,8 @@ print("Keep TCP and UDP 5300 closed in the firewall: this test server is for thi
 sys.exit(0 if state == "active" and ":5300" in ss else 1)
 """
 
-_SVX_REFL_CONN_PY = r"""import os
+_SVX_REFL_CONN_PY = r"""import configparser
+import os
 import re
 import shutil
 import subprocess
@@ -3696,6 +3891,7 @@ import sys
 import time
 
 F = "/usr/local/etc/svxlink/svxlink.conf"
+H44CONF = "/etc/44helper/44helper.conf"
 LOG = "/var/log/svxlink"
 PTY = "/var/lib/svxlink/dtmf_ctrl"
 host = os.environ.get("HOST", "")
@@ -3724,6 +3920,37 @@ def section(lines, name):
             end = j
             break
     return start, end
+
+
+def value(lines, name, key):
+    sec = section(lines, name)
+    if sec is None:
+        return ""
+    for i in range(sec[0] + 1, sec[1]):
+        m = re.match(r"^\s*" + key + r"\s*=\s*(.*?)\s*$", lines[i])
+        if m:
+            return m.group(1).strip('"')
+    return ""
+
+
+def radio_joining(lines):
+    try:
+        cp = configparser.ConfigParser(interpolation=None)
+        cp.read(H44CONF)
+        if cp.get("svxlink", "use", fallback="bridge") != "radio":
+            return ""
+        if cp.get("svxlink", "radio_reflector", fallback="no") != "yes":
+            return ""
+    except configparser.Error:
+        return ""
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s*LOGICS\s*=\s*(.*?)\s*$", line)
+        if m:
+            for name in [x.strip() for x in m.group(1).split(",") if x.strip()]:
+                if value(lines, name, "TYPE") in ("Simplex", "Repeater") and \
+                        value(lines, value(lines, name, "RX"), "TYPE") != "Dummy":
+                    return name
+    return ""
 
 
 def setkeys(lines, name, pairs, drop=()):
@@ -3784,7 +4011,11 @@ lines = setkeys(lines, "SvxCtrlLogic", [("TYPE", "Simplex"), ("RX", "SvxCtrlRx")
                                         ("SHORT_IDENT_INTERVAL", "0"), ("LONG_IDENT_INTERVAL", "0")])
 lines = setkeys(lines, "SvxCtrlRx", [("TYPE", "Dummy")])
 lines = setkeys(lines, "SvxCtrlTx", [("TYPE", "Dummy")])
-lines = setkeys(lines, "ReflectorLink", [("CONNECT_LOGICS", "SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic"),
+joined = "SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic"
+radio_name = radio_joining(lines)
+if radio_name:
+    joined += "," + radio_name + ":9:TG"
+lines = setkeys(lines, "ReflectorLink", [("CONNECT_LOGICS", joined),
                                          ("DEFAULT_ACTIVE", "1")], drop=("TIMEOUT", "ACTIVATE_ON_ACTIVITY", "ACTIVATE_ON_TG"))
 lines = addlist(lines, "LOGICS", ["ReflectorLogic", "SvxCtrlLogic"])
 lines = addlist(lines, "LINKS", ["ReflectorLink"])
@@ -3972,25 +4203,51 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                     {"id": "port", "label": "Port the ASL3 node LISTENS on (SvxLink sends to it)", "type": "text",
                      "default": "32000"},
                     {"id": "rx_port", "label": "Port the ASL3 node SENDS to (SvxLink listens on it)", "type": "text",
-                     "default": "34000"}],
-         "cmd_template": _svx_usrp_wire_cmd("{{callsign}}", "{{port}}", "{{rx_port}}"),
+                     "default": "34000"},
+                    {"id": "svx_use", "label": "How will SvxLink be used here?", "type": "select",
+                     "options": [["bridge", "Bridge under ASL3 (no radio)"], ["radio", "With its own radio"]],
+                     "default": "bridge"},
+                    {"id": "svx_rtype", "label": "Radio interface", "type": "select",
+                     "options": [["cm108", "USB sound card with CM108 HID pins"], ["serial", "Serial port pins"],
+                                 ["gpio", "Raspberry Pi GPIO"]], "default": "cm108", "show_if": "svx_use=radio"},
+                    {"id": "svx_audio", "label": "Radio sound card (auto = the first USB one)", "type": "text",
+                     "default": "auto", "show_if": "svx_use=radio"},
+                    {"id": "svx_rdev", "label": "Radio device: HID, serial port or GPIO chip (auto = the usual one)",
+                     "type": "text", "default": "auto", "show_if": "svx_use=radio"},
+                    {"id": "svx_sqlpin", "label": "Squelch (COS) pin or line (auto = VOL_DN, CTS or 22)",
+                     "type": "text", "default": "auto", "show_if": "svx_use=radio"},
+                    {"id": "svx_pttpin", "label": "PTT pin or line (auto = GPIO3, DTRRTS or 17)",
+                     "type": "text", "default": "auto", "show_if": "svx_use=radio"},
+                    {"id": "svx_rrefl", "label": "Radio also joins the reflector", "type": "select",
+                     "options": [["no", "No"], ["yes", "Yes"]], "default": "no", "show_if": "svx_use=radio"}],
+         "cmd_template": _svx_usrp_wire_cmd("{{callsign}}", "{{port}}", "{{rx_port}}", "{{svx_use}}",
+                                            "{{svx_rtype}}", "{{svx_audio}}", "{{svx_rdev}}", "{{svx_sqlpin}}",
+                                            "{{svx_pttpin}}", "{{svx_rrefl}}"),
          "cmd": _svx_usrp_wire_cmd("YOURCALL", "32000", "34000"),
          "timeout": 60,
-         "note": "Sets SvxLink up as a bridge with no radio, the way it is used with ASL3: ASL3 owns the radio, so SvxLink "
-                 "must not open a sound card or serial port of its own. In svxlink.conf [GLOBAL] it makes sure UsrpLogic "
-                 "is in LOGICS and takes out any radio logic (a Simplex or Repeater logic whose receiver is not a Dummy; "
-                 "the stock SimplexLogic), and takes out any link that joined one of them, such as LinkToUsrp. The "
-                 "reflector step later adds the reflector logic and the link that joins it to UsrpLogic. It sets the "
-                 "callsign everywhere, and in UsrpLogic the callsign, USRP_HOST=127.0.0.1, the two ports and "
-                 "DV_USER_INFOFILE (the fork's template points at /etc/svxlink, this build installs it under "
-                 "/usr/local/etc/svxlink). A copy of the first version is kept as svxlink.conf.44helper-bak. Safe to run "
-                 "again, and run it again on a node set up before this change to take the radio logic out; restart "
-                 "svxlink-usrp afterwards. The other end is ASL3's private node 1900 (rxchannel = "
-                 "USRP/127.0.0.1:34000:32000 in rpt.conf), so the defaults are its mirror image: SvxLink sends to "
-                 "32000 and listens on 34000. The node itself is added on the Config tab: Add SvxLink bridge node "
-                 "does it in one step and sets these two ports again to match, picking other numbers if 1900 or the "
-                 "ports are taken. To bridge to something else, enter that program's ports here. Keep everything on "
-                 "127.0.0.1; never open these ports in a firewall."},
+         "note": "The question for this install: is SvxLink a bridge under ASL3, or does it have a radio of its own? "
+                 "A bridge has no radio, the usual case with ASL3: ASL3 owns the radio, so SvxLink must not open a "
+                 "sound card or serial port of its own. For a bridge, step 8 makes sure UsrpLogic is in LOGICS in "
+                 "svxlink.conf and takes out any radio logic (a Simplex or Repeater logic whose receiver is not a "
+                 "Dummy one, the stock SimplexLogic) and any link that joined it, such as LinkToUsrp. With its own "
+                 "radio, step 8 keeps the radio logic, joins it to UsrpLogic in [LinkToUsrp] (listed in LINKS), and "
+                 "writes the radio settings into its receiver and transmitter sections: the sound card, and the "
+                 "squelch and PTT pins for a USB sound card with CM108 HID pins, serial port pins, or Raspberry Pi "
+                 "GPIO. The radio fields only appear for the radio answer; leave them at auto to use the first USB "
+                 "sound card and the usual device and pins. It stops, changing nothing, if Asterisk's SimpleUSB or "
+                 "USBRadio node would use the same USB device. It sets the callsign everywhere, and in UsrpLogic the "
+                 "callsign, USRP_HOST=127.0.0.1, the two ports and DV_USER_INFOFILE (the fork's template points at "
+                 "/etc/svxlink, this build installs it under /usr/local/etc/svxlink). The answer is saved in "
+                 "/etc/44helper/44helper.conf ([svxlink] use=), and the reflector step reads it. A copy of the first "
+                 "version of svxlink.conf is kept as svxlink.conf.44helper-bak, and the version before this run as "
+                 "svxlink.conf.44helper-prev. Safe to run again, and run it again with the other answer to switch: the "
+                 "radio sections are never deleted, only listed or unlisted. Restart svxlink-usrp afterwards. The "
+                 "other end is ASL3's private node 1900 (rxchannel = USRP/127.0.0.1:34000:32000 in rpt.conf), so the "
+                 "defaults are its mirror image: SvxLink sends to 32000 and listens on 34000. The node itself is "
+                 "added on the Config tab: Add SvxLink bridge node does it in one step and sets these two ports "
+                 "again to match, picking other numbers if 1900 or the ports are taken. To bridge to something "
+                 "else, enter that program's ports here. Keep everything on 127.0.0.1; never open these ports in a "
+                 "firewall."},
         {"id": "usrp_service_unit", "num": 9, "title": "Install & start the svxlink-usrp service",
          "cmd": _SVX_USRP_SERVICE_CMD,
          "timeout": 60,
@@ -4749,6 +5006,14 @@ _STEP_FIELD_RULES = {
     "cruser": (re.compile(r"[a-z_][a-z0-9_-]{0,31}"), "use a Linux login name: lowercase letters, digits, _ and -"),
     "crfolder": (re.compile(r"[~/A-Za-z0-9._-]{1,200}"),
                  "use a folder path such as ~/claude-remote or /home/you/claude-remote (no spaces)"),
+    "svx_use": (re.compile(r"bridge|radio"), "choose bridge or radio"),
+    "svx_rtype": (re.compile(r"cm108|serial|gpio"), "choose cm108, serial or gpio"),
+    "svx_audio": (re.compile(r"auto|alsa:[A-Za-z0-9_.:=,-]{1,60}"),
+                  "use auto, or an ALSA device such as alsa:plughw:CARD=Device"),
+    "svx_rdev": (re.compile(r"auto|/dev/[A-Za-z0-9_./-]{1,40}"), "use auto, or a device such as /dev/hidraw0"),
+    "svx_sqlpin": (re.compile(r"auto|[A-Za-z0-9_]{1,12}"), "use auto, or a pin name or number such as VOL_DN, CTS or 22"),
+    "svx_pttpin": (re.compile(r"auto|[A-Za-z0-9_]{1,12}"), "use auto, or a pin name or number such as GPIO3, DTRRTS or 17"),
+    "svx_rrefl": (re.compile(r"no|yes"), "choose no or yes"),
     "refl_host": (re.compile(r"[A-Za-z0-9.-]{1,100}(:[0-9]{1,5})?(,[A-Za-z0-9.-]{1,100}(:[0-9]{1,5})?){0,3}"),
                   "use a host name or IP address (up to 4, separated by commas, each with an optional :port)"),
     "refl_port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
@@ -24931,8 +25196,23 @@ function svxRenderStepList(mode, distro) {
     if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
     if (step.fields) {
       step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':' +
-          '<input type="' + svxEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" value="' + svxEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
+        var hide = 'block';
+        if (f.show_if) {
+          var sp = f.show_if.split('=');
+          var ctl = null;
+          step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
+          hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
+        }
+        html += '<label data-showif="' + svxEscapeAttr(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':';
+        if (f.options) {
+          html += '<select class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" onchange="svxFieldVis(this)">';
+          f.options.forEach(function(o) {
+            html += '<option value="' + svxEscapeAttr(o[0]) + '"' + (o[0] === f.default ? ' selected' : '') + '>' + svxEscapeAttr(o[1]) + '</option>';
+          });
+          html += '</select></label>';
+        } else {
+          html += '<input type="' + svxEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" value="' + svxEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
+        }
       });
     } else {
       html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" readonly value="' + svxEscapeAttr(step.cmd) + '">';
@@ -25079,6 +25359,19 @@ function svxReconnectRunningJobs(distro) {
         }
       }).catch(function() {});
     });
+  });
+}
+
+function svxFieldVis(sel) {
+  var m = /^svx-field-([^-]+)-(.+)$/.exec(sel.id);
+  if (!m) return;
+  var box = sel.closest('.step-card') || sel.parentNode.parentNode;
+  box.querySelectorAll('label[data-showif]').forEach(function(l) {
+    var w = l.getAttribute('data-showif');
+    if (!w) return;
+    var sp = w.split('=');
+    if (sp[0] !== m[1]) return;
+    l.style.display = (sel.value === sp[1]) ? 'block' : 'none';
   });
 }
 
