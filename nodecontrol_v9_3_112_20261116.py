@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.111"
+VERSION      = "9.3.112"
 BUILD_DATE   = "2026-11-13"
 
 ASL_NODE        = "652702"
@@ -65,11 +65,17 @@ M17_NODE      = "1917"
 M17_INI_PATH  = "/opt/USRP2M17/USRP2M17.ini"
 M17_SERVICE   = "usrp2m17"
 
+SVX_NODE      = "1900"
+SVX_CONF      = "/usr/local/etc/svxlink/svxlink.conf"
+SVX_SERVICE   = "svxlink-usrp"
+SVX_CTRL_PTY  = "/var/lib/svxlink/dtmf_ctrl"
+
 BRIDGE_SLOT_DIGITAL    = 0
 BRIDGE_SLOT_M17        = 1
 BRIDGE_SLOT_PHONE      = 2
+BRIDGE_SLOT_SVX        = 3
 BRIDGE_SLOT_COUNT      = 4
-BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Phone Bridge", "Reserved")
+BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Phone Bridge", "SvxLink Bridge")
 PHONE_NODE             = "1001"
 DEFAULT_BRIDGE_NODES   = [ASL_BRIDGE_NODE, M17_NODE, PHONE_NODE, ""]
 
@@ -260,7 +266,7 @@ def _sd_notify(state: str) -> None:
         log.warning("_sd_notify: failed to notify systemd (%s): %s", state, e)
 
 DIGITAL_MODES    = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
-ALL_PAGES        = ("ASL", "ECHO") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHONE")
+ALL_PAGES        = ("ASL", "ECHO", "SVX") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHONE")
 VALID_CONF_MODES = {"DMR", "STFU", "YSF", "FCS", "P25", "NXDN", "DSTAR"}
 TUNE_MODES       = set(DIGITAL_MODES) | {"FCS"}
 
@@ -268,6 +274,7 @@ BRIDGE_SLOT_PAGES = {
     BRIDGE_SLOT_DIGITAL: TUNE_MODES | {"XLX"},
     BRIDGE_SLOT_M17:     {"M17"},
     BRIDGE_SLOT_PHONE:   {"PHONE"},
+    BRIDGE_SLOT_SVX:     {"SVX"},
 }
 
 @dataclass
@@ -367,6 +374,9 @@ class AppState:
     conf_warnings:      list                = field(default_factory=list)
     m17_reflectors:     list                = field(default_factory=list)
     has_m17:            bool                = False
+    has_svx:            bool                = False
+    svx_nodes:          list                = field(default_factory=list)
+    svx_tg:             Optional[str]       = None
 
 _lock        = threading.Lock()
 _cfg_lock    = threading.Lock()
@@ -947,6 +957,7 @@ _DEFAULT_DMR_SERVERS = [
 _MODE_NET_URL_DEFAULTS: Dict[str, str] = {
     "ASL":   "https://stats.allstarlink.org/",
     "ECHO":  "",
+    "SVX":   "",
     "STFU":  "https://hose.brandmeister.network/",
     "FCS":   "http://xreflector.net/",
 }
@@ -3755,8 +3766,13 @@ def _try_load_conf_from(path: Path) -> Optional[tuple]:
                       dmr_server_tgs=srv_tgs)
         merged_urls = dict(_MODE_NET_URL_DEFAULTS)
         merged_urls.update(net_urls)
+        svx_rows, svx_url = _svx_parse(str(path))
+        if svx_url is not None:
+            merged_urls["SVX"] = svx_url
+        if str(cfg.get("svx_tab", "on")).strip().lower() != "off":
+            _apply_config({"enabled_tabs": sorted(_cfg.enabled_tabs | {"SVX"})})
         set_state(xlx_reflectors=xlx_refs, mode_net_urls=merged_urls,
-                  m17_reflectors=m17_refs)
+                  m17_reflectors=m17_refs, svx_nodes=svx_rows)
         return nodes, tgs, echo_nodes, xlx_skipped, legacy_sec_url
     except Exception as exc:
         log.warning("load_conf: could not load %s: %s", path, exc)
@@ -3937,6 +3953,7 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
             f"port={_cfg.port}\n",
             f"callsign={_cfg.callsign}\n",
             f"enabled_tabs={','.join(_cfg.enabled_tabs_sorted)}\n",
+            f"svx_tab={'on' if 'SVX' in _cfg.enabled_tabs else 'off'}\n",
             f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n\n",
             "[ASL]\n",
         ]
@@ -3948,6 +3965,11 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
         lines.append(f"network_url={_st_urls.get('ECHO', _MODE_NET_URL_DEFAULTS['ECHO'])}\n")
         for name, node, *_rest in echo_entries:
             lines.append(f"{name}|{node}\n")
+        lines.append("\n[SVX]\n")
+        lines.append("# name|talkgroup  (SvxReflector talkgroups, picked through the SvxLink bridge node)\n")
+        lines.append(f"network_url={_st_urls.get('SVX', _MODE_NET_URL_DEFAULTS['SVX'])}\n")
+        for sname, stg in get_state().svx_nodes:
+            lines.append(f"{sname}|{stg}\n")
         for m in DIGITAL_MODES:
             mode_tgs = [(n, t, u) for mode, n, t, u in tg_entries if mode == m]
             if mode_tgs:
@@ -3980,7 +4002,7 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
                          else f"{mname}|{mbase}|{mmodule}|{mip}\n")
         for _ in range(max(0, 10 - len(m17_refs))):
             lines.append(f"{bn}|{bn}|@ALL|{ba}\n")
-        _REGENERATED = {"CONFIG", "ASL", "ECHO", "XLX", "M17", "FCS"} | set(DIGITAL_MODES)
+        _REGENERATED = {"CONFIG", "ASL", "ECHO", "SVX", "XLX", "M17", "FCS"} | set(DIGITAL_MODES)
         if conf_path.is_file():
             try:
                 existing = conf_path.read_text(errors="replace")
@@ -4311,7 +4333,10 @@ def _slot_node(slot: Optional[int]) -> str:
             return _phone_live_node()
         except Exception as e:
             log.warning("bridge slot: phone node unreadable: %s", e)
-    return _cfg.bridge_nodes[slot] if slot < len(_cfg.bridge_nodes) else ""
+    node = _cfg.bridge_nodes[slot] if slot < len(_cfg.bridge_nodes) else ""
+    if slot == BRIDGE_SLOT_SVX and not node:
+        return SVX_NODE
+    return node
 
 def _bridge_slot_of(node: str) -> Optional[int]:
     node = str(node).strip()
@@ -4396,6 +4421,7 @@ _detection_cache: Dict[str, Tuple[Optional[bool], float]] = {
     "echo":   (None, 0.0),
     "sysmon": (None, 0.0),
     "m17":    (None, 0.0),
+    "svx":    (None, 0.0),
     "nodelisten": (None, 0.0),
 }
 _STFU_CACHE_TTL   = 60.0
@@ -4406,6 +4432,7 @@ _NODELISTEN_CONFS     = ("/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodeliste
 _NODELISTEN_PORT      = 8993
 _NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
+_SVX_CACHE_TTL    = 60.0
 _detection_lock = threading.Lock()
 
 class _ListCache:
@@ -4547,6 +4574,69 @@ def _detect_m17() -> bool:
             return True
         return False
     return _cached_detect("m17", _M17_CACHE_TTL, _probe_m17)
+
+def _detect_svx() -> bool:
+
+    def _probe_svx() -> bool:
+        if Path(SVX_CONF).is_file():
+            return True
+        return bool(shutil.which("systemctl")) and run(["systemctl", "status", SVX_SERVICE], timeout=3)[1] in (0, 3)
+    return _cached_detect("svx", _SVX_CACHE_TTL, _probe_svx)
+
+def _svx_ready() -> bool:
+    try:
+        return Path(os.path.realpath(SVX_CTRL_PTY)).exists() and os.path.lexists(SVX_CTRL_PTY)
+    except OSError:
+        return False
+
+def _svx_send(cmd: str) -> bool:
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        log.warning("_svx_send: refused %r", cmd)
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            log.warning("_svx_send: %s is not a SvxLink control device", SVX_CTRL_PTY)
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        log.info("SVX: sent %s to SvxLink", cmd)
+        return True
+    except OSError as e:
+        log.warning("_svx_send: %s: %s", cmd, e)
+        return False
+
+def _svx_parse(path: str) -> Tuple[list, Optional[str]]:
+    rows: list = []
+    url: Optional[str] = None
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return rows, url
+    section = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and "]" in line:
+            section = line[1:line.index("]")].strip().upper()
+            continue
+        if section != "SVX":
+            continue
+        if "=" in line and "|" not in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "network_url":
+                url = v.strip()
+            continue
+        parts = line.split("|")
+        if len(parts) >= 2:
+            name, tg = parts[0].strip(), parts[1].strip()
+            if name and tg.isdigit() and 0 < int(tg) < 10 ** 9:
+                rows.append((_clip_label(name), str(int(tg))))
+    return rows[:50], url
 
 def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
@@ -6558,7 +6648,7 @@ def _bridge_reaper(page: str, active_slot: Optional[int],
 
 def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
 
-    st = get_state_fields("page", "has_asl", "has_m17")
+    st = get_state_fields("page", "has_asl", "has_m17", "has_svx")
     page = st["page"]
 
     active_slot = None
@@ -6576,6 +6666,8 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
     if active_slot is None or not st["has_asl"]:
         return
     if active_slot == BRIDGE_SLOT_M17 and not st["has_m17"]:
+        return
+    if active_slot == BRIDGE_SLOT_SVX and not st["has_svx"]:
         return
 
     node = _slot_node(active_slot)
@@ -7109,7 +7201,7 @@ def _link_poll_loop() -> None:
         if time.monotonic() - last_detect >= 60.0:
             last_detect = time.monotonic()
             try:
-                set_state(has_stfu=_detect_stfu(), has_echo=_detect_echo())
+                set_state(has_stfu=_detect_stfu(), has_echo=_detect_echo(), has_svx=_detect_svx())
             except Exception as e:
                 log.warning("_link_poll_loop: capability re-detect error: %s", e)
 
@@ -7127,6 +7219,8 @@ _PAGE_ENTER = {
               "msg": "ASL | Ready"},
     "ECHO":  {"dvs_mode": None,    "settle": 1.0, "status": "Echo | Ready",
               "msg": "Echo | Ready"},
+    "SVX":   {"dvs_mode": None,    "settle": 1.0, "status": "SVX | Ready — pick a talkgroup",
+              "msg": "SVX ready — pick a talkgroup"},
     "DMR":   {"dvs_mode": "DMR",   "settle": 0.0, "status": "DMR | Ready — pick a TG",
               "msg": "DMR ready — pick a TG"},
     "STFU":  {"dvs_mode": "STFU",  "settle": 0.0, "status": "STFU | Ready — pick a TG",
@@ -7161,6 +7255,8 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
             ok, err = _m17_disconnect_core()
             if not ok:
                 log.warning("_leave_page: M17 disconnect: %s", err)
+        elif prev_page == "SVX" and prev_page != next_page:
+            _svx_release()
     except Exception as e:
         log.warning("_leave_page: %s -> %s teardown error: %s", prev_page, next_page, e)
     _gateway_svc_leave(prev_page, next_page)
@@ -7203,7 +7299,7 @@ def _enter_page(page: str, retune: bool = False) -> str:
                 log.warning("_enter_page: mode switch to %s failed — the next tune will "
                             "try it again", dvs_mode)
 
-        if keep and st.has_asl and (page != "M17" or st.has_m17):
+        if keep and st.has_asl and (page != "M17" or st.has_m17) and (page != "SVX" or st.has_svx):
             _connect(keep)
 
         set_state(page=page, current_fav=None, current_fav_node=None, echo_fav=None,
@@ -7287,6 +7383,7 @@ def action_switch_tab(page: str) -> Tuple[bool, str]:
 _PAGE_RETUNE_MSG = {
     "ASL":   "ASL re-tuned",
     "ECHO":  "Echo re-tuned",
+    "SVX":   "SVX re-tuned",
     "M17":   "M17 re-tuned",
     "XLX":   "XLX re-tuned",
     "FCS":   "FCS re-tuned",
@@ -7776,6 +7873,88 @@ def action_echo_disconnect(drop_all: bool = False) -> Tuple[bool, str]:
     set_state(echo_fav=None, linked_node=None, linked_nodes=frozenset(),
               status="Echo | Ready")
     return True, "Echo disconnected"
+
+def _svx_release() -> None:
+    if get_state().svx_tg and _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    set_state(svx_tg=None)
+
+@_link_locked
+def action_svx_connect(tg: str, name: str) -> Tuple[bool, str]:
+    tg = str(tg).strip()
+    if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+        return False, f"Invalid talkgroup: {tg or '(empty)'} — use a number from 1 to 999999999"
+    tg = str(int(tg))
+    name = name or f"TG {tg}"
+    st = get_state()
+    if not st.has_svx:
+        return False, "SvxLink USRP is not installed on this node. Install it from 44helper's SvxLink tab."
+    if not st.has_asl:
+        return False, "ASL3 is not installed on this node."
+    if st.page != "SVX":
+        err = _enter_page("SVX")
+        if err:
+            return False, err
+    if not _svx_ready():
+        set_state(page="SVX", svx_tg=None, status="SVX | Bridge linked — reflector not set up")
+        return False, ("The SvxLink bridge is linked, but no talkgroup was picked: SvxLink has no control device "
+                       f"({SVX_CTRL_PTY}). Run Connect to an SvxReflector on 44helper's SvxLink tab first.")
+    if not _svx_send(f"91{tg}#"):
+        return False, "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."
+    set_state(page="SVX", svx_tg=tg, status=f"SVX | {name} | TG {tg}")
+    return True, f"SVX talkgroup {tg} ({name}) picked"
+
+@_link_locked
+def action_svx_disconnect() -> Tuple[bool, str]:
+    st = get_state()
+    had = st.svx_tg
+    if _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    set_state(svx_tg=None, status="SVX | Ready — pick a talkgroup" if st.page == "SVX" else st.status)
+    return True, (f"SVX talkgroup {had} left — the bridge stays linked while this tab is open" if had
+                  else "SVX: no talkgroup was picked")
+
+def _svx_rows_sanitized(rows: list) -> list:
+    out = []
+    for e in rows if isinstance(rows, list) else []:
+        if not isinstance(e, dict):
+            continue
+        name = _clip_label(str(e.get("name", "")).strip().replace("|", " "))
+        tg = str(e.get("tg", "")).strip()
+        if not name and not tg:
+            continue
+        if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+            raise ValueError(f"SVX talkgroup '{tg}' is not a number from 1 to 999999999")
+        out.append((name or f"TG {int(tg)}", str(int(tg))))
+    return out[:50]
+
+def action_save_svx(rows: list) -> Tuple[bool, str]:
+    try:
+        clean = _svx_rows_sanitized(rows)
+    except ValueError as e:
+        return False, str(e)
+    set_state(svx_nodes=clean)
+    st = get_state()
+    ok, msg = _write_conf(list(st.asl_nodes), list(st.talkgroups), list(st.echo_nodes))
+    return (True, f"Saved {len(clean)} SVX talkgroups") if ok else (False, msg)
+
+def action_save_svx_favorite(tg: str, name: str) -> Tuple[bool, str]:
+    tg = str(tg).strip()
+    if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+        return False, f"Invalid talkgroup: {tg or '(empty)'}"
+    tg = str(int(tg))
+    rows = list(get_state().svx_nodes)
+    if any(t == tg for _n, t in rows):
+        return False, f"TG {tg} is already in the SVX favorites"
+    if len(rows) >= 50:
+        return False, "The SVX favorites list is full (50)"
+    rows.append((_clip_label((name or f"TG {tg}").replace("|", " ")), tg))
+    set_state(svx_nodes=rows)
+    st = get_state()
+    ok, msg = _write_conf(list(st.asl_nodes), list(st.talkgroups), list(st.echo_nodes))
+    return (True, f"TG {tg} saved to the SVX favorites") if ok else (False, msg)
 
 def _svc_restart(name: str) -> None:
     rc = run(["systemctl", "restart", name], timeout=15)[1]
@@ -8285,7 +8464,7 @@ def build_status() -> dict:
         "has_echo", "echo_fav", "linked_node", "linked_nodes", "link_known", "tune_state",
         "asl_nodes", "echo_nodes",
         "callsign", "stfu_server", "dmr_servers", "active_dmr_server",
-        "conf_warnings", "has_m17",
+        "conf_warnings", "has_m17", "has_svx", "svx_nodes", "svx_tg",
     )
 
     return {
@@ -8302,6 +8481,10 @@ def build_status() -> dict:
         "has_stfu":          st["has_stfu"],
         "has_echo":          st["has_echo"],
         "has_m17":           st["has_m17"],
+        "has_svx":           st["has_svx"],
+        "svx":               [{"name": n, "tg": t} for n, t in st["svx_nodes"]],
+        "svx_tg":            st["svx_tg"],
+        "svx_ready":         _svx_ready() if st["has_svx"] else False,
         "echo_fav":          _shown_echo(st) if st["page"] == "ECHO" else st["echo_fav"],
         "asl_node":          _cfg.asl_node,
         "enabled_tabs":      _cfg.enabled_tabs_sorted,
@@ -8636,9 +8819,10 @@ body.offline.perm-linked #perm-link-bar {
 .tab:hover { color: var(--text-bright); border-color: #5a7898; background: #253550; }
 /* v8.9.0: tabs go grey and ignore taps while a card menu or search box is in use */
 .tabs.tabs-locked .tab { opacity: .3; filter: grayscale(1); pointer-events: none; cursor: default; }
-.tab.t-asl,.tab.t-echo,.tab.t-dmr,.tab.t-stfu,.tab.t-ysf,.tab.t-fcs,.tab.t-p25,.tab.t-nxdn,.tab.t-dstar,.tab.t-xlx,.tab.t-m17,.tab.t-phone,.tab.t-edit{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
+.tab.t-asl,.tab.t-echo,.tab.t-svx,.tab.t-dmr,.tab.t-stfu,.tab.t-ysf,.tab.t-fcs,.tab.t-p25,.tab.t-nxdn,.tab.t-dstar,.tab.t-xlx,.tab.t-m17,.tab.t-phone,.tab.t-edit{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
 .tab.t-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 .tab.t-echo{--mc:var(--amber);--mc-rgb:255,208,64}
+.tab.t-svx{--mc:var(--lime);--mc-rgb:212,255,0}
 .tab.t-dmr{--mc:var(--blue);--mc-rgb:34,212,255}
 .tab.t-stfu{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ysf{--mc:var(--purple);--mc-rgb:212,102,255}
@@ -8683,9 +8867,10 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .row-grid:hover      { background: var(--surface2); }
 
 /* ── Active states ── */
-.row-grid.active-asl,.row-grid.active-echo,.row-grid.active-dmr,.row-grid.active-stfu,.row-grid.active-ysf,.row-grid.active-fcs,.row-grid.active-p25,.row-grid.active-nxdn,.row-grid.active-dstar,.row-grid.active-xlx{background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
+.row-grid.active-asl,.row-grid.active-echo,.row-grid.active-svx,.row-grid.active-dmr,.row-grid.active-stfu,.row-grid.active-ysf,.row-grid.active-fcs,.row-grid.active-p25,.row-grid.active-nxdn,.row-grid.active-dstar,.row-grid.active-xlx{background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
 .row-grid.active-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 .row-grid.active-echo{--mc:var(--amber);--mc-rgb:255,208,64}
+.row-grid.active-svx{--mc:var(--lime);--mc-rgb:212,255,0}
 .row-grid.active-dmr{--mc:var(--blue);--mc-rgb:34,212,255}
 .row-grid.active-phone{--mc:var(--green);--mc-rgb:0,255,176;background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
 .pt-call{font-family:var(--sans);font-size:.858rem;color:var(--muted);padding:.45rem .9rem;min-height:1.4em;border-bottom:1px solid var(--border)}
@@ -8792,7 +8977,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
 .btn-conn-fcs  { color: var(--fcs);  border-color: var(--fcs-dim);  }
 
 /* ── Keyed states ── */
-body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
+body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-svx,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow:0 0 8px rgba(255,215,0,.7)}
 
 .row-num  { font-family: var(--sans); font-size: .902rem; color: #ffffff; text-align: right; }
@@ -9215,7 +9400,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
 .tgc-card.tgc-nxdn { --tc: var(--lime); --tc-dim: var(--lime-dim); --tc-rgb: 212,255,0; }
 .tgc-card.tgc-stfu { --tc: var(--green); --tc-dim: var(--green-dim); --tc-rgb: 0,255,176; }
 .tgc-card.tgc-asl  { --tc: var(--teal); --tc-dim: var(--teal-dim); --tc-rgb: 0,255,229; }
-.tgc-card.tgc-echo { --tc: var(--amber); --tc-dim: var(--amber-dim); --tc-rgb: 255,208,64; }   /* v9.3.60 */
+.tgc-card.tgc-echo { --tc: var(--amber); --tc-dim: var(--amber-dim); --tc-rgb: 255,208,64; }
+.tgc-card.tgc-svx { --tc: var(--lime); --tc-dim: var(--lime-dim); --tc-rgb: 212,255,0; }   /* v9.3.60 */
 .tgc-card.grid-busy { opacity: .25; pointer-events: none; }
 .tgc-input, .tgc-select {
   font-family: var(--sans);
@@ -9725,6 +9911,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
       <div class="tabs">
         <div class="tab" id="tab-asl"   onclick="clickTab('ASL')">ASL</div>
         <div class="tab" id="tab-echo"  onclick="clickTab('ECHO')">Echo</div>
+        <div class="tab" id="tab-svx"   onclick="clickTab('SVX')">SVX</div>
         <div class="tab" id="tab-dmr"   onclick="clickTab('DMR')">DMR</div>
         <div class="tab" id="tab-stfu"  onclick="clickTab('STFU')">STFU</div>
         <div class="tab" id="tab-ysf"   onclick="clickTab('YSF')">YSF</div>
@@ -9782,6 +9969,26 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
           <div id="echo-grid"></div>
           <div class="act-bar">
             <button class="btn btn-red" onclick="doEchoDisc()">Disconnect</button>
+          </div>
+        </div>
+        <!-- SVX -->
+        <div id="pg-SVX" class="hidden">
+          <div id="svx-card" class="tgc-card tgc-svx">
+            <input id="svx-tg" class="tgc-input" type="text" inputmode="numeric" maxlength="9"
+              placeholder="Talkgroup #" aria-label="SvxReflector talkgroup"
+              autocomplete="off" spellcheck="false" oninput="svxButtons()"
+              onkeydown="if(event.key==='Enter')svxConnectTyped()">
+            <button id="svx-connect-btn" class="btn btn-lime" onclick="svxConnectTyped()" disabled>Connect</button>
+            <button id="lh-btn-SVX" class="btn-last lh-off" onclick="openModeLast('SVX')"
+              aria-label="Open the SvxReflector dashboard set on the Edit tab">LH</button>
+            <button id="svx-save-btn" class="btn btn-muted" onclick="svxSave()" disabled
+              aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
+            <div id="svx-card-msg" class="tgc-card-msg" role="status" hidden></div>
+          </div>
+          <div class="net-sel-hdr svx-fav-hdr">Favorites</div>
+          <div id="svx-grid"></div>
+          <div class="act-bar">
+            <button class="btn btn-red" onclick="doSvxDisc()">Disconnect</button>
           </div>
         </div>
         <div id="pg-DMR" class="hidden">
@@ -10067,8 +10274,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
                 <input id="cfg-bridge-node-2" type="hidden">
               </div>
               <div class="cfg-field">
-                <label class="cfg-lbl cfg-lbl-reserved" for="cfg-bridge-node-3">Reserved</label>
-                <input id="cfg-bridge-node-3" class="cfg-inp" type="text" inputmode="numeric" placeholder="—" maxlength="10" disabled title="Reserved for future use">
+                <label class="cfg-lbl" for="cfg-bridge-node-3">SvxLink Bridge</label>
+                <input id="cfg-bridge-node-3" class="cfg-inp" type="text" inputmode="numeric" placeholder="e.g. 1900" maxlength="10" title="The private node SvxLink USRP is wired to (blank = 1900)">
               </div>
               <div class="cfg-field">
                 <label class="cfg-lbl" for="cfg-port">Web UI Port</label>
@@ -10085,6 +10292,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
             <div id="eds-tabs" class="tab-enable-row" style="border-top:none;padding-top:0;margin-top:.3rem">
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-ASL"   value="ASL">ASL</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-ECHO"  value="ECHO">Echo</label>
+              <label class="tab-chk-lbl"><input type="checkbox" id="chk-SVX"   value="SVX">SVX</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-DMR"   value="DMR">DMR</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-STFU"  value="STFU">STFU</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-YSF"   value="YSF">YSF</label>
@@ -10209,8 +10417,8 @@ const byId=id=>document.getElementById(id);
 // applyTabVisibility() on first load anyway. Keep this list in sync with
 // MODE_CAPS' keys below if a mode is ever added/removed at the Object.keys
 // level; applyTabVisibility() itself no longer needs this list at all.
-const PAGES=['ASL','ECHO','DMR','STFU','YSF','FCS','P25','NXDN','DSTAR','XLX','M17'];
-let TAB_LABELS={ASL:'ASL',ECHO:'ECHO',DMR:'DMR',STFU:'STFU',YSF:'YSF',FCS:'FCS',P25:'P25',NXDN:'NXDN',DSTAR:'DSTAR',XLX:'XLX'};
+const PAGES=['ASL','ECHO','SVX','DMR','STFU','YSF','FCS','P25','NXDN','DSTAR','XLX','M17'];
+let TAB_LABELS={ASL:'ASL',ECHO:'ECHO',SVX:'SVX',DMR:'DMR',STFU:'STFU',YSF:'YSF',FCS:'FCS',P25:'P25',NXDN:'NXDN',DSTAR:'DSTAR',XLX:'XLX'};
 const TG_BLANK_NAME='blank';
 const TG_BLANK_ADDR='000000';
 const TG_DISCONNECT='disconnect';
@@ -10230,7 +10438,7 @@ function _saveTabState(){try{sessionStorage.setItem('dashLastTab',curPage);}catc
 // torn down (Edit-page round-trips).  Used by clickTab to restore the
 // correct indicator immediately on tab entry without waiting for a tune event.
 const _curTgPerMode = {};
-let _hasAsl=true,_hasDvs=true,_hasStfu=false,_hasEcho=false,_hasM17=false,_lastHash='',_firstPoll=true,_failCount=0,_lastKeyed=false;
+let _hasAsl=true,_hasDvs=true,_hasStfu=false,_hasEcho=false,_hasM17=false,_hasSvx=false,_lastHash='',_firstPoll=true,_failCount=0,_lastKeyed=false;
 let _uptimeBase=0,_uptimeAt=0;
 let _tuneState='';   // server verdict for the tuned talkgroup: '', pending, confirmed, unconfirmed, sent
 let _abTimer=0;
@@ -10482,6 +10690,7 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'
 const MODE_CAPS={
   ASL:   {requires:['hasAsl'],            isDigital:false, reflectorGrid:false, tgRefresh:false},
   ECHO:  {requires:['hasAsl','hasEcho'],  isDigital:false, reflectorGrid:false, tgRefresh:false},
+  SVX:   {requires:['hasAsl','hasSvx'],   isDigital:false, reflectorGrid:false, tgRefresh:false},
   DMR:   {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
   STFU:  {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
   YSF:   {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
@@ -10494,8 +10703,8 @@ const MODE_CAPS={
   PHONE: {requires:['hasAsl'],            isDigital:false, reflectorGrid:false, tgRefresh:false},
 };
 const STATIC_PAGES=Object.keys(MODE_CAPS);
-function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17){
-  const flags={hasAsl,hasDvs,hasStfu,hasEcho,hasM17};
+function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17,hasSvx){
+  const flags={hasAsl,hasDvs,hasStfu,hasEcho,hasM17,hasSvx};
   const before=PAGES.slice().sort().join();
   PAGES.length=0;
   STATIC_PAGES.forEach(p=>{
@@ -10775,6 +10984,9 @@ function _gridClick(e){
     case 'echo-row':
       echoConnect(row.dataset.node,row.dataset.name);
       break;
+    case 'svx-row':
+      svxConnect(row.dataset.tg,row.dataset.name);
+      break;
     case 'dmr-net-row':
       switchDmrServer(row.dataset.name);
       break;
@@ -10881,6 +11093,68 @@ function renderEchoGrid(nodes,fav){
       <span class="row-name">${esc(nd.name)}</span></div>`;
   }).join('');
   if(!n)el.innerHTML='<div style="padding:1rem;color:var(--muted);font-family:var(--sans);font-size:.858rem">No Echo nodes saved</div>';
+}
+let _lastSvx=[],_lastSvxTg=null,_svxReady=false;
+function renderSvxGrid(list,tg){
+  const el=byId('svx-grid');if(!el)return;_wireGridClicks(el);let n=0;
+  el.innerHTML=(list||[]).map(r=>{
+    n++;
+    const active=tg!==null&&String(tg)===String(r.tg);
+    return `<div class="${active?'row-grid active-svx':'row-grid'}" data-role="svx-row" data-tg="${esc(r.tg)}" data-name="${esc(r.name)}" title="${esc(r.name)} (TG ${esc(r.tg)})">
+      <span class="row-num">${n}</span>
+      <div class="dot ${active?'dot-on':'dot-off'}"></div>
+      <span class="row-name">${esc(r.name)}</span></div>`;
+  }).join('');
+  if(!n)el.innerHTML='<div style="padding:1rem;color:var(--muted);font-family:var(--sans);font-size:.858rem">No SVX talkgroups saved</div>';
+}
+function svxTyped(){
+  const v=((byId('svx-tg')||{}).value||'').trim();
+  return /^[0-9]{1,9}$/.test(v)&&Number(v)>0?String(Number(v)):'';
+}
+function svxButtons(){
+  const ok=!!svxTyped();
+  const c=byId('svx-connect-btn'),s=byId('svx-save-btn');
+  if(c)c.disabled=!ok;if(s)s.disabled=!ok;
+}
+function svxMsg(){
+  const el=byId('svx-card-msg');if(!el)return;
+  if(!_svxReady){
+    el.hidden=false;
+    el.textContent='SvxLink is not connected to a reflector yet, so Connect only links the bridge. Run Connect to an SvxReflector on 44helper\'s SvxLink tab.';
+  }else if(_lastSvxTg){
+    el.hidden=false;el.textContent='Talkgroup '+_lastSvxTg+' picked.';
+  }else{el.hidden=true;el.textContent='';}
+}
+async function svxConnect(tg,name){
+  if(busy)return;
+  dimGrid('SVX');
+  try{await apiAction(
+    {action:'svx-connect',tg,name},
+    `SVX picking TG ${tg}…`,
+    d=>{_lastSvxTg=String(Number(tg));renderSvxGrid(_lastSvx,_lastSvxTg);svxMsg();showReady(`SVX READY — ${name}`);},
+    30000
+  );}finally{undimGrid('SVX');}
+}
+function svxConnectTyped(){
+  const tg=svxTyped();if(!tg)return;
+  const fav=(_lastSvx||[]).find(r=>String(r.tg)===tg);
+  svxConnect(tg,fav?fav.name:'TG '+tg);
+}
+async function svxSave(){
+  const tg=svxTyped()||(_lastSvxTg||'');if(!tg)return;
+  await apiAction(
+    {action:'save-svx-favorite',tg,name:'TG '+tg},
+    'Saving…',
+    d=>{toast(d.message,'ok');const i=byId('svx-tg');if(i)i.value='';svxButtons();setTimeout(refresh,300);}
+  );
+}
+async function doSvxDisc(){
+  await apiAction(
+    {action:'svx-disc'},
+    'SVX disconnecting…',
+    ()=>{_lastSvxTg=null;renderSvxGrid(_lastSvx,null);svxMsg();showReady('SVX — no talkgroup');},
+    30000
+  );
 }
 function buildModuleOptions(selected,includeAll){
   // Returns <option> HTML for modules A–Z, optionally prefixed with the
@@ -11055,6 +11329,7 @@ function _refreshLhBtns(){
   _updateLhBtn('lh-btn-DMR', activeSrv?activeSrv.net_url||'':'');
   _updateLhBtn('lh-btn-ASL',  modeNetUrls.ASL||'');
   _updateLhBtn('lh-btn-ECHO', modeNetUrls.ECHO||'');
+  _updateLhBtn('lh-btn-SVX',  modeNetUrls.SVX||'');
   _updateLhBtn('lh-btn-STFU', modeNetUrls.STFU||'');
   fcsCardButtons();   // v9.3.82: card LH falls back to the FCS network LH
   dmrSaveSync();   // v8.9.6: DMR Save follows the network dropdown
@@ -12425,14 +12700,14 @@ async function doReboot(){if(!await confirm1('Reboot the system?'))return;const 
 async function doShutdown(){if(!await confirm1('Shut down the system?'))return;const d=await api({action:'shutdown'});if(!d||!d.ok){toast(d?.message||'Shutdown failed','err');return}toast(d.message||'Shutting down…','info')}
 function applyTabState(d){
   if(_firstPoll){
-    _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
+    _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;_hasSvx=!!d.has_svx;
     if(!d.has_asl&&!d.has_dvs){
       byId('tabs-strip').style.display='none';
       PAGES.length=0;inEdit=true;syncPageDisplay();edReload();
       document.body.classList.add('tabs-ready');
       _firstPoll=false;return;
     }
-    applyTabVisibility(d.enabled_tabs||[],_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    applyTabVisibility(d.enabled_tabs||[],_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);
     // X2 — one-shot startup warnings from the backend (e.g. legacy XLX rows
     // dropped during conf parse). Gated on _firstPoll so it surfaces exactly
     // once per page load, never repeats on subsequent poll cycles.
@@ -12481,8 +12756,8 @@ function applyTabState(d){
     document.body.classList.add('tabs-ready');
     _firstPoll=false;
   }else if(Array.isArray(d.enabled_tabs)){
-    _hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
-    const pc=applyTabVisibility(d.enabled_tabs,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    _hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;_hasSvx=!!d.has_svx;
+    const pc=applyTabVisibility(d.enabled_tabs,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);
     if(pc){
       if(curPage&&!PAGES.includes(curPage)){curPage=PAGES.length?PAGES[0]:null;if(!inEdit)inEdit=!curPage}
       syncPageDisplay();_lastHash='';
@@ -12612,6 +12887,8 @@ function applyGridState(d,changed){
     // it draws at boot/tab-switch instead of only after a connect/disconnect
     // action (which was the only place this used to be called from).
     renderEchoGrid(_lastEchoNodes,_lastEchoFav);
+    _lastSvx=d.svx||[];_lastSvxTg=d.svx_tg||null;_svxReady=!!d.svx_ready;
+    renderSvxGrid(_lastSvx,_lastSvxTg);svxMsg();
     // T2 guard: only render TG grids once loadTgData() has successfully fetched
     // real data.  Before that, _lastTgs is {} and every renderTGGrid call would
     // render "No X entries", permanently blanking the grids if loadTgData()
@@ -12659,9 +12936,11 @@ async function refresh(){
     if(d.wifimon_shutdown&&d.wifimon_shutdown.active)showWfmShutdown(d.wifimon_shutdown);
     const aslFP=(d.asl||[]).map(n=>n.name+n.node).join('|');
     const echoFP=(d.echo||[]).map(n=>n.name+n.node).join('|');
+    const svxFP=(d.svx||[]).map(n=>n.name+n.tg).join('|');
     const hash=JSON.stringify([d.page,d.current_fav,d.echo_fav,
                                d.has_asl,d.has_dvs,d.has_stfu,d.has_echo,
-                               aslFP,echoFP,(d.enabled_tabs||[]).join()]);
+                               aslFP,echoFP,(d.enabled_tabs||[]).join(),
+                               d.has_svx,d.svx_tg,d.svx_ready,svxFP]);
     const changed=hash!==_lastHash;_lastHash=hash;
     applyTabState(d);
     applyServerState(d);
@@ -12677,7 +12956,7 @@ async function refresh(){
     }
   }
 }
-let edRows=[],ndRows=[],ecRows=[],xlxEdRows=[],m17EdRows=[],modeNetUrls={},rowNetUrlDefaults={};
+let edRows=[],ndRows=[],ecRows=[],svRows=[],xlxEdRows=[],m17EdRows=[],modeNetUrls={},rowNetUrlDefaults={};
 async function cfgLoad(){
   try{
     const d=await(await fetch('/api/config')).json();
@@ -13502,6 +13781,8 @@ async function edReload(){
     m17EdRows=await m17Res.json();
     while(ndRows.length<10)ndRows.push({name:TG_BLANK_NAME,node:TG_BLANK_ADDR});
     while(ecRows.length<10)ecRows.push({name:TG_BLANK_NAME,node:TG_BLANK_ADDR});
+    svRows=(_lastSvx||[]).map(r=>({name:r.name,tg:String(r.tg)}));
+    while(svRows.length<10)svRows.push({name:'',tg:''});
     while(xlxEdRows.length<10)xlxEdRows.push({name:TG_BLANK_NAME,tg:TG_BLANK_ADDR,url:''});
     while(m17EdRows.length<10)m17EdRows.push({name:TG_BLANK_NAME,base:TG_BLANK_NAME,module:'@ALL',ip:TG_BLANK_ADDR,url:''});
     const DM=['DMR','STFU','YSF','FCS','P25','NXDN','DSTAR'];edRows=[];
@@ -13602,6 +13883,13 @@ function ecSyncFromDOM(){
   });
 }
 function ecFieldChanged(i,f,v){if(ecRows[i])ecRows[i][f]=v}
+function svSyncFromDOM(){
+  syncEdRowsFromDOM('.sv-row',svRows,(row,entry)=>{
+    const n=row.querySelector('.sv-inp-name');const t=row.querySelector('.sv-inp-tg');
+    if(n)entry.name=n.value;if(t)entry.tg=t.value;
+  });
+}
+function svFieldChanged(i,f,v){if(svRows[i])svRows[i][f]=v}
 function modeNetUrlChanged(m,v){modeNetUrls[m]=v;}
 function xlxUrlChanged(i,v){if(xlxEdRows[i])xlxEdRows[i].url=v;}
 function m17UrlChanged(i,v){if(m17EdRows[i])m17EdRows[i].url=v;}
@@ -13670,7 +13958,7 @@ function edRender(){
   // Default all sections to collapsed on first entry to the edit tab.
   // _edCollapsed persists for the session, so sections the user has explicitly
   // opened stay open on subsequent edReload() calls.
-  const allSids=['eds-tabs','eds-phone','eds-ASL','eds-ECHO','eds-DSTAR','eds-XLX','eds-M17',
+  const allSids=['eds-tabs','eds-phone','eds-ASL','eds-ECHO','eds-SVX','eds-DSTAR','eds-XLX','eds-M17',
                  'eds-DMR-NET','eds-FCS',
                  ...DM.map(m=>`eds-${m}`),
                  ...Object.keys(dmrSrvRows||{}).map(k=>`eds-TGS-${k}`)];
@@ -13695,6 +13983,17 @@ function edRender(){
     h+=ecRows.map((r,i)=>`<div class="ec-row ed-row" data-idx="${i}">
     <input class="ed-inp ec-inp-name" value="${esc(r.name)}" placeholder="Name" oninput="ecFieldChanged(${i},'name',this.value)">
     <input class="ed-inp ec-inp-node" value="${esc(r.node)}" placeholder="Node #" inputmode="numeric" oninput="ecFieldChanged(${i},'node',this.value)">
+    </div>`).join('');
+    h+='</div></div>';
+  }
+  if(PAGES.includes('SVX')){
+    h+=`<div class="ed-sec-hdr"><span>SVX</span><button onclick="toggleEdSection('eds-SVX')">Hide</button></div>`;
+    h+=`<div id="eds-SVX">`;
+    h+=edUrlRow('SVX');
+    h+=`<div class="ed-list-grid">`;
+    h+=svRows.map((r,i)=>`<div class="sv-row ed-row" data-idx="${i}">
+    <input class="ed-inp sv-inp-name" value="${esc(r.name)}" placeholder="Name" oninput="svFieldChanged(${i},'name',this.value)">
+    <input class="ed-inp sv-inp-tg" value="${esc(r.tg)}" placeholder="Talkgroup #" inputmode="numeric" maxlength="9" oninput="svFieldChanged(${i},'tg',this.value)">
     </div>`).join('');
     h+='</div></div>';
   }
@@ -13874,7 +14173,7 @@ function edRender(){
 async function edSave(){
   if(busy)return;busy=true;
   if(document.activeElement?.closest('.ed-row'))document.activeElement.blur();
-  edSyncFromDOM();ndSyncFromDOM();ecSyncFromDOM();xlxSyncFromDOM();m17SyncFromDOM();showWorking('Saving…');
+  edSyncFromDOM();ndSyncFromDOM();ecSyncFromDOM();svSyncFromDOM();xlxSyncFromDOM();m17SyncFromDOM();showWorking('Saving…');
   try{
     if(!await cfgSave())return;
     if(_ph.loaded&&_ph.dirty)await phSave(true);
@@ -13900,11 +14199,16 @@ async function edSave(){
         const dm=await api({action:'save-m17',rows:m17EdRows});
         if(!dm.ok)toast(dm.message,'err');
       }
+      if(PAGES.includes('SVX')){
+        const dv=await api({action:'save-svx',rows:svRows.filter(r=>String(r.name||'').trim()||String(r.tg||'').trim())});
+        if(!dv.ok)toast(dv.message,'err');
+        else{_lastSvx=svRows.filter(r=>String(r.tg||'').trim()).map(r=>({name:String(r.name||'').trim()||'TG '+Number(r.tg),tg:String(Number(r.tg))}));}
+      }
       edRender();
       loadTgData();
       _refreshLhBtns();
       const en=STATIC_PAGES.filter(m=>byId('chk-'+m)?.checked);
-      applyTabVisibility(en,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);syncPageDisplay();setTimeout(refresh,400);
+      applyTabVisibility(en,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);syncPageDisplay();setTimeout(refresh,400);
     }
   }finally{hideWorking();busy=false}
 }
@@ -15002,11 +15306,12 @@ _REC_BLOCKED_ACTIONS = frozenset((
     "switch-tab", "retune-tab", "tune", "quick-tune", "asl-connect", "asl-disc-current", "disc-perm-link",
     "connect-by-number", "echo-connect", "echo-connect-by-number", "echo-disc", "dstar-connect", "xlx-connect",
     "dstar-disconnect", "xlx-disconnect", "m17-connect", "m17-disconnect", "disc-all", "switch-dmr-server",
+    "svx-connect", "svx-disc", "save-svx", "save-svx-favorite",
     "save-all", "save-dmr-server-tgs", "save-xlx", "save-m17", "save-config", "save-phone", "phone-select",
     "phone-apply", "phone-activate", "phone-revert", "phone-dial", "phone-test", "phone-patch"))
 _REC_BRIDGE_ACTIONS = frozenset((
     "switch-tab", "retune-tab", "tune", "quick-tune", "dstar-connect", "xlx-connect", "dstar-disconnect", "xlx-disconnect",
-    "m17-connect", "m17-disconnect", "switch-dmr-server"))
+    "m17-connect", "m17-disconnect", "svx-connect", "svx-disc", "switch-dmr-server"))
 _REC_POWER_ACTIONS = frozenset(("reboot", "shutdown"))
 _REC_RESTART_ACTIONS = frozenset(("phone-apply", "phone-activate", "phone-revert"))
 _REC_DIGITAL_MODES = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
@@ -15465,6 +15770,9 @@ _POST_ACTIONS: dict = {
     "echo-connect":      lambda h, d: action_echo_connect(_arg(d, "node"), _clip_label(_arg(d, "name"))),
     "echo-connect-by-number": lambda h, d: action_echo_connect_by_number(_arg(d, "node")),
     "echo-disc":         lambda h, d: action_echo_disconnect(drop_all=True),
+    "svx-connect":       lambda h, d: action_svx_connect(_arg(d, "tg"), _clip_label(_arg(d, "name"))),
+    "svx-disc":          lambda h, d: action_svx_disconnect(),
+    "save-svx-favorite": lambda h, d: action_save_svx_favorite(_arg(d, "tg"), _clip_label(_arg(d, "name"))),
     "dstar-connect":     lambda h, d: action_dstar_connect(
         _arg_s(d, "base"), _arg_s(d, "module"),
         _clip_label(_arg_s(d, "name") or f"DSTAR {_arg_s(d, 'base')}{_arg_s(d, 'module')}")),
@@ -15493,6 +15801,7 @@ _POST_ACTIONS: dict = {
     "save-xlx-favorite": lambda h, d: action_save_xlx_favorite(_arg(d, "base"), _arg(d, "module")),
     "save-xlx":          _act_rows(lambda rows: action_save_xlx(rows)),
     "save-m17":          _act_rows(lambda rows: action_save_m17(rows)),
+    "save-svx":          _act_rows(lambda rows: action_save_svx(rows)),
     "save-config":       _act_save_config,
     "save-phone":        lambda h, d: action_save_phone(d.get("phone", {})),
     "phone-select":      lambda h, d: action_phone_select(_arg_s(d, "network")),
@@ -15890,9 +16199,12 @@ def startup() -> None:
     has_asl = _detect_asl()
     has_dvs = _detect_dvs()
     has_m17 = _detect_m17()
-    set_state(has_asl=has_asl, has_dvs=has_dvs, has_m17=has_m17)
+    has_svx = _detect_svx()
+    set_state(has_asl=has_asl, has_dvs=has_dvs, has_m17=has_m17, has_svx=has_svx)
     if has_m17:
         log.info("M17 bridge detected — tab enabled")
+    if has_svx:
+        log.info("SvxLink USRP detected — SVX tab enabled")
 
     cs = _read_callsign()
     set_state(callsign=cs)

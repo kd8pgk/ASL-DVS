@@ -1,6 +1,18 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_111_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_112_20261116.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.112 (2026-11-16)
+
+New **SVX** tab, after Echo: SvxReflector talkgroups through SvxLink USRP, modelled on the ASL tab. Full build only.
+
+- **Shown when** ASL3 is installed and SvxLink USRP is (`/usr/local/etc/svxlink/svxlink.conf` or the `svxlink-usrp` service), and SVX is ticked under Visible Tabs.
+- **Opening the tab** links the main node to the SvxLink bridge node and keeps it linked while the tab is open, like the M17 tab; leaving it clears the talkgroup and drops the link.
+- **Connect** (a typed talkgroup number or a favorite) picks that talkgroup on the reflector: Node Controller writes `91<TG>#` to SvxLink's control device, `/var/lib/svxlink/dtmf_ctrl`. **Disconnect** clears it (`910#`) and turns SvxLink's reflector link off (`9#`); the bridge stays linked while the tab is open. **Save** adds the talkgroup to the favorites; **LH** opens the reflector dashboard URL set on the Edit tab.
+- When SvxLink has no control device yet, the tab says so and Connect only links the bridge: run Connect to an SvxReflector on 44helper's SvxLink tab (44helper 0.1.39 or later) first.
+- **Edit tab:** the fourth bridge field, Reserved before, is now **SvxLink Bridge** (blank means 1900, the node 44helper's Add SvxLink bridge node creates); an **SVX** box under Visible Tabs; an **SVX** section after Echo with name and talkgroup rows and a dashboard URL. They are saved in a new `[SVX]` section of `asl_dvs.conf`.
+- **Mixed versions:** an older Node Controller keeps the `[SVX]` section and the fourth bridge node when it saves, but it drops SVX from `enabled_tabs`. This version also writes `svx_tab=on|off` and treats a missing `svx_tab` as on, so an older save does not hide the tab.
+- This is a release: the server and the page gained a tab.
 
 ## 9.3.111 (2026-11-13)
 
