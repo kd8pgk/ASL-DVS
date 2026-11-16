@@ -18,9 +18,9 @@ SYSMON_FULL_TABS = {"asldvs", "console", "dvsm", "edit", "firewall", "hardware",
 SYSMON_PI02W_TABS = {"asldvs", "dvsm", "edit", "hardware", "journal", "m17", "overview", "phone",
                      "ports", "reg", "sdcard", "services", "stfu", "tune"}
 
-NC_FULL_TABS = {"tab-asl", "tab-dmr", "tab-dstar", "tab-echo", "tab-edit", "tab-fcs", "tab-m17",
-                "tab-nxdn", "tab-p25", "tab-phone", "tab-stfu", "tab-xlx", "tab-ysf"}
-NC_PI02W_TABS = NC_FULL_TABS
+NC_PI02W_TABS = {"tab-asl", "tab-dmr", "tab-dstar", "tab-echo", "tab-edit", "tab-fcs", "tab-m17",
+                 "tab-nxdn", "tab-p25", "tab-phone", "tab-stfu", "tab-xlx", "tab-ysf"}
+NC_FULL_TABS = NC_PI02W_TABS | {"tab-svx"}
 NT_TABS = {"nav-connect", "nav-listen", "nav-setup"}
 NR_TABS = {"nav-connect", "nav-record", "nav-setup"}
 
