@@ -107,7 +107,7 @@ def make_bar_case(key, pattern):
     return BarCase
 
 
-GROUP_TOOLS = {"nodecontrol": "nodecontrol_v[0-9]*.py"}
+GROUP_TOOLS = {"nodecontrol": "nodecontrol_v[0-9]*.py", "nodecontrol_pi02w": "nodecontrol_pi02w_v[0-9]*.py"}
 
 
 def make_group_case(key, pattern):

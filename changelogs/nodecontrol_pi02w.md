@@ -1,6 +1,15 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_117_20261113.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_118_20261116.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.118-pi02w (2026-11-16)
+
+The Allmon3 quick-link button at the top left of the page is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page's link table changed.
+
+- **Nodemon** is the first button of the left group and opens `http://<this node>:7777/`, like Cockpit, which is a fixed button too. It does not check whether Node Monitor is running first.
+- **Allmon3** is no longer offered in the button groups. The DVSwitch and Cockpit buttons are unchanged.
+- This is the Pi Zero 2 W build. The full build got the same change in 9.3.113.
+- Nothing else changes.
 
 ## 9.3.117-pi02w (2026-11-13)
 
