@@ -101,13 +101,13 @@
    "version": "0.16.1"
   },
   "sysmon": {
-   "blob": "04343e160c28f43cfe414977edeccf31f7c10979",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "sysmon_v6_13_95_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-11-11T18:44:35Z",
-   "reason": "age",
-   "version": "6.13.95"
+   "blob": "6ab00a2204cd09c644797ddb4391a907f5f2f233",
+   "commit": "a47af7f8bdda597565ae460386ea954510445a13",
+   "file": "sysmon_v6_13_96_20261111.py",
+   "landed": "2026-11-11T21:42:38Z",
+   "promoted": "2026-11-16T16:25:35Z",
+   "reason": "count",
+   "version": "6.13.96"
   },
   "sysmon_pi02w": {
    "blob": "60b6d99ae42a92f92a53a16964a6558d3365b94f",
