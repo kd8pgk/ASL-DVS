@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_40_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_41_20261116.py`. Newest entries first.
+
+## 0.1.41 (2026-11-16)
+
+Fix: the `exten` line for private nodes. **Add private node** (with "Add the exten line" ticked, the default), **Add SvxLink bridge node** and the M17 tab's config step wrote `exten => NODE,1,rpt,NODE`. ASL3's Asterisk rejects that form ("No application 'rpt,NODE'"), and because the line overrides ASL3's own `_XXXX!` pattern in `[radio-secure]`, the main node could not link to the node at all. Found while testing the SVX bridge on a real ASL3.
+
+- New lines are written as `exten => NODE,1,Rpt(NODE)`.
+- **Fix exten lines:** when `[radio-secure]` holds a line in the old form, the Add private node card says so and offers Preview fix and Fix exten lines. Only lines in the exact old form (`exten => N,1,rpt,N`) in `[radio-secure]` are changed; comments are kept; an automatic copy is saved first. Asterisk reads the file again when restarted.
+- Add private node changes the node's own old line instead of leaving it; Remove takes away either form. The M17 step changes an old line it finds (Purge puts the old one back).
+- 44helper is a common tool; this affects both builds.
+- This is a release: what the tab writes changed.
 
 ## 0.1.40 (2026-11-16)
 

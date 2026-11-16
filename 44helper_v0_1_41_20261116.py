@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.40"
+APP_VERSION = "0.1.41"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4043,7 +4043,7 @@ to:
 
 _M17_EXTENSIONS_SNIPPET = """Add to the [radio-secure] stanza in /etc/asterisk/extensions.conf:
 
-exten => 1917,1,rpt,1917
+exten => 1917,1,Rpt(1917)
 
 ASL3-specific (community-reported by the upstream README, not confirmed
 by an official AllStarLink doc) — also add to rpt.conf's own [globals]
@@ -4159,11 +4159,15 @@ def apply_ext(text):
         fail("extensions.conf has no [radio-secure] stanza.")
     s, e = sec
     body = lines[s + 1:e]
-    if any(re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,\s*1\s*,\s*rpt\s*,\s*" + node + r"\b", x) for x in body):
+    for i in range(s + 1, e):
+        if re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,\s*1\s*,\s*rpt\s*,\s*" + node + r"\b", lines[i]):
+            lines[i] = "exten => " + node + ",1,Rpt(" + node + ") ; " + TAG + " (was: " + lines[i].strip() + ")"
+            return "\n".join(lines), ["changed the extension to Rpt(" + node + "): ASL3's Asterisk rejects the old rpt," + node + " form"]
+    if any(re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,\s*1\s*,\s*rpt\s*\(\s*" + node + r"\s*\)", x, re.I) for x in body):
         return text, ["extension already there"]
     if any(re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,", x) for x in body):
         fail("Extension " + node + " is already used in [radio-secure] for something else.")
-    lines.insert(insert_point(lines, s, e), "exten => " + node + ",1,rpt," + node + " ; " + TAG)
+    lines.insert(insert_point(lines, s, e), "exten => " + node + ",1,Rpt(" + node + ") ; " + TAG)
     return "\n".join(lines), ["added extension " + node]
 
 
@@ -4212,6 +4216,11 @@ def undo_ext(text):
     out = []
     n = 0
     for x in text.split("\n"):
+        m = re.search(r"; " + TAG + r" \(was: (.*)\)\s*$", x)
+        if m:
+            out.append(m.group(1))
+            n += 1
+            continue
         if x.rstrip().endswith("; " + TAG):
             n += 1
             continue
@@ -18145,7 +18154,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "pn_fix_ext", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -19065,7 +19074,37 @@ def _pn_ext_section(lines: list[str]) -> dict | None:
     return next((s for s in _cfgr_sections(lines, mask) if s["name"].lower() == "radio-secure"), None)
 
 def _pn_ext_line(node: str) -> str:
-    return f"exten => {node},1,rpt,{node}"
+    return f"exten => {node},1,Rpt({node})"
+
+_PN_EXT_OLD_RE = re.compile(r"^(\s*)exten\s*=>\s*(\d+)\s*,\s*1\s*,\s*rpt\s*,\s*(\d+)\s*(;.*)?$")
+
+def _pn_ext_fix_lines(el: list[str]) -> tuple[list[str], list[str]]:
+    sec = _pn_ext_section(el)
+    if sec is None:
+        return el, []
+    out = list(el)
+    fixed: list[str] = []
+    for i in range(sec["start"] + 1, sec["end"]):
+        m = _PN_EXT_OLD_RE.match(out[i])
+        if m and m.group(2) == m.group(3):
+            out[i] = m.group(1) + _pn_ext_line(m.group(2)) + (" " + m.group(4) if m.group(4) else "")
+            fixed.append(m.group(2))
+    return out, fixed
+
+def _cfgr_act_pn_fix_ext(payload: dict, apply: bool) -> dict:
+    ext_b = _cfgr_read(_CFGR_EXT)
+    if ext_b is None:
+        return {"success": False, "output": f"{_CFGR_EXT} not found."}
+    el = _cfgr_lines(ext_b.decode("utf-8", "replace"))
+    new, fixed = _pn_ext_fix_lines(el)
+    if not fixed:
+        return {"success": True, "changes": [], "output": "No exten line in [radio-secure] uses the old rpt,NODE form. "
+                "Nothing to change."}
+    changes = {_CFGR_EXT: (ext_b, _cfgr_join(new).encode("utf-8"))}
+    notes = ["The old form (exten => NODE,1,rpt,NODE) is rejected by ASL3's Asterisk, so links to these nodes "
+             "fail. Rpt(NODE) is the form ASL3 uses. Asterisk reads extensions.conf again when it is restarted "
+             "(or with: asterisk -rx 'dialplan reload')."]
+    return _pn_finish(changes, "fixing exten lines", apply, ["Fix exten lines for node(s) " + ", ".join(fixed) + ":"], notes)
 
 def _pn_finish(changes: dict[str, tuple[bytes, bytes]], reason: str, apply: bool, head: list[str],
                notes: list[str], extra: dict | None = None) -> dict:
@@ -19177,7 +19216,13 @@ def _cfgr_act_pn_add(payload: dict, apply: bool,
             notes.append("extensions.conf has no [radio-secure] context, so no exten line was added. Add "
                          f"'{_pn_ext_line(node)}' by hand where your nodes are.")
         elif any(_CFGR_EXTEN_RE.match(x) and _CFGR_EXTEN_RE.match(x).group(1) == node for x in el):
-            notes.append(f"extensions.conf already has an exten line for {node}; left as it is.")
+            fixed_el, fixed = _pn_ext_fix_lines(el)
+            if node in fixed:
+                changes[_CFGR_EXT] = (ext_b, _cfgr_join(fixed_el).encode("utf-8"))
+                notes.append(f"extensions.conf had the old exten line for {node} (rpt,{node}), which ASL3's Asterisk "
+                             f"rejects; it is changed to Rpt({node}).")
+            else:
+                notes.append(f"extensions.conf already has an exten line for {node}; left as it is.")
         else:
             changes[_CFGR_EXT] = (ext_b, _cfgr_join(_pn_insert_in_section(el, sec, [_pn_ext_line(node)])).encode("utf-8"))
     if kind == "usrp":
@@ -19323,9 +19368,9 @@ def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
         el = _cfgr_lines(ext_b.decode("utf-8", "replace"))
         sec = _pn_ext_section(el)
         if sec is not None:
-            want = _pn_ext_line(node).replace(" ", "")
+            want = {_pn_ext_line(node).replace(" ", ""), f"exten=>{node},1,rpt,{node}"}
             keep = [x for i, x in enumerate(el)
-                    if not (sec["start"] < i < sec["end"] and x.split(";", 1)[0].replace(" ", "") == want)]
+                    if not (sec["start"] < i < sec["end"] and x.split(";", 1)[0].replace(" ", "") in want)]
             if keep != el:
                 changes[_CFGR_EXT] = (ext_b, _cfgr_join(keep).encode("utf-8"))
     notes = ["modules.conf is not changed (other nodes may use chan_usrp)."]
@@ -19339,7 +19384,10 @@ def _pn_status() -> dict:
     lines = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
     sc = _pn_scan(lines)
     tpl, main = _pn_template(lines, sc["secs"])
+    ext_b = _cfgr_read(_CFGR_EXT)
+    old_ext = _pn_ext_fix_lines(_cfgr_lines(ext_b.decode("utf-8", "replace")))[1] if ext_b is not None else []
     return {"available": True, "next_free": _pn_next_free(sc["used"]), "template": tpl, "main": main,
+            "old_ext": old_ext,
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
 
@@ -19361,6 +19409,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "svx_bridge": lambda p: _cfgr_act_svx_bridge(p, True),
     "pn_remove_preview": lambda p: _cfgr_act_pn_remove(p, False),
     "pn_remove": lambda p: _cfgr_act_pn_remove(p, True),
+    "pn_fix_ext_preview": lambda p: _cfgr_act_pn_fix_ext(p, False),
+    "pn_fix_ext": lambda p: _cfgr_act_pn_fix_ext(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
     "gateways_revert": _cfgr_act_gateways_revert,
     "reinstall_preview": _cfgr_act_reinstall_preview,
@@ -19691,6 +19741,14 @@ function cfgPnRender(pn) {
     return;
   }
   stEl.textContent = 'next free: ' + (pn.next_free || 'none') + (pn.template ? ' \u00b7 template ' + pn.template : '');
+  var fx = document.getElementById('cfg-pn-fixext');
+  if (fx) {
+    var old = pn.old_ext || [];
+    fx.style.display = old.length ? '' : 'none';
+    var t = document.getElementById('cfg-pn-fixext-msg');
+    if (t) t.textContent = old.length ? ('extensions.conf has the old exten line for node ' + old.join(', ') +
+      ' (rpt,NODE). ASL3\'s Asterisk rejects it, so links to ' + (old.length > 1 ? 'these nodes' : 'this node') + ' fail.') : '';
+  }
   var nodeEl = document.getElementById('cfg-pn-node');
   if (nodeEl) nodeEl.placeholder = pn.next_free ? ('blank = ' + pn.next_free) : 'no free number left';
   var ours = pn.ours || [];
@@ -20311,6 +20369,11 @@ def _render_config_panel() -> str:
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPnAdd(this,false)">Preview</button>
       <button class="btn-run" onclick="cfgPnAdd(this,true)">Add node</button>
+    </div>
+    <div class="step-actions" id="cfg-pn-fixext" style="display:none">
+      <span class="ov-banner lvl-warn" id="cfg-pn-fixext-msg"></span>
+      <button class="btn-copy" onclick="cfgPost({action: 'pn_fix_ext_preview'}, 'cfg-pn-out', this)">Preview fix</button>
+      <button class="btn-run" onclick="if (confirm('Change the old exten lines to Rpt(NODE)? An automatic copy of the current files is saved first. Asterisk is not restarted.')) cfgPost({action: 'pn_fix_ext'}, 'cfg-pn-out', this)">Fix exten lines</button>
     </div>
     <div class="step-actions" id="cfg-svx-bridge" style="display:none">
       <span class="cfg-hint">SvxLink USRP is installed. One step: adds the bridge node (1900, ports 34000/32000, or the next free

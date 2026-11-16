@@ -1077,7 +1077,7 @@ class SvxBridge(SvxBase):
         self.assertEqual(self.fs.written, {})
         self.assertEqual(r["node"], "1900")
         for text in ("[1900](node-main)", "rxchannel = USRP/127.0.0.1:34000:32000", "USRP_RX_PORT=34000",
-                     "USRP_TX_PORT=32000", "1900 = radio@127.0.0.1/1900,NONE", "exten => 1900,1,rpt,1900"):
+                     "USRP_TX_PORT=32000", "1900 = radio@127.0.0.1/1900,NONE", "exten => 1900,1,Rpt(1900)"):
             self.assertIn(text, r["output"])
         self.assertIn(SVXU, r["changes"])
         self.assertIn(SVX, r["changes"])
@@ -1087,7 +1087,8 @@ class SvxBridge(SvxBase):
         self.assertTrue(r["success"], r["output"])
         f = self.fs.files
         self.assertIn("[1900](node-main)\nrxchannel = USRP/127.0.0.1:34000:32000", f["/etc/asterisk/rpt.conf"])
-        self.assertIn("exten => 1900,1,rpt,1900", f["/etc/asterisk/extensions.conf"])
+        self.assertIn("exten => 1900,1,Rpt(1900)", f["/etc/asterisk/extensions.conf"])
+        self.assertNotIn("1,rpt,1900", f["/etc/asterisk/extensions.conf"])
         self.assertRegex(f["/etc/asterisk/modules.conf"], r"(?m)^load\s*=\s*chan_usrp\.so")
         for p in (SVX, SVXU):
             self.assertIn("USRP_HOST=127.0.0.1\nUSRP_TX_PORT=32000\nUSRP_RX_PORT=34000", f[p])
@@ -1284,6 +1285,76 @@ class SvxNodeInfo(SvxBase):
         self.assertEqual(d["qth"][0]["name"], "Big Hill")
         self.assertEqual(d["qth"][0]["rx"], {"A": {"freq": 146.52}})
         self.assertEqual(d["nodeClass"], "repeater")
+
+
+EXT_OLD = ("[globals]\nHOMENPA = 330\n\n[radio-secure]\nexten => _XXXX!,1,Set(NODENUM=${CALLERID(num)})\n"
+           "exten => 1900,1,rpt,1900\nexten => 1917,1,rpt,1917 ; 44helper M17\nexten => 1999,1,Rpt(1999)\n\n[other]\n"
+           "exten => 1500,1,rpt,1500\n")
+
+
+class ExtenLineFix(SvxBase):
+    def setUp(self):
+        super().setUp()
+        self.fs.files = {"/etc/asterisk/rpt.conf": RPT_BARE + "\n[1900](node-main)\nrxchannel = USRP/127.0.0.1:34000:32000\n",
+                         "/etc/asterisk/extensions.conf": EXT_OLD, "/etc/asterisk/modules.conf": MOD_BARE}
+        p = mock.patch.object(h44, "_cfgr_installed", lambda: {g: g == "asl3" for g in h44._CFGR_GROUPS})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_new_lines_use_rpt_in_brackets(self):
+        self.assertEqual(h44._pn_ext_line("1900"), "exten => 1900,1,Rpt(1900)")
+
+    def test_status_names_the_old_lines_in_radio_secure_only(self):
+        self.assertEqual(h44._pn_status()["old_ext"], ["1900", "1917"])
+
+    def test_fix_changes_only_the_old_form_and_keeps_comments(self):
+        r = h44._cfgr_act_pn_fix_ext({}, False)
+        self.assertTrue(r["success"])
+        self.assertEqual(self.fs.written, {})
+        self.assertIn("1900, 1917", r["output"])
+        r = h44._cfgr_act_pn_fix_ext({}, True)
+        self.assertTrue(r["success"], r["output"])
+        t = self.fs.files["/etc/asterisk/extensions.conf"]
+        self.assertIn("exten => 1900,1,Rpt(1900)\n", t)
+        self.assertIn("exten => 1917,1,Rpt(1917) ; 44helper M17\n", t)
+        self.assertIn("exten => 1999,1,Rpt(1999)\n", t)
+        self.assertIn("[other]\nexten => 1500,1,rpt,1500", t)
+        self.assertIn("exten => _XXXX!,1,Set(NODENUM=${CALLERID(num)})", t)
+        self.assertEqual(h44._pn_status()["old_ext"], [])
+        again = h44._cfgr_act_pn_fix_ext({}, True)
+        self.assertEqual(again["changes"], [])
+
+    def test_add_node_repairs_its_own_old_line(self):
+        self.fs.files["/etc/asterisk/rpt.conf"] = RPT_BARE
+        r = h44._cfgr_act_pn_add({"node": "1900", "kind": "plain"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertIn("exten => 1900,1,Rpt(1900)", self.fs.files["/etc/asterisk/extensions.conf"])
+        self.assertIn("changed to Rpt(1900)", r["output"])
+
+    def test_remove_node_removes_either_form(self):
+        lines = self.fs.files["/etc/asterisk/rpt.conf"].replace("[1900](node-main)", h44._PN_NOTE + "\n[1900](node-main)")
+        self.fs.files["/etc/asterisk/rpt.conf"] = lines.replace("[nodes]\n", "[nodes]\n1900 = radio@127.0.0.1/1900,NONE\n")
+        r = h44._cfgr_act_pn_remove({"node": "1900"}, True)
+        self.assertTrue(r["success"], r["output"])
+        self.assertNotIn("exten => 1900", self.fs.files["/etc/asterisk/extensions.conf"])
+
+    def test_m17_script_repairs_and_undo_restores(self):
+        src = h44._M17_CONF_PY
+        ns = {"__name__": "x"}
+        with mock.patch.object(sys, "argv", ["m17", "apply"]):
+            exec(compile(src.split("\nif mode == ")[0], "m17", "exec"), ns)
+        ns["node"] = "1917"
+        new, notes = ns["apply_ext"]("[radio-secure]\nexten => 1917,1,rpt,1917\n")
+        self.assertIn("exten => 1917,1,Rpt(1917) ; 44helper M17 (was: exten => 1917,1,rpt,1917)", new)
+        self.assertIn("Rpt(1917)", notes[0])
+        back, _ = ns["undo_ext"](new)
+        self.assertIn("exten => 1917,1,rpt,1917", back)
+        self.assertNotIn("Rpt(1917)", back)
+        fresh, _ = ns["apply_ext"]("[radio-secure]\nexten => _XXXX!,1,Set(X=1)\n")
+        self.assertIn("exten => 1917,1,Rpt(1917) ; 44helper M17", fresh)
+        same, n2 = ns["apply_ext"](fresh)
+        self.assertEqual(same, fresh)
+        self.assertEqual(n2, ["extension already there"])
 
 
 if __name__ == "__main__":
