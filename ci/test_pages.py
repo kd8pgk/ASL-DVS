@@ -14,7 +14,7 @@ PLAYWRIGHT_MODULE = os.environ.get("ASL_TEST_PLAYWRIGHT_MODULE") or None
 
 SYSMON_FULL_TABS = {"asldvs", "console", "dvsm", "edit", "firewall", "hardware", "journal", "m17",
                     "net", "overview", "phone", "ports", "reg", "sdcard", "security", "services",
-                    "stfu", "tune", "zello"}
+                    "stfu", "svx", "tune", "zello"}
 SYSMON_PI02W_TABS = {"asldvs", "dvsm", "edit", "hardware", "journal", "m17", "overview", "phone",
                      "ports", "reg", "sdcard", "services", "stfu", "tune"}
 

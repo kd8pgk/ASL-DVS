@@ -1,6 +1,17 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_100_20261116.py`. Newest entries first.
+Current file: `sysmon_v6_13_101_20261116.py`. Newest entries first.
+
+## 6.13.101 (2026-11-16)
+
+A new **SVX** tab for SvxLink, the bridge between the node and a reflector. Full build only. This is a release: a tab, a route and page logic are new.
+
+- **Checks** card. Each row is PASS, FAIL, WARN or INFO with one line on what to do. It runs when the tab opens and on Refresh, not in the background. The header shows the count. Rows: the SvxLink build and `svxlink-usrp` running; `svxlink.conf` reads cleanly; the reflector settings; the reflector reachable (a short TCP connection to its port); logged in (from the SvxLink log); the SvxLink USRP ports mirroring a node in `rpt.conf`; that node loaded in Asterisk; its `exten => N,1,Rpt(N)` line (the old `rpt,N` form fails); its `[nodes]` line has a host and the port Asterisk really uses; the control device Node Controller's SVX tab needs; the bridge UDP ports closed to the network; warnings in the log; the talkgroup now selected.
+- **Connect to a reflector** card, the same change as 44helper's SvxLink step 11. It sets `[ReflectorLogic]` (host, port, the callsign already in the file, the password, default talkgroup, monitored talkgroups), adds `[SvxCtrlLogic]` and `[ReflectorLink]` and the `LOGICS` and `LINKS` entries, and restarts `svxlink-usrp`. A blank password keeps the one already set. A copy of the first version is kept as `svxlink.conf.44helper-bak`. Safe to run again.
+- **Config editor** card. A plain text editor for the SvxLink files (`svxlink.conf`, `svxlink.d/*.conf`, the other `.conf` and `.json` files next to it). Save checks the file first and refuses one with a comment after a value, a name in `LOGICS` or `LINKS` with no section, a port that is not a number, bad JSON, Windows line endings or an empty file. Each save keeps the previous version; **Restore previous** swaps it back, and again to undo that. It never restarts the service by itself.
+- The tab is listed like STFU, M17 and Zello and can be hidden on the Edit tab. Nodes that saved a tab list before this release get it once; after the next Edit save the choice is theirs.
+- All three need the root login to change anything. Routes: `/api/svx` (read the checks), and the same path for read, save, restore, restart and connect.
+- The Pi Zero 2 W build is unchanged. Manuals are unchanged.
 
 ## 6.13.100 (2026-11-16)
 
