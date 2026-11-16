@@ -1206,6 +1206,8 @@ def _phone_reserved_nodes() -> Set[str]:
     for i, nd in enumerate(_cfg.bridge_nodes):
         if nd and i != BRIDGE_SLOT_PHONE:
             r.add(nd)
+    if not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        r.add(SVX_NODE)
     return r
 
 def _phone_hand_nodes() -> Set[str]:
@@ -4317,6 +4319,8 @@ def _disconnect_perm(node: str) -> None:
 
 def _bridge_set() -> Set[str]:
     s = set(filter(None, _cfg.bridge_nodes))
+    if not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        s.add(SVX_NODE)
     try:
         s.update(_phone_all_nodes())
     except Exception as e:
@@ -4345,6 +4349,8 @@ def _bridge_slot_of(node: str) -> Optional[int]:
     for slot, nd in enumerate(_cfg.bridge_nodes):
         if nd and nd == node:
             return slot
+    if node == SVX_NODE and not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        return BRIDGE_SLOT_SVX
     try:
         if node in _phone_all_nodes():
             return BRIDGE_SLOT_PHONE
@@ -6596,8 +6602,8 @@ def _dvs_settle() -> None:
     global _dvs_settle_until
     _dvs_settle_until = time.monotonic() + _DVS_SETTLE_MS / 1000.0
 
-_bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
-_bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
+_bridge_slot_last_reconnect = {slot: 0.0 for slot in BRIDGE_SLOT_PAGES}
+_bridge_slot_down_polls     = {slot: 0 for slot in BRIDGE_SLOT_PAGES}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
 _BRIDGE_DOWN_THRESHOLD     = 3
 
@@ -16654,7 +16660,7 @@ def main() -> None:
     pad = " " * max(0, 32 - len(_cfg.asl_node))
     lpad = " " * max(0, 15 - len(str(_cfg.port)))
     npad = " " * max(0, 24 - len(ip) - len(str(_cfg.port)))
-    _bridge_short_labels = ("Digital", "M17", "Phone", "Reserved")
+    _bridge_short_labels = ("Digital", "M17", "Phone", "SvxLink")
     _bridge_lines = []
     for _i in range(BRIDGE_SLOT_COUNT):
         _val = _cfg.bridge_nodes[_i] or "—"

@@ -82,6 +82,11 @@ class Shape(unittest.TestCase):
         self.assertIn("SVX", nc._PAGE_ENTER)
         self.assertEqual(nc.SVX_CTRL_PTY, "/var/lib/svxlink/dtmf_ctrl")
 
+    def test_watchdog_counters_cover_every_slot(self):
+        self.assertEqual(set(nc._bridge_slot_down_polls), set(nc.BRIDGE_SLOT_PAGES))
+        self.assertEqual(set(nc._bridge_slot_last_reconnect), set(nc.BRIDGE_SLOT_PAGES))
+        self.assertIn(nc.BRIDGE_SLOT_SVX, nc._bridge_slot_down_polls)
+
     def test_blank_slot_means_1900(self):
         saved = list(nc._cfg.bridge_nodes)
         try:
@@ -98,6 +103,34 @@ class TabFlow(Base):
         nc._cfg.bridge_nodes[3] = ""
         self.assertEqual(nc._enter_page("SVX"), "")
         self.assertTrue(any(l.endswith(" 1900") for l in self.links()), self.calls)
+
+    def test_watchdog_relinks_a_dropped_bridge_on_the_svx_tab(self):
+        nc._cfg.bridge_nodes[3] = ""
+        nc._enter_page("SVX")
+        self.calls.clear()
+        saved = (nc._BRIDGE_DOWN_THRESHOLD, nc._BRIDGE_RECONNECT_COOLDOWN)
+        try:
+            nc._BRIDGE_DOWN_THRESHOLD, nc._BRIDGE_RECONNECT_COOLDOWN = 1, 0
+            nc._bridge_slot_last_reconnect[nc.BRIDGE_SLOT_SVX] = 0.0
+            nc._bridge_watchdog(frozenset())
+        finally:
+            nc._BRIDGE_DOWN_THRESHOLD, nc._BRIDGE_RECONNECT_COOLDOWN = saved
+        self.assertTrue(any(l.endswith(" 1900") for l in self.links()), self.calls)
+
+    def test_blank_svx_slot_counts_1900_as_a_bridge_when_svxlink_is_installed(self):
+        saved = nc._detect_svx
+        try:
+            nc._cfg.bridge_nodes[3] = ""
+            nc._detect_svx = lambda: True
+            self.assertIn("1900", nc._bridge_set())
+            self.assertTrue(nc._is_bridge_node("1900"))
+            self.assertIn("1900", nc._phone_reserved_nodes())
+            nc._detect_svx = lambda: False
+            self.assertNotIn("1900", nc._bridge_set())
+            nc._cfg.bridge_nodes[3] = "1905"
+            self.assertIn("1905", nc._bridge_set())
+        finally:
+            nc._detect_svx = saved
 
     def test_no_svxlink_no_bridge_link(self):
         nc.set_state(has_svx=False)
