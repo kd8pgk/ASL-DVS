@@ -1,6 +1,17 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_5_1_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_6_0_20261116.py`. Newest entries first.
+
+## 0.6.0 (2026-11-16)
+
+A node linked to a hub no longer lists the hub's whole roster as its own links, and the Connections tab is gone. This is a release: what the status reply and the page count as a link changed.
+
+- **Only direct links are links.** A link is a node Asterisk reports with a `Conn:` line (and one still connecting). Before, every other node in Asterisk's `LinkedNodes` line, which for a hub such as the East Coast Reflector is every node on it, was added as a link with the state UNKNOWN. A node linked to a hub showed over a hundred links, and Node Talker's transmit node showed the same list again because it is linked to the main node.
+- **The nodes behind the links are collapsed.** Under the Linked to column and on the Main node and Private node cards a closed line reads "Other nodes on the links (N)" and opens to the list of node numbers. Asterisk does not say which link each one is behind, so they are not grouped.
+- **The counts follow.** "Links on the nodes" on the Overview card counts direct links only, so it no longer counts the same hub nodes once for every node that can see them.
+- **Disconnect and Disconnect All are unchanged.** They drop the node's direct links, as before. The status reply gets an `others` list for each node beside `links`.
+- **The Connections tab is removed.** It repeated the main node's link table and the gateways, which the Main node tab already shows. The tabs are Overview, Main node, Private nodes and Log.
+- Nothing else changes.
 
 ## 0.5.1 (2026-11-16)
 

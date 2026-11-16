@@ -23,7 +23,7 @@ NC_PI02W_TABS = {"tab-asl", "tab-dmr", "tab-dstar", "tab-echo", "tab-edit", "tab
 NC_FULL_TABS = NC_PI02W_TABS | {"tab-svx"}
 NT_TABS = {"nav-connect", "nav-listen", "nav-setup"}
 NR_TABS = {"nav-connect", "nav-record", "nav-setup"}
-NM_TABS = {"tab-ov", "tab-main", "tab-conn", "tab-priv", "tab-log"}
+NM_TABS = {"tab-ov", "tab-main", "tab-priv", "tab-log"}
 
 PAGE_CASES = {
     "sysmon": {"title": "System Monitor", "tabs": SYSMON_FULL_TABS,
