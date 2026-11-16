@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_34_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_35_20261115.py`. Newest entries first.
+
+## 0.1.35 (2026-11-15)
+
+Config tab, stage 3 of SvxLink USRP: the SvxLink rows under **Stands alone** on the Identity card each get a field and a Set button, like the other rows there. A row changes its own line only, with the preview, automatic save point and restart list (`svxlink-usrp`); secret rows use a password input and are masked.
+
+- **SvxLink EchoLink password** (1 to 64 characters, no spaces, `#` or quotes), **sysop name** (1 to 40 characters) and **location** (1 to 27 characters, EchoLink's limit): `svxlink.d/ModuleEchoLink.conf`.
+- **SvxLink reflector key** (1 to 64 characters, no spaces, `#` or quotes): `[ReflectorLogic]` `AUTH_KEY` in `svxlink.conf`, keeping its quotes. The `AUTH_KEY` lines of other sections are not touched. A commented-out key has no row and is not written.
+- This is a release: the server writes more lines.
 
 ## 0.1.34 (2026-11-15)
 

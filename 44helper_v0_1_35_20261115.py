@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.34"
+APP_VERSION = "0.1.35"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -15620,12 +15620,17 @@ _CFGR_ALONE_ROWS: dict[str, dict] = {
     "var_tgif_pw": {"re": r"""[^\s"'$`\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, quotes, $, backtick or backslash.", "secret": True},
     "ircddb_pw": {"re": _CFGR_ALONE_RE_PW, "msg": "A password is 1 to 64 characters with no spaces, quotes or backslash.", "secret": True},
     "ircddb_remote_pw": {"re": _CFGR_ALONE_RE_PW, "msg": "A password is 1 to 64 characters with no spaces, quotes or backslash.", "secret": True},
+    "svx_el_pw": {"re": r"""[^\s#"'\\]{1,64}""", "msg": "A password is 1 to 64 characters with no spaces, # or quotes.", "secret": True},
+    "svx_el_sysop": {"re": r"""[^\r\n#"'\\]{1,40}""", "msg": "A sysop name is 1 to 40 characters with no # or quotes.", "secret": False, "trim": True},
+    "svx_el_location": {"re": r"""[^\r\n#"'\\]{1,27}""", "msg": "A location is 1 to 27 characters with no # or quotes.", "secret": False, "trim": True},
+    "svx_refl_key": {"re": r"""[^\s#"'\\]{1,64}""", "msg": "A key is 1 to 64 characters with no spaces, # or quotes.", "secret": True},
 }
 _CFGR_ALONE_SERVICES: dict[str, str] = {
     _CFGR_ECHOLINK: "asterisk", "/etc/asterisk/custom/echolink.conf": "asterisk", _CFGR_IAX: "asterisk",
     "/etc/asterisk/custom/iax.conf": "asterisk", "/etc/asterisk/custom/iax/iaxrpt-users.conf": "asterisk",
     "/etc/asterisk/custom/iax/iaxclient-users.conf": "asterisk", _CFGR_MMDVM: "mmdvm_bridge",
-    _CFGR_DVSINI: "stfu", _CFGR_IRCDDB: "ircddbgatewayd"}
+    _CFGR_DVSINI: "stfu", _CFGR_IRCDDB: "ircddbgatewayd", _CFGR_SVX_CONF: "svxlink-usrp",
+    _CFGR_SVX_EL: "svxlink-usrp"}
 _CFGR_WHERE_RE = re.compile(r"^\[(.*)\] (\S+)$")
 
 def _cfgr_alone_row(payload: dict) -> tuple[dict | None, str]:
@@ -15651,7 +15656,7 @@ def _cfgr_set_alone_check(payload: dict) -> tuple[str | None, str]:
         return None, why
     spec = _CFGR_ALONE_ROWS[r["fid"]]
     value = str(payload.get("value", ""))
-    if spec["secret"] is False and r["fid"] == "stfu_ta":
+    if r["fid"] == "stfu_ta" or spec.get("trim"):
         value = value.strip()
     if not re.fullmatch(spec["re"], value):
         return None, spec["msg"]
