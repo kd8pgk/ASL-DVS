@@ -1,5 +1,17 @@
 # instmon changelog
 
+Current file: `instmon_v2_111_0_20261116.py`.
+
+## 2.111.0 (2026-11-16)
+
+Node Monitor (port 7777) is a managed tool.
+
+- **Node Monitor card.** The Components list shows it with Install, Uninstall, Start and Stop like the other tools. It opens at `http://<node>:7777`.
+- **Library and updates.** Its files (`nodemon*.py`) have their own folder in the library, in the upload and import lists and in GitHub updates. A Full Update updates it before the Dashboard, SysMon and instmon.
+- **Logs.** Its unit is part of the suite log.
+- **Login cookie.** A Full Update also asks the browser to drop Node Monitor's login cookie, like the other tools'.
+- Nothing else changes.
+
 ## 2.110.0 (2026-11-13)
 
 A Full Update now also asks each signed-in browser to drop the other tools' login cookies. This is a release: the server's replies changed.
