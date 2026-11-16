@@ -14,7 +14,20 @@ os.environ.setdefault("NODETALKER_SUITELOG", os.path.join(WORK, "nt_suitelog.jso
 os.environ.setdefault("NODETALKER_SUITELOG_FLAG", os.path.join(WORK, "nt_suitelog.on"))
 os.environ.setdefault("NODERECORDER_CONFIG_DIR", os.path.join(WORK, "nr"))
 
-PILL = '<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>'
+LABELS = {
+    "nodetalker": "Node Mon",
+
+    "noderecorder": "Nodemon",
+
+    "sysmon": "Nodemon",
+
+    "sysmon_pi02w": "Nodemon",
+
+    "nodecontrol": "Nodemon",
+
+    "nodecontrol_pi02w": "Nodemon",
+}
+PILL = '<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">{}</a>'
 QL_ROW_TOOLS = {"nodetalker": "nodetalker_v[0-9]*.py", "noderecorder": "noderecorder_v[0-9]*.py"}
 
 
@@ -41,7 +54,7 @@ def make_case(key, pattern):
                 cls.src = fh.read()
 
         def test_the_page_has_the_nodemon_button_and_no_allmon3_button(self):
-            self.assertEqual(self.src.count(PILL), 1)
+            self.assertEqual(self.src.count(PILL.format(LABELS[key])), 1)
             self.assertNotIn('data-ql="allmon3"', self.src)
             self.assertNotIn(">Allmon3</a>", self.src)
 
@@ -96,7 +109,7 @@ def make_bar_case(key, pattern):
         def test_the_button_opens_node_monitor(self):
             m = re.search(r'<a id="lnk-nodemon" class="ql-btn" href="([^"]+)" target="_blank" rel="noopener"\s+title="([^"]+)">([^<]+)</a>', self.bar)
             self.assertIsNotNone(m)
-            self.assertEqual(m.groups(), ("http://localhost:7777/", "Node Monitor", "Nodemon"))
+            self.assertEqual(m.groups(), ("http://localhost:7777/", "Node Monitor", LABELS[key]))
 
         def test_the_page_points_it_at_this_nodes_port_7777(self):
             self.assertIn('const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};', self.src)
@@ -120,10 +133,10 @@ def make_group_case(key, pattern):
 
         def test_the_left_group_has_nodemon_first_then_dvswitch_and_cockpit(self):
             labels = re.findall(r">([^<]+)</a>", self.group)
-            self.assertEqual(labels, ["Nodemon", "DVSwitch", "Cockpit"])
+            self.assertEqual(labels, [LABELS[key], "DVSwitch", "Cockpit"])
 
         def test_the_button_opens_node_monitor_by_port(self):
-            self.assertIn('<a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>', self.group)
+            self.assertIn('<a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">%s</a>' % LABELS[key], self.group)
             self.assertNotIn('data-ql-path="/allmon3"', self.src)
             self.assertNotIn(">Allmon3</a>", self.src)
 

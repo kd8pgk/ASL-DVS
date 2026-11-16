@@ -2,6 +2,13 @@
 
 Current file: `nodetalker_v0_10_50_20261116.py`. Newest entries first.
 
+## 0.10.50.1 (2026-11-16)
+
+The Node Monitor quick-link button reads **Node Mon** instead of Nodemon. This is a cosmetic build: the button's text changed and nothing else, so the file name stays and it does not go to stable on its own.
+
+- The button still opens Node Monitor on port 7777, in the same place. Node Monitor's own title stays "Node Monitor".
+- Nothing else changes.
+
 ## 0.10.50 (2026-11-16)
 
 The link badge under the push-to-talk button knows the SvxLink bridge. This is a release: the status reply for a link to that node changed.
