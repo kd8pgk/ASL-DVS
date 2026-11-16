@@ -341,6 +341,7 @@ class LivePoll(unittest.TestCase):
 
     def run_monitor(self):
         mon = nm.Monitor()
+        mon.touch()
         old = nm.MON
         nm.MON = mon
         self.addCleanup(setattr, nm, "MON", old)
@@ -369,6 +370,51 @@ class LivePoll(unittest.TestCase):
         self.assertIn("not found", priv["1999"]["error"].lower())
         self.assertFalse(priv["1921"]["loaded"])
         self.assertNotIn("gateway", priv["1921"])
+
+    def xstats(self):
+        return sum(1 for m in self.ami.seen if m.get("Command") == "XStat")
+
+    def until(self, test, seconds=8.0):
+        end = time.time() + seconds
+        while time.time() < end and not test():
+            time.sleep(0.05)
+        return test()
+
+    def test_polling_stops_when_no_page_asks_and_wakes_on_the_next_request(self):
+        with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 1.5):
+            mon = self.run_monitor()
+            self.assertTrue(self.until(lambda: self.xstats() > 0))
+            self.assertTrue(self.until(lambda: mon.state()["idle"], 10), "it never went idle")
+            n = self.xstats()
+            time.sleep(2.5)
+            self.assertEqual(self.xstats(), n, "Asterisk was still polled with no page open")
+            d = nm.build_status(True)
+            self.assertTrue(d["ami"]["ok"], d["ami"])
+            self.assertLess(d["ami"]["age"], 3.0, "the first request after idle must get fresh data")
+            self.assertGreater(self.xstats(), n)
+            self.assertFalse(mon.state()["idle"])
+
+    def test_a_request_with_no_login_does_not_wake_the_polling(self):
+        with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 1.5):
+            mon = self.run_monitor()
+            self.assertTrue(self.until(lambda: mon.state()["idle"], 10))
+            n = self.xstats()
+            nm.build_status(False)
+            time.sleep(1.5)
+            self.assertEqual(self.xstats(), n)
+            self.assertTrue(mon.state()["idle"])
+
+    def test_nothing_is_polled_before_the_first_request(self):
+        mon = nm.Monitor()
+        old = nm.MON
+        nm.MON = mon
+        self.addCleanup(setattr, nm, "MON", old)
+        threading.Thread(target=mon.loop, daemon=True).start()
+        time.sleep(1.0)
+        self.assertEqual(self.ami.seen, [])
+        d = nm.build_status(True)
+        self.assertTrue(d["ami"]["ok"], d["ami"])
+        self.assertGreater(self.xstats(), 0)
 
     def test_a_refused_login_shows_no_links(self):
         self.write("manager.conf", "[admin]\nsecret = wrong\n")
@@ -561,6 +607,60 @@ class SystemBar(AmiCase):
         post = src.split("    def do_POST(self):", 1)[1].split("class Server", 1)[0]
         self.assertLess(post.index("if not self._authed():"), post.index('"/api/system/reboot"'))
         self.assertLess(post.index("if not self._authed():"), post.index('"/api/disconnect-all"'))
+
+
+class QuickLinks(unittest.TestCase):
+    def setUp(self):
+        self.saved = (dict(nm._links_cache), nm._config["port"])
+        nm._links_cache.update(t=-1e9, v=[])
+
+    def tearDown(self):
+        nm._links_cache.clear()
+        nm._links_cache.update(self.saved[0])
+        nm._config["port"] = self.saved[1]
+
+    def test_only_tools_that_answer_are_listed_in_a_fixed_order_and_never_itself(self):
+        nm._config["port"] = 7777
+        up = {8989, 8993, 7878, 9090, 7777}
+        with unittest.mock.patch.object(nm, "port_open", lambda port, timeout=0.3: port in up), \
+                unittest.mock.patch.object(nm, "page_answers", lambda path, port=80, timeout=0.5: path == "/allmon3/"):
+            got = nm.quick_links()
+        self.assertEqual([x["key"] for x in got], ["nodecontrol", "nodetalker", "termon", "cockpit", "allmon3"])
+        by = {x["key"]: x for x in got}
+        self.assertEqual((by["termon"]["scheme"], by["termon"]["port"]), ("https", 7878))
+        self.assertEqual((by["nodecontrol"]["scheme"], by["nodecontrol"]["port"], by["nodecontrol"]["path"]), ("http", 8989, "/"))
+        self.assertEqual((by["allmon3"]["port"], by["allmon3"]["path"]), (80, "/allmon3/"))
+
+    def test_the_answer_is_kept_for_a_short_while(self):
+        calls = []
+        with unittest.mock.patch.object(nm, "port_open", lambda port, timeout=0.3: calls.append(port) or False), \
+                unittest.mock.patch.object(nm, "page_answers", lambda path, port=80, timeout=0.5: False):
+            self.assertEqual(nm.quick_links(), [])
+            n = len(calls)
+            self.assertEqual(nm.quick_links(), [])
+            self.assertEqual(len(calls), n)
+
+    def test_nothing_listening_means_an_empty_list(self):
+        with unittest.mock.patch.object(nm, "port_open", lambda port, timeout=0.3: False), \
+                unittest.mock.patch.object(nm, "page_answers", lambda path, port=80, timeout=0.5: False):
+            self.assertEqual(nm.quick_links(), [])
+
+    def test_the_status_carries_the_links_only_when_logged_in(self):
+        with unittest.mock.patch.object(nm, "quick_links", lambda: [{"key": "x"}]):
+            self.assertEqual(nm.build_status(True)["links"], [{"key": "x"}])
+            self.assertEqual(nm.build_status(False)["links"], [])
+
+    def test_the_page_opens_on_the_overview_tab(self):
+        html = nm._HTML_TEMPLATE
+        self.assertLess(html.index('id="tab-ov"'), html.index('id="tab-main"'))
+        self.assertIn('class="tab t-ov active"', html)
+        self.assertIn("current = 'ov'", nm._JS)
+        self.assertIn('<section id="pg-main" class="hidden">', html)
+    def test_active_nodes_are_lit_in_the_overview(self):
+        self.assertIn("tr.lit td:first-child", nm._CSS)
+        self.assertIn("rgba(255,208,64", nm._CSS)
+        self.assertIn("classList.add('lit')", nm._JS)
+        self.assertIn("classList.add('hot')", nm._JS)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -981,12 +981,29 @@ def parse_localnodes(lines):
     return out
 
 
+IDLE_AFTER_SEC = 30.0
+WAKE_WAIT_SEC = 4.0
+
+
 class Monitor:
     def __init__(self):
         self.lock = threading.Lock()
         self.snap = {"ok": False, "error": "starting", "at": 0.0, "banner": "", "loaded": [], "regs": {},
-                     "nodes": {}}
+                     "nodes": {}, "idle": False}
         self.refused = None
+        self.wake_event = threading.Event()
+        self.last_ask = -1e9
+
+    def touch(self):
+        self.last_ask = time.monotonic()
+        self.wake_event.set()
+
+    def _wanted(self):
+        return time.monotonic() - self.last_ask < IDLE_AFTER_SEC
+
+    def waiting(self):
+        with self.lock:
+            return self.snap["idle"] or self.snap["error"] == "starting"
 
     def state(self):
         with self.lock:
@@ -999,7 +1016,7 @@ class Monitor:
     def _down(self, error):
         with self.lock:
             was = self.snap["ok"]
-            self.snap.update(ok=False, error=error, nodes={}, regs={}, loaded=[])
+            self.snap.update(ok=False, error=error, nodes={}, regs={}, loaded=[], idle=False)
         if was:
             log_event(f"Asterisk link lost ({error})", "warn")
 
@@ -1017,6 +1034,8 @@ class Monitor:
                     raise AmiRefused("Asterisk refused the AMI login")
                 raise ValueError("the manager gave no answer to the login")
             self._put(banner=banner)
+            if self.snap["idle"]:
+                log_event("A page is open again: polling Asterisk again", "info")
             n = 0
             while True:
                 n += 1
@@ -1042,15 +1061,24 @@ class Monitor:
                         out[node] = {"links": [], "txkeyed": False, "rxkeyed": False, "ok": False, "error": msg}
                 with self.lock:
                     first = not self.snap["ok"]
-                    self.snap.update(ok=True, error="", at=time.time(), loaded=loaded, regs=regs, nodes=out)
+                    self.snap.update(ok=True, error="", at=time.time(), loaded=loaded, regs=regs, nodes=out, idle=False)
                 if first:
                     log_event(f"Link state from Asterisk (AMI {AMI_HOST}:{AMI_PORT}): {banner}", "ok")
                 time.sleep(_cfg_get("poll_sec"))
+                if not self._wanted():
+                    self._put(idle=True)
+                    log_event("No page is open: Asterisk is not polled until one is", "info")
+                    return
         finally:
             sock.close()
 
     def loop(self):
         while True:
+            if not self._wanted():
+                self.wake_event.clear()
+                if not self._wanted():
+                    self.wake_event.wait()
+                continue
             user, secret = ami_credentials(AMI_CONF)
             if not user or not secret:
                 self._down(f"no AMI login found in {AMI_CONF}")
@@ -1239,7 +1267,64 @@ def _link_view(link, kinds, gateways):
     return row
 
 
+TOOL_LINKS = (
+    ("nodecontrol", "Node Controller", 8989, "http", "/"),
+    ("sysmon", "SysMon", 9999, "http", "/"),
+    ("instmon", "instmon", 8990, "http", "/"),
+    ("wifimon", "wifimon", 8991, "http", "/"),
+    ("44helper", "44helper", 9997, "http", "/"),
+    ("nodetalker", "Node Talker", 8993, "http", "/"),
+    ("noderecorder", "Node Recorder", 8995, "http", "/"),
+    ("pibrary", "Pibrary", 9000, "http", "/"),
+    ("termon", "Terminal Monitor", 7878, "https", "/"),
+    ("cockpit", "Cockpit", 9090, "https", "/"),
+)
+WEB_PAGES = (("allmon3", "Allmon3", "/allmon3/"), ("dvswitch", "DVSwitch", "/dvswitch/"))
+LINK_TTL_SEC = 15.0
+_links_cache = {"t": -1e9, "v": []}
+
+
+def port_open(port, timeout=0.3):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def page_answers(path, port=80, timeout=0.5):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("HEAD", path)
+        return conn.getresponse().status < 400
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+def quick_links():
+    now = time.monotonic()
+    if now - _links_cache["t"] < LINK_TTL_SEC:
+        return _links_cache["v"]
+    own = _cfg_get("port")
+    out = []
+    for key, label, port, scheme, path in TOOL_LINKS:
+        if port != own and port_open(port):
+            out.append({"key": key, "label": label, "port": port, "scheme": scheme, "path": path})
+    for key, label, path in WEB_PAGES:
+        if page_answers(path):
+            out.append({"key": key, "label": label, "port": 80, "scheme": "http", "path": path})
+    _links_cache.update(t=now, v=out)
+    return out
+
+
 def build_status(authed=True):
+    if authed:
+        MON.touch()
+        end = time.monotonic() + WAKE_WAIT_SEC
+        while MON.waiting() and time.monotonic() < end:
+            time.sleep(0.1)
     plan = node_plan()
     snap = MON.state()
     kinds = plan["kind"]
@@ -1253,7 +1338,7 @@ def build_status(authed=True):
     out = {"version": VERSION, "ami": {"ok": snap["ok"], "error": snap["error"], "banner": snap["banner"],
                                         "age": (time.time() - snap["at"]) if snap["at"] else None},
            "plan": {"ok": plan["ok"], "error": plan["error"]}, "main": None, "private": [],
-           "gateways": gateways, "poll_sec": _cfg_get("poll_sec")}
+           "gateways": gateways, "poll_sec": _cfg_get("poll_sec"), "links": quick_links() if authed else []}
     if not plan["ok"]:
         return out
 
@@ -1453,6 +1538,7 @@ main{padding:.6rem 1rem;max-width:1100px;margin:0 auto}
 .tab{font-size:.9rem;font-weight:bold;letter-spacing:.08em;text-transform:uppercase;padding:.52rem 1.1rem;border-radius:5px 5px 0 0;border:1px solid var(--border2);border-bottom:none;background:var(--surface2);color:#fff;cursor:pointer;flex-shrink:0;user-select:none}
 .tab:hover{background:#253550;border-color:#5a7898}
 .tab.active{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
+.t-ov{--mc:var(--orange);--mc-rgb:255,170,34}
 .t-main{--mc:var(--teal);--mc-rgb:0,255,229}
 .t-conn{--mc:var(--amber);--mc-rgb:255,208,64}
 .t-priv{--mc:var(--lime);--mc-rgb:212,255,0}
@@ -1492,6 +1578,20 @@ td.mono{font-family:var(--mono)}
 .sysmsg.ok{color:var(--green)}
 .sysmsg.err{color:var(--red)}
 @media (max-width:560px){.act-bar{flex-direction:column}.act-bar .btn{min-width:0}}
+.ql-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
+.ql{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;white-space:nowrap;color:var(--amber);border:1px solid rgba(244,192,78,.45);background:rgba(255,61,90,.15);text-shadow:0 0 8px rgba(255,208,64,.4);border-radius:4px;padding:8px 12px;cursor:pointer;transition:all .14s}
+.ql:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+.ql:active{transform:scale(.95)}
+.sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.5rem;margin-top:.3rem}
+.sum .box{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:.45rem .6rem}
+.sum .box .n{font-size:1.15rem;font-weight:bold;color:var(--text-bright)}
+.sum .box.lit{border-color:#b8860b;background:rgba(255,208,64,.12);box-shadow:0 0 18px rgba(255,208,64,.22)}
+.sum .box.lit .n{color:var(--amber);text-shadow:0 0 14px rgba(255,208,64,1)}
+tr.lit td{background:rgba(255,208,64,.10)}
+tr.lit td:first-child{border-left:3px solid #b8860b;color:var(--amber);font-weight:bold;text-shadow:0 0 14px rgba(255,208,64,1)}
+tr.hot td{background:rgba(255,208,64,.24)}
+tr.hot td:first-child{border-left-color:var(--amber)}
+.sum .box .t{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;color:#9db4d0}
 .cmdbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cmdbar select,.cmdbar input{background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:5px;padding:.3rem .5rem;font-size:var(--fs-base);max-width:100%}
 .cmdbar input{width:9rem}
@@ -1536,13 +1636,15 @@ __CSS__</style>
 </div>
 <main id="app" class="hidden">
 <div class="tabs" id="tabs" role="tablist">
-<div class="tab t-main active" id="tab-main" data-tab="main" role="tab">Main node</div>
+<div class="tab t-ov active" id="tab-ov" data-tab="ov" role="tab">Overview</div>
+<div class="tab t-main" id="tab-main" data-tab="main" role="tab">Main node</div>
 <div class="tab t-conn" id="tab-conn" data-tab="conn" role="tab">Connections</div>
 <div class="tab t-priv" id="tab-priv" data-tab="priv" role="tab">Private nodes</div>
 <div class="tab t-log" id="tab-log" data-tab="log" role="tab">Log</div>
 </div>
 <div id="status-banner"></div>
-<section id="pg-main"></section>
+<section id="pg-ov"></section>
+<section id="pg-main" class="hidden"></section>
 <section id="pg-conn" class="hidden"></section>
 <section id="pg-priv" class="hidden"></section>
 <section id="pg-log" class="hidden"><div class="card"><h2>Node Monitor log</h2><div class="logbox" id="logbox"></div></div></section>
@@ -1562,7 +1664,7 @@ __CSS__</style>
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
-let authed = false, current = 'main', status = null, logSince = 0, timer = null, COMMANDS = [];
+let authed = false, current = 'ov', status = null, logSince = 0, timer = null, COMMANDS = [];
 const bars = {};
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -1604,7 +1706,7 @@ async function logout() { await api('/api/logout', {method: 'POST', body: {}}); 
 function showTab(name) {
   current = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  ['main', 'conn', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
+  ['ov', 'main', 'conn', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
   if (name === 'log') pollLog();
 }
 function kv(label, node) {
@@ -1739,6 +1841,70 @@ function nodeCard(n, title) {
   card.appendChild(table(LINK_COLS, linkRows(n), 'No links.'));
   return card;
 }
+function nodeSummary(n) {
+  const st = stateOf(n);
+  const linked = n.links.map((l) => l.node);
+  const reg = n.registration;
+  const cells = [{text: n.node, mono: true}, n.role === 'main' ? 'Main node' : (n.bridge || 'Private node'),
+                 {node: badge(st[0], st[1])},
+                 linked.length ? linked.length + ': ' + linked.join(', ') : 'none'];
+  let note = '';
+  if (n.txkeyed) note = 'transmitting';
+  else if (n.rxkeyed) note = 'receiving';
+  if (n.gateway) note += (note ? '; ' : '') + n.gateway.text;
+  if (reg) note += (note ? '; ' : '') + 'ASL3 ' + reg.state.toLowerCase();
+  cells.push(note || '-');
+  return cells;
+}
+function renderOv(d) {
+  const root = $('pg-ov');
+  root.textContent = '';
+  const nodes = (d.main ? [d.main] : []).concat(d.private);
+  const up = nodes.filter((n) => n.ok && n.loaded !== false).length;
+  const links = nodes.reduce((a, n) => a + n.links.length, 0);
+  const gws = Object.keys(d.gateways || {});
+  const gwOn = gws.filter((k) => d.gateways[k].state === 'connected').length;
+  const reg = d.main && d.main.registration ? d.main.registration.state : 'unknown';
+  const c1 = el('div', 'card');
+  const h = el('h2');
+  h.appendChild(el('span', '', 'Status'));
+  h.appendChild(badge(d.ami.ok ? 'ok' : 'err', d.ami.ok ? 'Asterisk connected' : 'No Asterisk'));
+  c1.appendChild(h);
+  const sum = el('div', 'sum');
+  [[up + ' of ' + nodes.length, 'Nodes up', up > 0], [String(links), 'Links on the nodes', links > 0],
+   [gwOn + ' of ' + gws.length, 'Gateways tuned', gwOn > 0], [reg, 'ASL3 registration', /^registered$/i.test(reg)]].forEach((x) => {
+    const b = el('div', 'box' + (x[2] ? ' lit' : ''));
+    b.appendChild(el('div', 'n', x[0]));
+    b.appendChild(el('div', 't', x[1]));
+    sum.appendChild(b);
+  });
+  c1.appendChild(sum);
+  root.appendChild(c1);
+  const c2 = el('div', 'card');
+  c2.appendChild(el('h2', '', 'Nodes'));
+  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes'], nodes.map(nodeSummary), 'No nodes were found in rpt.conf.');
+  const trs = tbl.querySelectorAll('tr');
+  nodes.forEach((n, i) => {
+    if (!trs[i + 1] || !n.ok || n.loaded === false) return;
+    trs[i + 1].classList.add('lit');
+    if (n.txkeyed || n.rxkeyed) trs[i + 1].classList.add('hot');
+  });
+  c2.appendChild(tbl);
+  root.appendChild(c2);
+  const c3 = el('div', 'card');
+  c3.appendChild(el('h2', '', 'Links'));
+  const row = el('div', 'ql-row');
+  (d.links || []).forEach((l) => {
+    const a = el('a', 'ql', l.label);
+    a.href = l.scheme + '://' + location.hostname + (l.port === 80 ? '' : ':' + l.port) + l.path;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    row.appendChild(a);
+  });
+  if (!row.children.length) row.appendChild(el('span', 'empty', 'No other tool pages are answering on this node.'));
+  c3.appendChild(row);
+  root.appendChild(c3);
+}
 function renderMain(d) {
   const root = $('pg-main');
   root.textContent = '';
@@ -1807,6 +1973,7 @@ function renderAll(d) {
   renderBanner(d);
   const busy = document.activeElement && document.activeElement.closest && document.activeElement.closest('.cmdbar');
   if (busy) return;
+  renderOv(d);
   renderMain(d);
   renderConn(d);
   renderPriv(d);

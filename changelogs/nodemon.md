@@ -1,6 +1,17 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_3_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_4_0_20261116.py`. Newest entries first.
+
+## 0.4.0 (2026-11-16)
+
+An **Overview** tab, first and the one the page opens on. This is a release: the status reply has a new field and the page's logic changed.
+
+- **Status card:** whether Asterisk answers, how many of the nodes are up, how many links there are in all, how many gateways are tuned, and the ASL3 registration state.
+- **Nodes card:** one line for every node in rpt.conf, the main node first: what it is (the bridge name for a private node), its state (up, not loaded in Asterisk, or no answer), the nodes linked to it, and a note (transmitting or receiving, what its gateway is tuned to, the registration).
+- **Links card**, like Node Talker's Setup tab: buttons to the tools on this node that answer right now, which are Node Controller, SysMon, instmon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Terminal Monitor, Cockpit, Allmon3 and DVSwitch. A tool that is not running is not shown, and neither is Node Monitor itself. The answer is kept for 15 seconds.
+- **Active nodes light up** in Node Controller's amber and gold: a node that is up gets a gold edge, an amber number and a glow, and a node that is transmitting or receiving glows brighter. A node that is not loaded in Asterisk or does not answer stays dim. The same lighting marks the Status boxes that are non-zero.
+- **Polling idles when no page is open.** Asterisk is polled only while a logged-in page is asking for the status: the page asks every few seconds while it is on screen and stops when its browser tab is hidden. Thirty seconds after the last request the poller closes its connection to Asterisk and waits; the Log tab says so. The next request wakes it and waits up to 4 seconds for fresh data, so the first view after an idle spell is never stale. A node with no page open now costs Asterisk nothing, and Node Monitor sends no manager commands until the first page asks. The service watchdog's own health check does not wake it.
+- The other tabs are unchanged and keep their order after the Overview.
 
 ## 0.3.0 (2026-11-16)
 
