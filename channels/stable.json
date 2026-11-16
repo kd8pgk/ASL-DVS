@@ -11,13 +11,13 @@
    "version": "0.1.22"
   },
   "amp_nodetalker": {
-   "blob": "3fcda70a6f1a3066afd678087e3a1ca1552b0c5b",
-   "commit": "2b4e94d644682913782e8dd9145247a98198c1d8",
-   "file": "amp_nodetalker_v0_3_2_20261027.py",
-   "landed": "2026-10-27T22:41:35Z",
-   "promoted": "2026-11-02T00:15:52Z",
-   "reason": "count",
-   "version": "0.3.2"
+   "blob": "3f4ef9e0f36caefae42108e6f439e2b949a0a246",
+   "commit": "5b0bd8f763cd0c299d12a6b5e36fb37ffabfe763",
+   "file": "amp_nodetalker_v0_3_7_20261101.py",
+   "landed": "2026-11-02T00:15:52Z",
+   "promoted": "2026-11-16T00:15:52Z",
+   "reason": "age",
+   "version": "0.3.7"
   },
   "confgetter": {
    "blob": "642d7d1bbe5b35a3232542760d2511364c63d3dc",
