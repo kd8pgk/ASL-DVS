@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_37_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_38_20261115.py`. Newest entries first.
+
+## 0.1.38 (2026-11-15)
+
+SvxLink tab, stage 6 of SvxLink USRP: step 8 of the USRP build ("Switch UsrpLogic on and set its ports") now matches the bridge through ASL3's private node 1900.
+
+- **Default ports** are 32000 (the port the ASL3 node listens on, SvxLink sends to it) and 34000 (the port the ASL3 node sends to, SvxLink listens on it), the mirror image of `rxchannel = USRP/127.0.0.1:34000:32000`. Before, the defaults were the fork's own 41234 and 41233.
+- **Labels and notes** say "the ASL3 node" where they said "Analog_Bridge", and point to the Config tab's Add SvxLink bridge node button, which adds the node and sets the same two ports. Other ports can still be typed in to bridge to another program.
+- A node already wired with other ports is not changed by this release; the step only uses the new defaults when it is run.
+- This is a release: the step's default command changed.
 
 ## 0.1.37 (2026-11-15)
 

@@ -1167,5 +1167,34 @@ class SvxBridge(SvxBase):
         self.assertEqual(h44._cfgr_svx_set_ports("[X]\na=1\n", 1, 2), "[X]\na=1\n")
 
 
+class SvxStep8Defaults(unittest.TestCase):
+    def step(self):
+        return next(s for s in h44._SVXLINK_SCRIPTS["install"]["usrp"] if s["id"] == "usrp_logic_conf")
+
+    def test_defaults_are_the_mirror_image_of_node_1900(self):
+        f = {x["id"]: x for x in self.step()["fields"]}
+        self.assertEqual(f["port"]["default"], str(h44._CFGR_SVX_BRIDGE_RX))
+        self.assertEqual(f["rx_port"]["default"], str(h44._CFGR_SVX_BRIDGE_TX))
+        self.assertEqual((f["port"]["default"], f["rx_port"]["default"]), ("32000", "34000"))
+        self.assertIn("ASL3 node", f["port"]["label"])
+        self.assertIn("ASL3 node", f["rx_port"]["label"])
+
+    def test_default_command_uses_the_same_ports(self):
+        st = self.step()
+        self.assertIn("tx='32000'; rx='34000'", st["cmd"])
+        cmd, why = h44._step_command(st, {"callsign": "AA1AA", "port": "32000", "rx_port": "34000"})
+        self.assertEqual(why, "")
+        self.assertIn("c='AA1AA'; tx='32000'; rx='34000'", cmd)
+
+    def test_other_ports_can_still_be_entered(self):
+        cmd, why = h44._step_command(self.step(), {"callsign": "AA1AA", "port": "41234", "rx_port": "41233"})
+        self.assertEqual(why, "")
+        self.assertIn("tx='41234'; rx='41233'", cmd)
+
+    def test_step_8_and_the_bridge_button_agree(self):
+        self.assertEqual(h44._CFGR_SVX_BRIDGE_NODE, "1900")
+        self.assertIn("1900", self.step()["note"])
+
+
 if __name__ == "__main__":
     unittest.main()
