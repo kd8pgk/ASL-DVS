@@ -3394,6 +3394,63 @@ class RxHealthWifiTests(unittest.TestCase):
         self.assertEqual(v["state"], "network")
 
 
+class InstmonNodemonTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp0 = tempfile.mkdtemp()
+        cls.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(cls.tmp0, "lib"),
+                              "INSTMON_CONFIG_DIR": os.path.join(cls.tmp0, "cfg")})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp0, True)
+
+    def nodemon(self):
+        return next(c for c in self.m.COMPONENTS if c["category"] == "nodemon")
+
+    def nodemon_file(self):
+        import glob
+        return sorted(glob.glob(os.path.join(HERE, "..", "nodemon_v*.py")))[-1]
+
+    def test_registry_entry_is_complete(self):
+        m, c = self.m, self.nodemon()
+        self.assertEqual((c["name"], c["service"], c["port"], c.get("scheme", "http")), ("Node Monitor", "nodemon", 7777, "http"))
+        self.assertEqual(c["install_link"], "/usr/local/bin/nodemon.py")
+        self.assertEqual(c["unit_paths"], {"nodemon": ("/usr/local/bin/nodemon.py", "/usr/local/lib/asl_dvs/nodemon")})
+        for table in (m.LIB_SUBDIRS, m.ALLOWED_EXT, m._FU_DEFAULT_STEM):
+            self.assertIn("nodemon", table)
+        self.assertIn("nodemon", m.FU_ORDER)
+        self.assertIn("nodemon", m.INSTALLABLE_CATEGORIES)
+        self.assertIn("nodemon", m.GH_CATEGORIES)
+        self.assertIn("nodemon", [g[1] for g in m._LIBRARY_GROUPS])
+        self.assertLess(m.FU_ORDER.index("nodemon"), m.FU_ORDER.index("instmon"))
+        self.assertEqual(m.ALLOWED_EXT["nodemon"], (".py",))
+        self.assertIn("nodemon_session", m._PURGE_COOKIES)
+
+    def test_nodemon_files_are_recognised_by_name_and_by_content(self):
+        m = self.m
+        path = self.nodemon_file()
+        name = os.path.basename(path)
+        self.assertEqual(m._gh_kind_for_name(name), ("nodemon", "nodemon*.py"))
+        self.assertEqual(m._fu_stem_of_name(name), "nodemon")
+        with open(path, encoding="utf-8") as fh:
+            version, self_install, self_uninstall = m._scan_header_text(fh.read())
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        self.assertTrue(self_install)
+        self.assertTrue(self_uninstall)
+
+    def test_nothing_else_claims_nodemon_files_and_nodemon_claims_nothing_else(self):
+        for name in ("sysmon_v1_0_0_20261101.py", "nodetalker_v0_1_0_20261101.py", "termon_v0_2_5_20261113.py"):
+            self.assertNotEqual(self.m._gh_kind_for_name(name)[0], "nodemon")
+        self.assertEqual(self.m._gh_kind_for_name("termon_v0_2_5_20261113.py")[0], "termon")
+
+    def test_home_scan_finds_the_file(self):
+        self.assertIn(("nodemon", ["nodemon*.py"]), self.m.HOME_SCAN_PATTERN_MAP)
+
+    def test_full_update_order_and_unit_logs(self):
+        self.assertIn("nodemon", self.m.SL_UNITS)
+
+
 class InstmonTermonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

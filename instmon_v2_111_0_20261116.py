@@ -40,8 +40,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.110.0"
-DATE_STR ="2026-11-13"
+VERSION ="2.111.0"
+DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -424,7 +424,7 @@ def _check_session(token):
 
 
 _PURGE_COOKIES = ("asl_dvs_session", "helper44_session", "pibrary_session", "wifimon_session",
-                  "nodetalker_session", "noderecorder_session", "amp_nodetalker_session", "termon_session")
+                  "nodetalker_session", "noderecorder_session", "amp_nodetalker_session", "termon_session", "nodemon_session")
 _PURGE_KEEP_SEC = 6 * 3600
 _purge_keys = {}
 _purge_lock = threading.Lock()
@@ -3006,6 +3006,7 @@ LIB_SUBDIRS ={
 "noderecorder":os .path .join (LIBRARY_DIR ,"noderecorder"),
 "pibrary":os .path .join (LIBRARY_DIR ,"pibrary"),
 "termon":os .path .join (LIBRARY_DIR ,"termon"),
+"nodemon":os .path .join (LIBRARY_DIR ,"nodemon"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
 "config":os .path .join (LIBRARY_DIR ,"config"),
@@ -3022,6 +3023,7 @@ ALLOWED_EXT ={
 "noderecorder":(".py",),
 "pibrary":(".py",),
 "termon":(".py",),
+"nodemon":(".py",),
 "instmon":(".py",),
 "scripts":(".sh",),
 "config":(".conf",),
@@ -3099,6 +3101,14 @@ COMPONENTS =[
 "category":"termon",
 },
 {
+"name":"Node Monitor",
+"service":"nodemon",
+"port":7777 ,
+"install_link":"/usr/local/bin/nodemon.py",
+"unit_paths":{"nodemon":("/usr/local/bin/nodemon.py","/usr/local/lib/asl_dvs/nodemon")},
+"category":"nodemon",
+},
+{
 "name":"instmon",
 "service":"instmon",
 "port":PORT ,
@@ -3120,6 +3130,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("noderecorder",["noderecorder*.py"]),
 ("pibrary",["pibrary*.py"]),
 ("termon",["termon*.py"]),
+("nodemon",["nodemon*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
@@ -6358,7 +6369,7 @@ def _build_wanted_variant():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-FU_ORDER = ("44helper", "wifimon", "nodelisten", "noderecorder", "pibrary", "termon", "dashboard", "sysmon", "instmon")
+FU_ORDER = ("44helper", "wifimon", "nodelisten", "noderecorder", "pibrary", "termon", "nodemon", "dashboard", "sysmon", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
@@ -6372,6 +6383,7 @@ _FU_DEFAULT_STEM = {
     "noderecorder": "noderecorder",
     "pibrary": "pibrary",
     "termon": "termon",
+    "nodemon": "nodemon",
     "instmon": "instmon",
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
@@ -6399,7 +6411,7 @@ SUITELOG_PATH = os.environ.get("INSTMON_SUITELOG", "/run/asl_dvs/suitelog.jsonl"
 SUITELOG_FLAG = os.environ.get("INSTMON_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
 SUITELOG_SEG = 10000000
 SL_UNITS = ("nodetalker", "nodelisten", "amp_nodetalker", "amp-server", "amp-hub", "wifimon", "instmon", "nodecontrol",
-            "asl_dvs_dashboard", "sysmon", "44helper", "44helper-netready", "noderecorder", "pibrary", "termon", "termon-helper", "usrp2m17",
+            "asl_dvs_dashboard", "sysmon", "44helper", "44helper-netready", "noderecorder", "pibrary", "termon", "termon-helper", "nodemon", "usrp2m17",
             "stfu", "svxlink-usrp", "asl-zello-bridge", "mmdvm_bridge", "analog_bridge", "asterisk", "allmon3",
             "asl_dvs_*", "wg-quick@*")
 SL_FILES = ("/var/log/asterisk/full", "/var/log/asterisk/messages", "/var/log/asterisk/messages.log",
@@ -9237,6 +9249,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("Node Recorder","noderecorder","install"),
     ("Pibrary","pibrary","install"),
     ("Terminal Monitor","termon","install"),
+    ("Node Monitor","nodemon","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
@@ -13169,6 +13182,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="noderecorder">Node Recorder (.py)</option>
       <option value="pibrary">Pibrary (.py)</option>
       <option value="termon">Terminal Monitor (.py)</option>
+      <option value="nodemon">Node Monitor (.py)</option>
       <option value="instmon">InstMon (.py)</option>
       <option value="confgetter">Config getter (.sh)</option>
       <option value="confputter">Config putter (.py)</option>
