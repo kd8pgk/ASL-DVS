@@ -1183,15 +1183,15 @@ class SvxStep8Defaults(unittest.TestCase):
 
     def test_default_command_uses_the_same_ports(self):
         st = self.step()
-        self.assertIn("tx='32000'; rx='34000'", st["cmd"])
+        self.assertIn("TX='32000' RX='34000'", st["cmd"])
         cmd, why = h44._step_command(st, {"callsign": "AA1AA", "port": "32000", "rx_port": "34000"})
         self.assertEqual(why, "")
-        self.assertIn("c='AA1AA'; tx='32000'; rx='34000'", cmd)
+        self.assertIn("CALL='AA1AA' TX='32000' RX='34000'", cmd)
 
     def test_other_ports_can_still_be_entered(self):
         cmd, why = h44._step_command(self.step(), {"callsign": "AA1AA", "port": "41234", "rx_port": "41233"})
         self.assertEqual(why, "")
-        self.assertIn("tx='41234'; rx='41233'", cmd)
+        self.assertIn("TX='41234' RX='41233'", cmd)
 
     def test_step_8_and_the_bridge_button_agree(self):
         self.assertEqual(h44._CFGR_SVX_BRIDGE_NODE, "1900")

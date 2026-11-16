@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.42"
+APP_VERSION = "0.1.43"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3400,18 +3400,13 @@ _SVX_USRP_PREFIX = "/usr/local"
 _SVX_USRP_ETC = "/usr/local/etc/svxlink"
 _SVX_USRP_SRC_DIR = "~/svxlink-usrp-src"
 
-_SVX_USRP_LOGIC_SNIPPET = f"""# 1) {_SVX_USRP_ETC}/svxlink.conf -- in the [GLOBAL] section, change
-#    LOGICS=SimplexLogic   to:
-LOGICS=SimplexLogic,UsrpLogic
+_SVX_USRP_LOGIC_SNIPPET = f"""# 1) {_SVX_USRP_ETC}/svxlink.conf -- in the [GLOBAL] section, set
+#    LOGICS=UsrpLogic
+#    SvxLink used with ASL3 has no radio of its own: ASL3 owns the radio, so no
+#    SimplexLogic or RepeaterLogic is listed. The reflector step adds the
+#    reflector logic and the link that joins it to UsrpLogic.
 
-# 2) Same file -- add this section at the end, so the radio side and
-#    the USRP side hear each other:
-[LinkToUsrp]
-CONNECT_LOGICS=SimplexLogic:9:USRP,UsrpLogic
-DEFAULT_ACTIVE=1
-TIMEOUT=0
-
-# 3) {_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf -- change these lines:
+# 2) {_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf -- change these lines:
 DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json
 CALL=YOURCALL
 USRP_HOST=127.0.0.1
@@ -3425,30 +3420,150 @@ USRP_HOST=127.0.0.1
 _SVX_USRP_CONF = f"{_SVX_USRP_ETC}/svxlink.conf"
 _SVX_USRP_LOGIC_CONF = f"{_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf"
 
+_SVX_USRP_WIRE_PY = r"""import os
+import re
+import shutil
+import sys
+
+F = "/usr/local/etc/svxlink/svxlink.conf"
+U = "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"
+DV = "/usr/local/etc/svxlink/dv_users.json"
+call = os.environ.get("CALL", "")
+tx = os.environ.get("TX", "")
+rx = os.environ.get("RX", "")
+
+
+def stop(msg):
+    print("STOPPED: " + msg + " Nothing was changed.")
+    sys.exit(1)
+
+
+def sections(lines):
+    out = {}
+    cur = None
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
+        if m:
+            cur = m.group(1).strip()
+            out.setdefault(cur, {"start": i, "end": len(lines), "kv": {}})
+            continue
+        if cur is not None:
+            out[cur]["end"] = i + 1
+            m = re.match(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$", line)
+            if m and not line.lstrip().startswith("#") and m.group(1) not in out[cur]["kv"]:
+                out[cur]["kv"][m.group(1)] = m.group(2).strip('"')
+    return out
+
+
+def getlist(lines, key):
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s*" + key + r"\s*=\s*(.*?)\s*$", line)
+        if m:
+            return i, [x.strip() for x in m.group(1).split(",") if x.strip()]
+    return None, []
+
+
+def setlist(lines, key, names):
+    i, _have = getlist(lines, key)
+    text = key + "=" + ",".join(names)
+    if i is not None:
+        lines[i] = text
+        return lines
+    for j, line in enumerate(lines):
+        if re.match(r"^\s*\[GLOBAL\]\s*$", line):
+            return lines[:j + 1] + [text] + lines[j + 1:]
+    stop(F + " has no [GLOBAL] section.")
+
+
+def setkeys(lines, name, pairs):
+    sec = sections(lines).get(name)
+    if sec is None:
+        return lines
+    s, e = sec["start"], sec["end"]
+    want = dict(pairs)
+    seen = set()
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*([A-Z_]+)\s*=", lines[i])
+        if m and m.group(1) in want and m.group(1) not in seen:
+            seen.add(m.group(1))
+            lines[i] = m.group(1) + "=" + want[m.group(1)]
+    add = [k + "=" + v for k, v in pairs if k not in seen]
+    return lines[:s + 1] + add + lines[s + 1:]
+
+
+if not os.path.exists(F):
+    stop(F + " is missing: run step 5 first.")
+for p in (tx, rx):
+    if not p.isdigit() or not 1 <= int(p) <= 65535:
+        stop("Ports must be numbers from 1 to 65535.")
+if tx == rx:
+    stop("The two ports must be different.")
+if not re.match(r"^[A-Za-z0-9-]{3,12}$", call):
+    stop("Enter your callsign.")
+with open(F, encoding="utf-8") as fh:
+    old = fh.read()
+if "\r" in old:
+    stop(F + " uses Windows line endings.")
+lines = old.split("\n")
+secs = sections(lines)
+_i, logics = getlist(lines, "LOGICS")
+_k, links = getlist(lines, "LINKS")
+radio = []
+for name in logics:
+    kv = secs.get(name, {}).get("kv", {})
+    if kv.get("TYPE") in ("Simplex", "Repeater"):
+        rxsec = secs.get(kv.get("RX", ""), {}).get("kv", {})
+        if rxsec.get("TYPE") != "Dummy":
+            radio.append(name)
+keep = [n for n in logics if n not in radio]
+if "UsrpLogic" not in keep:
+    keep.append("UsrpLogic")
+dropped = []
+kept_links = []
+for link in links:
+    joined = secs.get(link, {}).get("kv", {}).get("CONNECT_LOGICS", "")
+    names = [x.split(":")[0].strip() for x in joined.split(",")]
+    if any(n in radio for n in names):
+        dropped.append(link)
+    else:
+        kept_links.append(link)
+lines = setlist(lines, "LOGICS", keep)
+if links or dropped:
+    lines = setlist(lines, "LINKS", kept_links)
+lines = [re.sub(r"^CALLSIGN=.*$", "CALLSIGN=" + call, x) for x in lines]
+lines = setkeys(lines, "UsrpLogic", [("CALL", call), ("USRP_HOST", "127.0.0.1"), ("USRP_TX_PORT", tx),
+                                     ("USRP_RX_PORT", rx), ("DV_USER_INFOFILE", DV)])
+new = "\n".join(lines)
+if not os.path.exists(F + ".44helper-bak"):
+    shutil.copy2(F, F + ".44helper-bak")
+if new != old:
+    with open(F + ".44helper-tmp", "w", encoding="utf-8") as fh:
+        fh.write(new)
+    shutil.copystat(F, F + ".44helper-tmp")
+    os.replace(F + ".44helper-tmp", F)
+if os.path.exists(U):
+    with open(U, encoding="utf-8") as fh:
+        ulines = fh.read().split("\n")
+    ulines = setkeys(ulines, "UsrpLogic", [("CALL", call), ("USRP_HOST", "127.0.0.1"), ("USRP_TX_PORT", tx),
+                                           ("USRP_RX_PORT", rx), ("DV_USER_INFOFILE", DV)])
+    with open(U + ".44helper-tmp", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(ulines))
+    shutil.copystat(U, U + ".44helper-tmp")
+    os.replace(U + ".44helper-tmp", U)
+print("--- " + F + ":")
+print("LOGICS=" + ",".join(keep))
+print("LINKS=" + ",".join(kept_links))
+if radio:
+    print("Radio logic taken out (ASL3 owns the radio): " + ", ".join(radio))
+if dropped:
+    print("Links that joined it taken out: " + ", ".join(dropped))
+print("--- UsrpLogic: CALL=" + call + " USRP_HOST=127.0.0.1 USRP_TX_PORT=" + tx + " USRP_RX_PORT=" + rx)
+print("SvxLink is set up as a bridge with no radio. Backup of the first version: " + F + ".44helper-bak")
+print("If svxlink-usrp is running, restart it for this to take effect.")
+"""
+
 def _svx_usrp_wire_cmd(call: str, tx: str, rx: str) -> str:
-    f, u = _SVX_USRP_CONF, _SVX_USRP_LOGIC_CONF
-    return (f"F={f}; U={u}; [ -f $F ] || {{ echo 'No {f}: run step 5 first.'; exit 1; }}; "
-            f"c='{call}'; tx='{tx}'; rx='{rx}'; "
-            "for p in \"$tx\" \"$rx\"; do case \"$p\" in ''|*[!0-9]*) echo 'Ports must be numbers'; exit 1;; esac; "
-            "if [ \"$p\" -lt 1 ] || [ \"$p\" -gt 65535 ]; then echo 'Ports must be 1 to 65535'; exit 1; fi; done; "
-            "[ \"$tx\" != \"$rx\" ] || { echo 'The two ports must be different'; exit 1; }; "
-            "sudo cp -n $F $F.44helper-bak; "
-            "L=$(sed -n '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=\\([^,]*\\).*/\\1/p' $F | head -1); L=${L:-SimplexLogic}; "
-            "grep -qE '^LOGICS=.*UsrpLogic' $F || sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=\\(.*\\)$/LOGICS=\\1,UsrpLogic/' $F; "
-            "if grep -qE '^LINKS=' $F; then grep -qE '^LINKS=.*LinkToUsrp' $F || "
-            "sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LINKS=\\(.*\\)$/LINKS=\\1,LinkToUsrp/' $F; "
-            "else sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=.*$/&\\nLINKS=LinkToUsrp/' $F; fi; "
-            "grep -q '^\\[LinkToUsrp\\]' $F || printf '\\n[LinkToUsrp]\\nCONNECT_LOGICS=%s:9:USRP,UsrpLogic\\nDEFAULT_ACTIVE=1\\nTIMEOUT=0\\n' \"$L\" "
-            "| sudo tee -a $F >/dev/null; "
-            "sudo sed -i \"s/^CALLSIGN=.*/CALLSIGN=$c/\" $F; "
-            "for x in $F $U; do [ -f $x ] && sudo sed -i -e \"/^\\[UsrpLogic\\]/,/^\\[/ {"
-            " s|^CALL=.*|CALL=$c|; s|^USRP_HOST=.*|USRP_HOST=127.0.0.1|; s|^USRP_TX_PORT=.*|USRP_TX_PORT=$tx|;"
-            f" s|^USRP_RX_PORT=.*|USRP_RX_PORT=$rx|; s|^DV_USER_INFOFILE=.*|DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json|; }}\" $x; done; "
-            "echo \"--- $F:\"; sed -n '/^\\[GLOBAL\\]/,/^\\[/p' $F | grep -E '^(LOGICS|LINKS)='; "
-            "sed -n '/^\\[LinkToUsrp\\]/,/^\\[/p' $F | grep -v '^\\[' | grep -v '^$'; "
-            "echo \"--- UsrpLogic:\"; grep -hE '^(CALL|USRP_HOST|USRP_TX_PORT|USRP_RX_PORT|DV_USER_INFOFILE)=' $U 2>/dev/null || "
-            "sed -n '/^\\[UsrpLogic\\]/,/^\\[/p' $F | grep -E '^(CALL|USRP_|DV_USER)'; "
-            "echo \"Linked $L with UsrpLogic. Backup of the first version: $F.44helper-bak\"")
+    return (f"sudo env CALL='{call}' TX='{tx}' RX='{rx}' python3 - <<'PYEOF'\n{_SVX_USRP_WIRE_PY}PYEOF")
 
 _SVX_REFL_TEST_PY = r"""import os
 import re
@@ -3861,13 +3976,16 @@ def _svxlink_install_steps_usrp() -> list[dict]:
          "cmd_template": _svx_usrp_wire_cmd("{{callsign}}", "{{port}}", "{{rx_port}}"),
          "cmd": _svx_usrp_wire_cmd("YOURCALL", "32000", "34000"),
          "timeout": 60,
-         "note": "Edits the build's config (a copy of the first version is kept as svxlink.conf.44helper-bak). In "
-                 "[GLOBAL] it adds UsrpLogic to LOGICS and LinkToUsrp to LINKS, and adds a [LinkToUsrp] section "
-                 "joining your radio logic (the first one in LOGICS, SimplexLogic by default) with UsrpLogic. A "
-                 "[LinkToUsrp] section alone does nothing: SvxLink only uses links listed in LINKS=. It sets the "
+         "note": "Sets SvxLink up as a bridge with no radio, the way it is used with ASL3: ASL3 owns the radio, so SvxLink "
+                 "must not open a sound card or serial port of its own. In svxlink.conf [GLOBAL] it makes sure UsrpLogic "
+                 "is in LOGICS and takes out any radio logic (a Simplex or Repeater logic whose receiver is not a Dummy; "
+                 "the stock SimplexLogic), and takes out any link that joined one of them, such as LinkToUsrp. The "
+                 "reflector step later adds the reflector logic and the link that joins it to UsrpLogic. It sets the "
                  "callsign everywhere, and in UsrpLogic the callsign, USRP_HOST=127.0.0.1, the two ports and "
                  "DV_USER_INFOFILE (the fork's template points at /etc/svxlink, this build installs it under "
-                 "/usr/local/etc/svxlink). The other end is ASL3's private node 1900 (rxchannel = "
+                 "/usr/local/etc/svxlink). A copy of the first version is kept as svxlink.conf.44helper-bak. Safe to run "
+                 "again, and run it again on a node set up before this change to take the radio logic out; restart "
+                 "svxlink-usrp afterwards. The other end is ASL3's private node 1900 (rxchannel = "
                  "USRP/127.0.0.1:34000:32000 in rpt.conf), so the defaults are its mirror image: SvxLink sends to "
                  "32000 and listens on 34000. The node itself is added on the Config tab: Add SvxLink bridge node "
                  "does it in one step and sets these two ports again to match, picking other numbers if 1900 or the "
@@ -18155,7 +18273,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "pn_fix_ext", "pn_fix_nodes", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "pn_fix_ext", "pn_fix_nodes", "pn_fix_refs", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -19212,6 +19330,61 @@ def _cfgr_act_pn_fix_nodes(payload: dict, apply: bool) -> dict:
     head = ["Fix the [nodes] lines in rpt.conf:"] + ["  " + x for x in t["fixes"]]
     return _pn_finish({_CFGR_RPT: (rpt_b, data)}, "fixing [nodes] lines", apply, head, notes)
 
+_PN_REF_KEYS = ("events", "functions", "link_functions", "phone_functions", "morse", "telemetry", "controlstates",
+                "scheduler", "wait_times", "macro")
+
+def _pn_refs_check(lines: list[str]) -> dict:
+    mask = _cfgr_managed_mask(lines)
+    secs = _cfgr_sections(lines, mask)
+    names = {s["name"] for s in secs}
+    refs: list[dict] = []
+    for sec in secs:
+        for i in range(sec["start"] + 1, sec["end"]):
+            if mask[i]:
+                continue
+            kv = _cfgr_kv(lines[i])
+            if kv and kv[0].lower() in _PN_REF_KEYS and kv[1] and kv[1] not in names:
+                refs.append({"sec": sec["name"], "key": kv[0], "want": kv[1], "i": i})
+    used = {r["want"] for r in refs} | {kv[1] for sec in secs for i in range(sec["start"] + 1, sec["end"])
+                                          if not mask[i] for kv in [_cfgr_kv(lines[i])]
+                                          if kv and kv[0].lower() in _PN_REF_KEYS}
+    issues: list[str] = []
+    fixes: list[str] = []
+    unfixable: list[str] = []
+    rename: dict[int, str] = {}
+    for r in refs:
+        head = f"[{r['sec']}] {r['key']} = {r['want']}"
+        pre = re.sub(r"\d+$", "", r["want"])
+        near = [s for s in secs if s["name"] not in used and s["name"] != r["want"]
+                and s["name"].startswith(pre) and len(s["name"]) == len(r["want"])
+                and sum(a != b for a, b in zip(s["name"], r["want"])) <= 2 and s["start"] not in rename]
+        issues.append(f"{head}: there is no [{r['want']}] section")
+        if pre != r["want"] and len(near) == 1:
+            sec = near[0]
+            rename[sec["start"]] = r["want"]
+            fixes.append(f"[{sec['name']}] renamed to [{r['want']}], the section {r['sec']} asks for ({r['key']})")
+        else:
+            unfixable.append(f"{head}: add a [{r['want']}] section or change the line; it cannot be told which")
+    out = list(lines)
+    for start, new in rename.items():
+        out[start] = re.sub(r"\[[^\]]+\]", "[" + new + "]", out[start], count=1)
+    return {"lines": out, "issues": issues, "fixes": fixes, "unfixable": unfixable}
+
+def _cfgr_act_pn_fix_refs(payload: dict, apply: bool) -> dict:
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return {"success": False, "output": f"{_CFGR_RPT} not found."}
+    t = _pn_refs_check(_cfgr_lines(rpt_b.decode("utf-8", "replace")))
+    data = _cfgr_join(t["lines"]).encode("utf-8")
+    if data == rpt_b:
+        return {"success": True, "changes": [], "output": "\n".join(
+            ["Nothing to rename. Every events, functions, morse, telemetry and similar line names a section that exists."
+             if not t["issues"] else "Nothing can be renamed safely."] + t["issues"] + t["unfixable"])}
+    notes = ["Asterisk reads rpt.conf again when it is restarted. Restart it for the change to take effect."]
+    notes += t["unfixable"]
+    head = ["Fix the section names in rpt.conf:"] + ["  " + x for x in t["fixes"]]
+    return _pn_finish({_CFGR_RPT: (rpt_b, data)}, "fixing section names", apply, head, notes)
+
 def _pn_tidy_into(lines: list[str], notes: list[str], port: str | None = None) -> list[str]:
     t = _pn_nodes_tidy(lines, port)
     if t["fixes"]:
@@ -19517,8 +19690,10 @@ def _pn_status() -> dict:
     ext_b = _cfgr_read(_CFGR_EXT)
     old_ext = _pn_ext_fix_lines(_cfgr_lines(ext_b.decode("utf-8", "replace")))[1] if ext_b is not None else []
     nt = _pn_nodes_tidy(lines)
+    rf = _pn_refs_check(lines)
     return {"available": True, "next_free": _pn_next_free(sc["used"]), "template": tpl, "main": main,
             "old_ext": old_ext, "nodes_issues": nt["issues"] + nt["unfixable"],
+            "refs_issues": rf["issues"], "refs_fixable": bool(rf["fixes"]),
             "nodes_fixable": bool(nt["issues"]) and _cfgr_join(nt["lines"]) != _cfgr_join(lines),
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
@@ -19545,6 +19720,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "pn_fix_ext": lambda p: _cfgr_act_pn_fix_ext(p, True),
     "pn_fix_nodes_preview": lambda p: _cfgr_act_pn_fix_nodes(p, False),
     "pn_fix_nodes": lambda p: _cfgr_act_pn_fix_nodes(p, True),
+    "pn_fix_refs_preview": lambda p: _cfgr_act_pn_fix_refs(p, False),
+    "pn_fix_refs": lambda p: _cfgr_act_pn_fix_refs(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
     "gateways_revert": _cfgr_act_gateways_revert,
     "reinstall_preview": _cfgr_act_reinstall_preview,
@@ -19892,6 +20069,17 @@ function cfgPnRender(pn) {
     ['cfg-pn-fixnodes-prev', 'cfg-pn-fixnodes-run'].forEach(function(id) {
       var b = document.getElementById(id);
       if (b) b.style.display = pn.nodes_fixable ? '' : 'none';
+    });
+  }
+  var fr = document.getElementById('cfg-pn-fixrefs');
+  if (fr) {
+    var ri = pn.refs_issues || [];
+    fr.style.display = ri.length ? '' : 'none';
+    var rm = document.getElementById('cfg-pn-fixrefs-msg');
+    if (rm) rm.textContent = ri.length ? ('rpt.conf: ' + ri.join('; ') + '.') : '';
+    ['cfg-pn-fixrefs-prev', 'cfg-pn-fixrefs-run'].forEach(function(id) {
+      var b = document.getElementById(id);
+      if (b) b.style.display = pn.refs_fixable ? '' : 'none';
     });
   }
   var nodeEl = document.getElementById('cfg-pn-node');
@@ -20524,6 +20712,11 @@ def _render_config_panel() -> str:
       <span class="ov-banner lvl-warn" id="cfg-pn-fixnodes-msg"></span>
       <button class="btn-copy" id="cfg-pn-fixnodes-prev" onclick="cfgPost({action: 'pn_fix_nodes_preview'}, 'cfg-pn-out', this)">Preview fix</button>
       <button class="btn-run" id="cfg-pn-fixnodes-run" onclick="if (confirm('Fix the [nodes] lines in rpt.conf? An automatic copy of the current files is saved first. Asterisk is not restarted.')) cfgPost({action: 'pn_fix_nodes'}, 'cfg-pn-out', this)">Fix [nodes] lines</button>
+    </div>
+    <div class="step-actions" id="cfg-pn-fixrefs" style="display:none">
+      <span class="ov-banner lvl-warn" id="cfg-pn-fixrefs-msg"></span>
+      <button class="btn-copy" id="cfg-pn-fixrefs-prev" onclick="cfgPost({action: 'pn_fix_refs_preview'}, 'cfg-pn-out', this)">Preview fix</button>
+      <button class="btn-run" id="cfg-pn-fixrefs-run" onclick="if (confirm('Rename the misnamed section in rpt.conf? An automatic copy of the current files is saved first. Asterisk is not restarted.')) cfgPost({action: 'pn_fix_refs'}, 'cfg-pn-out', this)">Fix section names</button>
     </div>
     <div class="step-actions" id="cfg-svx-bridge" style="display:none">
       <span class="cfg-hint">SvxLink USRP is installed. One step: adds the bridge node (1900, ports 34000/32000, or the next free
