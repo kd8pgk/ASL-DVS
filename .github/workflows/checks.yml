@@ -98,6 +98,8 @@ jobs:
         run: python3 ci/test_talker_stream.py
       - name: Terminal Monitor tests (termon)
         run: sudo env PATH="$PATH" python3 ci/test_termon.py
+      - name: Node Monitor tests (nodemon)
+        run: python3 ci/test_nodemon.py
       - name: Repo checks
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}

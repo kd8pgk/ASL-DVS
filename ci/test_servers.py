@@ -44,6 +44,11 @@ SERVERS = {
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
+    "nodemon": {"file": "nodemon_v0_1_0_20261116.py", "port": 7777, "scheme": "http", "health": "/api/health",
+                "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
+                "files_env": {"NODEMON_RPT_CONF": "run/rpt.conf", "NODEMON_AMI_CONF": "run/manager.conf",
+                              "NODEMON_M17_INI": "run/m17.ini", "NODEMON_SVX_CONF": "run/svxlink.conf",
+                              "NODEMON_SVX_LOG": "run/svxlink.log", "NODEMON_ABINFO_GLOB": "run/ABInfo_none.json"}},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
@@ -63,6 +68,7 @@ PUBLIC_BY_DESIGN = {
     "wifimon": {"/api/whoami", "/api/countries"},
     "44helper": set(),
     "termon": {"/api/health", "/api/whoami"},
+    "nodemon": {"/api/health", "/api/whoami"},
 }
 
 

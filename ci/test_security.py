@@ -35,6 +35,8 @@ EXPECT = {
                  "after_login": ("/api/logout", "xhr"), "terminal_proxy": True},
     "termon": {"xfo": "DENY", "referrer": "same-origin", "csp": True, "login_guard": "xhr",
                "after_login": ("/api/term/ticket", "xhr")},
+    "nodemon": {"xfo": "DENY", "referrer": "no-referrer", "csp": True, "login_guard": "xhr",
+                "proxy_loopback": True, "after_login": ("/api/logout", "xhr")},
 }
 
 KNOWN_GAPS = {}
