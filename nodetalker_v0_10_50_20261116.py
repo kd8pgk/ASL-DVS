@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.50"
+VERSION = "0.10.50.1"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Talker"
 
@@ -11981,7 +11981,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="sys-shutdown" class="btn" type="button">Shutdown</button></div>
 <div id="sys-msg" class="msg"></div>
 <div id="ql-row" class="ql-row hidden">
-<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>
+<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">Node Mon</a>
 <a class="ql hidden" data-ql="dvswitch" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
 <a class="ql hidden" data-ql="cockpit" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
 </div>
