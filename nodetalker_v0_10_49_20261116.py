@@ -34,8 +34,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.48"
-DATE_STR = "2026-11-13"
+VERSION = "0.10.49"
+DATE_STR = "2026-11-16"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -3632,6 +3632,7 @@ def quick_links():
         return _links_cache["v"]
     v = {name: page_answers(path) for name, path in WEB_PAGES}
     v["cockpit"] = port_open(COCKPIT_PORT)
+    v["nodemon"] = port_open(NODEMON_PORT)
     _links_cache.update(t=now, v=v)
     return v
 
@@ -3965,7 +3966,8 @@ LOCAL_KEY_PATH = os.environ.get("NODETALKER_LOCAL_KEY", "/etc/asl_dvs/local_api.
 SYSMON_PORT = 9999
 INSTMON_PORT = 8990
 COCKPIT_PORT = 9090
-WEB_PAGES = (("allmon3", "/allmon3/"), ("dvswitch", "/dvswitch/"))
+NODEMON_PORT = 7777
+WEB_PAGES = (("dvswitch", "/dvswitch/"),)
 LINK_TTL_SEC = 30.0
 POWER_CMDS = {"reboot": (["reboot"], "Rebooting…"), "shutdown": (["shutdown", "-h", "now"], "Shutting down…")}
 TX_BUSY_GRACE_SEC = 1.0
@@ -11898,7 +11900,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="sys-shutdown" class="btn" type="button">Shutdown</button></div>
 <div id="sys-msg" class="msg"></div>
 <div id="ql-row" class="ql-row hidden">
-<a class="ql hidden" data-ql="allmon3" data-ql-path="/allmon3" href="#" target="_blank" rel="noopener">Allmon3</a>
+<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">Nodemon</a>
 <a class="ql hidden" data-ql="dvswitch" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
 <a class="ql hidden" data-ql="cockpit" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
 </div>

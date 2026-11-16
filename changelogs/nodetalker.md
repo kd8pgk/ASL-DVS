@@ -1,5 +1,16 @@
 # Node Talker changelog
 
+Current file: `nodetalker_v0_10_49_20261116.py`. Newest entries first.
+
+## 0.10.49 (2026-11-16)
+
+The Allmon3 quick-link button on the Setup tab is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page asks which tools are answering, and that check changed.
+
+- **Nodemon** appears in the links row only while Node Monitor answers on port 7777, like Cockpit. A node without Node Monitor shows nothing there.
+- **Allmon3** is no longer offered here. The DVSwitch and Cockpit buttons are unchanged.
+- Node Talker still updates Allmon3's node list (`allmon3.ini`) as before; only the button went.
+- Nothing else changes.
+
 ## 0.10.48 (2026-11-13)
 
 Fixes a login that succeeded and then was refused on an https page. This is a release: the server's cookie reading changed.

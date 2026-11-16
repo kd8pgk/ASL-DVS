@@ -100,6 +100,8 @@ jobs:
         run: sudo env PATH="$PATH" python3 ci/test_termon.py
       - name: Node Monitor tests (nodemon)
         run: python3 ci/test_nodemon.py
+      - name: Nodemon quick-link tests (Node Talker, Node Recorder, SysMon, Node Controller)
+        run: python3 ci/test_nodemon_links.py
       - name: Repo checks
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
