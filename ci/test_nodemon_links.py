@@ -75,6 +75,42 @@ def make_case(key, pattern):
     return QuickLinkCase
 
 
+STATIC_BAR_TOOLS = {"sysmon": "sysmon_v[0-9]*.py"}
+
+
+def make_bar_case(key, pattern):
+    class BarCase(unittest.TestCase):
+        @classmethod
+        def setUpClass(cls):
+            with open(newest(pattern), encoding="utf-8") as fh:
+                cls.src = fh.read()
+            cls.bar = cls.src.split('<div id="ql-bar">', 1)[1].split("</div>", 1)[0]
+
+        def test_the_bar_has_the_nodemon_button_first_and_no_allmon3(self):
+            ids = re.findall(r'<a id="(lnk-[a-z0-9]+)"', self.bar)
+            self.assertEqual(ids[:2], ["lnk-nodemon", "lnk-dvswitch"])
+            self.assertNotIn("lnk-allmon3", self.src)
+            self.assertNotIn(">Allmon3</a>", self.bar)
+            self.assertEqual(ids[2:], ["lnk-cockpit", "lnk-m17", "lnk-wifimon", "lnk-dashboard"])
+
+        def test_the_button_opens_node_monitor(self):
+            m = re.search(r'<a id="lnk-nodemon" class="ql-btn" href="([^"]+)" target="_blank" rel="noopener"\s+title="([^"]+)">([^<]+)</a>', self.bar)
+            self.assertIsNotNone(m)
+            self.assertEqual(m.groups(), ("http://localhost:7777/", "Node Monitor", "Nodemon"))
+
+        def test_the_page_points_it_at_this_nodes_port_7777(self):
+            self.assertIn('const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};', self.src)
+            self.assertNotIn("8080", self.src.split("const qlPorts", 1)[1].split(";", 1)[0])
+
+    BarCase.__name__ = f"QuickBar_{key}"
+    BarCase.__qualname__ = f"QuickBar_{key}"
+    return BarCase
+
+
+for _key, _pattern in STATIC_BAR_TOOLS.items():
+    globals()[f"QuickBar_{_key}"] = make_bar_case(_key, _pattern)
+
+
 for _key, _pattern in QL_ROW_TOOLS.items():
     globals()[f"QuickLinks_{_key}"] = make_case(_key, _pattern)
 
