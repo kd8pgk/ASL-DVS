@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PATH = sorted(glob.glob(os.path.join(ROOT, "nodemon_v*.py")))[-1]
@@ -222,6 +223,14 @@ class Gateways(unittest.TestCase):
         self.active(True)
         self.assertEqual(nm.read_svx()["state"], "idle")
 
+    def test_only_root_owned_status_files_are_trusted(self):
+        nm.ABINFO_GLOB = os.path.join(self.tmp.name, "ABInfo_*.json")
+        self.path("ABInfo_34001.json", json.dumps({"last_tune": "3100@bm_server"}))
+        self.active(True)
+        with unittest.mock.patch.object(nm, "_root_owned", lambda path: False):
+            self.assertEqual(nm.read_dvswitch()["state"], "unknown")
+        self.assertEqual(nm._root_owned(os.path.join(self.tmp.name, "none")), False)
+
     def test_read_m17(self):
         nm.M17_INI = self.path("m.ini", "[M17 Network]\nAddress=m17.freestar.network\nName=M17-DMR C\n")
         self.active(True)
@@ -234,6 +243,9 @@ class Gateways(unittest.TestCase):
 
     def test_read_dvswitch(self):
         nm.ABINFO_GLOB = os.path.join(self.tmp.name, "ABInfo_*.json")
+        owner = unittest.mock.patch.object(nm, "_root_owned", lambda path: True)
+        owner.start()
+        self.addCleanup(owner.stop)
         self.active(True)
         self.assertEqual(nm.read_dvswitch()["state"], "unknown")
         self.path("ABInfo_34001.json", json.dumps({"last_tune": "3100@bm_server"}))

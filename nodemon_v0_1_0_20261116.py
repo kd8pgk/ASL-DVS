@@ -1091,10 +1091,17 @@ def _gateway(kind, state, text, detail="", source=""):
     return {"kind": kind, "state": state, "text": text, "detail": detail, "source": source}
 
 
+def _root_owned(path):
+    try:
+        return os.stat(path).st_uid == 0
+    except OSError:
+        return False
+
+
 def read_dvswitch():
     last = None
     try:
-        files = [f for f in glob.glob(ABINFO_GLOB) if os.stat(f).st_uid == 0]
+        files = [f for f in glob.glob(ABINFO_GLOB) if _root_owned(f)]
         if files:
             with open(max(files, key=os.path.getmtime), encoding="utf-8", errors="replace") as fh:
                 d = json.load(fh)
