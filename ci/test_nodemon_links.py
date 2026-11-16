@@ -75,7 +75,7 @@ def make_case(key, pattern):
     return QuickLinkCase
 
 
-STATIC_BAR_TOOLS = {"sysmon": "sysmon_v[0-9]*.py"}
+STATIC_BAR_TOOLS = {"sysmon": "sysmon_v[0-9]*.py", "sysmon_pi02w": "sysmon_pi02w_v[0-9]*.py"}
 
 
 def make_bar_case(key, pattern):
