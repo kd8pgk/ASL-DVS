@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1278,6 +1278,116 @@ def build_status(authed=True):
     return out
 
 
+_cmd_lock = threading.Lock()
+_NODE_RE = re.compile(r"^\d{1,7}$")
+_TEXT_RE = re.compile(r"^[A-Za-z0-9 .,:;!?_@#()/+=-]{1,100}$")
+
+COMMANDS = (
+    {"op": 3, "label": "Connect: transceive", "group": "Connect", "target": "node"},
+    {"op": 2, "label": "Connect: monitor only", "group": "Connect", "target": "node"},
+    {"op": 8, "label": "Connect: local monitor only", "group": "Connect", "target": "node"},
+    {"op": 1, "label": "Disconnect a link", "group": "Disconnect", "target": "node"},
+    {"op": 6, "label": "Disconnect all links", "group": "Disconnect", "target": "none",
+     "confirm": "Disconnect every link on this node?"},
+    {"op": 16, "label": "Reconnect the links dropped by Disconnect all", "group": "Disconnect", "target": "none"},
+    {"op": 13, "label": "Permanent link: transceive", "group": "Permanent links", "target": "node",
+     "confirm": "Make this link permanent? It comes back after a restart."},
+    {"op": 12, "label": "Permanent link: monitor only", "group": "Permanent links", "target": "node",
+     "confirm": "Make this link permanent? It comes back after a restart."},
+    {"op": 18, "label": "Permanent link: local monitor only", "group": "Permanent links", "target": "node",
+     "confirm": "Make this link permanent? It comes back after a restart."},
+    {"op": 11, "label": "Disconnect a permanent link", "group": "Permanent links", "target": "node",
+     "confirm": "Disconnect this permanent link?"},
+    {"op": 4, "label": "Enter command mode on a link", "group": "Other", "target": "node"},
+    {"op": 9, "label": "Send a text message (node, or 0 for all links)", "group": "Other", "target": "node0",
+     "text": True},
+    {"op": 5, "label": "System status (announced on the air)", "group": "Announce on the air", "target": "none",
+     "confirm": "This makes the node transmit its status on the air. Continue?"},
+    {"op": 7, "label": "Last node to key up (announced on the air)", "group": "Announce on the air",
+     "target": "none", "confirm": "This makes the node transmit on the air. Continue?"},
+    {"op": 15, "label": "Full system status (announced on the air)", "group": "Announce on the air",
+     "target": "none", "confirm": "This makes the node transmit on the air. Continue?"},
+    {"op": 17, "label": "MDC test (announced on the air)", "group": "Announce on the air", "target": "none",
+     "confirm": "This makes the node transmit a test on the air. Continue?"},
+)
+_COMMAND_BY_OP = {c["op"]: c for c in COMMANDS}
+
+
+def ami_command(line):
+    user, secret = ami_credentials(AMI_CONF)
+    if not user or not secret:
+        raise OSError(f"no AMI login found in {AMI_CONF}")
+    with _cmd_lock:
+        sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
+        try:
+            fh = sock.makefile("rb")
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
+                raise OSError("that port is not the Asterisk manager")
+            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="nclogin"))
+            if "Response: Success" not in _ami_read_for(fh, "nclogin"):
+                raise OSError("Asterisk refused the AMI login")
+            sock.sendall(_ami_msg(Action="Command", Command=line, ActionID="nccmd"))
+            reply = _ami_read_for(fh, "nccmd")
+            try:
+                sock.sendall(_ami_msg(Action="Logoff", ActionID="nclogoff"))
+            except OSError:
+                pass
+            return reply
+        finally:
+            sock.close()
+
+
+def command_line(body):
+    plan = node_plan()
+    if not plan["ok"]:
+        return None, plan["error"]
+    node = str(body.get("node", "")).strip()
+    if node not in plan["public"] + plan["private"]:
+        return None, f"Node {node[:12] or '?'} is not a node on this server."
+    try:
+        op = int(body.get("op"))
+    except (TypeError, ValueError):
+        return None, "Pick a command."
+    cmd = _COMMAND_BY_OP.get(op)
+    if cmd is None:
+        return None, "Unknown command."
+    parts = ["rpt", "cmd", node, "ilink", str(op)]
+    target = str(body.get("target", "")).strip()
+    if cmd["target"] in ("node", "node0"):
+        if not _NODE_RE.match(target) or (target == "0" and cmd["target"] != "node0"):
+            return None, "Type or pick the node number to use."
+        if target == node:
+            return None, "A node cannot be linked to itself."
+        parts.append(target)
+    elif target:
+        return None, "This command takes no node."
+    if cmd.get("text"):
+        text = str(body.get("text", "")).strip()
+        if not _TEXT_RE.match(text):
+            return None, "Type a message of up to 100 letters, digits and simple punctuation."
+        parts.append(text)
+    return " ".join(parts), cmd
+
+
+def run_command(body, who="?"):
+    line, cmd = command_line(body)
+    if line is None:
+        return {"ok": False, "error": cmd}
+    try:
+        reply = ami_command(line)
+    except (OSError, ValueError) as exc:
+        log_event(f"Command from {who} failed ({line}): {exc}", "err")
+        return {"ok": False, "error": f"Asterisk could not be reached: {exc}"}
+    out = [x[8:].strip() for x in reply if x.startswith("Output: ")]
+    out = [x for x in out if x]
+    if "Response: Success" not in reply or out:
+        msg = " ".join(out) or next((x[9:] for x in reply if x.startswith("Message: ")), "Asterisk refused it.")
+        log_event(f"Command from {who}: {line}: {msg}", "warn")
+        return {"ok": False, "error": msg}
+    log_event(f"Command from {who}: {line}", "ok")
+    return {"ok": True, "message": f"Sent: {cmd['label']}. The link table shows what happened.", "line": line}
+
+
 _CSS = r""":root{--bg:#0d1117;--surface:#161e2e;--surface2:#1e2a3f;--border:#2e4060;--border2:#3a5278;--amber:#ffd040;--green:#00ffb0;--red:#ff3d5a;--blue:#22d4ff;--teal:#00ffe5;--lime:#d4ff00;--orange:#ffaa22;--text:#ffffff;--text-bright:#f0f8ff;--sans:"Readex Pro",Arial,Helvetica,sans-serif;--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:var(--fs-base);min-height:100vh;padding-bottom:3rem}
@@ -1321,6 +1431,16 @@ th{color:var(--amber);font-size:var(--fs-sm);letter-spacing:.06em;text-transform
 td.mono{font-family:var(--mono)}
 .empty{color:#aab8cc;padding:.4rem 0}
 .keyed{color:var(--lime)}
+.cmdbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+.cmdbar select,.cmdbar input{background:var(--surface2);color:var(--text);border:1px solid var(--border2);border-radius:5px;padding:.3rem .5rem;font-size:var(--fs-base);max-width:100%}
+.cmdbar input{width:9rem}
+.cmdbar input.msg{width:15rem}
+.cmdbar select:focus,.cmdbar input:focus{outline:2px solid var(--amber);outline-offset:1px}
+.cmdbar .go{background:rgba(255,208,64,.16);border-color:var(--amber);color:var(--amber);font-weight:bold}
+.cmdbar .go:disabled{opacity:.5;cursor:default}
+.cmdres{font-size:var(--fs-sm)}
+.cmdres.ok{color:var(--green)}
+.cmdres.err{color:var(--red)}
 .logbox{background:#080c12;border:1px solid var(--border);border-radius:6px;padding:.5rem;font-family:var(--mono);font-size:var(--fs-sm);max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .logbox .l-warn{color:var(--amber)}
 .logbox .l-err{color:var(--red)}
@@ -1372,7 +1492,8 @@ __CSS__</style>
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
-let authed = false, current = 'main', status = null, logSince = 0, timer = null;
+let authed = false, current = 'main', status = null, logSince = 0, timer = null, COMMANDS = [];
+const bars = {};
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -1407,7 +1528,7 @@ async function login(ev) {
   const d = await api('/api/login', {method: 'POST', body: {password: $('pw').value}});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; render(); } else $('login-msg').textContent = d.error || 'Login failed.';
+  if (d.ok) { authed = true; await loadCommands(); render(); } else $('login-msg').textContent = d.error || 'Login failed.';
 }
 async function logout() { await api('/api/logout', {method: 'POST', body: {}}); authed = false; render(); }
 function showTab(name) {
@@ -1458,6 +1579,75 @@ function linkRows(n) {
   });
 }
 const LINK_COLS = ['Node', 'Type', 'Tuned to', 'State', 'Mode', 'Direction', 'Connected', 'Audio'];
+function byOp(op) { return COMMANDS.find((c) => String(c.op) === String(op)); }
+function buildBar(node) {
+  const bar = el('div', 'cmdbar');
+  const sel = el('select');
+  sel.setAttribute('aria-label', 'Command for node ' + node);
+  const groups = {};
+  COMMANDS.forEach((c) => {
+    let g = groups[c.group];
+    if (!g) { g = document.createElement('optgroup'); g.label = c.group; groups[c.group] = g; sel.appendChild(g); }
+    const o = el('option', '', c.label);
+    o.value = c.op;
+    g.appendChild(o);
+  });
+  const tgt = el('input');
+  tgt.type = 'text'; tgt.placeholder = 'Node'; tgt.maxLength = 7; tgt.autocomplete = 'off'; tgt.inputMode = 'numeric';
+  tgt.setAttribute('list', 'dl-' + node);
+  tgt.setAttribute('aria-label', 'Node to use');
+  const dl = document.createElement('datalist');
+  dl.id = 'dl-' + node;
+  const txt = el('input', 'msg');
+  txt.type = 'text'; txt.placeholder = 'Message'; txt.maxLength = 100; txt.autocomplete = 'off';
+  txt.setAttribute('aria-label', 'Message');
+  const go = el('button', 'pill go', 'Send');
+  go.type = 'button';
+  const res = el('span', 'cmdres');
+  res.setAttribute('role', 'status');
+  const sync = () => {
+    const c = byOp(sel.value);
+    tgt.classList.toggle('hidden', !c || c.target === 'none');
+    txt.classList.toggle('hidden', !(c && c.text));
+    tgt.placeholder = c && c.target === 'node0' ? 'Node, or 0 for all' : 'Node';
+  };
+  sel.addEventListener('change', () => { sync(); res.textContent = ''; });
+  sync();
+  go.addEventListener('click', async () => {
+    const c = byOp(sel.value);
+    if (!c) return;
+    if (c.confirm && !window.confirm('Node ' + node + ': ' + c.confirm)) return;
+    go.disabled = true;
+    res.className = 'cmdres';
+    res.textContent = 'Sending...';
+    const d = await api('/api/command', {method: 'POST', body: {node: node, op: c.op, target: c.target === 'none' ? '' : tgt.value.trim(), text: c.text ? txt.value.trim() : ''}});
+    go.disabled = false;
+    res.className = 'cmdres ' + (d.ok ? 'ok' : 'err');
+    res.textContent = d.ok ? d.message : (d.error || 'It failed.');
+    if (document.activeElement && bar.contains(document.activeElement)) document.activeElement.blur();
+    poll();
+    setTimeout(poll, 1500);
+  });
+  [sel, tgt, txt, go, res, dl].forEach((x) => bar.appendChild(x));
+  bar._dl = dl;
+  return bar;
+}
+function cmdBar(n) {
+  if (!bars[n.node]) bars[n.node] = buildBar(n.node);
+  const bar = bars[n.node];
+  const seen = {};
+  const pick = [];
+  n.links.forEach((l) => { if (!seen[l.node]) { seen[l.node] = 1; pick.push(l.node); } });
+  const others = [];
+  if (status) {
+    if (status.main) others.push(status.main.node);
+    status.private.forEach((p) => others.push(p.node));
+  }
+  others.forEach((x) => { if (x !== n.node && !seen[x]) { seen[x] = 1; pick.push(x); } });
+  bar._dl.textContent = '';
+  pick.forEach((x) => { const o = document.createElement('option'); o.value = x; bar._dl.appendChild(o); });
+  return bar;
+}
 function nodeCard(n, title) {
   const card = el('div', 'card');
   const h = el('h2');
@@ -1475,6 +1665,7 @@ function nodeCard(n, title) {
     box.appendChild(el('span', '', ' ' + g.text + (g.detail ? ' (' + g.detail + ')' : '')));
     card.appendChild(kv('Gateway', box));
   }
+  if (n.ok && COMMANDS.length) card.appendChild(kv('Command', cmdBar(n)));
   card.appendChild(table(LINK_COLS, linkRows(n), 'No links.'));
   return card;
 }
@@ -1544,6 +1735,8 @@ function renderAll(d) {
   status = d;
   $('hdr-node').textContent = d.main ? 'Node ' + d.main.node : '';
   renderBanner(d);
+  const busy = document.activeElement && document.activeElement.closest && document.activeElement.closest('.cmdbar');
+  if (busy) return;
   renderMain(d);
   renderConn(d);
   renderPriv(d);
@@ -1575,7 +1768,16 @@ document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () 
 $('login-form').addEventListener('submit', login);
 $('logout').addEventListener('click', logout);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'hidden') poll(); });
-(async () => { const d = await api('/api/whoami'); authed = !!d.authed; render(); })();
+async function loadCommands() {
+  const d = await api('/api/commands');
+  COMMANDS = d.commands || [];
+}
+(async () => {
+  const d = await api('/api/whoami');
+  authed = !!d.authed;
+  if (authed) await loadCommands();
+  render();
+})();
 """
 
 
@@ -1738,6 +1940,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/whoami":
                 self._json(200, {"ok": True, "authed": authed, "version": VERSION,
                                  "backend": _root_backend_available()})
+            elif path == "/api/commands":
+                self._json(200, {"ok": True, "commands": list(COMMANDS)})
             elif path == "/api/status":
                 self._json(200, _status_view(authed))
             elif path == "/api/log":
@@ -1790,6 +1994,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
+            return
+        if path == "/api/command":
+            self._json(200, run_command(body, ip))
             return
         self._json(404, {"ok": False, "error": "Not found."})
 

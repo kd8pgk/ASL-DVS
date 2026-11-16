@@ -1,6 +1,24 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_1_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_2_0_20261116.py`. Newest entries first.
+
+## 0.2.0 (2026-11-16)
+
+Link commands. Every node card (the main node and each private node that is up) now has a **Command** row of drop-down menus.
+
+- **Every ilink operation of rpt.conf is offered**, in groups, with plain labels:
+  - **Connect:** transceive (3), monitor only (2), local monitor only (8).
+  - **Disconnect:** a link (1), all links (6), reconnect the links dropped by Disconnect all (16).
+  - **Permanent links:** transceive (13), monitor only (12), local monitor only (18), disconnect a permanent link (11).
+  - **Other:** enter command mode on a link (4), send a text message to a node or, with 0, to all links (9).
+  - **Announce on the air:** system status (5), last node to key up (7), full system status (15), MDC test (17). These make the node transmit, so they ask first.
+  - ilink 10 is left out: rpt.conf marks it as unused.
+- **The node to link** is typed or picked from a list of the nodes already linked and the other nodes on this server.
+- **Asks first** for Disconnect all, the permanent-link commands and the ones that transmit on the air.
+- **The result is the next poll, not the command's reply.** Asterisk answers a successful command with nothing, so the page says "Sent" and refreshes the link table at once and again 1.5 seconds later; the table shows what really happened. Asterisk's own text is shown when it refuses (for example an unknown node).
+- **Checked before Asterisk sees it.** The server builds the command line only from a node on this server, a listed operation number, a numeric target and a plain-text message, and refuses a node linking to itself. Commands need the login, the same X-Requested-With guard as every other action, and are not open to the internet.
+- **Every command is written to the Log tab** and the journal with the address it came from and the exact line sent.
+- Not changed: the text message (ilink 9) is sent as the rpt command line, but Asterisk gives no reply to it, so Node Monitor cannot show that the other node got it.
 
 ## 0.1.0 (2026-11-16)
 
