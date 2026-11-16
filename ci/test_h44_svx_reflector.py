@@ -252,6 +252,82 @@ class TestReflectorStep(ScriptBase):
         self.assertEqual(self.read(self.rconf), before)
 
 
+WIRE_ENV = {"CALL": "KD8PGK", "TX": "32000", "RX": "34000"}
+
+
+class WireStep(ScriptBase):
+    def test_a_stock_radio_logic_is_taken_out_with_the_links_that_joined_it(self):
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0, out)
+        t = self.read(self.conf)
+        self.assertIn("LOGICS=UsrpLogic\n", t)
+        self.assertIn("LINKS=\n", t)
+        self.assertIn("Radio logic taken out (ASL3 owns the radio): SimplexLogic", out)
+        self.assertIn("Links that joined it taken out: LinkToUsrp", out)
+        usrp = t.split("[UsrpLogic]")[1].split("\n[")[0]
+        for line in ("CALL=KD8PGK", "USRP_HOST=127.0.0.1", "USRP_TX_PORT=32000", "USRP_RX_PORT=34000"):
+            self.assertIn(line + "\n", usrp + "\n")
+        self.assertIn("CALLSIGN=KD8PGK", t)
+        self.assertTrue(os.path.exists(self.conf + ".44helper-bak"))
+        with open(self.conf + ".44helper-bak") as fh:
+            self.assertIn("LOGICS=SimplexLogic,UsrpLogic", fh.read())
+
+    def test_a_node_already_wired_to_a_reflector_keeps_its_control_logic_and_reflector_link(self):
+        self.run_script(h44._SVX_REFL_CONN_PY, CONN_ENV)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0, out)
+        t = self.read(self.conf)
+        self.assertIn("LOGICS=UsrpLogic,ReflectorLogic,SvxCtrlLogic\n", t)
+        self.assertIn("LINKS=ReflectorLink\n", t)
+        self.assertIn("[SvxCtrlLogic]\nTYPE=Simplex\nRX=SvxCtrlRx", t)
+
+    def test_a_logic_with_a_dummy_receiver_is_not_a_radio(self):
+        conf = SVXLINK_CONF.replace("[SimplexLogic]\nTYPE=Simplex\n", "[SimplexLogic]\nTYPE=Simplex\nRX=Dummy1\nTX=Dummy1\n") + "\n[Dummy1]\nTYPE=Dummy\n"
+        with open(self.conf, "w") as fh:
+            fh.write(conf)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0, out)
+        self.assertIn("LOGICS=SimplexLogic,UsrpLogic\n", self.read(self.conf))
+        self.assertNotIn("Radio logic taken out", out)
+
+    def test_a_repeater_logic_is_a_radio_too(self):
+        conf = SVXLINK_CONF.replace("LOGICS=SimplexLogic,UsrpLogic", "LOGICS=SimplexLogic,RepeaterLogic,UsrpLogic") + \
+            "\n[RepeaterLogic]\nTYPE=Repeater\nRX=Rx1\nTX=Tx1\n\n[Rx1]\nTYPE=Local\n"
+        with open(self.conf, "w") as fh:
+            fh.write(conf)
+        code, out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0, out)
+        self.assertIn("LOGICS=UsrpLogic\n", self.read(self.conf))
+        self.assertIn("SimplexLogic, RepeaterLogic", out)
+
+    def test_second_run_changes_nothing(self):
+        self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        once = self.read(self.conf)
+        code, _out = self.run_script(h44._SVX_USRP_WIRE_PY, WIRE_ENV)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.read(self.conf), once)
+
+    def test_bad_input_changes_nothing(self):
+        before = self.read(self.conf)
+        for env in (dict(WIRE_ENV, TX="0"), dict(WIRE_ENV, RX="70000"), dict(WIRE_ENV, TX="x"),
+                    dict(WIRE_ENV, TX="32000", RX="32000"), dict(WIRE_ENV, CALL="")):
+            code, out = self.run_script(h44._SVX_USRP_WIRE_PY, env)
+            self.assertEqual(code, 1, env)
+            self.assertIn("STOPPED", out)
+        self.assertEqual(self.read(self.conf), before)
+        self.assertFalse(os.path.exists(self.conf + ".44helper-bak"))
+
+    def test_the_step_and_the_guide_text_say_no_radio(self):
+        step = {s["id"]: s for s in h44._SVXLINK_SCRIPTS["install"]["usrp"]}["usrp_logic_conf"]
+        self.assertIn("no radio", step["note"])
+        self.assertNotIn("LinkToUsrp to LINKS", step["note"])
+        self.assertIn("LOGICS=UsrpLogic", h44._SVX_USRP_LOGIC_SNIPPET)
+        self.assertNotIn("LinkToUsrp", h44._SVX_USRP_LOGIC_SNIPPET)
+        cmd, why = h44._step_command(step, {"callsign": "KD8PGK", "port": "32000", "rx_port": "34000"})
+        self.assertEqual(why, "")
+        self.assertIn("CALL='KD8PGK'", cmd)
+
+
 class StepsAndFields(unittest.TestCase):
     def steps(self):
         return {s["id"]: s for s in h44._SVXLINK_SCRIPTS["install"]["usrp"]}

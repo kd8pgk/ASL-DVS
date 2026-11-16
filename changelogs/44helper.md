@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_42_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_43_20261116.py`. Newest entries first.
+
+## 0.1.43 (2026-11-16)
+
+Two fixes found on a Node Talker node: a misnamed section in rpt.conf, and SvxLink set up with a radio of its own.
+
+- **Misnamed sections in rpt.conf.** The Add private node card now also checks that every `events`, `functions`, `link_functions`, `phone_functions`, `morse`, `telemetry`, `controlstates`, `scheduler`, `wait_times` and `macro` line names a section that exists. The node that gave it away had `events = events-652705` while the section was `[events-652706]`, so the node ran without its events section. When exactly one unused section has the same name apart from up to two characters, **Preview fix** and **Fix section names** rename that section (the part after `]`, such as `(events-main,events-hotspotradio-usb)`, is kept). Otherwise the line is named for fixing by hand and nothing is changed. The usual preview, automatic save point and "Asterisk is not restarted" apply. Lines inside blocks that Node Talker or another tool manages are left alone.
+- **SvxLink with ASL3 has no radio.** Step 8 (Switch UsrpLogic on and set its ports) used to join the first radio logic in `LOGICS` (SimplexLogic as installed) to UsrpLogic, so `svxlink-usrp` opened a sound card, a HID device and a serial port that ASL3's SimpleUSB already uses. Step 8 now takes any radio logic out of `LOGICS` (a Simplex or Repeater logic whose receiver is not a Dummy one), takes out the links that joined it (`LinkToUsrp`), makes sure UsrpLogic is listed, and sets the callsign, host, ports and `DV_USER_INFOFILE` as before. The control logic and the reflector link that step 11 adds are kept. A copy of the first version is kept as `svxlink.conf.44helper-bak`. Run step 8 again on a node set up earlier, then restart `svxlink-usrp`. The guide text for the manual steps says the same.
+- 44helper is a common tool; this affects both builds.
+- This is a release: the Config tab and step 8 change what they write.
 
 ## 0.1.42 (2026-11-16)
 
