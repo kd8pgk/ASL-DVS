@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.38"
+APP_VERSION = "0.1.39"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3393,7 +3393,7 @@ def _svxlink_install_steps() -> list[dict]:
 _SVX_USRP_BUILD_DEPS = (
     "g++ cmake make libsigc++-2.0-dev libgsm1-dev libpopt-dev tcl-dev libgcrypt20-dev "
     "libspeex-dev libasound2-dev libopus-dev librtlsdr-dev doxygen groff alsa-utils "
-    "vorbis-tools curl libcurl4-openssl-dev git rtl-sdr libjsoncpp-dev libgpiod-dev libssl-dev"
+    "vorbis-tools curl libcurl4-openssl-dev git rtl-sdr libjsoncpp-dev libgpiod-dev libssl-dev python3-yaml"
 )
 
 _SVX_USRP_PREFIX = "/usr/local"
@@ -3449,6 +3449,271 @@ def _svx_usrp_wire_cmd(call: str, tx: str, rx: str) -> str:
             "echo \"--- UsrpLogic:\"; grep -hE '^(CALL|USRP_HOST|USRP_TX_PORT|USRP_RX_PORT|DV_USER_INFOFILE)=' $U 2>/dev/null || "
             "sed -n '/^\\[UsrpLogic\\]/,/^\\[/p' $F | grep -E '^(CALL|USRP_|DV_USER)'; "
             "echo \"Linked $L with UsrpLogic. Backup of the first version: $F.44helper-bak\"")
+
+_SVX_REFL_TEST_PY = r"""import os
+import re
+import shutil
+import subprocess
+import sys
+
+CONF = "/usr/local/etc/svxlink/svxreflector.conf"
+BIN = "/usr/local/bin/svxreflector"
+PKI = "/var/lib/svxreflector/pki/"
+UNIT = "/etc/systemd/system/svxreflector.service"
+call = os.environ.get("CALL", "").upper()
+key = os.environ.get("KEY", "")
+TAG = "# 44helper: test reflector user (next line)"
+
+
+def stop(msg):
+    print("STOPPED: " + msg + " Nothing was changed.")
+    sys.exit(1)
+
+
+def section(lines, name):
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*\[" + re.escape(name) + r"\]\s*$", line):
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def setkeys(lines, name, pairs):
+    sec = section(lines, name)
+    if sec is None:
+        lines += ["", "[" + name + "]"] + [k + "=" + v for k, v in pairs]
+        return lines
+    s, e = sec
+    seen = set()
+    want = dict(pairs)
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*#?\s*([A-Z_]+)\s*=", lines[i])
+        if m and m.group(1) in want and m.group(1) not in seen:
+            seen.add(m.group(1))
+            lines[i] = m.group(1) + "=" + want[m.group(1)]
+    add = [k + "=" + v for k, v in pairs if k not in seen]
+    return lines[:s + 1] + add + lines[s + 1:]
+
+
+def ours_out(lines):
+    out = []
+    skip = False
+    for x in lines:
+        if skip:
+            skip = False
+            continue
+        if x.strip() == TAG:
+            skip = True
+            continue
+        out.append(x)
+    return out
+
+
+if not os.path.exists(BIN) or not os.path.exists(CONF):
+    stop(BIN + " or " + CONF + " is missing: run the build steps (3 and 5) first.")
+if not re.fullmatch(r"[A-Z0-9]{3,8}(-[A-Z0-9]{1,3})?", call):
+    stop("The callsign must be 3 to 8 letters and digits, with an optional -suffix.")
+yaml_ok = subprocess.run(["python3", "-c", "import yaml"], capture_output=True).returncode == 0
+with open(CONF, encoding="utf-8") as f:
+    old = f.read()
+if "\r" in old:
+    stop(CONF + " uses Windows line endings.")
+lines = ours_out(old.split("\n"))
+lines = setkeys(lines, "GLOBAL", [("LISTEN_PORT", "5300"), ("CERT_PKI_DIR", PKI)])
+lines = setkeys(lines, "SERVER_CERT", [("COMMON_NAME", "localhost"),
+                                       ("SUBJECT_ALT_NAME", "DNS:localhost,IP:127.0.0.1")])
+for name, line in (("USERS", call + "=44helperNodes"), ("PASSWORDS", '44helperNodes="' + key + '"')):
+    sec = section(lines, name)
+    if sec is None:
+        lines += ["", "[" + name + "]", TAG, line]
+    else:
+        lines[sec[0] + 1:sec[0] + 1] = [TAG, line]
+new = "\n".join(lines)
+if not os.path.exists(CONF + ".44helper-bak"):
+    shutil.copy2(CONF, CONF + ".44helper-bak")
+if new != old:
+    with open(CONF + ".44helper-tmp", "w", encoding="utf-8") as f:
+        f.write(new)
+    shutil.copystat(CONF, CONF + ".44helper-tmp")
+    os.replace(CONF + ".44helper-tmp", CONF)
+os.makedirs(PKI, exist_ok=True)
+subprocess.run(["chown", "-R", "svxlink:svxlink", "/var/lib/svxreflector"])
+unit = "\n".join([
+    "[Unit]", "Description=SvxReflector test server (written by 44helper)", "After=network.target", "",
+    "[Service]", "User=svxlink", "ExecStart=" + BIN + " --config=" + CONF, "Restart=always", "RestartSec=10", "",
+    "[Install]", "WantedBy=multi-user.target", ""])
+with open(UNIT, "w", encoding="utf-8") as f:
+    f.write(unit)
+subprocess.run(["systemctl", "daemon-reload"])
+subprocess.run(["systemctl", "enable", "svxreflector"], capture_output=True)
+subprocess.run(["systemctl", "restart", "svxreflector"])
+import time
+time.sleep(6)
+state = subprocess.run(["systemctl", "is-active", "svxreflector"], capture_output=True, text=True).stdout.strip()
+ss = subprocess.run(["ss", "-ltn", "sport", "= :5300"], capture_output=True, text=True).stdout
+print("svxreflector: " + state + ("; listening on TCP 5300" if ":5300" in ss else "; NOT listening on 5300"))
+print("Test user: " + call + " (password as entered). Backup of the first version: " + CONF + ".44helper-bak")
+print("--- last log lines:")
+j = subprocess.run(["journalctl", "-u", "svxreflector", "-n", "8", "--no-pager", "-o", "cat"],
+                   capture_output=True, text=True).stdout
+print("\n".join(x for x in j.splitlines() if not x.startswith("[{"))[-1500:])
+if not yaml_ok:
+    print("Note: python3-yaml is not installed, so the reflector's certificate hook (a mail notifier) can't run. "
+          "Logins still work. Step 2 installs it when run again.")
+print("Next: run the Connect to an SvxReflector step with host 127.0.0.1, port 5300 and the same password.")
+print("Keep TCP and UDP 5300 closed in the firewall: this test server is for this node only.")
+sys.exit(0 if state == "active" and ":5300" in ss else 1)
+"""
+
+_SVX_REFL_CONN_PY = r"""import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+F = "/usr/local/etc/svxlink/svxlink.conf"
+LOG = "/var/log/svxlink"
+PTY = "/var/lib/svxlink/dtmf_ctrl"
+host = os.environ.get("HOST", "")
+port = os.environ.get("PORT", "")
+key = os.environ.get("KEY", "")
+tg = os.environ.get("TG", "")
+mon = os.environ.get("MON", "")
+
+
+def stop(msg):
+    print("STOPPED: " + msg + " Nothing was changed.")
+    sys.exit(1)
+
+
+def section(lines, name):
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*\[" + re.escape(name) + r"\]\s*$", line):
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def setkeys(lines, name, pairs, drop=()):
+    sec = section(lines, name)
+    if sec is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines + ["", "[" + name + "]"] + [k + "=" + v for k, v in pairs] + [""]
+    s, e = sec
+    seen = set()
+    want = dict(pairs)
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*(#?)\s*([A-Z_]+)\s*=", lines[i])
+        if not m:
+            continue
+        k = m.group(2)
+        if k in want and k not in seen:
+            seen.add(k)
+            lines[i] = k + "=" + want[k]
+        elif k in drop and not m.group(1):
+            lines[i] = "#" + lines[i]
+    add = [k + "=" + v for k, v in pairs if k not in seen]
+    return lines[:s + 1] + add + lines[s + 1:]
+
+
+def addlist(lines, key, names):
+    sec = section(lines, "GLOBAL")
+    if sec is None:
+        stop(F + " has no [GLOBAL] section.")
+    s, e = sec
+    for i in range(s + 1, e):
+        m = re.match(r"^\s*" + key + r"\s*=\s*(.*)$", lines[i])
+        if m:
+            have = [x.strip() for x in m.group(1).split(",") if x.strip()]
+            lines[i] = key + "=" + ",".join(have + [n for n in names if n not in have])
+            return lines
+    return lines[:s + 1] + [key + "=" + ",".join(names)] + lines[s + 1:]
+
+
+if not os.path.exists(F):
+    stop(F + " is missing: run the build steps first.")
+with open(F, encoding="utf-8") as f:
+    old = f.read()
+if "\r" in old:
+    stop(F + " uses Windows line endings.")
+calls = re.findall(r"(?m)^\s*(?:CALLSIGN|CALL)\s*=\s*\"?([A-Za-z0-9-]+)\"?", old)
+call = next((c.upper() for c in calls if c.upper() not in ("MYCALL", "N0CALL", "OBJECT_NAME")), "")
+if not call:
+    stop("No callsign is set in " + F + ". Run step 8 (or the Identity card's Set everywhere) first.")
+lines = old.split("\n")
+pairs = [("TYPE", "Reflector"), ("HOSTS", host), ("HOST_PORT", port), ("CALLSIGN", '"' + call + '"'),
+         ("AUTH_KEY", '"' + key + '"'), ("DEFAULT_TG", tg), ("TG_SELECT_TIMEOUT", "3600")]
+if mon:
+    pairs.append(("MONITOR_TGS", mon))
+lines = setkeys(lines, "ReflectorLogic", pairs, drop=() if mon else ("MONITOR_TGS",))
+lines = setkeys(lines, "SvxCtrlLogic", [("TYPE", "Simplex"), ("RX", "SvxCtrlRx"), ("TX", "SvxCtrlTx"),
+                                        ("CALLSIGN", call), ("DTMF_CTRL_PTY", PTY),
+                                        ("SHORT_IDENT_INTERVAL", "0"), ("LONG_IDENT_INTERVAL", "0")])
+lines = setkeys(lines, "SvxCtrlRx", [("TYPE", "Dummy")])
+lines = setkeys(lines, "SvxCtrlTx", [("TYPE", "Dummy")])
+lines = setkeys(lines, "ReflectorLink", [("CONNECT_LOGICS", "SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic"),
+                                         ("DEFAULT_ACTIVE", "1")], drop=("TIMEOUT", "ACTIVATE_ON_ACTIVITY", "ACTIVATE_ON_TG"))
+lines = addlist(lines, "LOGICS", ["ReflectorLogic", "SvxCtrlLogic"])
+lines = addlist(lines, "LINKS", ["ReflectorLink"])
+new = "\n".join(lines)
+if not os.path.exists(F + ".44helper-bak"):
+    shutil.copy2(F, F + ".44helper-bak")
+if new != old:
+    with open(F + ".44helper-tmp", "w", encoding="utf-8") as f:
+        f.write(new)
+    shutil.copystat(F, F + ".44helper-tmp")
+    os.replace(F + ".44helper-tmp", F)
+    print("svxlink.conf: reflector " + host + ":" + port + ", callsign " + call + ", default TG " + tg +
+          (", monitoring " + mon if mon else "") + ".")
+else:
+    print("svxlink.conf: already set.")
+os.makedirs("/var/lib/svxlink", exist_ok=True)
+subprocess.run(["chown", "svxlink:svxlink", "/var/lib/svxlink"])
+start = os.path.getsize(LOG) if os.path.exists(LOG) else 0
+subprocess.run(["systemctl", "restart", "svxlink-usrp"])
+time.sleep(10)
+try:
+    with open(LOG, encoding="utf-8", errors="replace") as f:
+        f.seek(start)
+        got = f.read().splitlines()
+except OSError:
+    got = []
+refl = [x for x in got if "ReflectorLogic" in x and "audio clip" not in x and "Loading" not in x]
+print("--- SvxLink, reflector lines after the restart:")
+print("\n".join(refl[-12:]) or "(none yet)")
+ok = any("Authentication OK" in x for x in refl)
+print("")
+print("Logged in to the reflector." if ok else
+      "Not logged in yet. Read the lines above: a wrong password, a blocked port or a reflector that needs a "
+      "signed certificate all show there.")
+print("Control device for Node Controller: " + PTY + (" (present)" if os.path.exists(PTY) else " (not there yet)"))
+sys.exit(0 if ok else 1)
+"""
+
+def _svx_refl_test_cmd(call: str, key: str) -> str:
+    return f"sudo env CALL='{call}' KEY='{key}' python3 - <<'PYEOF'\n{_SVX_REFL_TEST_PY}PYEOF"
+
+def _svx_refl_conn_cmd(host: str, port: str, key: str, tg: str, mon: str) -> str:
+    return (f"sudo env HOST='{host}' PORT='{port}' KEY='{key}' TG='{tg}' MON='{mon}' python3 - <<'PYEOF'\n"
+            f"{_SVX_REFL_CONN_PY}PYEOF")
 
 _SVX_USRP_UNIT_LINES = (
     "[Unit]", "Description=SvxLink (USRP fork, written by 44helper)", "After=network.target sound.target", "",
@@ -3615,11 +3880,50 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "it starts as root and drops to the svxlink user from step 4), enables it at boot and starts it. It "
                  "stops first if the apt svxlink service is running, since both use the same ports. When SvxLink "
                  "stops at once, the step shows its own log."},
-        _svx_config_field_step(10, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp") |
+        {"id": "usrp_refl_test", "num": 10, "title": "(Optional) Run a test SvxReflector on this node",
+         "fields": [{"id": "callsign", "label": "Callsign (the test user)", "type": "text", "default": ""},
+                    {"id": "refl_key", "label": "Password for the test reflector", "type": "text", "default": ""}],
+         "cmd_template": _svx_refl_test_cmd("{{callsign}}", "{{refl_key}}"),
+         "cmd": _svx_refl_test_cmd("YOURCALL", "change-me-123"),
+         "timeout": 300,
+         "note": "Optional: a private reflector for testing, before you have a password for a public network. It uses the "
+                 "svxreflector program the build in step 5 already installed. It sets up "
+                 "/usr/local/etc/svxlink/svxreflector.conf with one user (your callsign) and the password you enter, a "
+                 "certificate name of localhost, and its own certificate folder (/var/lib/svxreflector/pki), and "
+                 "starts svxreflector.service. A copy of the first version "
+                 "of the file is kept as svxreflector.conf.44helper-bak. Safe to run again. Then run step 11 with host "
+                 "127.0.0.1, port 5300 and the same password. Keep TCP and UDP 5300 closed in the firewall: only this "
+                 "node needs to reach it."},
+        {"id": "usrp_refl_conn", "num": 11, "title": "Connect to an SvxReflector",
+         "fields": [{"id": "refl_host", "label": "Reflector host (127.0.0.1 for the test reflector)", "type": "text",
+                     "default": "127.0.0.1"},
+                    {"id": "refl_port", "label": "Reflector port", "type": "text", "default": "5300"},
+                    {"id": "refl_key", "label": "Password (AUTH_KEY) from the reflector's sysop", "type": "text",
+                     "default": ""},
+                    {"id": "refl_tg", "label": "Default talkgroup (0 = none)", "type": "text", "default": "0"},
+                    {"id": "refl_monitor", "label": "Monitored talkgroups (comma separated, blank = none)",
+                     "type": "text", "default": ""}],
+         "cmd_template": _svx_refl_conn_cmd("{{refl_host}}", "{{refl_port}}", "{{refl_key}}", "{{refl_tg}}",
+                                            "{{refl_monitor}}"),
+         "cmd": _svx_refl_conn_cmd("127.0.0.1", "5300", "change-me-123", "0", ""),
+         "timeout": 120,
+         "note": "Logs SvxLink in to an SvxReflector and joins it to ASL3, so the main node can reach the reflector's "
+                 "talkgroups through the bridge node. In svxlink.conf it sets [ReflectorLogic] (host, port, your callsign "
+                 "from the file, the password, the default talkgroup, the monitored talkgroups, and a one-hour talkgroup "
+                 "timeout so a picked talkgroup is not dropped after 30 seconds); adds [SvxCtrlLogic], a control logic "
+                 "with no radio (Dummy receiver and transmitter) whose control device, /var/lib/svxlink/dtmf_ctrl, is how "
+                 "Node Controller's SVX tab picks talkgroups; and adds [ReflectorLink] joining the control logic, "
+                 "UsrpLogic and ReflectorLogic. ReflectorLogic, SvxCtrlLogic and ReflectorLink are added to LOGICS and "
+                 "LINKS. Safe to run again; a copy of the first version is kept as svxlink.conf.44helper-bak. It restarts "
+                 "svxlink-usrp and shows SvxLink's reflector lines, ending with whether it logged in. Monitored "
+                 "talkgroups: traffic on these is heard when no talkgroup is picked; add + after a number to give it "
+                 "priority (for example 91,240+). A reflector that signs certificates instead of using passwords keeps "
+                 "this node's request waiting until its sysop signs it."},
+        _svx_config_field_step(12, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp") |
         {"title": "(Optional) Change the callsign", "note": "Step 8 already sets it. Use this to change it later: "
                  "it sets CALLSIGN= in every logic of the build's svxlink.conf and restarts svxlink-usrp."},
-        _cockpit_install_step(11),
-        _cockpit_enable_step(12),
+        _cockpit_install_step(13),
+        _cockpit_enable_step(14),
     ]
 
 def _svxlink_purge_steps_usrp() -> list[dict]:
@@ -4318,6 +4622,14 @@ _STEP_FIELD_RULES = {
     "cruser": (re.compile(r"[a-z_][a-z0-9_-]{0,31}"), "use a Linux login name: lowercase letters, digits, _ and -"),
     "crfolder": (re.compile(r"[~/A-Za-z0-9._-]{1,200}"),
                  "use a folder path such as ~/claude-remote or /home/you/claude-remote (no spaces)"),
+    "refl_host": (re.compile(r"[A-Za-z0-9.-]{1,100}(:[0-9]{1,5})?(,[A-Za-z0-9.-]{1,100}(:[0-9]{1,5})?){0,3}"),
+                  "use a host name or IP address (up to 4, separated by commas, each with an optional :port)"),
+    "refl_port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
+    "refl_key": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{6,64}"),
+                 "use 6 to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &)"),
+    "refl_tg": (re.compile(r"[0-9]{1,9}"), "use a talkgroup number (0 for none)"),
+    "refl_monitor": (re.compile(r"([0-9]{1,9}\+{0,3}(,[0-9]{1,9}\+{0,3}){0,19})?"),
+                     "use talkgroup numbers separated by commas, each with up to three + for priority, or leave it blank"),
     "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
                  "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &). "
                  "Set any other password from the Custom box"),
@@ -14583,9 +14895,10 @@ _CFGR_GROUPS: dict[str, dict] = {
             "core": ["/usr/local/etc/svxlink/svxlink.conf", "/usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf"],
             "optional": ["/usr/local/etc/svxlink/svxlink.d/ModuleEchoLink.conf", "/usr/local/etc/svxlink/dv_users.json",
                          "/usr/local/etc/svxlink/node_info.json", "/usr/local/etc/svxlink/gpio.conf",
-                         "/etc/systemd/system/svxlink-usrp.service"],
+                         "/etc/systemd/system/svxlink-usrp.service", "/usr/local/etc/svxlink/svxreflector.conf",
+                         "/etc/systemd/system/svxreflector.service"],
             "globs": [("/usr/local/etc/svxlink/svxlink.d", ".conf")],
-            "services": ["svxlink-usrp"]},
+            "services": ["svxlink-usrp", "svxreflector"]},
     "phone": {"label": "Phone", "markers": ["/etc/asl_dvs/phone.json"],
               "core": ["/etc/asl_dvs/phone.json"],
               "optional": ["/etc/asterisk/dvs_phone_extensions.conf", "/etc/asterisk/dvs_phone_pjsip.conf",

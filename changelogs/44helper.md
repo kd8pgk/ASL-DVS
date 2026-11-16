@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_38_20261115.py`. Newest entries first.
+Current file: `44helper_v0_1_39_20261116.py`. Newest entries first.
+
+## 0.1.39 (2026-11-16)
+
+SvxLink tab, USRP build: two new steps join the node to an SvxReflector, the server SvxLink nodes share talkgroups on. With them the main node reaches the reflector's talkgroups through the bridge node, and Node Controller's SVX tab (full build, coming) can pick talkgroups.
+
+- **Step 10, (Optional) Run a test SvxReflector on this node:** a private reflector for testing before you have a password for a public network. It uses the `svxreflector` program step 5 already built, sets up `/usr/local/etc/svxlink/svxreflector.conf` with one user (your callsign) and the password you enter, a server certificate name of `localhost` and its own certificate folder (`/var/lib/svxreflector/pki`), and starts `svxreflector.service`. Safe to run again: the user is replaced, not added twice. Keep TCP and UDP 5300 closed in the firewall.
+- **Step 11, Connect to an SvxReflector** (host, port, password, default talkgroup, monitored talkgroups): sets `[ReflectorLogic]` (with a one-hour talkgroup timeout so a picked talkgroup is not dropped after 30 seconds), adds `[SvxCtrlLogic]`, a control logic with no radio (Dummy receiver and transmitter) whose control device `/var/lib/svxlink/dtmf_ctrl` is how a talkgroup is picked (`91<TG>#` selects one, `910#` clears it, `9#` turns the link off), and adds `[ReflectorLink]` joining the control logic, `UsrpLogic` and `ReflectorLogic`. It restarts `svxlink-usrp` and shows SvxLink's reflector lines, ending with whether it logged in. The callsign comes from `svxlink.conf`; the step stops if it is still `MYCALL` or `N0CALL`. Safe to run again.
+- The old step 10 (Set Callsign) and the Cockpit steps move to 12 to 14. Step 2 also installs `python3-yaml`, which the reflector's certificate hook needs.
+- The Config tab's SvxLink USRP system also saves `svxreflector.conf` and its unit, and its Restart button restarts `svxreflector`.
+- Tested on a real build (ASL3, the USRP fork and node 1900 in a Debian 12 container): both steps run from the page's API, SvxLink logged in to the test reflector, `91240#` selected talkgroup 240 on both ends, voice from the ASL3 side reached the reflector, and a second run of each step left both files unchanged.
+- This is a release: the tab gained steps.
 
 ## 0.1.38 (2026-11-15)
 
