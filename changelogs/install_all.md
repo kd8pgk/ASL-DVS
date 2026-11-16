@@ -1,6 +1,15 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_7_0_20261114.sh`. Newest entries first.
+Current file: `install_all_v7_8_0_20261116.sh`. Newest entries first.
+
+## 7.8.0 (2026-11-16)
+
+Node Monitor (port 7777) is an optional tool of the installer. This is a release: the installer's behaviour changed. It is a common tool, so this applies to the Pi Zero 2 W and the full build alike.
+
+- **Asked like Node Recorder and Pibrary.** A fresh install, a `--suite` run or `INSTALL_NODEMON=1` installs it; without one of those an interactive run asks "Install Node Monitor? [y/N]" and a run with no terminal skips it. `--core` leaves it out, and `--tools=nodemon` (with `--action=components`) installs it on its own.
+- **Its file** `nodemon*.py` is found in the library, downloaded from the stable channel and installed with its own `--install`, like the other optional tools. Node Monitor's port is read from `/etc/asl_dvs/nodemon.conf` after the install.
+- **A full upgrade does not add it**, as with the other optional tools; an installed Node Monitor is updated.
+- Nothing else changes.
 
 ## 7.7.0 (2026-11-14)
 

@@ -20,9 +20,9 @@ BOOTSTRAP = os.path.join(ROOT, "bootstrap.sh")
 UNINSTALLER = sorted(glob.glob(os.path.join(ROOT, "uninstall_all_v*.sh")))[-1]
 
 NAMES = {"wifimon": "wifimon", "nodetalker": "nodetalker", "noderecorder": "noderecorder",
-         "pibrary": "pibrary", "termon": "termon", "44helper": "44helper"}
+         "pibrary": "pibrary", "termon": "termon", "44helper": "44helper", "nodemon": "nodemon"}
 LIB = {"wifimon": "wifimon", "nodetalker": "nodelisten", "noderecorder": "noderecorder",
-       "pibrary": "pibrary", "termon": "termon", "44helper": "44helper"}
+       "pibrary": "pibrary", "termon": "termon", "44helper": "44helper", "nodemon": "nodemon"}
 
 
 def skip_reason():
@@ -327,6 +327,34 @@ class OptionalToolTests(InstallerBase):
         self.assertEqual(rc, 0, out[-1500:])
         self.assertTrue(self.installed("pibrary"))
         self.assertFalse(self.installed("noderecorder"))
+
+    def test_node_monitor_is_optional_and_asked_for_by_name(self):
+        self.put("wifimon")
+        self.put("nodemon")
+        rc, out = self.run_installer("--non-interactive", "--offline", "--core")
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertFalse(self.installed("nodemon"))
+        self.assertIn("Node Monitor is optional and not installed", out)
+        rc, out = self.run_installer("--non-interactive", "--offline", env={"INSTALL_NODEMON": "1"})
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertTrue(self.installed("nodemon"))
+        self.assertEqual(self.read_state("nodemon"), "active")
+        self.assertIn("Node Monitor installed, enabled, and restarted", out)
+        self.assertIn("http://localhost:7777", out)
+
+    def test_node_monitor_can_be_picked_with_the_tools_list(self):
+        self.put("nodemon")
+        rc, out = self.run_installer("--non-interactive", "--offline", "--action=components", "--tools=nodemon")
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertTrue(self.installed("nodemon"))
+
+    def test_the_suite_installs_node_monitor_and_everything_except_terminal_monitor(self):
+        for key in ("wifimon", "nodetalker", "noderecorder", "pibrary", "nodemon", "termon"):
+            self.put(key)
+        rc, out = self.run_installer("--non-interactive", "--offline", "--suite")
+        self.assertEqual(rc, 0, out[-1500:])
+        self.assertTrue(self.installed("nodemon"))
+        self.assertIn("Pibrary and Node Monitor", out)
 
     def test_the_suite_installs_everything_except_terminal_monitor(self):
         for key in ("wifimon", "nodetalker", "noderecorder", "pibrary", "termon"):
@@ -642,6 +670,7 @@ class PrerequisiteTests(InstallerBase):
                                         ("Install Node Talker? [y/N]: ", "n"),
                                         ("Install Node Recorder? [y/N]: ", "n"),
                                         ("Install Pibrary? [y/N]: ", "n"),
+                                        ("Install Node Monitor? [y/N]: ", "n"),
                                         ("Install Terminal Monitor? [y/N]: ", "n")])
         self.assertEqual(rc, 0, out[-2500:])
         self.assertEqual(self.unanswered, [])
@@ -658,6 +687,7 @@ class PrerequisiteTests(InstallerBase):
                                         ("Install Node Talker? [y/N]: ", "n"),
                                         ("Install Node Recorder? [y/N]: ", "n"),
                                         ("Install Pibrary? [y/N]: ", "n"),
+                                        ("Install Node Monitor? [y/N]: ", "n"),
                                         ("Install Terminal Monitor? [y/N]: ", "n")])
         self.assertEqual(rc, 0, out[-2500:])
         self.assertNotIn("install", self.apt_log())
