@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.41"
+APP_VERSION = "0.1.42"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17293,6 +17293,7 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
     if len(lines) in add_before:
         out.extend(add_before[len(lines)])
     out.extend(tail)
+    out = _pn_tidy_into(out, notes, port)
     have = set(units)
     removed = sorted(have - set(want), key=int)
     added = sorted(set(want) - have, key=int)
@@ -18154,7 +18155,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "pn_fix_ext", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "pn_fix_ext", "pn_fix_nodes", "svx_bridge", "gateways_apply", "gateways_revert", "id_set_callsign", "id_set",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -19091,6 +19092,133 @@ def _pn_ext_fix_lines(el: list[str]) -> tuple[list[str], list[str]]:
             fixed.append(m.group(2))
     return out, fixed
 
+_PN_NODES_VAL_RE = re.compile(r"^(?:([^@\s/:]+)@)?([^@:/\s]*)(?::(\d{1,5}))?/(\d+)\s*(,[^;]*?)?\s*(;.*)?$")
+
+def _pn_nodes_canon(node: str, port: str, tail: str = ",NONE", comment: str = "") -> str:
+    host = "127.0.0.1" if port == "4569" else f"127.0.0.1:{port}"
+    return f"{node} = radio@{host}/{node}{tail or ',NONE'}" + (" " + comment if comment else "")
+
+def _pn_nodes_tidy(lines: list[str], port: str | None = None) -> dict:
+    port = port or _cfgr_bindport()
+    mask = _cfgr_managed_mask(lines)
+    secs = _cfgr_sections(lines, mask)
+    sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
+    if sec is None:
+        return {"lines": list(lines), "issues": [], "fixes": [], "unfixable": []}
+    local = {s["name"] for s in secs if s["name"].isdigit()}
+    issues: list[str] = []
+    fixes: list[str] = []
+    unfixable: list[str] = []
+    entries: list[dict] = []
+    managed_nodes: set[str] = set()
+    for i in range(sec["start"] + 1, sec["end"]):
+        kv = _cfgr_kv(lines[i])
+        if not kv or not kv[0].isdigit():
+            continue
+        if mask[i]:
+            managed_nodes.add(kv[0])
+            continue
+        body = lines[i].split("=", 1)[1].strip() if "=" in lines[i] else ""
+        body = body[1:].strip() if body.startswith(">") else body
+        m = _PN_NODES_VAL_RE.match(body)
+        e = {"i": i, "node": kv[0], "m": m, "probs": [],
+             "tail": (m.group(5) or ",NONE").strip() if m else ",NONE",
+             "comment": (m.group(6) or "").strip() if m else ""}
+        if m is None:
+            e["probs"].append("the line is not in the form node = radio@host[:port]/node,NONE")
+        else:
+            if m.group(4) != kv[0]:
+                e["probs"].append(f"it ends in /{m.group(4)}, not /{kv[0]}")
+            if not m.group(2):
+                e["probs"].append("it has no host")
+            if kv[0] in local and (m.group(3) or "4569") != port:
+                e["probs"].append(f"its port is {m.group(3) or '4569'}, but Asterisk listens on {port} (iax.conf bindport)")
+        entries.append(e)
+    by_node: dict[str, list[dict]] = {}
+    for e in entries:
+        by_node.setdefault(e["node"], []).append(e)
+    keep_text: dict[int, str] = {}
+    drop: set[int] = set()
+    for node, group in by_node.items():
+        good = next((e for e in group if not e["probs"]), None)
+        keep = good or group[0]
+        if len(group) > 1:
+            issues.append(f"[nodes] {node}: {len(group)} lines for this node; Asterisk uses only one of them")
+            fixes.append(f"[nodes] {node}: extra line(s) removed, kept: " + lines[keep["i"]].strip())
+            drop.update(e["i"] for e in group if e is not keep)
+        for p in keep["probs"]:
+            issues.append(f"[nodes] {node}: {p}")
+        if keep["probs"]:
+            if node in local:
+                keep_text[keep["i"]] = _pn_nodes_canon(node, port, keep["tail"], keep["comment"])
+                fixes.append(f"[nodes] {node}: " + lines[keep["i"]].strip() + " -> " + keep_text[keep["i"]])
+            else:
+                unfixable.append(f"[nodes] {node}: not a node on this server, so its address is not known here; "
+                                 "fix it by hand")
+        elif lines[keep["i"]] != lines[keep["i"]].rstrip():
+            keep_text[keep["i"]] = lines[keep["i"]].rstrip()
+    missing = sorted((n for n in local if n not in by_node and n not in managed_nodes
+                      and not any(mask[s["start"]] for s in secs if s["name"] == n)),
+                     key=lambda n: (_cfgr_is_private(n), int(n)))
+    for n in missing:
+        issues.append(f"[nodes] {n}: node [{n}] has no [nodes] line, so links to it fail")
+        fixes.append(f"[nodes] {n}: added " + _pn_nodes_canon(n, port))
+    loc = [e for e in entries if e["node"] in local and e["i"] not in drop]
+    anchor_e = next((e for e in loc if not _cfgr_is_private(e["node"])), loc[0] if loc else None)
+    block_lines = [(e["node"], keep_text.get(e["i"], lines[e["i"]])) for e in loc]
+    block_lines += [(n, _pn_nodes_canon(n, port)) for n in missing]
+    block = [t for _n, t in sorted(block_lines, key=lambda t: (_cfgr_is_private(t[0]), int(t[0])))]
+    moved = {e["i"] for e in loc}
+    out: list[str] = []
+    placed = False
+    for i, line in enumerate(lines):
+        if sec["start"] < i < sec["end"] and not mask[i]:
+            if i in drop:
+                continue
+            if i in moved:
+                if anchor_e is not None and i == anchor_e["i"]:
+                    out.extend(block)
+                    placed = True
+                continue
+            if not line.strip() and out and not out[-1].strip():
+                continue
+            out.append(keep_text.get(i, line))
+            continue
+        if i == sec["end"] and not placed and block:
+            while out and not out[-1].strip():
+                out.pop()
+            out.extend(block + [""])
+            placed = True
+        out.append(line)
+    if not placed and block:
+        while out and not out[-1].strip():
+            out.pop()
+        out.extend(block)
+    if not issues and out != list(lines):
+        fixes.append("[nodes]: this server's node lines put together in one block, in order")
+    return {"lines": out, "issues": issues, "fixes": fixes, "unfixable": unfixable}
+
+def _cfgr_act_pn_fix_nodes(payload: dict, apply: bool) -> dict:
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return {"success": False, "output": f"{_CFGR_RPT} not found."}
+    t = _pn_nodes_tidy(_cfgr_lines(rpt_b.decode("utf-8", "replace")))
+    data = _cfgr_join(t["lines"]).encode("utf-8")
+    if data == rpt_b:
+        return {"success": True, "changes": [], "output": "\n".join(
+            ["The [nodes] lines are fine. Nothing to change."] + t["unfixable"])}
+    notes = ["Asterisk reads rpt.conf again when it is restarted. Restart it for the change to take effect."]
+    notes += t["unfixable"]
+    head = ["Fix the [nodes] lines in rpt.conf:"] + ["  " + x for x in t["fixes"]]
+    return _pn_finish({_CFGR_RPT: (rpt_b, data)}, "fixing [nodes] lines", apply, head, notes)
+
+def _pn_tidy_into(lines: list[str], notes: list[str], port: str | None = None) -> list[str]:
+    t = _pn_nodes_tidy(lines, port)
+    if t["fixes"]:
+        notes.append("[nodes] tidied as well: " + "; ".join(t["fixes"]))
+    notes.extend(t["unfixable"])
+    return t["lines"]
+
 def _cfgr_act_pn_fix_ext(payload: dict, apply: bool) -> dict:
     ext_b = _cfgr_read(_CFGR_EXT)
     if ext_b is None:
@@ -19205,6 +19333,7 @@ def _cfgr_act_pn_add(payload: dict, apply: bool,
     while new and not new[-1].strip():
         new.pop()
     new += [""] + stanza + tail
+    new = _pn_tidy_into(new, notes, port)
     changes: dict[str, tuple[bytes, bytes]] = {}
     data = _cfgr_join(new).encode("utf-8")
     changes[_CFGR_RPT] = (rpt_b, data)
@@ -19362,6 +19491,8 @@ def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
         out.append(x)
     while out and not out[-1].strip():
         out.pop()
+    notes = ["modules.conf is not changed (other nodes may use chan_usrp)."]
+    out = _pn_tidy_into(out, notes)
     changes = {_CFGR_RPT: (rpt_b, _cfgr_join(out).encode("utf-8"))}
     ext_b = _cfgr_read(_CFGR_EXT)
     if ext_b is not None:
@@ -19373,7 +19504,6 @@ def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
                     if not (sec["start"] < i < sec["end"] and x.split(";", 1)[0].replace(" ", "") in want)]
             if keep != el:
                 changes[_CFGR_EXT] = (ext_b, _cfgr_join(keep).encode("utf-8"))
-    notes = ["modules.conf is not changed (other nodes may use chan_usrp)."]
     _pn_allmon(changes, notes, [], [node])
     return _pn_finish(changes, f"removing private node {node}", apply, [f"Remove private node {node}:"], notes)
 
@@ -19386,8 +19516,10 @@ def _pn_status() -> dict:
     tpl, main = _pn_template(lines, sc["secs"])
     ext_b = _cfgr_read(_CFGR_EXT)
     old_ext = _pn_ext_fix_lines(_cfgr_lines(ext_b.decode("utf-8", "replace")))[1] if ext_b is not None else []
+    nt = _pn_nodes_tidy(lines)
     return {"available": True, "next_free": _pn_next_free(sc["used"]), "template": tpl, "main": main,
-            "old_ext": old_ext,
+            "old_ext": old_ext, "nodes_issues": nt["issues"] + nt["unfixable"],
+            "nodes_fixable": bool(nt["issues"]) and _cfgr_join(nt["lines"]) != _cfgr_join(lines),
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
 
@@ -19411,6 +19543,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "pn_remove": lambda p: _cfgr_act_pn_remove(p, True),
     "pn_fix_ext_preview": lambda p: _cfgr_act_pn_fix_ext(p, False),
     "pn_fix_ext": lambda p: _cfgr_act_pn_fix_ext(p, True),
+    "pn_fix_nodes_preview": lambda p: _cfgr_act_pn_fix_nodes(p, False),
+    "pn_fix_nodes": lambda p: _cfgr_act_pn_fix_nodes(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
     "gateways_revert": _cfgr_act_gateways_revert,
     "reinstall_preview": _cfgr_act_reinstall_preview,
@@ -19748,6 +19882,17 @@ function cfgPnRender(pn) {
     var t = document.getElementById('cfg-pn-fixext-msg');
     if (t) t.textContent = old.length ? ('extensions.conf has the old exten line for node ' + old.join(', ') +
       ' (rpt,NODE). ASL3\'s Asterisk rejects it, so links to ' + (old.length > 1 ? 'these nodes' : 'this node') + ' fail.') : '';
+  }
+  var fn = document.getElementById('cfg-pn-fixnodes');
+  if (fn) {
+    var iss = pn.nodes_issues || [];
+    fn.style.display = iss.length ? '' : 'none';
+    var fm = document.getElementById('cfg-pn-fixnodes-msg');
+    if (fm) fm.textContent = iss.length ? ('rpt.conf [nodes]: ' + iss.join('; ') + '.') : '';
+    ['cfg-pn-fixnodes-prev', 'cfg-pn-fixnodes-run'].forEach(function(id) {
+      var b = document.getElementById(id);
+      if (b) b.style.display = pn.nodes_fixable ? '' : 'none';
+    });
   }
   var nodeEl = document.getElementById('cfg-pn-node');
   if (nodeEl) nodeEl.placeholder = pn.next_free ? ('blank = ' + pn.next_free) : 'no free number left';
@@ -20374,6 +20519,11 @@ def _render_config_panel() -> str:
       <span class="ov-banner lvl-warn" id="cfg-pn-fixext-msg"></span>
       <button class="btn-copy" onclick="cfgPost({action: 'pn_fix_ext_preview'}, 'cfg-pn-out', this)">Preview fix</button>
       <button class="btn-run" onclick="if (confirm('Change the old exten lines to Rpt(NODE)? An automatic copy of the current files is saved first. Asterisk is not restarted.')) cfgPost({action: 'pn_fix_ext'}, 'cfg-pn-out', this)">Fix exten lines</button>
+    </div>
+    <div class="step-actions" id="cfg-pn-fixnodes" style="display:none">
+      <span class="ov-banner lvl-warn" id="cfg-pn-fixnodes-msg"></span>
+      <button class="btn-copy" id="cfg-pn-fixnodes-prev" onclick="cfgPost({action: 'pn_fix_nodes_preview'}, 'cfg-pn-out', this)">Preview fix</button>
+      <button class="btn-run" id="cfg-pn-fixnodes-run" onclick="if (confirm('Fix the [nodes] lines in rpt.conf? An automatic copy of the current files is saved first. Asterisk is not restarted.')) cfgPost({action: 'pn_fix_nodes'}, 'cfg-pn-out', this)">Fix [nodes] lines</button>
     </div>
     <div class="step-actions" id="cfg-svx-bridge" style="display:none">
       <span class="cfg-hint">SvxLink USRP is installed. One step: adds the bridge node (1900, ports 34000/32000, or the next free
