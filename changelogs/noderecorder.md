@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_7_20261114.py`. Newest entries first.
+Current file: `noderecorder_v0_17_8_20261116.py`. Newest entries first.
+
+## 0.17.8 (2026-11-16)
+
+The Allmon3 quick-link button on the Setup tab is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page asks which tools are answering, and that check changed.
+
+- **Nodemon** appears in the links row only while Node Monitor answers on port 7777, like Cockpit. A node without Node Monitor shows nothing there.
+- **Allmon3** is no longer offered here. The DVSwitch and Cockpit buttons are unchanged.
+- Node Recorder still updates Allmon3's node list (`allmon3.ini`) as before; only the button went.
+- Nothing else changes.
 
 ## 0.17.7 (2026-11-14)
 
