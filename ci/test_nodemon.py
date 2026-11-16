@@ -96,6 +96,27 @@ class Parsers(unittest.TestCase):
         self.assertEqual(r["links"], [])
         self.assertFalse(r["txkeyed"])
 
+    def test_the_nodes_behind_a_hub_are_others_not_links(self):
+        hub = ["Response: Success", "Node: 654321",
+               "Conn: 45192     203.0.113.9         0           OUT        00:10:00            ESTABLISHED",
+               "Conn: 1921      127.0.0.1           0           IN         00:09:00            ESTABLISHED",
+               "LinkedNodes: T1921, T45192, R27339, T27715, R1452251, T0CKV",
+               "Var: RPT_ALINKS=2,1921TU,45192TU"]
+        r = nm.parse_xstat(hub)
+        self.assertEqual([x["node"] for x in r["links"]], ["45192", "1921"])
+        self.assertEqual(r["others"], ["27339", "27715", "1452251", "0CKV"])
+        self.assertTrue(all(x["state"] == "ESTABLISHED" for x in r["links"]))
+
+    def test_a_node_with_no_links_has_no_others(self):
+        self.assertEqual(nm.parse_xstat(NO_LINKS)["others"], [])
+        self.assertEqual(nm.parse_xstat(XSTAT)["others"], [])
+
+    def test_a_connecting_node_stays_a_link_beside_the_others(self):
+        r = nm.parse_xstat(["Response: Success", "Conn: 45192 1.2.3.4 0 OUT 00:00:10 ESTABLISHED",
+                            "LinkedNodes: T45192, C1234, R27339", "Var: RPT_ALINKS=1,45192TU"])
+        self.assertEqual([(x["node"], x["state"]) for x in r["links"]], [("45192", "ESTABLISHED"), ("1234", "CONNECTING")])
+        self.assertEqual(r["others"], ["27339"])
+
     def test_a_node_still_connecting_is_listed(self):
         r = nm.parse_xstat(["Response: Success", "LinkedNodes: C1234", "Var: RPT_ALINKS=0"])
         self.assertEqual(len(r["links"]), 1)
@@ -688,6 +709,39 @@ class NodeDiscon(AmiCase):
         self.assertIn("display:none", rule)
         self.assertNotIn("nth-child(6)", rule)
         self.assertNotIn("nth-child(3)", rule)
+
+    def test_the_connections_tab_is_gone(self):
+        self.assertNotIn("tab-conn", nm._HTML_TEMPLATE)
+        self.assertNotIn("pg-conn", nm._JS)
+        self.assertNotIn("renderConn", nm._JS)
+        self.assertNotIn(".t-conn", nm._CSS)
+        self.assertNotIn("'conn'", nm._JS)
+
+    def test_the_others_are_collapsed_and_the_counts_are_direct_links_only(self):
+        js = nm._JS
+        box = js.split("function othersBox(n) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("el('details', 'others')", box)
+        self.assertIn("'Other nodes on the links ('", box)
+        cell = js.split("function linkedCell(n) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("n.links.map((l) => l.node)", cell)
+        self.assertNotIn("n.others", cell)
+        ov = js.split("function renderOv(d) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("a + n.links.length", ov)
+        self.assertNotIn("others", ov)
+        card = js.split("function nodeCard(n, title) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("othersBox(n)", card)
+        self.assertIn("details.others", nm._CSS)
+
+    def test_the_status_carries_the_others_for_every_node(self):
+        snap = {"ok": True, "error": "", "at": time.time(), "banner": "", "loaded": ["654321", "1900"], "regs": {},
+                "nodes": {"654321": {"ok": True, "links": [{"node": "45192", "state": "ESTABLISHED"}],
+                                     "others": ["27339", "27715"], "txkeyed": False, "rxkeyed": False},
+                          "1900": {"ok": True, "links": [], "txkeyed": False, "rxkeyed": False}}, "idle": False}
+        with unittest.mock.patch.object(nm.MON, "state", lambda: snap), unittest.mock.patch.object(nm.MON, "touch", lambda: None):
+            d = nm.build_status(False)
+        self.assertEqual(d["main"]["others"], ["27339", "27715"])
+        self.assertEqual([x["node"] for x in d["main"]["links"]], ["45192"])
+        self.assertEqual({x["node"]: x["others"] for x in d["private"]}["1900"], [])
 
     def test_allmon3_is_no_longer_offered(self):
         self.assertNotIn("allmon3", [x[0] for x in nm.WEB_PAGES])

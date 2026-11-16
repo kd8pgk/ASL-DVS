@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -948,12 +948,18 @@ def parse_xstat(lines):
         mode = linked.get(num) or (alinks.get(num) or ("", ""))[0]
         links.append(dict(c, mode=mode, mode_name=_MODE_NAMES.get(mode, ""),
                           keyed=(alinks.get(num) or ("", "U"))[1] == "K"))
+    others = []
     for num, mode in linked.items():
-        if num not in seen:
+        if num in seen:
+            continue
+        if mode == "C":
             links.append({"node": num, "peer": "", "reconnects": 0, "direction": "", "since": "",
-                          "state": "CONNECTING" if mode == "C" else "UNKNOWN", "mode": mode,
+                          "state": "CONNECTING", "mode": mode,
                           "mode_name": _MODE_NAMES.get(mode, ""), "keyed": False})
-    return {"links": links, "txkeyed": vars_.get("RPT_TXKEYED") == "1", "rxkeyed": vars_.get("RPT_RXKEYED") == "1"}
+        else:
+            others.append(num)
+    return {"links": links, "others": others, "txkeyed": vars_.get("RPT_TXKEYED") == "1",
+            "rxkeyed": vars_.get("RPT_RXKEYED") == "1"}
 
 
 _REG_ROW_RE = re.compile(r"^\s*(\S+)\s+(\d{4,7})\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
@@ -1058,7 +1064,7 @@ class Monitor:
                         out[node] = dict(parse_xstat(reply), ok=True, error="")
                     else:
                         msg = next((x[9:] for x in reply if x.startswith("Message: ")), "no answer")
-                        out[node] = {"links": [], "txkeyed": False, "rxkeyed": False, "ok": False, "error": msg}
+                        out[node] = {"links": [], "others": [], "txkeyed": False, "rxkeyed": False, "ok": False, "error": msg}
                 with self.lock:
                     first = not self.snap["ok"]
                     self.snap.update(ok=True, error="", at=time.time(), loaded=loaded, regs=regs, nodes=out, idle=False)
@@ -1349,7 +1355,8 @@ def build_status(authed=True):
                 "loaded": (node in loaded) if snap["ok"] else None,
                 "ok": bool(st and st["ok"]), "error": (st or {}).get("error", "") if snap["ok"] else snap["error"],
                 "txkeyed": bool(st and st["txkeyed"]), "rxkeyed": bool(st and st["rxkeyed"]),
-                "links": [_link_view(link, kinds, gateways) for link in (st or {}).get("links", [])]}
+                "links": [_link_view(link, kinds, gateways) for link in (st or {}).get("links", [])],
+                "others": list((st or {}).get("others", []))}
         if kind and kind[0] in gateways:
             view["gateway"] = gateways[kind[0]]
         return view
@@ -1574,7 +1581,6 @@ main{padding:.6rem 1rem;max-width:1100px;margin:0 auto}
 .tab.active{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
 .t-ov{--mc:var(--orange);--mc-rgb:255,170,34}
 .t-main{--mc:var(--teal);--mc-rgb:0,255,229}
-.t-conn{--mc:var(--amber);--mc-rgb:255,208,64}
 .t-priv{--mc:var(--lime);--mc-rgb:212,255,0}
 .t-log{--mc:var(--blue);--mc-rgb:34,212,255}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.7rem .8rem;margin-top:.7rem}
@@ -1598,6 +1604,9 @@ th,td{text-align:left;padding:.35rem .55rem;border-bottom:1px solid var(--border
 th{color:var(--amber);font-size:var(--fs-sm);letter-spacing:.06em;text-transform:uppercase}
 td.mono{font-family:var(--mono)}
 .empty{color:#aab8cc;padding:.4rem 0}
+details.others{margin-top:.35rem;white-space:normal;max-width:30rem}
+details.others summary{cursor:pointer;color:var(--blue);font-size:var(--fs-xs);letter-spacing:.06em}
+.others-list{margin-top:.3rem;max-height:9rem;overflow:auto;color:#aab8cc;word-break:break-word;line-height:1.5}
 .keyed{color:var(--lime)}
 .r{text-align:right}
 .btn.discon{padding:.3rem .8rem;font-size:var(--fs-sm)}
@@ -1676,14 +1685,12 @@ __CSS__</style>
 <div class="tabs" id="tabs" role="tablist">
 <div class="tab t-ov active" id="tab-ov" data-tab="ov" role="tab">Overview</div>
 <div class="tab t-main" id="tab-main" data-tab="main" role="tab">Main node</div>
-<div class="tab t-conn" id="tab-conn" data-tab="conn" role="tab">Connections</div>
 <div class="tab t-priv" id="tab-priv" data-tab="priv" role="tab">Private nodes</div>
 <div class="tab t-log" id="tab-log" data-tab="log" role="tab">Log</div>
 </div>
 <div id="status-banner"></div>
 <section id="pg-ov"></section>
 <section id="pg-main" class="hidden"></section>
-<section id="pg-conn" class="hidden"></section>
 <section id="pg-priv" class="hidden"></section>
 <section id="pg-log" class="hidden"><div class="card"><h2>Node Monitor log</h2><div class="logbox" id="logbox"></div></div></section>
 <div id="sysbar">
@@ -1746,7 +1753,7 @@ async function logout() { await api('/api/logout', {method: 'POST', body: {}}); 
 function showTab(name) {
   current = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  ['ov', 'main', 'conn', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
+  ['ov', 'main', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
   if (name === 'log') pollLog();
 }
 function kv(label, node) {
@@ -1880,6 +1887,8 @@ function nodeCard(n, title) {
   }
   if (n.ok && COMMANDS.length) card.appendChild(kv('Command', cmdBar(n)));
   card.appendChild(table(LINK_COLS, linkRows(n), 'No links.'));
+  const oth = othersBox(n);
+  if (oth) card.appendChild(oth);
   return card;
 }
 async function disconNode(node) {
@@ -1903,14 +1912,30 @@ function disconCell(n) {
   b.addEventListener('click', () => disconNode(n.node));
   return {node: b};
 }
+function othersBox(n) {
+  const list = n.others || [];
+  if (!list.length) return null;
+  const d = el('details', 'others');
+  d.appendChild(el('summary', '', 'Other nodes on the links (' + list.length + ')'));
+  d.appendChild(el('div', 'others-list mono', list.join(', ')));
+  return d;
+}
+function linkedCell(n) {
+  const direct = n.links.map((l) => l.node);
+  const oth = othersBox(n);
+  if (!oth) return direct.length ? direct.length + ': ' + direct.join(', ') : 'none';
+  const box = el('div');
+  box.appendChild(el('span', '', direct.length ? direct.length + ': ' + direct.join(', ') : 'none'));
+  box.appendChild(oth);
+  return {node: box};
+}
 function nodeSummary(n) {
   const st = stateOf(n);
-  const linked = n.links.map((l) => l.node);
   const reg = n.registration;
   const down = st[0] !== 'ok';
   const cells = [{text: n.node, mono: true}, n.role === 'main' ? 'Main node' : (n.bridge || 'Private node'),
                  {node: badge(st[0], down ? 'down' : 'up')},
-                 linked.length ? linked.length + ': ' + linked.join(', ') : 'none'];
+                 linkedCell(n)];
   let note = down ? st[1] : '';
   if (n.txkeyed) note = 'transmitting';
   else if (n.rxkeyed) note = 'receiving';
@@ -2006,19 +2031,6 @@ function gatewayTable(d) {
   });
   return table(['Gateway', 'State', 'Tuned to', 'Detail', 'Source'], rows, 'No gateways.');
 }
-function renderConn(d) {
-  const root = $('pg-conn');
-  root.textContent = '';
-  if (!d.main) { root.appendChild(el('div', 'banner warn', 'No node was found in rpt.conf.')); return; }
-  const c1 = el('div', 'card');
-  c1.appendChild(el('h2', '', 'Connected to node ' + d.main.node));
-  c1.appendChild(table(LINK_COLS, linkRows(d.main), 'Nothing is linked to this node.'));
-  root.appendChild(c1);
-  const c2 = el('div', 'card');
-  c2.appendChild(el('h2', '', 'Gateways'));
-  c2.appendChild(gatewayTable(d));
-  root.appendChild(c2);
-}
 function renderPriv(d) {
   const root = $('pg-priv');
   root.textContent = '';
@@ -2042,7 +2054,6 @@ function renderAll(d) {
   if (busy) return;
   renderOv(d);
   renderMain(d);
-  renderConn(d);
   renderPriv(d);
 }
 async function poll() {
