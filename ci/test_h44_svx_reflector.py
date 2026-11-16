@@ -363,7 +363,8 @@ class WireStep(ScriptBase):
             src = fh.read()
         self.assertIn("function svxFieldVis(sel)", src)
         self.assertIn("'<select class=\"asl3-cmd-input\" id=\"svx-field-'", src)
-        self.assertIn("hide = (ctl && String(ctl.default || '') === sp[1]) ? '' : 'display:none;';", src)
+        self.assertIn("hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';", src)
+        self.assertIn("style=\"display:' + hide + ';font-family", src)
 
 
 RADIO_CONF = SVXLINK_CONF + """

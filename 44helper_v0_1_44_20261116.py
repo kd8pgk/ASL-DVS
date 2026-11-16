@@ -25196,14 +25196,14 @@ function svxRenderStepList(mode, distro) {
     if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
     if (step.fields) {
       step.fields.forEach(function(f) {
-        var hide = '';
+        var hide = 'block';
         if (f.show_if) {
           var sp = f.show_if.split('=');
           var ctl = null;
           step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
-          hide = (ctl && String(ctl.default || '') === sp[1]) ? '' : 'display:none;';
+          hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
         }
-        html += '<label data-showif="' + svxEscapeAttr(f.show_if || '') + '" style="' + hide + 'display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':';
+        html += '<label data-showif="' + svxEscapeAttr(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':';
         if (f.options) {
           html += '<select class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" onchange="svxFieldVis(this)">';
           f.options.forEach(function(o) {
