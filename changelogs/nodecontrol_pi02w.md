@@ -2,6 +2,13 @@
 
 Current file: `nodecontrol_pi02w_v9_3_118_20261116.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
 
+## 9.3.118.1-pi02w (2026-11-16)
+
+The Node Monitor quick-link button reads **Node Mon** instead of Nodemon. This is a cosmetic build: the button's text changed and nothing else, so the file name stays and it does not go to stable on its own.
+
+- The button still opens Node Monitor on port 7777, in the same place. Node Monitor's own title stays "Node Monitor".
+- Nothing else changes.
+
 ## 9.3.118-pi02w (2026-11-16)
 
 The Allmon3 quick-link button at the top left of the page is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page's link table changed.

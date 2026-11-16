@@ -25,7 +25,7 @@ LABELS = {
 
     "nodecontrol": "Node Mon",
 
-    "nodecontrol_pi02w": "Nodemon",
+    "nodecontrol_pi02w": "Node Mon",
 }
 PILL = '<a class="ql hidden" data-ql="nodemon" data-ql-port="7777" href="#" target="_blank" rel="noopener">{}</a>'
 QL_ROW_TOOLS = {"nodetalker": "nodetalker_v[0-9]*.py", "noderecorder": "noderecorder_v[0-9]*.py"}
