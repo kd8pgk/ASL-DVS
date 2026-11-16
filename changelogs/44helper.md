@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_39_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_40_20261116.py`. Newest entries first.
+
+## 0.1.40 (2026-11-16)
+
+Identity card: SvxLink **Node Info** rows under Stands alone, each with its own Set button. Node Info is what SvxLink sends to the reflector for its dashboard and map, from `/usr/local/etc/svxlink/node_info.json`.
+
+- **Rows:** Location, Node type (repeater, simplex, hotspot or bridge), Sysop, Hidden from the map (yes or no), QTH name, Latitude, Longitude and QTH locator (Maidenhead, written as EN81xm). Each is checked before it is written, and numbers and yes/no are stored as JSON numbers and true/false.
+- **The sample is replaced:** the file SvxLink installs describes a made-up repeater (sample receivers, transmitters and a tone list). The first Set replaces it with a plain bridge-node entry holding only the values set here, and the preview says so. A file you have already filled in keeps its other fields.
+- **Switched on when ready:** `NODE_INFO_FILE` is commented out in `[ReflectorLogic]` as installed, so SvxLink sends nothing. It is switched on when Location, Latitude and Longitude are all set, never before, so the map never shows the node at 0.
+- The usual preview, automatic save point and restart list (`svxlink-usrp`). A file that is not valid JSON is left alone.
+- Tested on the real build: the rows read the installed file, five Sets replaced the sample and switched `NODE_INFO_FILE` on with the last one, and the test reflector's status page showed the node's location, type, sysop, position and monitored talkgroups.
+- This is a release: the card reads and writes another file.
 
 ## 0.1.39 (2026-11-16)
 
