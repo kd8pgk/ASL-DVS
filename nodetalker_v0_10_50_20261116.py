@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.49"
+VERSION = "0.10.50"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Talker"
 
@@ -3949,6 +3949,12 @@ M17_NET_PORTS = (17010, 17000)
 M17_USRP_PORTS = (32008, 34008)
 M17_GAIN_DB = 3
 DEFAULT_BRIDGES = ("1999", "1917")
+DEFAULT_SVX_BRIDGE = "1900"
+SVX_PORTS = frozenset((34000, 32000))
+SVX_SERVICE = "svxlink-usrp"
+SVX_LOG = os.environ.get("NODETALKER_SVX_LOG", "/var/log/svxlink")
+SVX_LOG_TAIL = 262144
+SVX_TTL_SEC = 3.0
 BLANK_NAME, BLANK_ADDR = "blank", "000000"
 _DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
 _CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9/-]{2,9}$")
@@ -4747,6 +4753,15 @@ def bridge_nodes(max_age=30.0):
         else:
             node, src = "", ""
         out[kind], out[kind + "_src"] = node, src
+    if SVX_PORTS in usrp:
+        node, src = usrp[SVX_PORTS], "rpt.conf"
+    elif len(dash) > 2 and dash[2].isdigit():
+        node, src = dash[2], "Node Controller"
+    elif DEFAULT_SVX_BRIDGE in usrp.values():
+        node, src = DEFAULT_SVX_BRIDGE, "default"
+    else:
+        node, src = "", ""
+    out["svx"], out["svx_src"] = node, src
     _bridge_cache.update(t=time.monotonic(), v=out)
     return out
 
@@ -6219,6 +6234,68 @@ def astdb_name(num):
     return _astdb_names["map"].get(str(int(num)), "") if str(num).isdigit() else ""
 
 
+_SVX_TAIL_RE = re.compile(r"^(?:\w{3} \w{3}\s+\d+ [\d:]+ \d{4}: )(.*)$")
+
+
+def svx_events(lines):
+    state = ""
+    tg = ""
+    link = True
+    for raw in lines:
+        m = _SVX_TAIL_RE.match(raw.rstrip())
+        text = m.group(1) if m else raw.strip()
+        if text.startswith("ReflectorLogic: Authentication OK"):
+            state = "connected"
+        elif text.startswith("ReflectorLogic: Disconnected from "):
+            state = "down"
+        elif text.startswith("ReflectorLogic: Connecting to"):
+            state = state or "connecting"
+        else:
+            mt = re.match(r"ReflectorLogic: Selecting TG #(\d+)", text)
+            if mt:
+                tg = mt.group(1)
+            else:
+                ml = re.match(r"(?:(De)a|A)ctivating link '?ReflectorLink'?", text)
+                if ml:
+                    link = not ml.group(1)
+    return {"state": state, "tg": tg, "link": link}
+
+
+def svx_text():
+    if not _svc_active(SVX_SERVICE):
+        return "SvxLink stopped"
+    try:
+        with open(SVX_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - SVX_LOG_TAIL))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return "talkgroup unknown"
+    ev = svx_events(lines)
+    if not ev["state"]:
+        return "talkgroup unknown"
+    if ev["state"] != "connected":
+        return "reflector not connected"
+    if not ev["link"]:
+        return "reflector link off"
+    if ev["tg"] and ev["tg"] != "0":
+        return "TG " + ev["tg"]
+    return "no talkgroup"
+
+
+_svx_cache = {"t": -1e9, "v": ""}
+
+
+def svx_now():
+    now = time.monotonic()
+    if now - _svx_cache["t"] < SVX_TTL_SEC:
+        return _svx_cache["v"]
+    text = svx_text()
+    _svx_cache.update(t=now, v=text)
+    return text
+
+
 def _bridge_tune(n, nc, dvs, m17_now, dig, m17):
     if nc:
         if n == m17 and m17_now:
@@ -6237,15 +6314,18 @@ def live_link(links, links_ok, nc, favs, unsure=False):
     if not links:
         return {"state": "none", "mode": "", "label": "", "tag": ""}
     bridges = bridge_nodes(5.0)
-    dig, m17 = bridges.get("digital", ""), bridges.get("m17", "")
+    dig, m17, svx = bridges.get("digital", ""), bridges.get("m17", ""), bridges.get("svx", "")
     linked = {l["node"] for l in links}
-    linked_bridge = bool(linked & {dig, m17} - {""})
+    linked_bridge = bool(linked & {dig, m17, svx} - {""})
     dvs = (nc_dvs_current() or {}) if nc and dig in linked else {}
     m17_now = m17_current() if nc and m17 in linked else ""
-    infra = {TX_NODE, dig, m17} - {""}
+    infra = {TX_NODE, dig, m17, svx} - {""}
 
     bridge = None
     for l in links:
+        if svx and l["node"] == svx:
+            bridge = ("SVX", svx_now(), "linking" if str(l.get("state", "")).upper().startswith("CONN") else "connected")
+            break
         if l["node"] in (dig, m17):
             mode, label = _bridge_tune(l["node"], nc, dvs, m17_now, dig, m17)
             if label:
@@ -11766,6 +11846,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 .card[data-mode="M17"] select,.card[data-mode="M17"] input{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
 #c-mode[data-mode="M17"]{color:rgb(212,102,255)!important}
 .lk-badge[data-mode="M17"]{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+.lk-badge[data-mode="SVX"]{border-color:rgb(212,255,0)!important;color:rgb(212,255,0)!important}
 /* v0.9.64.1: Connect card Connect/Disconnect buttons match the Tune card pair and fill the row */
 #tab-connect .sel-card .btn-pair{gap:var(--tn-gap)}
 #tab-connect .sel-card .btn-pair>.btn{flex:1 1 0;width:auto;min-width:0;min-height:var(--tn-h);padding:0 14px}

@@ -1,6 +1,22 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_49_20261116.py`. Newest entries first.
+Current file: `nodetalker_v0_10_50_20261116.py`. Newest entries first.
+
+## 0.10.50 (2026-11-16)
+
+The link badge under the push-to-talk button knows the SvxLink bridge. This is a release: the status reply for a link to that node changed.
+
+- **A link to the SvxLink bridge node (1900) shows `SVX` and the tuned talkgroup**, for example `SVX  TG 240`, instead of `ASL` and `Node 1900`. The badge is lime, like Node Controller's SVX tab.
+- **The talkgroup is read from SvxLink's own log** (`/var/log/svxlink`): the last talkgroup it selected, whether the reflector login is up, and whether the reflector link is on. Nothing is guessed. The label says what is known:
+  - `TG 240`: logged in, talkgroup picked;
+  - `no talkgroup`: logged in, none picked (talkgroup 0);
+  - `reflector link off`: logged in, the link switched off;
+  - `reflector not connected`: not logged in to the reflector;
+  - `talkgroup unknown`: the log cannot be read or says nothing yet;
+  - `SvxLink stopped`: the service is not running.
+- **With an AllStar node linked as well,** the AllStar node stays the main badge and the SVX talkgroup goes in the small tag after it, the way an M17 reflector does.
+- **Finding the node:** the node on USRP ports 34000 and 32000 in rpt.conf, else the third bridge node saved by Node Controller, else 1900 when rpt.conf has it. A node with no SvxLink bridge shows 1900 as an ordinary AllStar node, as before.
+- Nothing else changes.
 
 ## 0.10.49 (2026-11-16)
 
