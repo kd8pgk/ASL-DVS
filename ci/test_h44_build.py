@@ -305,17 +305,13 @@ class Status(Tmp):
                 mock.patch.object(h44, "_cfgr_snap_dir", lambda k, sid="": "x"), \
                 mock.patch.object(h44, "_cfgr_read_manifest", lambda d: {} if restore else None), \
                 mock.patch.object(h44, "_cfgr_load_preset", lambda p: None), \
-                mock.patch.object(h44, "_bld_identity_state", lambda form: ("todo", "x")), \
-                mock.patch.object(h44, "_bld_iax_state", lambda form: ("done", "x")), \
-                mock.patch.object(h44, "_bld_preset_state", lambda profile, port="": ("warn", "x")), \
-                mock.patch.object(h44, "_bld_restart_state", lambda: ("todo", "x")), \
-                mock.patch.object(h44, "_bld_registration_state", lambda node: ("warn", "x")), \
-                mock.patch.object(h44, "_bld_values_state", lambda step, form, profile: ("warn", "x")), \
-                mock.patch.object(h44, "_bld_ready_state", lambda stages, mode, up, age, form: ("todo", "x")), \
-                mock.patch.object(h44, "_bld_stfu_state", lambda: ("warn", "x")), \
-                mock.patch.object(h44, "_bld_stfu_installed", lambda: False), \
-                mock.patch.object(h44, "_bld_stfu_setup_state", lambda form: ("warn", "x")), \
-                mock.patch.object(h44, "_bld_echolink_state", lambda form, profile: ("done", "x")):
+                mock.patch.multiple(h44, _bld_identity_state=lambda form: ("todo", "x"), _bld_iax_state=lambda form: ("done", "x"),
+                                    _bld_preset_state=lambda profile, port="": ("warn", "x"), _bld_restart_state=lambda: ("todo", "x"),
+                                    _bld_registration_state=lambda node: ("warn", "x"),
+                                    _bld_values_state=lambda step, form, profile: ("warn", "x"),
+                                    _bld_ready_state=lambda stages, mode, up, age, form: ("todo", "x"),
+                                    _bld_stfu_state=lambda: ("warn", "x"), _bld_stfu_installed=lambda: False,
+                                    _bld_stfu_setup_state=lambda form: ("warn", "x"), _bld_echolink_state=lambda form, profile: ("done", "x")):
             return h44.build_build_status()
 
     def by_id(self, st):
