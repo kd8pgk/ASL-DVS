@@ -21129,7 +21129,7 @@ def _render_config_panel() -> str:
 
 TABS: list[tuple[str, str, str, str]] = [
     ("overview", "Overview", "t-overview", "Stage 2"),
-    ("build", "Build", "t-build", "0.1.46: travel node build order, preflight, radio check"),
+    ("build", "Travel Node", "t-build", "0.1.46: travel node build order, preflight, radio check"),
     ("router_install", "Router Install", "t-router-install", "Steps 1-2a: Stage 4 — Steps 3-11 (Model C): Stage 5 (done) — Model B: Stage 6"),
     ("full_tunnel", "Full Tunnel", "t-full-tunnel", "Stage 3"),
     ("split_tunnel", "Split Tunnel", "t-split-tunnel", "Stage 3"),
@@ -28819,7 +28819,9 @@ def _render_build_panel() -> str:
 <div class="tab-panel hidden" id="panel-build">
   <div class="step-card"><div class="step-head"><div class="step-title">Build a travel node</div>
       <span class="cfg-hint" id="bld-checked"></span></div>
-    <div class="step-body">The whole build in order, from a bare Pi to a working node, with where each step stands read from this
+    <div class="step-body"><b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b> The standard config
+      bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
+      turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
       node, not from memory. This first version only reads and checks: it saves the form below and nothing else. Each row links
       to the tab that does the step. Pick the tunnel mode first; the order changes with it.</div>
     <div id="bld-where"></div>

@@ -387,6 +387,8 @@ class Dispatch(unittest.TestCase):
         self.assertIn("build", [t[0] for t in h44.TABS])
         self.assertIn("build", h44._PANEL_RENDERERS)
         self.assertIn('id="panel-build"', h44._render_build_panel())
+        self.assertIn(("build", "Travel Node"), [(t[0], t[1]) for t in h44.TABS])
+        self.assertIn("either build", h44._render_build_panel())
 
 
 class Machine(unittest.TestCase):
