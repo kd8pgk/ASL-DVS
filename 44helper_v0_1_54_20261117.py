@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.53"
+APP_VERSION = "0.1.54"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -9458,6 +9458,8 @@ def _pi_after_start() -> list[str]:
 _BOOT_UNIT = "44helper-netready.service"
 _BOOT_UNIT_PATH = "/etc/systemd/system/44helper-netready.service"
 _BOOT_SCRIPT_PATH = "/usr/local/sbin/44helper-netready"
+_BOOT_HEAL_PATH = "/usr/local/sbin/44helper-bootheal"
+_BOOT_HEAL_APT_PATH = "/etc/apt/apt.conf.d/99-44helper-bootheal"
 _BOOT_DROPIN_NAME = "44helper-boot.conf"
 _BOOT_WG_UNIT = "wg-quick@wg0.service"
 _BOOT_LIMIT = 180
@@ -9571,6 +9573,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec={_BOOT_LIMIT + 30}
+ExecStartPre=-{_BOOT_HEAL_PATH}
 ExecStart={_BOOT_SCRIPT_PATH}
 """
 _BOOT_DV_DROPIN = f"""[Unit]
@@ -9602,6 +9605,28 @@ RestartSec=30
 """
 
 _BOOT_FALLBACK_UNIT = "44net-tunnel.service"
+_BOOT_HEAL_APT = ('DPkg::Post-Invoke { "[ -x ' + _BOOT_HEAL_PATH + ' ] && ' + _BOOT_HEAL_PATH
+                  + ' >/dev/null 2>&1 || true"; };\n')
+
+def _boot_heal_text() -> str:
+    head = ("#!/bin/bash\n"
+            'D="${H44_SYSTEMD_DIR:-/etc/systemd/system}"\n'
+            'SC="${H44_SYSTEMCTL:-systemctl}"\n'
+            "CHANGED=0\n"
+            "ensure() {\n"
+            '  local u="$1" want f\n'
+            '  want="$(cat)"\n'
+            '  "$SC" show -p LoadState --value "$u" 2>/dev/null | grep -qx loaded || return 0\n'
+            f'  f="$D/$u.d/{_BOOT_DROPIN_NAME}"\n'
+            '  [ "$(cat "$f" 2>/dev/null)" = "$want" ] && return 0\n'
+            '  mkdir -p "$D/$u.d" && printf \'%s\\n\' "$want" > "$f.tmp" && mv "$f.tmp" "$f" && CHANGED=1\n'
+            "}\n")
+    body = ""
+    for u in (_NETCHECK_UNIT,) + _OV_DVS_UNITS:
+        body += f"ensure {u} <<'H44_EOF'\n{_boot_dv_dropin_text(u)}H44_EOF\n"
+    for u in _BOOT_ASL_UNITS:
+        body += f"ensure {u} <<'H44_EOF'\n{_BOOT_DV_DROPIN}H44_EOF\n"
+    return head + body + '[ "$CHANGED" = 1 ] && "$SC" daemon-reload\nexit 0\n'
 
 def _boot_wg_unit() -> str:
     if os.path.exists(_ARDC_FALLBACK_UNIT_PATH) and not _wg_quick_template_available():
@@ -9694,6 +9719,9 @@ def status_boot_order() -> dict:
     late = [u for u in units if not _boot_file_is(_boot_dropin_path(u), _boot_dv_dropin_text(u))]
     if late:
         missing.append("DVSwitch ordering (" + ", ".join(u.replace(".service", "") for u in late) + ")")
+    if (units or _boot_asl_units()) and not (_boot_file_is(_BOOT_HEAL_PATH, _boot_heal_text())
+                                             and _boot_file_is(_BOOT_HEAL_APT_PATH, _BOOT_HEAL_APT)):
+        missing.append("the lasting fix (puts the ordering back on a DVSwitch service installed later)")
     asl = [u for u in _boot_asl_units() if not _boot_file_is(_boot_dropin_path(u), _BOOT_DV_DROPIN)]
     if asl:
         missing.append("ASL3 updates after the network (" + ", ".join(u.replace(".service", "") for u in asl) + ")")
@@ -9756,6 +9784,10 @@ def action_boot_order_apply() -> dict:
         units = _boot_dv_units()
         for u in units:
             _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
+        _boot_write(_BOOT_HEAL_PATH, _boot_heal_text(), 0o755)
+        _boot_write(_BOOT_HEAL_APT_PATH, _BOOT_HEAL_APT, 0o644)
+        out.append("ok    lasting fix: after every apt install, and at every boot, a DVSwitch service that was installed later "
+                   "(stfu, a gateway) gets the same ordering")
         asl = _boot_asl_units()
         for u in asl:
             _boot_write(_boot_dropin_path(u), _BOOT_DV_DROPIN, 0o644)
@@ -9809,6 +9841,13 @@ def action_dv_boot_undo() -> dict:
         return err
     a = action_netcheck_revert()
     removed = []
+    for path in (_BOOT_HEAL_APT_PATH, _BOOT_HEAL_PATH):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                removed.append(path)
+            except OSError:
+                pass
     for u in (_NETCHECK_UNIT,) + _OV_DVS_UNITS:
         path = _boot_dropin_path(u)
         if os.path.exists(path):
@@ -9830,7 +9869,8 @@ def action_boot_order_revert() -> dict:
     removed = []
     if os.path.exists(_BOOT_NONLOCAL_PATH):
         _run_argv(["sysctl", "-q", "-w", "net.ipv4.ip_nonlocal_bind=0"])
-    for path in ([_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH, _BOOT_NONLOCAL_PATH,
+    for path in ([_BOOT_HEAL_APT_PATH, _BOOT_HEAL_PATH, _BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH,
+                  _BOOT_NONLOCAL_PATH,
                   _netcheck_nonfatal_path()]
                  + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _BOOT_FALLBACK_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS + _BOOT_ASL_UNITS]):
         if os.path.exists(path):
@@ -32533,6 +32573,9 @@ _BLD_APT = (
      "why": "the certificate for the HTTPS pages"},
     {"pkg": "curl", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "downloads (it falls back to wget)"},
     {"pkg": "ca-certificates", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "trusting HTTPS downloads"},
+    {"pkg": "systemd-timesyncd", "group": "required", "by": "44helper, the tunnel, apt",
+     "why": "the clock: a Pi has no battery clock, and the tunnel handshake and HTTPS need the right time",
+     "alt": ("chrony", "ntp", "ntpsec", "openntpd")},
     {"pkg": "wireguard-tools", "group": "required", "by": "44helper, wifimon", "why": "the tunnel (wg, wg-quick) and its watchdog",
      "tunnel": True},
     {"pkg": "firewalld", "group": "required", "by": "44helper, SysMon, every tool that opens its own port",
@@ -32571,7 +32614,7 @@ def _bld_apt_rows(mode: str, pi: bool, dpkg: dict | None) -> list[dict]:
             continue
         if e.get("tunnel") and mode == "none":
             continue
-        have = bool(dpkg and e["pkg"] in dpkg and dpkg[e["pkg"]][0][1:2] == "i")
+        have = any(bool(dpkg and n in dpkg and dpkg[n][0][1:2] == "i") for n in (e["pkg"],) + tuple(e.get("alt", ())))
         rows.append({"pkg": e["pkg"], "group": e["group"], "by": e["by"], "why": e["why"], "installed": have,
                      "auto": e.get("auto", True), "how": e.get("how", "")})
     return rows

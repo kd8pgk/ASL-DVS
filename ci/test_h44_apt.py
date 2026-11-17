@@ -93,6 +93,31 @@ class Rows(unittest.TestCase):
             self.assertFalse(h44._bld_is_pi())
 
 
+class TimeSync(unittest.TestCase):
+    def row(self, have):
+        return {r["pkg"]: r for r in h44._bld_apt_rows("half", False, dpkg(*have))}["systemd-timesyncd"]
+
+    def test_it_is_a_required_automatic_package_for_every_mode(self):
+        for mode in ("half", "split", "full", "none"):
+            rows = {r["pkg"]: r for r in h44._bld_apt_rows(mode, False, dpkg())}
+            self.assertEqual((rows["systemd-timesyncd"]["group"], rows["systemd-timesyncd"]["auto"]), ("required", True), mode)
+            self.assertIn("systemd-timesyncd", h44._bld_apt_pick(list(rows.values()), "required"))
+
+    def test_installed_when_it_or_another_time_service_is_there(self):
+        self.assertFalse(self.row(()) ["installed"])
+        self.assertTrue(self.row(("systemd-timesyncd",))["installed"])
+        for other in ("chrony", "ntp", "ntpsec", "openntpd"):
+            self.assertTrue(self.row((other,))["installed"], other)
+
+    def test_another_time_service_is_never_replaced(self):
+        rows = h44._bld_apt_rows("half", False, dpkg("chrony"))
+        self.assertNotIn("systemd-timesyncd", h44._bld_apt_pick(rows, "all"))
+
+    def test_the_command_installs_it(self):
+        rows = h44._bld_apt_rows("half", False, dpkg())
+        self.assertIn("systemd-timesyncd", h44._bld_apt_cmd(h44._bld_apt_pick(rows, "required")).split())
+
+
 class Pick(unittest.TestCase):
     def pick(self, scope, have=()):
         rows = h44._bld_apt_rows("half", True, dpkg(*have))
