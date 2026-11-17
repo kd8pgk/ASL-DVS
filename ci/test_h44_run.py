@@ -138,7 +138,6 @@ class Dispatch(Tmp):
                 mock.patch.object(h44, "_bld_cfg", fake_cfg), \
                 mock.patch.object(h44, "_fcr_load", lambda: (({"files": []}, {}) if staged else (None, None))), \
                 mock.patch.object(h44, "_pn_status", lambda: {"old_ext": True, "nodes_fixable": False, "refs_fixable": True}), \
-                mock.patch.object(h44, "_bs_write", lambda profile: (["build-save-X-20261117-000000.json"], "")), \
                 mock.patch.object(h44, "action_boot_order_apply", lambda: {"success": True, "output": "boot ok"}):
             res = h44._bld_act_run_stage({"stage": sid, "profile": "travel", "preview": preview})
         return res, calls

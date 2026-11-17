@@ -29563,7 +29563,7 @@ function @F@RenderSaves(d) {
   var box = document.getElementById('@P@-saves-list');
   if (!box) { return; }
   var files = sv.files || [];
-  if (!files.length) { box.textContent = 'No Build Save yet. One is written at the Restore point step, or press Save now.'; return; }
+  if (!files.length) { box.textContent = 'No Build Save yet. Both files are written automatically when the Reboot test is done, or press Save now.'; return; }
   var h = '<table class="cfg-table"><tr><th>File</th><th>When</th><th></th></tr>';
   files.forEach(function(f) {
     h += '<tr><td>' + cfgEsc(f.name) + '</td><td>' + cfgEsc(f.saved_at) + '</td><td>' +
@@ -32152,9 +32152,11 @@ def build_build_status(profile: str = "travel") -> dict:
         if s["id"] == "reboot":
             others = [x for x in stages if x["id"] != "reboot"]
             s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
-            if s["state"] == "done" and any(form.get(k) for k in _BLD_SECRET_FIELDS):
-                _bs_write(profile)
-                if _bld_wipe_secrets():
+            if s["state"] == "done":
+                has_secrets = any(form.get(k) for k in _BLD_SECRET_FIELDS)
+                if has_secrets or not _bs_list():
+                    _bs_write(profile)
+                if has_secrets and _bld_wipe_secrets():
                     form = dict(form, **{k: "" for k in _BLD_SECRET_FIELDS})
     prev_ok = True
     for s in stages:
@@ -33271,9 +33273,6 @@ def _bld_act_run_stage(payload: dict) -> dict:
             else:
                 res = _bld_cfg("save_restore")
                 ok, lines = bool(res.get("success")), _bld_out(res)
-                names, err = _bs_write(profile)
-                lines += ["Build Save and Build Snapshot written: " + ", ".join(names)] if names else ([err] if err else
-                          ["Build Save and Build Snapshot already match the Preflight."])
     except Exception as exc:
         log(f"FAIL: Build run {sid}: {type(exc).__name__}: {exc}")
         return {"success": False, "message": f"Failed: {type(exc).__name__}"}
