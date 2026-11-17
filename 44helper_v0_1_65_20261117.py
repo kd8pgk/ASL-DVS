@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.64"
+APP_VERSION = "0.1.65"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -30539,6 +30539,40 @@ def login_ui_inject(html, input_id, nonce=""):
 def _route_index(query: dict) -> tuple[int, str, bytes]:
     return 200, "text/html; charset=utf-8", login_ui_inject(render_page(_cfg), "login-pw").encode("utf-8")
 
+_PAGE_GZ: dict = {"tag": "", "data": b""}
+_PAGE_GZ_LOCK = threading.Lock()
+
+def _accepts_gzip(header: str) -> bool:
+    for part in header.split(","):
+        name, _, params = part.partition(";")
+        if name.strip().lower() not in ("gzip", "x-gzip"):
+            continue
+        q = re.search(r"q\s*=\s*([0-9.]+)", params)
+        try:
+            return q is None or float(q.group(1)) > 0
+        except ValueError:
+            return False
+    return False
+
+def _etag_matches(header: str, tag: str) -> bool:
+    return any(x.strip().removeprefix("W/") == tag for x in header.split(",")) or header.strip() == "*"
+
+def _index_response(accept_encoding: str, if_none_match: str) -> tuple[int, dict, bytes]:
+    raw = login_ui_inject(render_page(_cfg), "login-pw").encode("utf-8")
+    tag = '"' + hashlib.md5(raw).hexdigest() + '"'
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if if_none_match and _etag_matches(if_none_match, tag):
+        return 304, headers, b""
+    if not _accepts_gzip(accept_encoding):
+        return 200, headers, raw
+    with _PAGE_GZ_LOCK:
+        if _PAGE_GZ["tag"] != tag:
+            _PAGE_GZ["data"] = gzip.compress(raw, 6, mtime=0)
+            _PAGE_GZ["tag"] = tag
+        data = _PAGE_GZ["data"]
+    headers["Content-Encoding"] = "gzip"
+    return 200, headers, data
+
 def _route_version(query: dict) -> tuple[int, str, bytes]:
     payload = {"app": APP_TITLE, "version": APP_VERSION, "stage": APP_STAGE}
     return 200, "application/json", json.dumps(payload).encode("utf-8")
@@ -34324,6 +34358,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/term/status":
             self._send(200, "application/json",
                        json.dumps(_term_status(self._client_ip(), self.headers)).encode("utf-8"))
+            return
+
+        if path in ("/", "/index.html"):
+            status, headers, body = _index_response(self.headers.get("Accept-Encoding", ""), self.headers.get("If-None-Match", ""))
+            self._send(status, "text/html; charset=utf-8", body, extra_headers=headers)
             return
 
         route_fn = _GET_ROUTES.get(path)
