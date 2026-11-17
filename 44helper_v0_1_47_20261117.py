@@ -28965,10 +28965,11 @@ function @F@RenderWhere(d) {
     msg = 'You opened this page at a 44 address. Do the tunnel steps from the LAN address.';
   }
   var board = d.board || {};
+  var h = msg ? '<div class="ov-banner lvl-warn">' + cfgEsc(msg) + '</div>' : '';
   if ('@PROFILE@' === 'magic' && board.zero2) {
-    msg = (msg ? msg + ' ' : '') + 'This node is a ' + board.model + ': Magic Box has fewer functions here. SysMon has no SVX tab on this build.';
+    h += '<div class="ov-banner lvl-info">This node is a ' + cfgEsc(board.model) + '. Nothing is blocked; SysMon has no SVX tab on this build.</div>';
   }
-  box.innerHTML = msg ? '<div class="ov-banner lvl-warn">' + cfgEsc(msg) + '</div>' : '';
+  box.innerHTML = h;
 }
 
 function @F@RenderRadio(d) {
@@ -29079,9 +29080,10 @@ function @F@WgCheck(btn) {
 """
 
 _BLD_NOTE_TRAVEL = "<b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b>"
-_BLD_NOTE_MAGIC = ("<b>Magic Box runs on the full build. The Pi Zero 2 W build limits its functions.</b> It is the Travel Node tab plus the SvxLink "
-                   "install, wiring and checks. SysMon's SVX tab, which runs the same SvxLink checks and edits svxlink.conf, is in the full build only; "
-                   "a Pi Zero 2 W has about 415 MB usable, so pause the node with Quiet System during the SvxLink install.")
+_BLD_NOTE_MAGIC = ("<b>Magic Box is made for the full build. On the Pi Zero 2 W build it builds the same way, with fewer functions; which "
+                   "build to use is your choice.</b> It is the Travel Node tab plus the SvxLink install, wiring and checks. SysMon's SVX tab, which runs the "
+                   "same SvxLink checks and edits svxlink.conf, is in the full build only; a Pi Zero 2 W has about 415 MB usable, so pausing the node "
+                   "with Quiet System during the SvxLink install helps.")
 _BLD_SVX_ROWS = (
     '      <tr><td>SvxLink use</td><td><select id="@P@-svx_use" onchange="@F@Dirty()">'
     '<option value="bridge">Bridge under ASL3 (no radio of its own)</option>'

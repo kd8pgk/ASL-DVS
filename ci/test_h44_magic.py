@@ -258,11 +258,17 @@ class Page(unittest.TestCase):
         html = h44._render_magic_panel()
         for k in ("svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"):
             self.assertIn(f'id="mbx-{k}"', html)
-        self.assertIn("Magic Box runs on the full build", html)
-        self.assertIn("limits its functions", html)
+        self.assertIn("Magic Box is made for the full build", html)
+        self.assertIn("fewer functions", html)
+        self.assertIn("your choice", html)
         self.assertNotIn("either build", html)
         self.assertIn('id="panel-magic"', html)
         self.assertIn('id="mbx-svx"', html)
+
+    def test_pi02w_is_never_blocked(self):
+        self.assertIn("Nothing is blocked", h44._JS_MAGIC)
+        for mode in ("half", "split", "full"):
+            self.assertEqual([i for i, _ in h44._bld_stage_defs(mode, "magic")].count("svx"), 1)
 
     def test_travel_panel_has_no_svx_rows(self):
         html = h44._render_build_panel()
