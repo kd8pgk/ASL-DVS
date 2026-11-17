@@ -97,8 +97,8 @@ def extract_routes(path):
                     public.add(c.value)
     literals = {"GET": set(), "POST": set()}
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST"):
-            kind = "GET" if node.name == "do_GET" else "POST"
+        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST", "_do_get", "_do_post"):
+            kind = "GET" if node.name in ("do_GET", "_do_get") else "POST"
             for c in ast.walk(node):
                 if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.startswith("/api/"):
                     literals[kind].add(c.value)
@@ -235,7 +235,14 @@ class Server:
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
+            if resp.status >= 500:
+                with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                    print(f"[{self.key}] {method} {path} -> {resp.status}; server log tail:\n{fh.read()[-2000:]}", file=sys.stderr)
             return resp.status, dict(resp.getheaders()), data
+        except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError) as exc:
+            with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                tail = fh.read()[-2000:]
+            raise RuntimeError(f"{self.key} dropped the connection on {method} {path}: {exc}\nserver log tail:\n{tail}") from exc
         finally:
             conn.close()
 

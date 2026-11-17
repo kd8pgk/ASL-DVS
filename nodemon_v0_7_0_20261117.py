@@ -2430,7 +2430,24 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _fail(self, exc):
+        import traceback
+        frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        where = "%s:%s" % (os.path.basename(frame.filename), frame.lineno) if frame else "?"
+        log_event("Request %s %s failed: %s: %s (%s)" % (self.command, self.path, type(exc).__name__, exc, where), "err")
+        try:
+            self.close_connection = True
+            self._json(500, {"ok": False, "error": "Node Monitor hit an internal error. The log has details."})
+        except OSError:
+            pass
+
     def do_GET(self):
+        try:
+            self._do_get()
+        except Exception as exc:
+            self._fail(exc)
+
+    def _do_get(self):
         if self._wan_refused():
             return
         path = urllib.parse.urlsplit(self.path).path
@@ -2468,6 +2485,12 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        try:
+            self._do_post()
+        except Exception as exc:
+            self._fail(exc)
+
+    def _do_post(self):
         if self._wan_refused():
             return
         path = urllib.parse.urlsplit(self.path).path
