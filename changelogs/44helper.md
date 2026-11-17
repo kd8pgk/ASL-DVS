@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_67_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_68_20261117.py`. Newest entries first.
+
+## 0.1.68 (2026-11-17)
+
+Each tab loads its data when it is first opened, not all at once when the page opens. This is a release: page JavaScript logic changes. It is stage 6 of a tidy of the file, and the one that takes load off the node.
+
+- **Why.** Opening the dashboard used to start 23 status loads at once, one for every tab, and each one runs commands on the node (firewall-cmd, wg, systemctl, asterisk, dpkg and more). In a headless browser against a test node that was 203 requests in the first 4 seconds, 173 of them job-status checks. On a Pi Zero 2 W that burst is the heaviest moment of using the page.
+- **Now.** The page opens with the Overview, the live updates and the quiet-mode status: 3 requests. Every other tab loads its data once, the first time you open it, and the tabs that already refreshed on every open (Travel Node, Magic Box, Boot and the firewall cards on the two tunnel tabs) still do. Opening a tab again does not reload it; its buttons and the live updates keep it current as before.
+- **Not changed.** What each tab shows and does, the Overview refresh every 5 seconds, the live updates, and the polling of running jobs.
+- **Tests.** `ci/test_h44_tabs.py` runs the tab code in node and checks that each tab loads its own data once on first open and nothing else, and that the startup loads only the first tab. I also ran the page in headless Chromium against a test node before and after: 203 requests at load before, 3 after, the same single console error before and after (the 401 of the login probe), and every tab opened without a script error.
 
 ## 0.1.67 (2026-11-17)
 
