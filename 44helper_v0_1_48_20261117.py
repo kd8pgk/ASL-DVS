@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.47"
+APP_VERSION = "0.1.48"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -19354,6 +19354,11 @@ def _fcr_ready(payload: dict):
         return None, None, None, None, err
     state = _fcr_group_state()
     rows, errors = _fcr_plan(m, tokens, state)
+    want = payload.get("groups")
+    if isinstance(want, list):
+        rows = [r for r in rows if r["group"] in want]
+        mine = [e["path"] for e in m["files"] if e["group"] in want]
+        errors = [e for e in errors if any(path in e for path in mine)]
     if errors:
         return None, None, None, None, "Nothing can be written:\n" + "\n".join(errors)
     return m, meta, state, rows, ""
@@ -28823,10 +28828,12 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-body">@NOTE@ The standard config
       bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
       turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
-      node, not from memory. This first version only reads and checks: it saves the form below and nothing else. Each row links
-      to the tab that does the step. Pick the tunnel mode first; the order changes with it.</div>
+      node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
+      (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
+      other rows link to the tab that does the step. Nothing runs by itself.</div>
     <div id="@P@-where"></div>
     <div id="@P@-stages">Loading...</div>
+    <div class="asl3-console shown" id="@P@-run-out" style="display:none"></div>
   </div>
   <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
       <span class="cfg-hint" id="@P@-form-state"></span></div>
@@ -28933,16 +28940,31 @@ function @F@ShowErrors(d) {
 }
 
 function @F@RenderStages(d) {
-  var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th></tr>';
+  var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th><th></th></tr>';
   (d.stages || []).forEach(function(s, i) {
     var tab = _@P@Tabs[s.id];
     var where = tab && tab !== '@TAB@'
       ? '<a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' + cfgEsc(_@P@StageNames[s.id] || tab) + '</a>'
       : cfgEsc(_@P@StageNames[s.id] || '');
     h += '<tr><td>' + (i + 1) + '</td><td>' + cfgEsc(s.label) + '</td><td style="' + @F@Tone(s.state) + '">' +
-         cfgEsc(@F@StateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td></tr>';
+         cfgEsc(@F@StateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td><td>' + @F@RunButtons(s) + '</td></tr>';
   });
   document.getElementById('@P@-stages').innerHTML = h + '</table>';
+}
+
+function @F@RunButtons(s) {
+  if (!s.run) { return ''; }
+  var id = cfgEsc(s.id);
+  var h = '';
+  if (s.run.preview) { h += '<button class="btn-copy" onclick="@F@Run(\'' + id + '\', true, this)">Preview</button> '; }
+  return h + '<button class="btn-run" onclick="@F@Run(\'' + id + '\', false, this)">Run</button>';
+}
+
+function @F@Run(stage, preview, btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the step uses the saved form.'); return; }
+  var label = stage.replace(/_/g, ' ');
+  if (!preview && !confirm('Run this step (' + label + ')? It changes this node. An automatic copy of the config is saved first where the step writes config.')) { return; }
+  @F@Post({action: 'run_stage', profile: '@PROFILE@', stage: stage, preview: preview}, '@P@-run-out', btn).then(function() { @F@Refresh(); });
 }
 
 function @F@RenderMachine(d) {
@@ -31520,6 +31542,9 @@ def build_build_status(profile: str = "travel") -> dict:
             s["detail"] = "Waits for the step before. " + s["detail"]
         if s["state"] not in ("done", "manual"):
             prev_ok = False
+    for s in stages:
+        if s["id"] in _BLD_RUNNABLE and s["state"] in ("todo", "warn"):
+            s["run"] = {"preview": s["id"] in _BLD_PREVIEWABLE}
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
@@ -31562,10 +31587,172 @@ def _bld_act_wg_check(payload: dict) -> dict:
     return {"success": True, "message": "The config is usable." + (" The tunnel step will change it as listed." if notes else ""),
             "notes": notes}
 
+_BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
+_BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save"})
+_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio"})
+_BLD_RUN_MAX_LINES = 120
+
+def _bld_out(res: dict) -> list[str]:
+    text = res.get("output") or res.get("message") or ""
+    return [ln for ln in str(text).splitlines()]
+
+def _bld_cfg(action: str, payload: dict | None = None) -> dict:
+    body = {"action": action}
+    body.update(payload or {})
+    return _dispatch_config_action(body)
+
+def _bld_run_apply(sid: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
+    group = _BLD_RUN_GROUP[sid]
+    lines: list[str] = []
+    m, _meta = _fcr_load()
+    if m is None:
+        res = _bld_cfg("bundle_fetch", {"ref": "main"})
+        lines += _bld_out(res)
+        if not res.get("success"):
+            return False, lines + ["The bundle could not be fetched, so nothing was written."]
+    body: dict = {"values": {k: form.get(k, "") for k in ("callsign", "node", "dmr_id", "nxdn_id")}, "groups": [group]}
+    if preview:
+        res = _bld_cfg("bundle_preview", body)
+    else:
+        body["confirm"] = True
+        res = _bld_cfg("bundle_apply", body)
+    out = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
+           for ln in _bld_out(res)]
+    return bool(res.get("success")), lines + out
+
+def _bld_run_wiring(preview: bool, which: tuple[str, ...]) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    try:
+        pn = _pn_status()
+    except Exception:
+        pn = {"available": False}
+    want = []
+    if pn.get("old_ext") and "ext" in which:
+        want.append("pn_fix_ext")
+    if pn.get("nodes_fixable") and "nodes" in which:
+        want.append("pn_fix_nodes")
+    if pn.get("refs_fixable") and "refs" in which:
+        want.append("pn_fix_refs")
+    for a in want:
+        res = _bld_cfg(a + ("_preview" if preview else ""))
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {a} =="] + _bld_out(res)
+    if not want:
+        lines.append("Nothing here can be fixed automatically. The rows above name what is left.")
+    return ok, lines
+
+def _bld_run_svx_wire(preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    res = _bld_cfg("svx_bridge_preview" if preview else "svx_bridge", {})
+    lines += ["== svx_bridge =="] + _bld_out(res)
+    ok = bool(res.get("success"))
+    ok2, more = _bld_run_wiring(preview, ("ext", "nodes"))
+    lines += more
+    lines.append("Step 8 (bridge or radio answer) is run on the SVXLink tab; this row does not run it.")
+    return ok and ok2, lines
+
+def _bld_devstr_edit(text: str, node: str, devstr: str) -> str | None:
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"^\s*\[([^\]]+)\]", ln)
+        if m and m.group(1).strip() == node:
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    for k in range(start + 1, end):
+        if re.match(r"^\s*devstr\s*=", lines[k]):
+            lines[k] = "devstr = " + devstr
+            break
+    else:
+        lines.insert(start + 1, "devstr = " + devstr)
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+def _bld_run_radio(form: dict, cards: list[dict], preview: bool) -> tuple[bool, list[str]]:
+    node = _bld_node_of(form)
+    pick = form.get("usb", "")
+    if not node:
+        return False, ["No node number yet."]
+    if not pick:
+        return False, ["Pick the USB card in the form and save it first."]
+    if pick not in {c["devstr"] for c in cards}:
+        return False, [f"{pick} is not attached any more."]
+    old = _bld_read(_BLD_SIMPLEUSB)
+    new = _bld_devstr_edit(old, node, pick) if old else None
+    if new is None:
+        return False, [f"No [{node}] stanza in {_BLD_SIMPLEUSB}: apply the ASL3 config first."]
+    if new == old:
+        return True, ["devstr already says " + pick + ". Nothing to change."]
+    diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), "now: " + _BLD_SIMPLEUSB, "after: " + _BLD_SIMPLEUSB, lineterm=""))
+    if preview:
+        return True, diff
+    sid, _removed = _cfgr_auto_point("Build tab radio devstr", ["asl3"])
+    uid, gid, mode = _cfgr_meta_of(_BLD_SIMPLEUSB)
+    res = _cfgr_write_file(_BLD_SIMPLEUSB, new.encode("utf-8"), uid, gid, mode)
+    log(f"OK: Build tab wrote devstr {pick} for node {node}")
+    return not res.startswith("NOT"), [f"Current files saved first as automatic copy {sid}.", f"{_BLD_SIMPLEUSB}: {res}",
+                                       "Asterisk reads simpleusb.conf again when it is restarted (Config tab, Restart services)."] + diff
+
+def _bld_act_run_stage(payload: dict) -> dict:
+    sid = str(payload.get("stage", ""))
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    preview = payload.get("preview") is True
+    if sid not in _BLD_RUNNABLE:
+        return {"success": False, "message": "This step is not run from this tab."}
+    if preview and sid not in _BLD_PREVIEWABLE:
+        return {"success": False, "message": "This step has no preview."}
+    st = build_build_status(profile)
+    stage = next((s for s in st["stages"] if s["id"] == sid), None)
+    if stage is None:
+        return {"success": False, "message": "This step is not part of the checklist."}
+    if stage["state"] == "locked":
+        return {"success": False, "message": "This step waits for the one before it: " + stage["detail"]}
+    if stage["state"] not in ("todo", "warn"):
+        return {"success": False, "message": "Nothing to do: " + stage["detail"]}
+    form = st["form"]
+    if sid in _BLD_RUN_GROUP and st["errors"]:
+        return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
+    try:
+        with _BLD_LOCK:
+            if sid in _BLD_RUN_GROUP:
+                ok, lines = _bld_run_apply(sid, form, preview)
+            elif sid == "boot":
+                res = action_boot_order_apply()
+                ok, lines = bool(res.get("success")), _bld_out(res)
+            elif sid == "wiring":
+                ok, lines = _bld_run_wiring(preview, ("ext", "nodes", "refs"))
+            elif sid == "svx_wire":
+                ok, lines = _bld_run_svx_wire(preview)
+            elif sid == "radio":
+                ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            else:
+                res = _bld_cfg("save_restore")
+                ok, lines = bool(res.get("success")), _bld_out(res)
+    except Exception as exc:
+        log(f"FAIL: Build run {sid}: {type(exc).__name__}: {exc}")
+        return {"success": False, "message": f"Failed: {type(exc).__name__}"}
+    cut = lines[:_BLD_RUN_MAX_LINES]
+    if len(lines) > len(cut):
+        cut.append(f"... {len(lines) - len(cut)} more line(s) not shown")
+    if preview:
+        head = "Preview of " + stage["label"] + (": nothing was changed." if ok else ": failed, nothing was changed.")
+    else:
+        head = stage["label"] + (": done." if ok else ": failed.")
+    log(f"{'OK' if ok else 'FAIL'}: Build run {sid}{' (preview)' if preview else ''}")
+    return {"success": ok, "message": head, "notes": cut}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
     "wg_check": _bld_act_wg_check,
+    "run_stage": _bld_act_run_stage,
 }
 
 def _dispatch_build_action(payload: dict) -> dict:

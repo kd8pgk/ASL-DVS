@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_47_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_48_20261117.py`. Newest entries first.
+
+## 0.1.48 (2026-11-17)
+
+Run buttons on the Travel Node and Magic Box tabs for the quick steps. This is a release: the two tabs now change the node, where 0.1.46 and 0.1.47 only read it.
+
+- **Which rows run.** Apply the ASL3, DVSwitch and M17 config, Boot order, Wiring checks, SvxLink bridge wiring (Magic Box), the radio's `devstr`, and the Restore point. A row shows its Run button only while it is open (to do or a warning) and not waiting for the step before it; the server checks that again and refuses a step that is locked or already done. The installs, the tunnel steps, the half tunnel, the full-tunnel exceptions, the reflector connection (it needs the password) and the reboot test stay on their own tabs.
+- **Preview, then Run.** Apply, Wiring checks, SvxLink bridge wiring and the radio step have a Preview that writes nothing. Every Run asks first. A page with unsaved form changes refuses to run: the step uses the saved form.
+- **Apply uses one group.** The bundle apply writes only the group of its own row (`asl3`, `dvs` or `m17`), so applying DVSwitch's config never rewrites `rpt.conf` again, and a later change to `rpt.conf` (the bridge node, Node Talker's node 1921) is not undone. The Config tab's own Full config replacement still writes every installed group; the optional `groups` list is only sent by this tab. The bundle is fetched from GitHub only when none is saved, and a failed fetch writes nothing. The form's callsign, node, DMR ID and NXDN ID fill the bundle's fields.
+- **Same actions as the Config tab.** Each step calls the existing action (bundle apply, the exten, `[nodes]` and section-name fixes, Add SvxLink bridge node, Save Restore point, Set the boot order), through the same lock and the same automatic copy, and marks a reinstall as pending as before. Nothing restarts; the output points to Restart services on the Config tab.
+- **Radio.** With a USB card picked in the form, the step writes `devstr = <that card>` in the node's `simpleusb.conf` stanza (an automatic copy first, the other stanzas untouched). With no card or one card, `devstr` stays empty, as before.
+- **Output.** The result and its lines (cut at 120) show under the checklist. Errors answer with a `message`; an unexpected exception is logged and the page gets only its type.
+- **Tests.** `ci/test_h44_run.py` (29 tests): the edit of `devstr`, the group filter and its errors, every refusal, each step's calls and payloads (the fetch only when needed, the confirm only on Run, only the fixers that apply), the output cut, exceptions not leaking, the Run info on the status, and the page script. Also run for real on Debian against the bundle: the preview, the apply (only the ASL3 files written), then the row turning done and refusing a second run.
 
 ## 0.1.47 (2026-11-17)
 
