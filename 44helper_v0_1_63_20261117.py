@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.62"
+APP_VERSION = "0.1.63"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -20345,7 +20345,56 @@ def _pn_status() -> dict:
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
 
+_FULL_NOTE = ("A save point is a full copy of this node's config files, passwords included. It stays on this node, and Restore puts it "
+              "back here. A snapshot is the same files as one text file with the passwords left out: use it to build another node "
+              "(confputter) or to read. They are not the same thing.")
+_FULL_SNAP_DIR = "/etc/asl_dvs/instmon_library/snapshots"
+_FULL_CONFGETTER = "/usr/local/bin/confgetter.sh"
+_FULL_SNAP_RE = re.compile(r"^confgetter_[A-Za-z0-9_.-]+_\d{8}-\d{6}\.md$")
+
+def _full_point_name(callsign: str) -> str:
+    call = re.sub(r"[^A-Za-z0-9]", "", callsign.upper())[:10] or "node"
+    return f"Finished {call} {time.strftime('%Y-%m-%d')}"
+
+def _full_save_point(callsign: str) -> dict:
+    name = _full_point_name(callsign)
+    for p in _cfgr_list_points():
+        if p["kind"] == "user" and p["label"] == name:
+            return {"success": True, "name": name, "output": f"Save point '{name}' already exists. Nothing new was saved.", "existing": True}
+    res = _cfgr_act_create_point({"name": name})
+    res["name"] = name
+    return res
+
+def _full_snapshot() -> dict:
+    if not os.path.isfile(_FULL_CONFGETTER):
+        return {"success": False, "output": "confgetter is not installed on this node. Install it from the Config getter list on instmon, then try again."}
+    before = set(_full_snap_names())
+    r = _run_argv(["bash", _FULL_CONFGETTER], timeout=180)
+    after = [n for n in _full_snap_names() if n not in before] or _full_snap_names()[:1]
+    if not r["success"] or not after:
+        return {"success": False, "output": "confgetter did not finish: " + str(r.get("output", ""))[-300:]}
+    path = os.path.join(_FULL_SNAP_DIR, after[0])
+    return {"success": True, "path": path, "name": after[0],
+            "output": f"Snapshot written: {path}\nPasswords are left out. Download it from the Config getter list on instmon; apply it on another node with confputter."}
+
+def _full_snap_names() -> list[str]:
+    try:
+        names = [n for n in os.listdir(_FULL_SNAP_DIR) if _FULL_SNAP_RE.match(n)]
+    except OSError:
+        return []
+    return sorted(names, reverse=True)
+
+def _cfgr_act_full_save(payload: dict) -> dict:
+    res = _full_save_point(_bld_form_load().get("callsign", ""))
+    res["output"] = res.get("output", "") + "\n\n" + _FULL_NOTE
+    return res
+
+def _cfgr_act_full_snapshot(payload: dict) -> dict:
+    return _full_snapshot()
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "full_save": _cfgr_act_full_save,
+    "full_snapshot": _cfgr_act_full_snapshot,
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
     "create_point": _cfgr_act_create_point,
@@ -20640,21 +20689,16 @@ function cfgGateways(btn, action) {
   cfgPost({action: action}, 'cfg-gw-out', btn);
 }
 
-function cfgPresetReset(btn, pid) {
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (!confirm('Remove your saved ' + name + ' preset and use the built-in default again?\n\nYour saved preset is deleted. Files on this node do not change.')) return;
-  cfgPost({action: 'preset_reset', preset: pid}, pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
+function cfgFullSave(btn) {
+  if (!confirm('Save a full copy of this node\'s config files now, passwords included? It stays on this node as a save point.')) return;
+  cfgPost({action: 'full_save'}, 'cfg-full-out', btn).then(function(res) {
+    if (res && res.success) { cfgFullSnapshot(btn, true); }
+  });
 }
 
-function cfgPresetCapture(btn, save, pid) {
-  pid = pid || 'travel_node';
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (save && !confirm('Save this node\'s wiring and private nodes as the ' + name + ' preset?\n\n' +
-                       'Only wiring is saved: no callsign, IDs or passwords' + (pid === 'magic_box' ? ', no reflector password' : '') +
-                       '. An existing ' + name + ' preset is replaced.\n' +
-                       'Use Preview first to see exactly what goes in.')) return;
-  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: pid},
-          pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
+function cfgFullSnapshot(btn, ask) {
+  if (ask && !confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) return;
+  cfgPost({action: 'full_snapshot'}, 'cfg-full-out', btn);
 }
 
 function cfgPnKind() {
@@ -20827,10 +20871,6 @@ function cfgRender(d) {
   sel.innerHTML = o || '<option value="">(nothing saved yet)</option>';
   if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
   cfgOnPointChange();
-  var tp = (d.presets || {}).travel_node || {};
-  document.getElementById('cfg-preset-state').textContent = tp.default ? 'built-in default in use' : (tp.exists ? ('your saved preset, ' + tp.saved_at) : 'not available');
-  var mp = (d.presets || {}).magic_box || {};
-  document.getElementById('cfg-mpreset-state').textContent = mp.default ? 'built-in default in use' : (mp.exists ? ('your saved preset, ' + mp.saved_at) : 'not available');
   cfgPnRender(d.private_nodes);
   var sb = document.getElementById('cfg-svx-bridge');
   if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
@@ -21261,37 +21301,17 @@ def _render_config_panel() -> str:
   </div>
 
   <div class="step-card">
-    <div class="step-head"><div class="step-title">Travel Node preset</div>
-      <span class="cfg-hint" id="cfg-preset-state"></span></div>
-    <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
-      [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
-      [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. A built-in default is used until you save your own from a node you have set up the way you want; saving replaces it, and "Use the built-in default"
-      brings it back. Apply it on any node from the Restore list above, or from the Build tabs.</div>
+    <div class="step-head"><div class="step-title">Save the full config</div>
+      <span class="cfg-hint" id="cfg-full-state"></span></div>
+    <div class="step-body"><b>Save point</b>: a full copy of this node's config files, passwords included, kept on this node. Restore puts it back
+      here. <b>Snapshot</b>: the same files as one text file with the passwords left out. Use it to build another node (confputter) or to read.
+      They are not the same thing, so this card can make both. The wiring presets are no longer saved here: the built-in Travel Node and
+      Magic Box presets feed the Build tabs, and a preset saved earlier is still read and can be applied from the Restore list above.</div>
     <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'travel_node')">Use the built-in default</button>
+      <button class="btn-run" onclick="cfgFullSave(this)">Save the full config</button>
+      <button class="btn-copy" onclick="cfgFullSnapshot(this)">Copy the configs for another node (snapshot)</button>
     </div>
-    <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Magic Box preset</div>
-      <span class="cfg-hint" id="cfg-mpreset-state"></span></div>
-    <div class="step-body">Everything the Travel Node preset saves, plus the SvxLink bridge setup from svxlink.conf and its
-      svxlink.d/UsrpLogic.conf: which logics and links are on (LOGICS and LINKS), the USRP link (host and the two ports,
-      jitter buffer, limiters), the reflector (host, port, default and monitored talkgroups, timeouts), the reflector link and
-      the control logic. Never the callsign, the reflector password (AUTH_KEY), the EchoLink password or any radio sections
-      (a node whose SvxLink has its own radio cannot save this preset). Applying it changes only values in sections that already
-      exist in svxlink.conf; a section the SVXLink tab has not created yet (steps 8 and 11) is left out and named in the preview.
-      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts. It also has a built-in default, replaced when you save your own.</div>
-    <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false,'magic_box')">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true,'magic_box')">Save as Magic Box</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'magic_box')">Use the built-in default</button>
-    </div>
-    <div class="asl3-console shown placeholder" id="cfg-mpreset-out">(nothing run yet)</div>
+    <div class="asl3-console shown placeholder" id="cfg-full-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-pn-card">
@@ -21421,7 +21441,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
-    ("config", "Config", "t-config", "Restore point, save points, Travel Node and Magic Box presets"),
+    ("config", "Config", "t-config", "Restore point, save points, snapshot"),
     ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -29207,6 +29227,13 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
+  <div class="step-card" id="@P@-finish" style="display:none"><div class="step-head"><div class="step-title">Build finished: save the full config</div></div>
+    <div class="step-body" id="@P@-finish-note"></div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="@F@FinishSave(this)">Save the full config</button>
+    </div>
+    <div class="asl3-console shown" id="@P@-finish-out" style="display:none"></div>
+  </div>
   @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
       SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
@@ -29561,7 +29588,26 @@ function @F@InstallStfu(btn) {
   });
 }
 
+function @F@FinishSave(btn) {
+  @F@Post({action: 'finish_save', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function(res) {
+    if (!res || !res.success) { return; }
+    if (confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) {
+      @F@Post({action: 'finish_snapshot', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function() { @F@Refresh(); });
+    } else { @F@Refresh(); }
+  });
+}
+
 function @F@RenderExtras(d) {
+  var fin = d.finish || {};
+  var box = document.getElementById('@P@-finish');
+  if (box) {
+    box.style.display = fin.done ? '' : 'none';
+    var note = document.getElementById('@P@-finish-note');
+    if (note) {
+      note.textContent = (fin.note || '') + (fin.save_name ? ' Save point made: ' + fin.save_name + '.' : '') +
+        (fin.snapshot_name ? ' Snapshot: ' + fin.snapshot_name + '.' : '') + (fin.confgetter ? '' : ' confgetter is not installed, so only the save point can be made.');
+    }
+  }
   var x = d.extras || {};
   var a = document.getElementById('@P@-stfu-state');
   if (a) { a.textContent = x.stfu_installed ? 'installed' : 'not installed'; }
@@ -32154,6 +32200,7 @@ def build_build_status(profile: str = "travel") -> dict:
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
+    out["finish"] = _bld_finish_info(next((x for x in stages if x["id"] == "reboot"), {}).get("state") == "done")
     out["extras"] = {"stfu_installed": _bld_stfu_installed(),
                      "el_owner_text": {"": "EchoLink stays off.", "asl3": "EchoLink will run in ASL3.", "svx": "EchoLink will run in SvxLink."}[_bld_el_owner(form, profile)]}
     out["job"] = _bld_job_info(profile)
@@ -33320,12 +33367,12 @@ def _bld_mark_ready() -> None:
         json.dump(dict(_bld_marks_load(), ready_at=int(time.time())), f)
     os.replace(tmp, _BLD_MARKS)
 
-def _bld_mark_set(key: str) -> None:
+def _bld_mark_set(key: str, value: object = None) -> None:
     os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
     tmp = _BLD_MARKS + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(dict(_bld_marks_load(), **{key: int(time.time())}), f)
+        json.dump(dict(_bld_marks_load(), **{key: int(time.time()) if value is None else value}), f)
     os.replace(tmp, _BLD_MARKS)
 
 def _bld_boot_ready_line() -> str:
@@ -33612,7 +33659,38 @@ def _bld_act_install_apt(payload: dict) -> dict:
     log(f"OK: Build tab started the apt install ({', '.join(pkgs)})")
     return {"success": True, "message": "Started: apt install " + " ".join(pkgs) + ".", "job_key": key}
 
+def _bld_finish_done(profile: str) -> bool:
+    st = build_build_status(profile)
+    return next((x for x in st["stages"] if x["id"] == "reboot"), {}).get("state") == "done"
+
+def _bld_act_finish_save(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if not _bld_finish_done(profile):
+        return {"success": False, "message": "This is available once the Reboot test shows done."}
+    res = _full_save_point(_bld_form_load().get("callsign", ""))
+    if res.get("success"):
+        _bld_mark_set("finish_save_at")
+        _bld_mark_set("finish_save_name", res["name"])
+    return {"success": bool(res.get("success")), "message": res.get("output", ""), "name": res.get("name", "")}
+
+def _bld_act_finish_snapshot(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if not _bld_finish_done(profile):
+        return {"success": False, "message": "This is available once the Reboot test shows done."}
+    res = _full_snapshot()
+    if res.get("success"):
+        _bld_mark_set("finish_snapshot_at")
+        _bld_mark_set("finish_snapshot_name", res["name"])
+    return {"success": bool(res.get("success")), "message": res.get("output", ""), "path": res.get("path", "")}
+
+def _bld_finish_info(done: bool) -> dict:
+    marks = _bld_marks_load()
+    return {"done": done, "note": _FULL_NOTE, "save_name": str(marks.get("finish_save_name", "")),
+            "snapshot_name": str(marks.get("finish_snapshot_name", "")), "confgetter": os.path.isfile(_FULL_CONFGETTER)}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "finish_save": _bld_act_finish_save,
+    "finish_snapshot": _bld_act_finish_snapshot,
     "install_apt": _bld_act_install_apt,
     "install_suite": _bld_act_install_suite,
     "run_rest": _bld_act_run_rest,

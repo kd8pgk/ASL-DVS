@@ -359,14 +359,13 @@ class BuildStep(unittest.TestCase):
 
 
 class Page(unittest.TestCase):
-    def test_the_config_tab_has_both_preset_cards(self):
+    def test_the_config_tab_no_longer_saves_presets_but_still_applies_them(self):
         with open(h44.__file__, encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('id="cfg-mpreset-state"', src)
-        self.assertIn('id="cfg-mpreset-out"', src)
-        self.assertIn("cfgPresetCapture(this,true,'magic_box')", src)
-        self.assertIn("cfgPresetCapture(this,true)", src)
-        self.assertIn("(d.presets || {}).magic_box", src)
+        for gone in ("cfg-mpreset-state", "cfg-preset-state", "cfgPresetCapture", "Save as Travel Node", "Save as Magic Box"):
+            self.assertNotIn(gone, src, gone)
+        self.assertIn('"preset_apply": lambda p: _cfgr_act_preset_apply(p, True)', src)
+        self.assertIn('"preset_capture": lambda p: _cfgr_act_preset_capture(p, True)', src)
 
     def test_the_build_tab_asks_before_applying_the_preset(self):
         for js in (h44._JS_BUILD, h44._JS_MAGIC):

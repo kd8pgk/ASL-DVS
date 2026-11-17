@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_62_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_63_20261117.py`. Newest entries first.
+
+## 0.1.63 (2026-11-17)
+
+A full config save at the end of the build, and the Config tab stops saving presets. This is a release: new actions and a changed Config tab.
+
+- **Build finished card.** When the Reboot test shows done, both Build tabs show "Build finished: save the full config". "Save the full config" makes a save point named "Finished <callsign> <date>" (once; pressing again keeps the existing one) and then asks whether to also copy the configs for another node.
+- **Two different things.** The card says it plainly: a save point is a full copy of this node's config files, passwords included, kept on this node, and Restore puts it back here. A snapshot is the same files as one text file with the passwords left out, made by `confgetter` into the instmon snapshots folder, for building another node with `confputter` or for reading. If `confgetter` is not installed the card says so and still makes the save point.
+- **Config tab.** The Travel Node and Magic Box preset cards (Preview, Save, "Use the built-in default") are replaced by one "Save the full config" card with the same two buttons and the same note, available any time. The built-in default presets still feed the Build tabs' wiring step. A preset saved earlier is still read and can be applied from the Restore list; the save and reset actions stay for older callers. The unused preset page functions are removed.
+- **Passwords.** The card text and the logs never show a password. The Preflight password wipe at done does not affect the save point, which is taken from the files.
+- **Tests.** `ci/test_h44_fullsave.py`; the preset tests follow the Config tab change.
 
 ## 0.1.62 (2026-11-17)
 
