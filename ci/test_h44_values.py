@@ -251,6 +251,11 @@ class Wipe(unittest.TestCase):
             st = h44.build_build_status()
         self.assertEqual(st["form"]["pw_node"], "")
         self.assertEqual(h44._bld_form_load()["pw_node"], "")
+        saves = os.path.join(self.d.name, "saves")
+        kept = [n for n in os.listdir(saves) if n.startswith("build-save-")]
+        self.assertEqual(len(kept), 1)
+        with open(os.path.join(saves, kept[0])) as f:
+            self.assertEqual(json.load(f)["values"]["pw_node"], "a")
 
 
 class Prefill(unittest.TestCase):
