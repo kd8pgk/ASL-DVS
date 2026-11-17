@@ -32573,6 +32573,9 @@ _BLD_APT = (
      "why": "the certificate for the HTTPS pages"},
     {"pkg": "curl", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "downloads (it falls back to wget)"},
     {"pkg": "ca-certificates", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "trusting HTTPS downloads"},
+    {"pkg": "systemd-timesyncd", "group": "required", "by": "44helper, the tunnel, apt",
+     "why": "the clock: a Pi has no battery clock, and the tunnel handshake and HTTPS need the right time",
+     "alt": ("chrony", "ntp", "ntpsec", "openntpd")},
     {"pkg": "wireguard-tools", "group": "required", "by": "44helper, wifimon", "why": "the tunnel (wg, wg-quick) and its watchdog",
      "tunnel": True},
     {"pkg": "firewalld", "group": "required", "by": "44helper, SysMon, every tool that opens its own port",
@@ -32611,7 +32614,7 @@ def _bld_apt_rows(mode: str, pi: bool, dpkg: dict | None) -> list[dict]:
             continue
         if e.get("tunnel") and mode == "none":
             continue
-        have = bool(dpkg and e["pkg"] in dpkg and dpkg[e["pkg"]][0][1:2] == "i")
+        have = any(bool(dpkg and n in dpkg and dpkg[n][0][1:2] == "i") for n in (e["pkg"],) + tuple(e.get("alt", ())))
         rows.append({"pkg": e["pkg"], "group": e["group"], "by": e["by"], "why": e["why"], "installed": have,
                      "auto": e.get("auto", True), "how": e.get("how", "")})
     return rows
