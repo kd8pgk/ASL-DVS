@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.52"
+APP_VERSION = "0.1.53"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -28880,6 +28880,13 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-actions"><button class="btn-copy" onclick="@F@WgCheck(this)">Check this config</button></div>
     <div class="asl3-console shown" id="@P@-wg-out" style="display:none"></div>
     <div id="@P@-machine" style="margin-top:.8rem"></div>
+    <div id="@P@-apt" style="margin-top:.8rem"></div>
+    <div class="step-actions">
+      <select id="@P@-apt-scope"><option value="required">Required packages</option><option value="recommended">Required and recommended</option>
+        <option value="all">Everything on the list</option></select>
+      <button class="btn-run" id="@P@-apt-btn" onclick="@F@InstallApt(this)">Install the missing packages (apt)</button>
+    </div>
+    <div class="cfg-hint">Both installs here are optional: nothing runs until you press its button, and the build does not wait for them.</div>
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
@@ -29088,6 +29095,33 @@ function @F@RenderRadio(d) {
   document.getElementById('@P@-radio').innerHTML = h + '</table>';
 }
 
+function @F@RenderApt(d) {
+  var box = document.getElementById('@P@-apt');
+  var ap = d.apt;
+  if (!box || !ap) { return; }
+  var missing = 0;
+  var h = '<table class="cfg-table"><tr><th>System package</th><th>Group</th><th>Needed by</th><th>For</th><th>State</th></tr>';
+  (ap.rows || []).forEach(function(r) {
+    if (!r.installed && r.auto) { missing += 1; }
+    var state = r.installed ? 'installed' : (r.auto ? 'not installed' : 'not installed: ' + r.how);
+    h += '<tr><td>' + cfgEsc(r.pkg) + '</td><td>' + cfgEsc(r.group) + '</td><td>' + cfgEsc(r.by) + '</td><td>' + cfgEsc(r.why) +
+         '</td><td style="' + @F@Tone(r.installed ? 'ok' : (r.group === 'required' ? 'fail' : 'warn')) + '">' + cfgEsc(state) + '</td></tr>';
+  });
+  box.innerHTML = h + '</table>';
+  var btn = document.getElementById('@P@-apt-btn');
+  if (btn) { btn.disabled = missing === 0; }
+}
+
+function @F@InstallApt(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the list depends on the tunnel mode.'); return; }
+  var scope = document.getElementById('@P@-apt-scope').value;
+  if (!confirm('Install the missing system packages now (' + scope + ')? It runs apt as root in the background and keeps going if you close this page. It never installs a network manager, the firewall or systemd-resolved.')) { return; }
+  @F@Post({action: 'install_apt', profile: '@PROFILE@', scope: scope}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
 function @F@RenderSuite(d) {
   var box = document.getElementById('@P@-suite');
   var su = d.suite;
@@ -29151,6 +29185,7 @@ function @F@Refresh() {
     @F@RenderWhere(d);
     @F@RenderRadio(d);
     @F@RenderSvx(d);
+    @F@RenderApt(d);
     @F@RenderSuite(d);
     if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
@@ -31678,6 +31713,7 @@ def build_build_status(profile: str = "travel") -> dict:
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
     out["job"] = _bld_job_info(profile)
+    out["apt"] = _bld_apt_state(form.get("mode", "half"))
     out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form.get("suite_channel", "stable")}
     if svx is not None:
         out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
@@ -32488,7 +32524,90 @@ def _bld_act_install_suite(payload: dict) -> dict:
             + f" in the background (build {_bld_suite_build(form)}, {form.get('suite_channel', 'stable')} channel).",
             "job_key": key}
 
+_BLD_APT_GROUPS = {"required": ("required",), "recommended": ("required", "recommended"), "all": ("required", "recommended", "optional")}
+_BLD_APT = (
+    {"pkg": "iproute2", "group": "required", "by": "SysMon, wifimon, 44helper", "why": "addresses, routes and sockets (ip, ss)"},
+    {"pkg": "iputils-ping", "group": "required", "by": "SysMon, wifimon, 44helper", "why": "the internet check (ping)"},
+    {"pkg": "iw", "group": "required", "by": "SysMon, wifimon", "why": "WiFi signal, scan, power save and country code"},
+    {"pkg": "openssl", "group": "required", "by": "SysMon, wifimon, instmon, 44helper, Node Talker, Node Recorder, Terminal Monitor",
+     "why": "the certificate for the HTTPS pages"},
+    {"pkg": "curl", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "downloads (it falls back to wget)"},
+    {"pkg": "ca-certificates", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "trusting HTTPS downloads"},
+    {"pkg": "wireguard-tools", "group": "required", "by": "44helper, wifimon", "why": "the tunnel (wg, wg-quick) and its watchdog",
+     "tunnel": True},
+    {"pkg": "firewalld", "group": "required", "by": "44helper, SysMon, every tool that opens its own port",
+     "why": "the firewall", "auto": False, "how": "installed by the tunnel step 1, which keeps this page's port open"},
+    {"pkg": "systemd-resolved", "group": "required", "by": "44helper", "why": "name lookups through the tunnel", "tunnel": True,
+     "auto": False, "how": "installed by the tunnel step 1a, which hands it the DNS servers"},
+    {"pkg": "network-manager", "group": "manager", "by": "wifimon, 44helper", "why": "nmcli: Keep on and Keep off, networks, the boot-time route hook",
+     "auto": False, "how": "pick the network manager yourself: swapping it can cut the node off"},
+    {"pkg": "wpasupplicant", "group": "manager", "by": "wifimon", "why": "wpa_cli: WiFi without NetworkManager", "auto": False,
+     "how": "pick the network manager yourself: swapping it can cut the node off"},
+    {"pkg": "rfkill", "group": "recommended", "by": "wifimon", "why": "radio on and off"},
+    {"pkg": "wireless-tools", "group": "recommended", "by": "SysMon, wifimon", "why": "the network name (iwgetid) without NetworkManager"},
+    {"pkg": "libraspberrypi-bin", "group": "recommended", "by": "SysMon, wifimon, 44helper", "why": "supply voltage and throttle readings (vcgencmd)",
+     "pi": True},
+    {"pkg": "usbutils", "group": "recommended", "by": "SysMon", "why": "listing USB devices (lsusb)"},
+    {"pkg": "alsa-utils", "group": "recommended", "by": "SysMon", "why": "sound card tests (aplay, arecord)"},
+    {"pkg": "psmisc", "group": "recommended", "by": "SysMon", "why": "finding what holds a port or device (fuser)"},
+    {"pkg": "avahi-daemon", "group": "recommended", "by": "SysMon", "why": "reaching the node as name.local"},
+    {"pkg": "libnss-mdns", "group": "recommended", "by": "SysMon", "why": "resolving name.local on the node"},
+    {"pkg": "openssh-server", "group": "recommended", "by": "this build", "why": "ssh, whose port the ports step opens"},
+    {"pkg": "dnsmasq-base", "group": "optional", "by": "wifimon", "why": "the emergency hotspot"},
+    {"pkg": "traceroute", "group": "optional", "by": "44helper", "why": "the router checks"},
+    {"pkg": "openssh-client", "group": "optional", "by": "44helper", "why": "Router Install over ssh"},
+    {"pkg": "mtr-tiny", "group": "optional", "by": "SysMon (full build)", "why": "the Net tab's path tests"},
+    {"pkg": "fail2ban", "group": "optional", "by": "SysMon", "why": "the Security tab's recommendation"},
+    {"pkg": "raspi-config", "group": "optional", "by": "wifimon", "why": "the WiFi country code on a Pi", "pi": True},
+)
+
+def _bld_is_pi() -> bool:
+    return _bld_board()["model"].startswith("Raspberry Pi")
+
+def _bld_apt_rows(mode: str, pi: bool, dpkg: dict | None) -> list[dict]:
+    rows = []
+    for e in _BLD_APT:
+        if e.get("pi") and not pi:
+            continue
+        if e.get("tunnel") and mode == "none":
+            continue
+        have = bool(dpkg and e["pkg"] in dpkg and dpkg[e["pkg"]][0][1:2] == "i")
+        rows.append({"pkg": e["pkg"], "group": e["group"], "by": e["by"], "why": e["why"], "installed": have,
+                     "auto": e.get("auto", True), "how": e.get("how", "")})
+    return rows
+
+def _bld_apt_state(mode: str) -> dict:
+    return {"rows": _bld_apt_rows(mode, _bld_is_pi(), _installed_dpkg_all()), "mode": mode}
+
+def _bld_apt_pick(rows: list[dict], scope: str) -> list[str]:
+    groups = _BLD_APT_GROUPS.get(scope, _BLD_APT_GROUPS["required"])
+    return [r["pkg"] for r in rows if r["auto"] and not r["installed"] and r["group"] in groups]
+
+def _bld_apt_cmd(pkgs: list[str]) -> str:
+    return ("DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold " + " ".join(pkgs))
+
+def _bld_act_install_apt(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    scope = payload.get("scope") if payload.get("scope") in _BLD_APT_GROUPS else "required"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    st = _bld_apt_state(_bld_form_load()["mode"])
+    pkgs = _bld_apt_pick(st["rows"], scope)
+    if not pkgs:
+        return {"success": True, "message": "Nothing to install for this choice: every package in it is already installed or is installed by a tunnel step."}
+    cmd = _bld_apt_cmd(pkgs)
+    gate = _pkg_health_gate(cmd)
+    if gate:
+        return {"success": False, "message": "The package system has unfinished installs. Fix it on the Update tab first, then try again.",
+                "notes": str(gate.get("output", "")).splitlines()[-12:]}
+    key = f"{_BLD_JOB_PREFIX}{profile}_apt"
+    _start_unit_job(key, cmd)
+    log(f"OK: Build tab started the apt install ({', '.join(pkgs)})")
+    return {"success": True, "message": "Started: apt install " + " ".join(pkgs) + ".", "job_key": key}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "install_apt": _bld_act_install_apt,
     "install_suite": _bld_act_install_suite,
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,

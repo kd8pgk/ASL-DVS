@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_52_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_53_20261117.py`. Newest entries first.
+
+## 0.1.53 (2026-11-17)
+
+The preflight lists the system packages the tools need, with an optional apt install. This is a release: the tabs can now run apt.
+
+- **A System package table in the Preflight card.** It comes from what SysMon, wifimon, 44helper and the suite installer call: wifimon's own install list (iproute2, iputils-ping, iw, NetworkManager, wpa_supplicant, rfkill, wireless-tools, libraspberrypi-bin, dnsmasq-base, wireguard-tools, openssl, raspi-config), what SysMon runs (lsusb, aplay and arecord, fuser, mtr, avahi, fail2ban's recommendation), what 44helper runs (wg and wg-quick, resolvectl, traceroute, ssh) and what bootstrap.sh needs (curl or wget, certificates), plus openssh-server for the ssh port the ports step opens. Each row shows the group (required, recommended, optional, or manager), which tools need it, what for, and whether dpkg has it installed. Raspberry Pi packages show only on a Pi, and the tunnel packages only when a tunnel mode is chosen.
+- **Optional, with its own button.** A scope menu (required, required and recommended, or everything on the list) and "Install the missing packages (apt)". It runs `apt-get update` and `apt-get install` for the missing packages as root in a transient systemd unit, behind the same package-health gate as the install tabs (it stops and points to the Update tab's Package recovery if dpkg has unfinished installs), and keeps going if the page is closed. Nothing runs until the button is pressed and the build does not wait for it.
+- **What it will not install.** The firewall (firewalld), systemd-resolved and the network manager (NetworkManager or wpa_supplicant). A new firewall can block this page, resolved changes how names are looked up, and swapping the network manager can cut the node off. The firewall and resolved are installed by tunnel steps 1 and 1a, which keep the open ports and hand resolved the DNS servers; the network manager is left to you. The rows say so.
+- **The suite install is optional in the same way.** Both installs have their own Run button in the Preflight card and neither is a step of the checklist or of Run the rest.
+- **One build job at a time.** The apt job counts as the build job, so it cannot overlap the suite install, an install step or the tunnel steps.
+- **Tests.** `ci/test_h44_apt.py` (23 tests): every row well formed, the risky packages never automatic, every wifimon package present in the list, the dpkg state (a removed or half-installed package counts as missing), Pi and tunnel filtering, the scopes, the command (valid shell, counted as apt), the action (the missing ones only, nothing to do, refused while another job runs, the dpkg gate, no tunnel leaves wireguard out, the job key per tab) and the page.
 
 ## 0.1.52 (2026-11-17)
 
