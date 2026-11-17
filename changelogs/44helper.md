@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_44_20261116.py`. Newest entries first.
+Current file: `44helper_v0_1_45_20261117.py`. Newest entries first.
+
+## 0.1.45 (2026-11-17)
+
+Ports tab: the SvxLink ports. This is a release: the Ports and Services tabs list more.
+
+- **USRP link to ASL3.** UDP 34000 (SvxLink listens) and UDP 32000 (the ASL3 bridge node listens) are listed as loopback-only. SvxLink listens on every interface, not only 127.0.0.1, so opening 34000 in the firewall shows as over-exposed.
+- **Reflector.** A row pair (TCP and UDP) for each reflector your `svxlink.conf` names (`HOSTS` and `HOST_PORT`; a host can carry its own `:port`), for example `north.america.svxlink.net` on 35300. They are outbound-only: SvxLink connects out, so an inbound opening shows as over-exposed. A reflector on this node (127.0.0.1 or localhost) is not listed as outbound.
+- **Test reflector.** TCP and UDP 5300 are listed as loopback-only, the port the test reflector of step 10 listens on. Keep them closed in the firewall.
+- **EchoLink.** TCP 5200 is added beside 5198-5199/udp. EchoLink needs both, and SvxLink's EchoLink module and Asterisk's use the same ports.
+- **Services tab.** `svxlink-usrp` and `svxreflector` are listed under SVXLink with the ports above, so the Ports tab can tell whether SvxLink is running.
+- A reference row's verdict is as for the other ports: loopback-only and outbound-only ports are never meant to be open; the EchoLink ports show "needed but not open" when something listens and the firewall zone does not open them.
+- 44helper is a common tool; this affects both builds.
 
 ## 0.1.44 (2026-11-16)
 
