@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_51_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_52_20261117.py`. Newest entries first.
+
+## 0.1.52 (2026-11-17)
+
+The preflight installs the Node Controller suite in the background. This is a release: the tabs can now run the installer.
+
+- **A Node Controller suite table in the Preflight card, with an "Install the missing suite tools" button.** It lists instmon, the Dashboard, SysMon, wifimon, Node Talker, Node Recorder, Pibrary, Node Monitor and the manuals as installed or not (a tool counts as installed when its systemd unit exists; the manuals when the instmon library's docs folder has files). The button runs the repository's `bootstrap.sh` (which finds, checks and runs the stable or newest installer, as in the README's one-line install) as root in a transient systemd unit, so it keeps going if the page is closed or 44helper restarts. It works while you fill in the rest of the form, and the page follows its output. 44helper itself and Terminal Monitor are never part of it.
+- **Only what is missing.** It runs `--non-interactive --action=components --tools=<the missing ones> --build=<pi02w or full>`, so tools that are installed are not reinstalled or restarted, and 44helper (the running service) is left alone. With nothing missing it says so and starts nothing.
+- **Two new form fields, on both tabs.** Suite build (automatic by the board, Pi Zero 2 W or full) and Suite channel (stable, or testing which is `main`). The installer gets the saved callsign and node number for a node that has no `asl_dvs.conf` yet; on such a node, without a valid callsign and node, the button asks you to fill them in first. Only values that match the form's patterns reach the shell command.
+- **One build job at a time.** The suite job counts as the build job, so it cannot overlap an install, the tunnel steps or Run the rest (the installer and those steps use apt).
+- **Tests.** `ci/test_h44_suite.py` (20 tests): which tools count as installed, the build and channel choices, the command (shape, only valid values in it, valid shell), the action (only the missing tools, nothing to do, refused while another job runs, the identity rule, the job key per tab) and the page script.
 
 ## 0.1.51 (2026-11-17)
 

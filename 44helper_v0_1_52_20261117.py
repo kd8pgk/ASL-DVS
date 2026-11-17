@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.51"
+APP_VERSION = "0.1.52"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -28863,6 +28863,10 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
       <tr><td>NXDN ID (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
       <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
+      <tr><td>Suite build</td><td><select id="@P@-suite_build" onchange="@F@Dirty()"><option value="auto">Automatic (by the board)</option>
+        <option value="pi02w">Pi Zero 2 W build</option><option value="full">Full build</option></select></td></tr>
+      <tr><td>Suite channel</td><td><select id="@P@-suite_channel" onchange="@F@Dirty()"><option value="stable">Stable</option>
+        <option value="testing">Testing (main)</option></select></td></tr>
       <tr><td>USB sound card</td><td><select id="@P@-usb" onchange="@F@Dirty()"></select> <span class="cfg-hint" id="@P@-e-usb"></span></td></tr>
 @SVXROWS@      <tr id="@P@-bypass-row" style="display:none"><td>Bypass list (full tunnel only)</td><td><textarea class="asl3-cmd-input" id="@P@-bypass" rows="2" spellcheck="false" placeholder="host names, IPv4 addresses or UDP ports, separated by spaces or commas" oninput="@F@Dirty()"></textarea> <span class="cfg-hint" id="@P@-e-bypass"></span></td></tr>
     </table>
@@ -28876,6 +28880,8 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-actions"><button class="btn-copy" onclick="@F@WgCheck(this)">Check this config</button></div>
     <div class="asl3-console shown" id="@P@-wg-out" style="display:none"></div>
     <div id="@P@-machine" style="margin-top:.8rem"></div>
+    <div id="@P@-suite" style="margin-top:.8rem"></div>
+    <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
   @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
@@ -29082,6 +29088,32 @@ function @F@RenderRadio(d) {
   document.getElementById('@P@-radio').innerHTML = h + '</table>';
 }
 
+function @F@RenderSuite(d) {
+  var box = document.getElementById('@P@-suite');
+  var su = d.suite;
+  if (!box || !su) { return; }
+  var missing = 0;
+  var h = '<table class="cfg-table"><tr><th>Node Controller suite</th><th>State</th></tr>';
+  (su.tools || []).forEach(function(t) {
+    if (!t.installed) { missing += 1; }
+    h += '<tr><td>' + cfgEsc(t.name) + '</td><td style="' + @F@Tone(t.installed ? 'ok' : 'warn') + '">' + (t.installed ? 'installed' : 'not installed') + '</td></tr>';
+  });
+  h += '</table><div class="cfg-hint">44helper is already running. The build is ' + cfgEsc(su.build) + ', the channel ' + cfgEsc(su.channel) +
+       '. Terminal Monitor is never part of this.</div>';
+  box.innerHTML = h;
+  var btn = document.getElementById('@P@-suite-btn');
+  if (btn) { btn.disabled = missing === 0; }
+}
+
+function @F@InstallSuite(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the install uses the saved form.'); return; }
+  if (!confirm('Install the missing Node Controller tools now? It runs the installer in the background as root, only for the tools that are not installed, and keeps going if you close this page. It does not touch 44helper.')) { return; }
+  @F@Post({action: 'install_suite', profile: '@PROFILE@'}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
 function @F@RenderSvx(d) {
   var box = document.getElementById('@P@-svx');
   var v = d.svx;
@@ -29119,6 +29151,7 @@ function @F@Refresh() {
     @F@RenderWhere(d);
     @F@RenderRadio(d);
     @F@RenderSvx(d);
+    @F@RenderSuite(d);
     if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
     document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
@@ -29198,7 +29231,7 @@ def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
             .replace("@P@", pfx).replace("@F@", fn))
 
-_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass"]
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
 _BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
 
 def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
@@ -31027,9 +31060,10 @@ _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
 _BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
 _BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
-               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon")
+               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel")
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
-                "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": ""}
+                "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
+                "suite_build": "auto", "suite_channel": "stable"}
 _BLD_PROFILES = ("travel", "magic")
 _BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
 _BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
@@ -31079,6 +31113,10 @@ def _bld_form_clean(payload: dict) -> dict:
         form["mode"] = _BLD_DEFAULT["mode"]
     if form["svx_use"] not in ("bridge", "radio"):
         form["svx_use"] = _BLD_DEFAULT["svx_use"]
+    if form["suite_build"] not in _BLD_SUITE_BUILDS:
+        form["suite_build"] = _BLD_DEFAULT["suite_build"]
+    if form["suite_channel"] not in _BLD_SUITE_CHANNELS:
+        form["suite_channel"] = _BLD_DEFAULT["suite_channel"]
     form["callsign"] = form["callsign"].upper()
     return form
 
@@ -31640,6 +31678,7 @@ def build_build_status(profile: str = "travel") -> dict:
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
     out["job"] = _bld_job_info(profile)
+    out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form["suite_channel"]}
     if svx is not None:
         out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
         out["svx"]["reachable"] = svx.get("reachable")
@@ -32389,7 +32428,67 @@ def _route_build_report(query: dict) -> tuple[int, str, bytes]:
         return 500, "application/json", json.dumps({"message": "Could not make the report: " + type(exc).__name__}).encode("utf-8")
     return 200, "text/plain; charset=utf-8", text.encode("utf-8")
 
+_BLD_MANUALS_DIR = "/etc/asl_dvs/instmon_library/docs"
+_BLD_ASLDVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
+_BLD_BOOTSTRAP_URL = "https://raw.githubusercontent.com/" + _FCR_REPO + "/main/bootstrap.sh"
+_BLD_SUITE_TOOLS = (("instmon", "instmon", "instmon"), ("dashboard", "nodecontrol", "Dashboard"), ("sysmon", "sysmon", "SysMon"),
+                    ("wifimon", "wifimon", "wifimon"), ("nodetalker", "nodetalker", "Node Talker"),
+                    ("noderecorder", "noderecorder", "Node Recorder"), ("pibrary", "pibrary", "Pibrary"),
+                    ("nodemon", "nodemon", "Node Monitor"), ("manuals", "", "Manuals"))
+_BLD_SUITE_BUILDS = ("auto", "pi02w", "full")
+_BLD_SUITE_CHANNELS = ("stable", "testing")
+
+def _bld_suite_state() -> list[dict]:
+    out = []
+    for key, unit, name in _BLD_SUITE_TOOLS:
+        if key == "manuals":
+            try:
+                have = bool(os.listdir(_BLD_MANUALS_DIR))
+            except OSError:
+                have = False
+        else:
+            have = _bld_unit_exists(unit + ".service")
+        out.append({"key": key, "name": name, "installed": have})
+    return out
+
+def _bld_suite_build(form: dict) -> str:
+    pick = form.get("suite_build", "auto")
+    if pick in ("pi02w", "full"):
+        return pick
+    return "pi02w" if _bld_board()["zero2"] else "full"
+
+def _bld_suite_cmd(form: dict, tools: list[str]) -> str:
+    channel = form.get("suite_channel", "stable")
+    env = [f"ASL_DVS_CHANNEL={channel if channel in _BLD_SUITE_CHANNELS else 'stable'}"]
+    if all(_BLD_FIELD_RES[k][0].fullmatch(form.get(k, "")) for k in ("callsign", "node")):
+        env += [f"AUTO_CALLSIGN={form['callsign']}", f"AUTO_NODE={form['node']}"]
+    args = f"--non-interactive --action=components --tools={','.join(tools)} --build={_bld_suite_build(form)}"
+    u = _BLD_BOOTSTRAP_URL
+    return (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
+            f" | env {' '.join(env)} bash -s -- {args}")
+
+def _bld_act_install_suite(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    form = _bld_form_load()
+    missing = [t["key"] for t in _bld_suite_state() if not t["installed"]]
+    if not missing:
+        return {"success": True, "message": "Every suite tool is already installed. Nothing to do."}
+    ident_ok = all(_BLD_FIELD_RES[k][0].fullmatch(form.get(k, "")) for k in ("callsign", "node"))
+    if not ident_ok and not os.path.exists(_BLD_ASLDVS_CONF):
+        return {"success": False, "message": "Fill in and save the callsign and node number first: the installer sets them up on a new node."}
+    key = f"{_BLD_JOB_PREFIX}{profile}_suite"
+    cmd = _bld_suite_cmd(form if ident_ok else dict(form, callsign="", node=""), missing)
+    _start_unit_job(key, cmd)
+    log(f"OK: Build tab started the suite install ({', '.join(missing)})")
+    names = {k: n for k, _u, n in _BLD_SUITE_TOOLS}
+    return {"success": True, "message": "Started: installing " + ", ".join(names[k] for k in missing)
+            + f" in the background (build {_bld_suite_build(form)}, {form.get('suite_channel', 'stable')} channel).",
+            "job_key": key}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "install_suite": _bld_act_install_suite,
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
