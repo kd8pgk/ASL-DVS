@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.67"
+APP_VERSION = "0.1.68"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -22191,6 +22191,33 @@ def action_save_node_snippet(cfg: configparser.ConfigParser, scope: str, text: s
     return {**result, "scope": scope}
 
 _JS_TABS = """
+var _tabSeen = {};
+var _TAB_FIRST = {
+  router_install: function() { refreshRouterInstall(); },
+  full_tunnel: function() { refreshPiInstall('full'); refreshFullX(); },
+  split_tunnel: function() { refreshPiInstall('split'); },
+  nodes: function() { refreshNodes(); },
+  services: function() { refreshServices(); },
+  ports: function() { refreshPorts(); },
+  actions_log: function() { refreshActionsLog(); },
+  asl3: function() { refreshAsl3(); },
+  dvswitch: function() { refreshDvswitch(); },
+  svxlink: function() { refreshSvxlink(); },
+  m17: function() { refreshM17(); },
+  amp: function() { refreshAmp(); },
+  cloudflare: function() { refreshCF(); },
+  'claude-remote': function() { refreshCr(); },
+  update: function() { refreshUpdate(); },
+  system_opt: function() { refreshSystemOpt(); },
+  config: function() { refreshConfig(); }
+};
+
+function tabFirstOpen(id) {
+  if (_tabSeen[id]) { return; }
+  _tabSeen[id] = true;
+  if (_TAB_FIRST[id]) { _TAB_FIRST[id](); }
+}
+
 function clickTab(id) {
   document.querySelectorAll('.tab').forEach(function(el) {
     el.classList.toggle('active', el.id === 'tab-' + id);
@@ -22198,6 +22225,7 @@ function clickTab(id) {
   document.querySelectorAll('.tab-panel').forEach(function(el) {
     el.classList.toggle('hidden', el.id !== 'panel-' + id);
   });
+  tabFirstOpen(id);
   if (typeof guardOnTab === 'function') guardOnTab(id);
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
@@ -23843,27 +23871,6 @@ function _startApp() {
   termInit();  // v0.0.149: optional terminal buttons on by-hand steps
   clickTab('overview');
   refreshOverview();
-  refreshPiInstall('full');
-  refreshPiInstall('split');
-  refreshRouterInstall();
-  refreshNodes();
-  refreshServices();
-  refreshPorts();
-  refreshFirewall();
-  refreshFirewall2();
-  refreshHalfTunnel();
-  refreshFullX();
-  refreshActionsLog();
-  refreshAsl3();
-  refreshDvswitch();
-  refreshSvxlink();
-  refreshM17();
-  refreshAmp();
-  refreshCr();
-  refreshCF();
-  refreshUpdate();
-  refreshSystemOpt();
-  refreshConfig();
   startQuietPolling();
   _ovTimer = setInterval(refreshOverview, 5000);
 }
