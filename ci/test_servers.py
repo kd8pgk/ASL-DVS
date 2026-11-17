@@ -44,8 +44,8 @@ SERVERS = {
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
-    "nodemon": {"file": "nodemon_v0_7_0_20261117.py", "port": 7777, "scheme": "http", "health": "/api/health",
-                "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
+    "nodemon": {"file": "nodemon_v0_7_0_20261117.py", "port": 7777, "scheme": "https", "health": "/api/health",
+                "tls_conf": True, "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
                 "files_env": {"NODEMON_RPT_CONF": "run/rpt.conf", "NODEMON_AMI_CONF": "run/manager.conf",
                               "NODEMON_M17_INI": "run/m17.ini", "NODEMON_SVX_CONF": "run/svxlink.conf",
                               "NODEMON_SVX_LOG": "run/svxlink.log", "NODEMON_ABINFO_GLOB": "run/ABInfo_none.json"}},
@@ -168,6 +168,8 @@ class Server:
         except FileNotFoundError:
             pass
         self.seed_login()
+        if self.spec.get("tls_conf"):
+            self.write_tls_config()
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
             [sys.executable] + self.launcher_args() + [os.path.join(ROOT, self.spec["file"])],
@@ -183,6 +185,15 @@ class Server:
             except OSError:
                 time.sleep(0.5)
         raise RuntimeError(f"{self.key} did not answer on port {self.spec['port']}")
+
+    def write_tls_config(self):
+        cfg = os.path.join(self.stub_dir, self.spec["dirs_env"]["NODEMON_CONFIG_DIR"])
+        os.makedirs(cfg, exist_ok=True)
+        cert, key = os.path.join(cfg, "nodemon.crt"), os.path.join(cfg, "nodemon.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-keyout", key, "-out", cert, "-subj", "/CN=localhost"], check=True, capture_output=True)
+        with open(os.path.join(cfg, "nodemon.conf"), "w") as f:
+            f.write("[nodemon]\nport = 7777\ncert_file = %s\nkey_file = %s\n" % (cert, key))
 
     def launcher_args(self):
         if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1" or self.spec.get("no_launcher"):
