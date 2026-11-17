@@ -23680,7 +23680,6 @@ function ndEditorHtml(scope) {
 }
 
 function renderNodes(data) {
-  window._ndData = data;
 
   var banner = document.getElementById('nd-banner');
   if (banner) {
