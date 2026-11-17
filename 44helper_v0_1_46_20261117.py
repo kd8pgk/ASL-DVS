@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.45"
+APP_VERSION = "0.1.46"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14856,6 +14856,7 @@ header {
 .tab.t-cloudflare{--mc:var(--cloudflare);--mc-rgb:243,128,32}
 .tab.t-update{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-boot{--mc:var(--amber);--mc-rgb:255,208,64}
+.tab.t-build{--mc:var(--teal);--mc-rgb:0,255,229}
 .tab.t-services{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ports{--mc:var(--purple);--mc-rgb:212,102,255}
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
@@ -21128,6 +21129,7 @@ def _render_config_panel() -> str:
 
 TABS: list[tuple[str, str, str, str]] = [
     ("overview", "Overview", "t-overview", "Stage 2"),
+    ("build", "Travel Node", "t-build", "0.1.46: travel node build order, preflight, radio check"),
     ("router_install", "Router Install", "t-router-install", "Steps 1-2a: Stage 4 — Steps 3-11 (Model C): Stage 5 (done) — Model B: Stage 6"),
     ("full_tunnel", "Full Tunnel", "t-full-tunnel", "Stage 3"),
     ("split_tunnel", "Split Tunnel", "t-split-tunnel", "Stage 3"),
@@ -21967,6 +21969,7 @@ function clickTab(id) {
   if (typeof guardOnTab === 'function') guardOnTab(id);
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
+  if (id === 'build' && typeof buildRefresh === 'function') { buildRefresh(); }
 }
 
 function fwToolsDock(id) {
@@ -28811,6 +28814,239 @@ function piPasteCancel(boxId) {
 }
 """
 
+def _render_build_panel() -> str:
+    return """
+<div class="tab-panel hidden" id="panel-build">
+  <div class="step-card"><div class="step-head"><div class="step-title">Build a travel node</div>
+      <span class="cfg-hint" id="bld-checked"></span></div>
+    <div class="step-body"><b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b> The standard config
+      bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
+      turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
+      node, not from memory. This first version only reads and checks: it saves the form below and nothing else. Each row links
+      to the tab that does the step. Pick the tunnel mode first; the order changes with it.</div>
+    <div id="bld-where"></div>
+    <div id="bld-stages">Loading...</div>
+  </div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
+      <span class="cfg-hint" id="bld-form-state"></span></div>
+    <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). It holds no
+      passwords and no keys: the WireGuard config below is checked and then forgotten.</div>
+    <table class="cfg-table">
+      <tr><td>Tunnel mode</td><td><select id="bld-mode" onchange="buildDirty();buildShowBypass()">
+        <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
+        <option value="split">Split tunnel (44Net only)</option>
+        <option value="full">Full tunnel with exceptions (everything through the tunnel)</option></select>
+        <span class="cfg-hint">Save the form to reorder the steps above.</span></td></tr>
+      <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="bld-callsign" maxlength="10" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-callsign"></span></td></tr>
+      <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="bld-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-node"></span></td></tr>
+      <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="bld-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-dmr_id"></span></td></tr>
+      <tr><td>NXDN ID</td><td><input type="text" class="asl3-cmd-input" id="bld-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-nxdn_id"></span></td></tr>
+      <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="bld-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-m17_node"></span></td></tr>
+      <tr><td>USB sound card</td><td><select id="bld-usb" onchange="buildDirty()"></select> <span class="cfg-hint" id="bld-e-usb"></span></td></tr>
+      <tr id="bld-bypass-row" style="display:none"><td>Bypass list (full tunnel only)</td><td><textarea class="asl3-cmd-input" id="bld-bypass" rows="2" spellcheck="false" placeholder="host names, IPv4 addresses or UDP ports, separated by spaces or commas" oninput="buildDirty()"></textarea> <span class="cfg-hint" id="bld-e-bypass"></span></td></tr>
+    </table>
+    <div class="step-actions">
+      <button class="btn-run" onclick="buildSave(this)">Save the form</button>
+      <button class="btn-copy" onclick="buildReset(this)">Clear it</button>
+    </div>
+    <div class="asl3-console shown" id="bld-form-out" style="display:none"></div>
+    <div class="step-body" style="margin-top:.8rem">WireGuard config for this node. Paste it to check it before the tunnel step. It is not saved.</div>
+    <textarea class="asl3-cmd-input" id="bld-wg" rows="5" spellcheck="false" autocomplete="off" style="width:100%"></textarea>
+    <div class="step-actions"><button class="btn-copy" onclick="buildWgCheck(this)">Check this config</button></div>
+    <div class="asl3-console shown" id="bld-wg-out" style="display:none"></div>
+    <div id="bld-machine" style="margin-top:.8rem"></div>
+  </div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
+    <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
+      SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
+    <div id="bld-radio">Loading...</div>
+  </div>
+</div>
+"""
+
+_JS_BUILD = r"""
+var _bldData = null;
+var _bldIsDirty = false;
+var _bldTabs = {
+  tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
+  apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
+  half: 'split_tunnel', fullx: 'full_tunnel', boot: 'split_tunnel', wiring: 'config',
+  radio: 'config', save: 'config', reboot: 'boot', preflight: 'build'
+};
+var _bldStageNames = {
+  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
+  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab',
+  boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
+  reboot: 'Boot tab', preflight: 'this tab'
+};
+
+function buildDirty() { _bldIsDirty = true; }
+
+function buildShowBypass() {
+  var m = document.getElementById('bld-mode');
+  var row = document.getElementById('bld-bypass-row');
+  if (m && row) { row.style.display = m.value === 'full' ? '' : 'none'; }
+}
+
+function buildTone(l) {
+  var c = (l === 'ok' || l === 'done') ? 'var(--green)' : ((l === 'warn') ? 'var(--amber)' : ((l === 'fail') ? 'var(--red)' : 'var(--muted)'));
+  return 'color:' + c + ';font-weight:bold';
+}
+
+function buildStateLabel(s) {
+  return {done: 'done', todo: 'to do', locked: 'waits', warn: 'check', manual: 'by hand'}[s] || s;
+}
+
+function buildFillForm(d) {
+  var f = d.form || {};
+  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'bypass'].forEach(function(k) {
+    var el = document.getElementById('bld-' + k);
+    if (el) { el.value = f[k] || ''; }
+  });
+  var mode = document.getElementById('bld-mode');
+  if (mode) { mode.value = f.mode || 'half'; }
+  var sel = document.getElementById('bld-usb');
+  if (sel) {
+    var h = '<option value="">(none picked)</option>';
+    ((d.radio && d.radio.cards) || []).forEach(function(c) {
+      h += '<option value="' + cfgEsc(c.devstr) + '">' + cfgEsc(c.name + ' (' + c.usbid + (c.devstr ? ', ' + c.devstr : '') + ')') + '</option>';
+    });
+    sel.innerHTML = h;
+    sel.value = f.usb || '';
+  }
+  buildShowBypass();
+}
+
+function buildShowErrors(d) {
+  var errs = d.errors || {};
+  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'usb', 'bypass'].forEach(function(k) {
+    var el = document.getElementById('bld-e-' + k);
+    if (el) { el.textContent = errs[k] ? errs[k] : ''; el.style.color = errs[k] ? 'var(--amber)' : ''; }
+  });
+  var n = Object.keys(errs).length;
+  var st = document.getElementById('bld-form-state');
+  if (st) { st.textContent = n ? n + ' to fix' : 'complete'; }
+}
+
+function buildRenderStages(d) {
+  var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th></tr>';
+  (d.stages || []).forEach(function(s, i) {
+    var tab = _bldTabs[s.id];
+    var where = tab && tab !== 'build'
+      ? '<a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' + cfgEsc(_bldStageNames[s.id] || tab) + '</a>'
+      : cfgEsc(_bldStageNames[s.id] || '');
+    h += '<tr><td>' + (i + 1) + '</td><td>' + cfgEsc(s.label) + '</td><td style="' + buildTone(s.state) + '">' +
+         cfgEsc(buildStateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td></tr>';
+  });
+  document.getElementById('bld-stages').innerHTML = h + '</table>';
+}
+
+function buildRenderMachine(d) {
+  var h = '<table class="cfg-table"><tr><th>Machine check</th><th>Result</th><th>Detail</th></tr>';
+  (d.machine || []).forEach(function(r) {
+    h += '<tr><td>' + cfgEsc(r.label) + '</td><td style="' + buildTone(r.level) + '">' + cfgEsc(r.level) +
+         '</td><td>' + cfgEsc(r.detail) + '</td></tr>';
+  });
+  document.getElementById('bld-machine').innerHTML = h + '</table>';
+}
+
+function buildRenderWhere(d) {
+  var box = document.getElementById('bld-where');
+  var wg = (d.addrs && d.addrs.wg0) || '';
+  var host = location.hostname;
+  var msg = '';
+  if (wg && host === wg) {
+    msg = 'You opened this page at the tunnel address (' + host + '). Do the tunnel steps from the LAN address, not through the tunnel.';
+  } else if (/^44[.]/.test(host)) {
+    msg = 'You opened this page at a 44 address. Do the tunnel steps from the LAN address.';
+  }
+  box.innerHTML = msg ? '<div class="ov-banner lvl-warn">' + cfgEsc(msg) + '</div>' : '';
+}
+
+function buildRenderRadio(d) {
+  var r = d.radio || {};
+  var h = '<table class="cfg-table"><tr><th>Item</th><th>Value</th></tr>';
+  h += '<tr><td>Main node</td><td>' + cfgEsc(r.node || 'not set yet') + '</td></tr>';
+  h += '<tr><td>rpt.conf rxchannel</td><td>' + cfgEsc(r.rxchannel || 'none') + '</td></tr>';
+  h += '<tr><td>simpleusb.conf devstr</td><td>' + (r.simpleusb_stanza ? cfgEsc(r.devstr || 'empty') : 'no stanza for this node yet') + '</td></tr>';
+  h += '<tr><td>Node Talker</td><td>' + (r.nodetalker ? 'installed' : 'not installed') + '</td></tr>';
+  h += '<tr><td>Node 1921 in rpt.conf</td><td>' + (r.stanza_1921 ? 'present' : 'not there') + '</td></tr>';
+  h += '<tr><td>Phone nodes (1001, 1002)</td><td>' + ((r.phone_nodes || []).length ? cfgEsc(r.phone_nodes.join(', ')) + ' present' : 'none') +
+       '. Node Controller adds them when the Phone tab is turned on; this tab never creates or removes them.</td></tr>';
+  h += '</table><table class="cfg-table"><tr><th>USB card</th><th>USB id</th><th>devstr</th><th>Radio interface</th></tr>';
+  var cards = r.cards || [];
+  if (!cards.length) { h += '<tr><td colspan="4">No USB sound card found.</td></tr>'; }
+  cards.forEach(function(c) {
+    h += '<tr><td>' + cfgEsc(c.name) + '</td><td>' + cfgEsc(c.usbid) + '</td><td>' + cfgEsc(c.devstr || '?') + '</td><td>' +
+         (c.radio_chip ? cfgEsc(c.radio_chip) + ' (likely)' : 'unknown') + '</td></tr>';
+  });
+  document.getElementById('bld-radio').innerHTML = h + '</table>';
+}
+
+function buildRefresh() {
+  return fetch('/api/build/status').then(function(r) { return r.json(); }).then(function(d) {
+    if (!d || !d.stages) {
+      document.getElementById('bld-stages').textContent = (d && d.message) || 'Could not read the node.';
+      return;
+    }
+    _bldData = d;
+    document.getElementById('bld-checked').textContent = d.checked_at || '';
+    if (!_bldIsDirty) { buildFillForm(d); }
+    buildShowErrors(d);
+    buildRenderStages(d);
+    buildRenderMachine(d);
+    buildRenderWhere(d);
+    buildRenderRadio(d);
+  }).catch(function(e) {
+    document.getElementById('bld-stages').textContent = 'Request failed: ' + e;
+  });
+}
+
+function buildPost(payload, outId, btn) {
+  if (btn) { btn.disabled = true; }
+  var out = document.getElementById(outId);
+  if (out) { out.style.display = ''; out.className = 'asl3-console shown placeholder'; out.textContent = 'Working...'; }
+  return fetch('/api/build/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(payload)
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    if (out) {
+      out.className = 'asl3-console shown' + (res.success ? ' ok' : ' fail');
+      var lines = [res.message || '(no message)'];
+      (res.notes || []).forEach(function(n) { lines.push('- ' + n); });
+      out.textContent = lines.join(String.fromCharCode(10));
+    }
+    if (btn) { btn.disabled = false; }
+    return res;
+  }).catch(function(e) {
+    if (out) { out.className = 'asl3-console shown fail'; out.textContent = 'Request failed: ' + e; }
+    if (btn) { btn.disabled = false; }
+  });
+}
+
+function buildFormValues() {
+  var v = {action: 'form_save', mode: document.getElementById('bld-mode').value, usb: document.getElementById('bld-usb').value};
+  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'bypass'].forEach(function(k) {
+    v[k] = document.getElementById('bld-' + k).value;
+  });
+  return v;
+}
+
+function buildSave(btn) {
+  buildPost(buildFormValues(), 'bld-form-out', btn).then(function() { _bldIsDirty = false; buildRefresh(); });
+}
+
+function buildReset(btn) {
+  buildPost({action: 'form_reset'}, 'bld-form-out', btn).then(function() { _bldIsDirty = false; buildRefresh(); });
+}
+
+function buildWgCheck(btn) {
+  var box = document.getElementById('bld-wg');
+  buildPost({action: 'wg_check', config_text: box.value}, 'bld-wg-out', btn).then(function(res) { if (res && res.success) { box.value = ''; } });
+}
+"""
+
 _JS = (
     _JS_AUTH
     + _JS_EVENTS
@@ -28823,6 +29059,7 @@ _JS = (
     + _JS_ROUTER_INSTALL
     + _JS_SERVICES_PORTS
     + _JS_BOOT
+    + _JS_BUILD
     + _JS_FIREWALL
     + _JS_HALF
     + _JS_FX
@@ -29547,6 +29784,7 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "system_opt": _render_system_opt_panel,
     "config": _render_config_panel,
     "boot": _render_boot_panel,
+    "build": _render_build_panel,
     "services": _render_services_panel,
     "ports": _render_ports_panel,
     "actions_log": _render_actions_log_panel,
@@ -30607,6 +30845,453 @@ def _route_action_status(query: dict) -> tuple[int, str, bytes]:
         return 400, "application/json", json.dumps({"error": "job_key required"}).encode("utf-8")
     return 200, "application/json", json.dumps(_job_status(job_key)).encode("utf-8")
 
+_BLD_FILE = "/etc/44helper/build.json"
+_BLD_LOCK = threading.Lock()
+_BLD_ASOUND = "/proc/asound"
+_BLD_USB_SYS = "/sys/bus/usb/devices"
+_BLD_RPT = "/etc/asterisk/rpt.conf"
+_BLD_SIMPLEUSB = "/etc/asterisk/simpleusb.conf"
+_BLD_SAVENODE = "/etc/asterisk/savenode.conf"
+_BLD_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
+_BLD_M17INI = "/opt/USRP2M17/USRP2M17.ini"
+_BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
+_BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
+_BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions"}
+_BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass")
+_BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
+                "usb": "", "bypass": ""}
+_BLD_FIELD_RES = {
+    "callsign": (re.compile(r"[A-Za-z0-9]{3,10}"), "3 to 10 letters or digits"),
+    "node": (re.compile(r"[0-9]{4,7}"), "4 to 7 digits"),
+    "dmr_id": (re.compile(r"[0-9]{7}"), "7 digits"),
+    "nxdn_id": (re.compile(r"[0-9]{1,5}"), "1 to 5 digits"),
+    "m17_node": (re.compile(r"1[0-9]{3}"), "a node number from 1000 to 1999"),
+}
+_BLD_REQUIRED = ("callsign", "node", "dmr_id", "nxdn_id")
+_BLD_HOST_RE = re.compile(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+_BLD_MAX_BYPASS = 20
+_BLD_HS_FRESH = 180
+_BLD_PRODUCT = {"asl3": "asl3", "dvs": "dvs", "m17": "usrp2m17"}
+
+def _bld_read(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+def _bld_form_load() -> dict:
+    form = dict(_BLD_DEFAULT)
+    try:
+        with open(_BLD_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return form
+    if isinstance(data, dict):
+        for k in _BLD_FIELDS:
+            v = data.get(k)
+            if isinstance(v, str):
+                form[k] = v[:400]
+    return form
+
+def _bld_form_clean(payload: dict) -> dict:
+    form = dict(_BLD_DEFAULT)
+    for k in _BLD_FIELDS:
+        v = payload.get(k, form[k])
+        form[k] = v.strip()[:400] if isinstance(v, str) else form[k]
+    if form["mode"] not in _BLD_MODES:
+        form["mode"] = _BLD_DEFAULT["mode"]
+    form["callsign"] = form["callsign"].upper()
+    return form
+
+def _bld_form_write(form: dict) -> None:
+    os.makedirs(os.path.dirname(_BLD_FILE), mode=0o755, exist_ok=True)
+    tmp = _BLD_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({k: form[k] for k in _BLD_FIELDS}, f, indent=1)
+        f.write("\n")
+    os.replace(tmp, _BLD_FILE)
+
+def _bld_bypass_tokens(text: str) -> list[str]:
+    return [t for t in re.split(r"[\s,]+", text) if t]
+
+def _bld_bypass_bad(token: str) -> bool:
+    if token.isdigit():
+        return not 1 <= int(token) <= 65535
+    if re.fullmatch(r"[0-9.]+", token):
+        try:
+            ipaddress.IPv4Address(token)
+        except ValueError:
+            return True
+        return False
+    return _BLD_HOST_RE.fullmatch(token) is None
+
+def _bld_form_errors(form: dict, cards: list[dict]) -> dict:
+    errs: dict = {}
+    for k in _BLD_REQUIRED:
+        v = form.get(k, "")
+        if not v:
+            errs[k] = "required"
+        elif _BLD_FIELD_RES[k][0].fullmatch(v) is None:
+            errs[k] = "use " + _BLD_FIELD_RES[k][1]
+    m17 = form.get("m17_node", "")
+    if _BLD_FIELD_RES["m17_node"][0].fullmatch(m17) is None:
+        errs["m17_node"] = "use " + _BLD_FIELD_RES["m17_node"][1]
+    elif m17 in ("1999", "1921") or m17 == form.get("node", ""):
+        errs["m17_node"] = "that number is used by something else"
+    if form.get("usb") and form["usb"] not in {c["devstr"] for c in cards}:
+        errs["usb"] = "that USB card is not attached any more"
+    if len([c for c in cards if c["devstr"]]) > 1 and not form.get("usb"):
+        errs["usb"] = "more than one USB sound card: pick one"
+    tokens = _bld_bypass_tokens(form.get("bypass", ""))
+    if form.get("mode") != "full" and tokens:
+        errs["bypass"] = "only used by the full tunnel"
+    elif len(tokens) > _BLD_MAX_BYPASS:
+        errs["bypass"] = f"at most {_BLD_MAX_BYPASS} entries"
+    else:
+        bad = [t for t in tokens if _bld_bypass_bad(t)]
+        if bad:
+            errs["bypass"] = "not a host name, IPv4 address or UDP port: " + ", ".join(bad[:3])
+    return errs
+
+def _bld_usb_cards() -> list[dict]:
+    text = _bld_read(_BLD_ASOUND + "/cards")
+    sysdev: dict = {}
+    try:
+        names = os.listdir(_BLD_USB_SYS)
+    except OSError:
+        names = []
+    for d in names:
+        if ":" in d or d.startswith("usb"):
+            continue
+        bus = _bld_read(f"{_BLD_USB_SYS}/{d}/busnum").strip()
+        dev = _bld_read(f"{_BLD_USB_SYS}/{d}/devnum").strip()
+        if bus.isdigit() and dev.isdigit():
+            sysdev[(int(bus), int(dev))] = d
+    cards: list[dict] = []
+    for m in re.finditer(r"^\s*(\d+)\s+\[([^\]]*)\]:\s*(.*)$", text, re.M):
+        idx, short, long_name = m.group(1), m.group(2).strip(), m.group(3).strip()
+        usbid = _bld_read(f"{_BLD_ASOUND}/card{idx}/usbid").strip().lower()
+        if not usbid:
+            continue
+        devstr = ""
+        mb = re.fullmatch(r"0*(\d+)/0*(\d+)", _bld_read(f"{_BLD_ASOUND}/card{idx}/usbbus").strip())
+        if mb:
+            devstr = sysdev.get((int(mb.group(1)), int(mb.group(2))), "")
+        vendor = usbid.split(":")[0]
+        cards.append({"card": int(idx), "name": long_name or short, "usbid": usbid, "devstr": devstr,
+                      "radio_chip": _BLD_CM_VENDORS.get(vendor, "")})
+    return cards
+
+def _bld_node_of(form: dict) -> str:
+    if form.get("node"):
+        return form["node"]
+    m = re.search(r"^\s*NODE\s*=\s*(\d+)", _bld_read(_BLD_SAVENODE), re.M)
+    return m.group(1) if m else ""
+
+def _bld_radio(form: dict, cards: list[dict]) -> dict:
+    node = _bld_node_of(form)
+    rpt = _bld_read(_BLD_RPT)
+    stanzas = _parse_asterisk_conf_stanzas(rpt) if rpt else {}
+    rx = ""
+    if node and node in stanzas:
+        for e in stanzas[node]["entries"]:
+            if e["key"].lower() == "rxchannel":
+                rx = e["val"]
+    usb_text = _bld_read(_BLD_SIMPLEUSB)
+    usb_st = _parse_asterisk_conf_stanzas(usb_text) if usb_text else {}
+    devstr = None
+    if node and node in usb_st:
+        devstr = ""
+        for e in usb_st[node]["entries"]:
+            if e["key"].lower() == "devstr":
+                devstr = e["val"]
+    return {"node": node, "rxchannel": rx, "devstr": devstr, "simpleusb_stanza": devstr is not None,
+            "cards": cards, "pick": form.get("usb", ""),
+            "nodetalker": os.path.exists(_BLD_NODETALKER), "stanza_1921": "1921" in stanzas,
+            "phone_nodes": [n for n in ("1001", "1002") if n in stanzas]}
+
+def _bld_radio_state(radio: dict) -> tuple[str, str]:
+    cards = radio["cards"]
+    if not radio["node"]:
+        return "todo", "No node number yet."
+    if not radio["rxchannel"]:
+        return "todo", f"Node {radio['node']} is not in rpt.conf yet (the ASL3 apply writes it)."
+    if not radio["rxchannel"].lower().startswith("simpleusb/"):
+        return "warn", f"Node {radio['node']} uses {radio['rxchannel']}, not SimpleUSB: Node Talker needs SimpleUSB."
+    if not cards:
+        return "warn", "No USB sound card detected. devstr stays empty; plug the radio interface in, then re-check."
+    want = radio["pick"]
+    have = radio["devstr"] or ""
+    if len(cards) == 1 and not want:
+        return "done", f"One USB card ({cards[0]['name']}); devstr empty, SimpleUSB takes the first card."
+    if want and have != want:
+        return "todo", f"Picked {want}, but simpleusb.conf has devstr = {have or 'empty'}."
+    if len(cards) > 1 and not want:
+        return "todo", "More than one USB card: pick one."
+    return "done", f"devstr = {have}."
+
+def _bld_hs_age() -> float | None:
+    try:
+        r = subprocess.run(["wg", "show", "wg0", "latest-handshakes"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    best = 0
+    for ln in r.stdout.splitlines():
+        parts = ln.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            best = max(best, int(parts[1]))
+    return time.time() - best if best else None
+
+def _bld_machine() -> list[dict]:
+    rows: list[dict] = []
+
+    def add(key: str, label: str, level: str, detail: str) -> None:
+        rows.append({"key": key, "label": label, "level": level, "detail": detail})
+
+    osr = _bld_read("/etc/os-release")
+    codename = re.search(r"^VERSION_CODENAME=(\S+)", osr, re.M)
+    cn = codename.group(1).strip('"') if codename else ""
+    if cn in ("bookworm", "trixie"):
+        add("os", "Operating system", "ok" if cn == "bookworm" else "warn",
+            cn + ("" if cn == "bookworm" else ": DVSwitch has packages for Bookworm only"))
+    else:
+        add("os", "Operating system", "fail", "Bookworm or Trixie is needed" + (f" (found {cn})" if cn else ""))
+    mem = _bld_read("/proc/meminfo")
+    swap = re.search(r"^SwapTotal:\s+(\d+)", mem, re.M)
+    total = re.search(r"^MemTotal:\s+(\d+)", mem, re.M)
+    if swap and int(swap.group(1)) > 0:
+        add("swap", "Swap", "ok", f"{int(swap.group(1)) // 1024} MB")
+    else:
+        add("swap", "Swap", "fail", "Swap is off. A Pi Zero 2 W runs out of memory without it.")
+    if total:
+        add("ram", "Memory", "ok", f"{int(total.group(1)) // 1024} MB usable")
+    try:
+        du = shutil.disk_usage("/")
+        free_mb = du.free // (1024 * 1024)
+        add("disk", "Free disk", "ok" if free_mb >= 2048 else ("warn" if free_mb >= 1024 else "fail"), f"{free_mb} MB free")
+    except OSError:
+        add("disk", "Free disk", "warn", "could not read")
+    try:
+        r = subprocess.run(["passwd", "-S", "root"], capture_output=True, text=True, timeout=5)
+        st = r.stdout.split()[1] if r.returncode == 0 and len(r.stdout.split()) > 1 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        st = ""
+    add("rootpw", "Root password", "ok" if st == "P" else ("fail" if st in ("L", "NP") else "warn"),
+        "set" if st == "P" else ("not set: the tool pages log in with it" if st in ("L", "NP") else "could not check"))
+    ufw = shutil.which("ufw") and subprocess.run(["systemctl", "is-active", "ufw"], capture_output=True, text=True, timeout=5).stdout.strip() == "active"
+    add("firewall", "Firewall", "fail" if ufw else "ok", "ufw is active: switch it off, the tunnel steps use firewalld" if ufw else "no ufw conflict")
+    synced = _ov_clock_synced()
+    add("clock", "Clock", "ok" if synced else ("warn" if synced is None else "fail"),
+        "synchronised" if synced else ("could not check" if synced is None else "not synchronised: the tunnel handshake needs the right time"))
+    try:
+        socket.getaddrinfo("deb.debian.org", 443, proto=socket.IPPROTO_TCP)
+        add("internet", "Internet", "ok", "names resolve")
+    except OSError:
+        add("internet", "Internet", "fail", "cannot resolve deb.debian.org")
+    return rows
+
+def _bld_lan_addrs() -> dict:
+    m = re.search(r"^\s*Address\s*=\s*(\d+\.\d+\.\d+\.\d+)", _bld_read(WG0_CONF_PATH), re.M | re.I)
+    return {"wg0": m.group(1) if m else ""}
+
+def _bld_stage_defs(mode: str) -> list[tuple[str, str]]:
+    tunnel = ("tunnel", "Tunnel steps 1 to 6")
+    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"),
+               ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
+               ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
+    tail = [("boot", "Boot order"), ("wiring", "Wiring checks"), ("radio", "Radio and Node Talker"),
+            ("save", "Restore point"), ("reboot", "Reboot test")]
+    if mode == "full":
+        return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions")] + tail
+    mid = [("half", "Half tunnel")] if mode == "half" else []
+    return [("preflight", "Preflight"), tunnel] + systems + mid + tail
+
+def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
+    call = form.get("callsign", "")
+    if stage == "apply_asl3":
+        rpt = _bld_read(_BLD_RPT)
+        ok = bool(node) and re.search(r"^\s*\[" + re.escape(node) + r"\]\s*\(node-main", rpt, re.M) is not None
+        return ok, ("" if ok else "No [" + (node or "node") + "](node-main) in rpt.conf yet.")
+    if stage == "apply_dvs":
+        text = _bld_read(_BLD_MMDVM)
+        ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
+        ok = ok and bool(form.get("dmr_id")) and re.search(r"^Id=" + re.escape(form["dmr_id"]) + r"\s*$", text, re.M) is not None
+        return ok, ("" if ok else "MMDVM_Bridge.ini does not have this callsign and DMR ID yet.")
+    text = _bld_read(_BLD_M17INI)
+    ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
+    return ok, ("" if ok else "USRP2M17.ini does not have this callsign yet.")
+
+def build_build_status() -> dict:
+    form = _bld_form_load()
+    cards = _bld_usb_cards()
+    errs = _bld_form_errors(form, cards)
+    machine = _bld_machine()
+    installed = {p["key"]: p["state"] for p in _detect_installed_products()}
+    node = _bld_node_of(form)
+    wg_text = _bld_read(WG0_CONF_PATH)
+    kind = _wg_route_kind(wg_text) if wg_text else ""
+    half_on = _HALF_BEGIN in {ln.strip() for ln in wg_text.splitlines()}
+    fx_on = _FX_BEGIN in {ln.strip() for ln in wg_text.splitlines()}
+    up = _wg0_interface_present()
+    age = _bld_hs_age() if up else None
+    zone = _firewalld_zone_info_cached()
+    try:
+        bo = status_boot_order()
+        bo_done, bo_missing = bool(bo.get("done")), list(bo.get("missing") or [])
+    except Exception as exc:
+        bo_done, bo_missing = False, [f"could not check: {exc}"]
+    try:
+        usrp_ok, usrp_warn = _cfgr_usrp_pairs()
+    except Exception:
+        usrp_ok, usrp_warn = [], ["could not read the USRP pairs"]
+    try:
+        pn = _pn_status()
+    except Exception:
+        pn = {"available": False}
+    restore = _cfgr_read_manifest(_cfgr_snap_dir("restore")) is not None
+    preset = _cfgr_load_preset("travel_node") is not None
+    radio = _bld_radio(form, cards)
+    mode = form["mode"]
+    defs = _bld_stage_defs(mode)
+    stages: list[dict] = []
+    blockers = [r for r in machine if r["level"] == "fail"]
+
+    def inst(key: str) -> bool:
+        return installed.get(key) == "installed"
+
+    for sid, label in defs:
+        state, detail = "todo", ""
+        if sid == "preflight":
+            if errs or blockers:
+                n = len(errs) + len(blockers)
+                state, detail = "todo", f"{n} item(s) to fix below."
+            else:
+                state, detail = "done", "Form complete and the machine checks pass."
+        elif sid == "tunnel":
+            want = "full" if mode == "full" else "split"
+            if not wg_text:
+                detail = "No wg0.conf yet."
+            elif not up:
+                detail = "wg0 is not up."
+            elif zone is None:
+                detail = "The 44NetConnect zone is missing."
+            elif age is None or age > _BLD_HS_FRESH:
+                detail = "No recent handshake."
+            elif kind not in (want, "other") and not (half_on or fx_on):
+                detail = f"wg0.conf is a {kind} tunnel, the chosen mode needs {want}."
+            else:
+                state, detail = "done", f"Up, handshake {int(age)} s ago."
+        elif sid in ("asl3", "dvs", "m17"):
+            have = inst(_BLD_PRODUCT[sid])
+            state = "done" if have else "todo"
+            detail = "installed" if have else ("not installed" if installed.get(_BLD_PRODUCT[sid], "absent") == "absent" else installed[_BLD_PRODUCT[sid]])
+        elif sid.startswith("apply_"):
+            if not inst(_BLD_PRODUCT[sid.split("_", 1)[1]]):
+                state, detail = "todo", "Needs the system installed first."
+            else:
+                ok, why = _bld_applied(sid, form, node)
+                state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
+        elif sid == "half":
+            state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
+        elif sid == "fullx":
+            state, detail = ("done", "Permanent.") if fx_on else ("todo", "Not permanent yet.")
+        elif sid == "boot":
+            state, detail = ("done", "In place.") if bo_done else ("todo", "Missing: " + "; ".join(bo_missing[:3]))
+        elif sid == "wiring":
+            issues = list(usrp_warn)
+            if pn.get("available"):
+                issues += [str(x) for x in (pn.get("nodes_issues") or [])[:2]]
+                issues += [str(x) for x in (pn.get("refs_issues") or [])[:2]]
+                if pn.get("old_ext"):
+                    issues.append("exten lines still in the old form")
+            if not usrp_ok and not usrp_warn:
+                state, detail = "todo", "No USRP pairs found yet."
+            elif issues:
+                state, detail = "todo", "; ".join(issues[:4])
+            else:
+                state, detail = "done", f"{len(usrp_ok)} USRP pair(s) match."
+        elif sid == "radio":
+            state, detail = _bld_radio_state(radio)
+        elif sid == "save":
+            state = "done" if restore else "todo"
+            detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
+        elif sid == "reboot":
+            state, detail = "manual", "Reboot at home, then read the Boot tab."
+        stages.append({"id": sid, "label": label, "state": state, "detail": detail})
+    prev_ok = True
+    for s in stages:
+        if s["state"] in ("todo",) and not prev_ok:
+            s["state"] = "locked"
+            s["detail"] = "Waits for the step before. " + s["detail"]
+        if s["state"] not in ("done", "manual"):
+            prev_ok = False
+    return {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages,
+            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "checked_at": _cfgr_now()}
+
+def _bld_act_form_save(payload: dict) -> dict:
+    form = _bld_form_clean(payload)
+    with _BLD_LOCK:
+        _bld_form_write(form)
+    errs = _bld_form_errors(form, _bld_usb_cards())
+    log("Build tab: saved the preflight form")
+    return {"success": True, "message": "Saved." if not errs else "Saved. Still to fix: " + ", ".join(sorted(errs)),
+            "errors": errs}
+
+def _bld_act_form_reset(payload: dict) -> dict:
+    with _BLD_LOCK:
+        try:
+            os.unlink(_BLD_FILE)
+        except FileNotFoundError:
+            pass
+    log("Build tab: cleared the preflight form")
+    return {"success": True, "message": "Cleared."}
+
+def _bld_act_wg_check(payload: dict) -> dict:
+    text = payload.get("config_text", "")
+    if not isinstance(text, str) or not text.strip():
+        return {"success": False, "message": "Paste the WireGuard config first."}
+    mode = _bld_form_load()["mode"]
+    res = action_paste_preview(text, "full" if mode == "full" else "split", None)
+    if not res.get("valid"):
+        return {"success": False, "message": res.get("output", "Rejected.")}
+    notes = [str(x) for x in (res.get("fixed") or [])][:8]
+    if res.get("blocker"):
+        return {"success": False, "message": str(res["blocker"]), "notes": notes}
+    return {"success": True, "message": "The config is usable." + (" The tunnel step will change it as listed." if notes else ""),
+            "notes": notes}
+
+_BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "form_save": _bld_act_form_save,
+    "form_reset": _bld_act_form_reset,
+    "wg_check": _bld_act_wg_check,
+}
+
+def _dispatch_build_action(payload: dict) -> dict:
+    action = str(payload.get("action", ""))
+    fn = _BLD_ACTIONS.get(action)
+    if fn is None:
+        return {"success": False, "message": f"Unknown action: {action}"}
+    err = _require_root()
+    if err:
+        return {"success": False, "message": err.get("output") or err.get("message") or "Run as root."}
+    try:
+        return fn(payload)
+    except OSError as exc:
+        log(f"FAIL: Build {action}: {exc}")
+        return {"success": False, "message": f"Failed: {exc}"}
+
+def _route_build_status(query: dict) -> tuple[int, str, bytes]:
+    try:
+        body = build_build_status()
+    except Exception as exc:
+        log(f"FAIL: Build status: {type(exc).__name__}: {exc}")
+        return 500, "application/json", json.dumps({"message": "Could not read the node: " + type(exc).__name__}).encode("utf-8")
+    return 200, "application/json", json.dumps(body).encode("utf-8")
+
 _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
 _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
@@ -30651,6 +31336,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/config/reinstall": _route_config_reinstall,
     "/api/action_status": _route_action_status,
     "/api/boot/status": _route_boot_status,
+    "/api/build/status": _route_build_status,
     "/api/boot/section": _route_boot_section,
     "/api/boot/report": _route_boot_report,
     "/api/boot/snapshot": _route_boot_snapshot,
@@ -31238,6 +31924,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload["_client_ip"] = self._client_ip()
             result = _dispatch_guarded(_dispatch_firewall_action, payload)
+            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
+            return
+
+        if path == "/api/build/action":
+            payload, err = self._read_json_body()
+            if err is not None:
+                self._send(400, "application/json", err)
+                return
+            result = _dispatch_build_action(payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
