@@ -241,7 +241,7 @@ class Stages(unittest.TestCase):
 
     def test_half_order(self):
         self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17",
-                                            "apply_m17", "half", "boot", "wiring", "radio", "save", "reboot"])
+                                            "apply_m17", "half", "ports", "boot", "wiring", "radio", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
         self.assertNotIn("half", self.ids("split"))
@@ -255,7 +255,15 @@ class Stages(unittest.TestCase):
 
     def test_every_mode_ends_the_same(self):
         for m in ("half", "split", "full"):
-            self.assertEqual(self.ids(m)[-5:], ["boot", "wiring", "radio", "save", "reboot"])
+            self.assertEqual(self.ids(m)[-6:], ["ports", "boot", "wiring", "radio", "save", "reboot"])
+
+    def test_ports_come_after_the_tunnels(self):
+        ids = self.ids("full")
+        self.assertEqual(ids[ids.index("fullx") + 1], "ports")
+        ids = self.ids("half")
+        self.assertEqual(ids[ids.index("half") + 1], "ports")
+        ids = self.ids("split")
+        self.assertGreater(ids.index("ports"), ids.index("apply_m17"))
 
 
 class Applied(Tmp):

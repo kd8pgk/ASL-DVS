@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_50_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_51_20261117.py`. Newest entries first.
+
+## 0.1.51 (2026-11-17)
+
+An "Open the ports" step on the Travel Node and Magic Box tabs. This is a release: the tabs can now change the firewall.
+
+- **Where it sits.** After the tunnel steps: after the half tunnel, after the full-tunnel exceptions, or (split) after the systems. It has a Preview, and "Run the rest" runs it in order.
+- **LAN side (the default firewalld zone).** ssh (22/tcp), Cockpit (9090/tcp) when it is installed, 44helper (9997/tcp) and the web port of each Node Controller tool that is installed: the Dashboard 8989, SysMon 9999, instmon 8990, wifimon 8991, Node Talker 8993, Node Recorder 8995, Pibrary 9000, Terminal Monitor 7878 and Node Monitor 7777. These are never opened in the tunnel's 44NetConnect zone, which would expose them to every peer on 44Net.
+- **Tunnel side (the 44NetConnect zone).** Only the inbound ports peers need: AllStarLink IAX2 (4569/udp) when ASL3 is installed, and EchoLink (5198-5199/udp and 5200/tcp) in the half and full modes when ASL3 or SvxLink is installed (not in split mode, where only 44Net hosts reach the node).
+- **DVSwitch, USRP2M17 and SvxLink need nothing inbound.** Their ports are loopback only (31100, 31103, 6073 to 6075, 34008, 32008, and SvxLink's 34000 and 32000) or outbound (the reflector connection), so the step opens none of them and says so in its note. It does not close anything either: if a management port is open to the tunnel side, or a loopback-only port is open in either zone, the row shows a warning that names it, and the Firewall card is where to close it.
+- **How.** Each missing port is added now and permanently with firewall-cmd, in the zone above, the same way the tools open their own ports when they install. The step is done when every planned port is open. With firewalld not running it shows a warning ("no port is blocked") and runs as a no-op; a warning never holds up the steps after it.
+- **Tests.** `ci/test_h44_ports_step.py` (18 tests): the plan per mode and per installed system (no loopback or management-only port is ever planned for the tunnel), port, range, service and accept matching, the states, the exposure warnings, and the run (preview changes nothing, each port opened now and permanently in the right zone only, nothing removed, a failure reported).
 
 ## 0.1.50 (2026-11-17)
 

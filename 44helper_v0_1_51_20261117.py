@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.50"
+APP_VERSION = "0.1.51"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -28891,13 +28891,13 @@ var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
   apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
-  half: 'split_tunnel', fullx: 'full_tunnel', boot: 'split_tunnel', wiring: 'config',
+  half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
   tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab',
+  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -31314,10 +31314,11 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
     tail += [("radio", "Radio and Node Talker"), ("save", "Restore point"), ("reboot", "Reboot test")]
+    ports = ("ports", "Open the ports")
     if mode == "full":
-        return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions")] + tail
+        return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
-    return [("preflight", "Preflight"), tunnel] + systems + mid + tail
+    return [("preflight", "Preflight"), tunnel] + systems + mid + [ports] + tail
 
 def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
     call = form.get("callsign", "")
@@ -31589,6 +31590,8 @@ def build_build_status(profile: str = "travel") -> dict:
                 state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
         elif sid.startswith("svx"):
             state, detail = _bld_svx_stage(sid, svx, form, radio)
+        elif sid == "ports":
+            state, detail = _bld_ports_stage(_bld_ports_gather(mode, installed))
         elif sid == "half":
             state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
         elif sid == "fullx":
@@ -31673,10 +31676,130 @@ def _bld_act_wg_check(payload: dict) -> dict:
     return {"success": True, "message": "The config is usable." + (" The tunnel step will change it as listed." if notes else ""),
             "notes": notes}
 
+_BLD_UNIT_DIRS = ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system")
+_BLD_SUITE_PORTS = (("nodecontrol", 8989, "Dashboard"), ("sysmon", 9999, "SysMon"), ("instmon", 8990, "instmon"),
+                    ("wifimon", 8991, "wifimon"), ("44helper", 9997, "44helper"), ("nodetalker", 8993, "Node Talker"),
+                    ("noderecorder", 8995, "Node Recorder"), ("pibrary", 9000, "Pibrary"),
+                    ("termon", 7878, "Terminal Monitor"), ("nodemon", 7777, "Node Monitor"))
+_BLD_SERVICE_PORT = {"ssh": (22, "tcp"), "cockpit": (9090, "tcp"), "iax2": (4569, "udp")}
+_BLD_MGMT_EXPOSED = frozenset({22, 5038, 8080, 9090} | {p for _u, p, _n in _BLD_SUITE_PORTS})
+
+def _bld_unit_exists(unit: str) -> bool:
+    return any(os.path.exists(f"{d}/{unit}") for d in _BLD_UNIT_DIRS)
+
+def _bld_port_spec(spec: str) -> tuple[int, int, str]:
+    num, _, proto = spec.partition("/")
+    lo, _, hi = num.partition("-")
+    return int(lo), int(hi or lo), proto
+
+def _bld_zone_state(zone: str) -> dict | None:
+    info = _firewalld_zone_info(zone)
+    if info is None:
+        return None
+    rc, out = _ov_q(["firewall-cmd", f"--zone={zone}", "--get-target"])
+    return {"ports": info["ports"], "services": info["services"], "accept": out.strip() == "ACCEPT"}
+
+def _bld_zone_open(zs: dict, spec: str) -> bool:
+    if zs["accept"]:
+        return True
+    lo, hi, proto = _bld_port_spec(spec)
+    for p in range(lo, hi + 1):
+        if _bld_port_in(zs["ports"], p, proto):
+            continue
+        if any(_BLD_SERVICE_PORT.get(s) == (p, proto) for s in zs["services"]):
+            continue
+        return False
+    return True
+
+def _bld_ports_plan(mode: str, installed: dict, cockpit: bool) -> tuple[list[dict], list[str]]:
+    rows: list[dict] = [{"zone": "lan", "spec": "22/tcp", "why": "ssh"}]
+    if cockpit:
+        rows.append({"zone": "lan", "spec": "9090/tcp", "why": "Cockpit"})
+    for unit, port, name in _BLD_SUITE_PORTS:
+        if unit == "44helper" or _bld_unit_exists(unit + ".service"):
+            rows.append({"zone": "lan", "spec": f"{port}/tcp", "why": name})
+    notes: list[str] = []
+    asl3 = installed.get("asl3") == "installed"
+    svx = installed.get("svx") == "installed"
+    if asl3:
+        rows.append({"zone": "tunnel", "spec": "4569/udp", "why": "AllStarLink IAX2"})
+    if mode != "split" and (asl3 or svx):
+        rows.append({"zone": "tunnel", "spec": "5198-5199/udp", "why": "EchoLink"})
+        rows.append({"zone": "tunnel", "spec": "5200/tcp", "why": "EchoLink (direct)"})
+    if installed.get("dvs") == "installed":
+        notes.append("DVSwitch: nothing inbound. Its ports (31100, 31103, 6073 to 6075) are loopback only.")
+    if installed.get("usrp2m17") == "installed":
+        notes.append("USRP2M17: nothing inbound. Its USRP ports (34008, 32008) are loopback only.")
+    if svx:
+        notes.append("SvxLink: nothing inbound. The reflector connection is outbound; UDP 34000 and 32000 stay closed.")
+    return rows, notes
+
+def _bld_ports_gather(mode: str, installed: dict) -> dict:
+    rc, _ = _ov_q(["firewall-cmd", "--state"])
+    cockpit = any(os.path.exists(f"{d}/cockpit.socket") for d in _BLD_UNIT_DIRS)
+    rows, notes = _bld_ports_plan(mode, installed, cockpit)
+    out = {"running": rc == 0, "rows": rows, "notes": notes, "default_zone": "", "exposed": [], "missing": []}
+    if rc != 0:
+        return out
+    _rc, dz = _ov_q(["firewall-cmd", "--get-default-zone"])
+    out["default_zone"] = dz.strip() or "public"
+    zones = {"lan": _bld_zone_state(out["default_zone"]), "tunnel": _bld_zone_state(FIREWALLD_ZONE)}
+    for r in rows:
+        zs = zones[r["zone"]]
+        r["open"] = bool(zs and _bld_zone_open(zs, r["spec"]))
+        if not r["open"]:
+            out["missing"].append(r)
+    tun = zones["tunnel"]
+    if tun and not tun["accept"]:
+        for p in sorted(_BLD_MGMT_EXPOSED):
+            if _bld_zone_open(tun, f"{p}/tcp"):
+                out["exposed"].append(f"{p}/tcp is open to the tunnel side")
+    loop = [k for k, (_n, role) in _PORT_ROLES.items() if role == "loopback-only"]
+    for z in ("lan", "tunnel"):
+        zs = zones[z]
+        if zs and not zs["accept"]:
+            for spec in loop:
+                if _bld_zone_open(zs, spec):
+                    out["exposed"].append(f"{spec} (loopback only) is open")
+    return out
+
+def _bld_ports_stage(g: dict) -> tuple[str, str]:
+    if not g["running"]:
+        return "warn", "firewalld is not running, so no port is blocked and there is nothing to open."
+    if g["missing"]:
+        names = ", ".join(f"{r['spec']} {r['why']}" for r in g["missing"][:5])
+        return "todo", f"{len(g['missing'])} port(s) to open: {names}" + ("..." if len(g["missing"]) > 5 else "")
+    if g["exposed"]:
+        return "warn", "Open that should not be: " + "; ".join(g["exposed"][:4])
+    return "done", f"{len(g['rows'])} port(s) open. " + " ".join(g["notes"])
+
+def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, list[str]]:
+    g = _bld_ports_gather(mode, installed)
+    if not g["running"]:
+        return True, ["firewalld is not running, so nothing is blocked and nothing needs opening."]
+    lines: list[str] = []
+    ok = True
+    for r in g["missing"]:
+        zone = g["default_zone"] if r["zone"] == "lan" else FIREWALLD_ZONE
+        if preview:
+            lines.append(f"would open {r['spec']} ({r['why']}) in zone {zone}")
+            continue
+        a = _run_argv(["firewall-cmd", f"--zone={zone}", f"--add-port={r['spec']}"])
+        b = _run_argv(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={r['spec']}"])
+        good = a["success"] and b["success"]
+        ok = ok and good
+        lines.append(("opened " if good else "FAILED to open ") + f"{r['spec']} ({r['why']}) in zone {zone}" + ("" if good else ": " + (a["output"] or b["output"])))
+    if not g["missing"]:
+        lines.append("Every needed port is already open.")
+    lines += g["notes"]
+    if g["exposed"]:
+        lines += ["Not changed, check the Firewall card: " + x for x in g["exposed"]]
+    return ok, lines
+
 _BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
 _BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
-                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio"})
+                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports"})
+_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -31821,6 +31944,8 @@ def _bld_act_run_stage(payload: dict) -> dict:
                 ok, lines = _bld_run_svx_wire(preview)
             elif sid == "radio":
                 ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            elif sid == "ports":
+                ok, lines = _bld_run_ports(preview, st["form"]["mode"], {p["key"]: p["state"] for p in _detect_installed_products()})
             elif sid == "reboot":
                 _bld_mark_ready()
                 ok, lines = True, ["Marked ready. Reboot the node at home now, then open this tab again to see the result."]
