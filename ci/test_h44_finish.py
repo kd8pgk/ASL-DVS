@@ -40,18 +40,19 @@ class NoBundle(unittest.TestCase):
         self.assertNotIn("bundle", h44._BLD_PANEL_TMPL.lower())
 
     def test_the_new_steps_and_what_runs(self):
-        for sid in ("identity", "restart"):
+        for sid in ("identity", "location", "passwords", "restart"):
             self.assertIn(sid, h44._BLD_RUNNABLE)
-        self.assertIn("identity", h44._BLD_PREVIEWABLE)
+        for sid in ("identity", "location", "passwords"):
+            self.assertIn(sid, h44._BLD_PREVIEWABLE)
         self.assertNotIn("restart", h44._BLD_PREVIEWABLE)
-        for sid in ("registration", "passwords", "ready"):
+        for sid in ("registration", "ready"):
             self.assertNotIn(sid, h44._BLD_RUNNABLE)
 
     def test_order_at_the_end(self):
         for profile in ("travel", "magic"):
             ids = [i for i, _ in h44._bld_stage_defs("half", profile)]
             tail = ids[ids.index("radio"):]
-            self.assertEqual(tail, ["radio", "restart", "registration", "passwords", "ready", "save", "reboot"])
+            self.assertEqual(tail, ["radio", "restart", "registration", "ready", "save", "reboot"])
             self.assertLess(ids.index("identity"), ids.index("preset"))
             self.assertLess(ids.index("m17"), ids.index("identity"))
 
@@ -180,28 +181,6 @@ class Registration(unittest.TestCase):
         self.assertEqual(self.state([], have=False)[0], "warn")
 
 
-class Passwords(unittest.TestCase):
-    def state(self, groups, profile="travel", svx=""):
-        scan = {"groups": {g: {"state": s} for g, s in groups.items()}, "rows": []}
-        with mock.patch.object(h44, "_cfgr_identity_scan", lambda: scan), mock.patch.object(h44, "_bld_read", lambda p: svx):
-            return h44._bld_passwords_state(profile)
-
-    def test_lists_what_is_missing_and_never_a_value(self):
-        st, why = self.state({"node_pw": "not set", "bm_pw": "match"})
-        self.assertEqual(st, "warn")
-        self.assertIn("ASL node password", why)
-        self.assertNotIn("BrandMeister", why)
-
-    def test_done_when_all_set(self):
-        self.assertEqual(self.state({"node_pw": "match", "bm_pw": "one copy"})[0], "done")
-
-    def test_magic_also_wants_the_reflector_password(self):
-        conf = "[ReflectorLogic]\nAUTH_KEY=\n"
-        self.assertIn("reflector", self.state({}, "magic", conf)[1])
-        self.assertEqual(self.state({}, "magic", "[ReflectorLogic]\nAUTH_KEY=abc\n")[0], "done")
-        self.assertEqual(self.state({}, "travel", conf)[0], "done")
-
-
 class Ready(unittest.TestCase):
     def state(self, restart="done", poke=True, mode="half", up=True, age=10.0):
         stages = [{"id": "restart", "state": restart}]
@@ -241,7 +220,7 @@ class FreshNodePort(unittest.TestCase):
 class Js(unittest.TestCase):
     def test_the_new_steps_are_named_on_both_tabs(self):
         for js in (h44._JS_BUILD, h44._JS_MAGIC):
-            for sid in ("identity:", "restart:", "registration:", "passwords:", "ready:"):
+            for sid in ("identity:", "location:", "restart:", "registration:", "passwords:", "ready:"):
                 self.assertIn(sid, js)
             self.assertNotIn("apply_asl3", js)
 

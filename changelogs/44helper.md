@@ -1,6 +1,21 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_60_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_61_20261117.py`. Newest entries first.
+
+## 0.1.61 (2026-11-17)
+
+Every per-node value is entered once, in the Preflight, and filled in for you. This is a release: new form fields, two new steps, a changed step, new actions and a wipe.
+
+- **Preflight groups.** Besides the callsign, node number, DMR ID and NXDN ID, the form on both Build tabs now has a Location group (sysop name, location, QTH name, latitude and longitude; the locator is worked out from the coordinates) and a Passwords group: ASL node password, BrandMeister password, AMI secret, Allmon3 admin password, EchoLink node number and password, TGIF password, and on Magic Box the SvxLink reflector password. A "More" fold holds the ircDDB passwords, the IAX client secret and the DMR talker alias. Only the callsign, node number and DMR ID are required.
+- **Shown in the clear.** The passwords are plain text in the form, like the Identity card. The form file `/etc/44helper/build.json` stays root-only (0600).
+- **New step "Set the location"** after "Set the callsign, node number and IDs". It writes the SvxLink node info (location, QTH, latitude, longitude, locator, sysop) and the EchoLink sysop and location. Preview and Run.
+- **"Passwords to enter" becomes "Set the passwords"** and moves up, right after the location step, so registration finds the password in place. It writes the ASL node, BrandMeister (also the DMR network password) and AMI passwords with the Identity setters, and the EchoLink, TGIF, ircDDB, IAX, talker alias and reflector values row by row. Preview and Run. Values are hidden in the output. Blank fields change nothing, and a section the node does not have yet is named and skipped.
+- **AMI secret.** If the AMI secret is blank and the node has none, a strong one is generated and kept in the form.
+- **Allmon3 admin password.** Set once with `allmon3-passwd` (no shell, user `admin`), then removed from the form. The Preflight never shows it again.
+- **Removed when the build is done.** When the Reboot test shows done, every saved password is wiped from `build.json`; the callsign, node number, IDs and location stay. A "Remove the saved passwords" button does it earlier (`clear_saved`).
+- **Other tabs fill themselves in.** The ASL3, DVSwitch, SVXLink and M17 tabs fill their empty step inputs from the Preflight: the callsign, DMR ID, BrandMeister password, reflector host, port, talkgroups and password, the Allmon3 admin password and the M17 node number. The test reflector's password is not filled with the real one.
+- **Reports and logs.** The build report names no password; step output shows `<hidden>` in place of a value.
+- **Tests.** `ci/test_h44_values.py`; the build, finish and preset tests follow the new order.
 
 ## 0.1.60 (2026-11-17)
 

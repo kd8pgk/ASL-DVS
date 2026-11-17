@@ -284,11 +284,11 @@ class BuildStep(unittest.TestCase):
     def ids(self, mode, profile):
         return [i for i, _ in h44._bld_stage_defs(mode, profile)]
 
-    def test_the_preset_step_follows_the_identity_step_and_comes_before_the_checks(self):
+    def test_the_preset_step_follows_the_values_steps_and_comes_before_the_checks(self):
         for mode in ("half", "split", "full", "none"):
             for profile in ("travel", "magic"):
                 ids = self.ids(mode, profile)
-                self.assertEqual(ids[ids.index("identity") + 1], "preset", (mode, profile))
+                self.assertEqual(ids[ids.index("identity") + 1:ids.index("identity") + 4], ["location", "passwords", "preset"], (mode, profile))
                 self.assertLess(ids.index("preset"), ids.index("wiring"))
                 self.assertLess(ids.index("preset"), ids.index("reboot"))
         labels = dict(h44._bld_stage_defs("half", "travel")), dict(h44._bld_stage_defs("half", "magic"))
