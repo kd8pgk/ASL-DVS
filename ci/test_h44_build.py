@@ -240,8 +240,8 @@ class Stages(unittest.TestCase):
         return [i for i, _ in h44._bld_stage_defs(mode)]
 
     def test_half_order(self):
-        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17",
-                                            "apply_m17", "preset", "half", "ports", "boot", "wiring", "radio", "save", "reboot"])
+        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17",
+                                            "apply_m17", "half", "ports", "boot", "wiring", "radio", "preset", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
         self.assertNotIn("half", self.ids("split"))
@@ -249,13 +249,13 @@ class Stages(unittest.TestCase):
 
     def test_full_puts_tunnel_after_the_systems(self):
         ids = self.ids("full")
-        self.assertEqual(ids[:8], ["preflight", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17", "apply_m17", "preset"])
+        self.assertEqual(ids[:8], ["preflight", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17", "apply_m17"])
         self.assertEqual(ids[8:10], ["tunnel", "fullx"])
         self.assertNotIn("half", ids)
 
     def test_every_mode_ends_the_same(self):
         for m in ("half", "split", "full"):
-            self.assertEqual(self.ids(m)[-6:], ["ports", "boot", "wiring", "radio", "save", "reboot"])
+            self.assertEqual(self.ids(m)[-7:], ["ports", "boot", "wiring", "radio", "preset", "save", "reboot"])
 
     def test_no_tunnel_mode_leaves_every_tunnel_step_out(self):
         for profile in ("travel", "magic"):
@@ -263,9 +263,8 @@ class Stages(unittest.TestCase):
             for gone in ("tunnel", "half", "fullx"):
                 self.assertNotIn(gone, ids)
             self.assertEqual(ids[0], "preflight")
-            self.assertEqual(ids[ids.index("ports") - 1], "preset")
-            self.assertEqual(ids[-5:] if profile == "travel" else [i for i in ids[-6:] if i != "svx_checks"],
-                             ["boot", "wiring", "radio", "save", "reboot"])
+            self.assertEqual(ids[-6:] if profile == "travel" else [i for i in ids[-7:] if i != "svx_checks"],
+                             ["boot", "wiring", "radio", "preset", "save", "reboot"])
             self.assertIn("asl3", ids)
 
     def test_no_tunnel_is_a_valid_mode(self):
