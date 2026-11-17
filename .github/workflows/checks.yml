@@ -72,6 +72,10 @@ jobs:
         run: python3 ci/test_h44_apt.py
       - name: Boot order lasting fix (44helper)
         run: python3 ci/test_h44_bootheal.py
+      - name: Presets and the preset build step (44helper)
+        run: python3 ci/test_h44_presets.py
+      - name: IAX check on the Ports tab (44helper)
+        run: python3 ci/test_h44_iax.py
       - name: SVX tab tests (Node Controller full build)
         run: python3 ci/test_nodecontrol_svx.py
       - name: Link, tune and disconnect tests (Node Controller)

@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.55"
+APP_VERSION = "0.1.56"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -11712,7 +11712,14 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
     router_mode = cfg.get("tunnels", "tunnel.router.mode", fallback="")
 
     my_port = cfg.getint("server", "port", fallback=9997)
-    reference = [t + _port_role(t[1], t[2]) for t in _PORTS_REFERENCE]
+    iax_port = _cfgr_bindport()
+    reference = []
+    for t in _PORTS_REFERENCE:
+        if t[0] == "IAX2" and iax_port != t[1]:
+            t = (t[0], iax_port) + t[2:]
+            reference.append(t + ("AllStarLink", "peer-inbound"))
+        else:
+            reference.append(t + _port_role(t[1], t[2]))
     reference.append(("44helper", str(my_port), "tcp", "This dashboard", True, "Dashboards", "mgmt-LAN"))
     svx_out = _svx_reflector_rows()
     reference.extend(svx_out)
@@ -11755,6 +11762,61 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
                                    _ref_running(label, port, proto, running_labels, dyn), system, role, tunnel=False))
 
     return {"rows": rows, "exposure_source": exposure_source, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+_IAX_POKE = struct.pack("!HHIBBBB", 0x8001, 0, 0, 0, 0, 6, 30)
+
+def _iax_bindaddr() -> str:
+    b = _cfgr_read(_CFGR_IAX)
+    if b is None:
+        return "0.0.0.0"
+    sec = ""
+    addr = "0.0.0.0"
+    for line in _cfgr_lines(b.decode("utf-8", "replace")):
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip().lower()
+            continue
+        kv = _cfgr_kv(line)
+        if sec == "general" and kv and kv[0].lower() == "bindaddr":
+            addr = kv[1].strip()
+    return addr
+
+def _iax_poke(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(_IAX_POKE, (host, port))
+        data, _addr = sock.recvfrom(512)
+    except socket.timeout:
+        return False, f"No answer from {host}:{port}/udp within {timeout:g} s."
+    except OSError as exc:
+        return False, f"Could not reach {host}:{port}/udp: {exc}"
+    finally:
+        sock.close()
+    if len(data) >= 12 and data[0] & 0x80 and data[10] == 6 and data[11] in (3, 4):
+        return True, f"{host}:{port}/udp answered the IAX POKE with a {'PONG' if data[11] == 3 else 'ACK'}."
+    return False, f"{host}:{port}/udp answered, but not with an IAX reply."
+
+def build_iax_check() -> dict:
+    port = _cfgr_bindport()
+    bind = _iax_bindaddr()
+    host = "127.0.0.1" if bind in ("0.0.0.0", "", "::") else bind
+    listening = _local_port_listening(int(port), "udp")
+    lines = [f"iax.conf: bindport={port}, bindaddr={bind}",
+             f"UDP {port} {'is' if listening else 'is NOT'} bound on this node."]
+    poke_ok, poke = _iax_poke(host, int(port))
+    lines.append(("PASS  " if poke_ok else "FAIL  ") + poke)
+    zone = _firewalld_zone_info()
+    if zone is not None:
+        shown = f"{port}/udp" in zone.get("ports", []) or ("iax2" in zone.get("services", []) and port == "4569")
+        lines.append(f"{FIREWALLD_ZONE} zone: {'open' if shown else 'NOT open'} for {port}/udp.")
+    for cmd in ("iax2 show settings", "iax2 show peers", "iax2 show registry", "iax2 show channels", "iax2 show netstats"):
+        rc, out = _half_q(["asterisk", "-rx", cmd], timeout=10)
+        lines.append("")
+        lines.append(f"== {cmd} ==")
+        lines.append(out if rc == 0 and out else (out or "(no output; is Asterisk running?)"))
+    return {"success": listening and poke_ok, "port": port, "bindaddr": bind, "listening": listening,
+            "poke": poke_ok, "output": "\n".join(lines)}
 
 def _ports_row(label, port, proto, purpose, flag_public, exposed, running, system=None, role=None,
                tunnel=True) -> dict:
@@ -15407,7 +15469,7 @@ _CFGR_GROUPS: dict[str, dict] = {
 for _g in _CFGR_GROUPS.values():
     _g["files"] = _g["core"] + _g["optional"]
 
-_CFGR_PRESETS: dict[str, str] = {"travel_node": "Travel Node"}
+_CFGR_PRESETS: dict[str, str] = {"travel_node": "Travel Node", "magic_box": "Magic Box"}
 _CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX = 1000, 1999
 _CFGR_IDENTITY_KEYS = frozenset({"callsign", "id", "password", "passwd", "secret", "register", "gatewaydmrid",
                                  "repeaterid", "name", "idrecording", "idtalkover", "callerid", "bmpassword",
@@ -17533,6 +17595,105 @@ def _cfgr_ini_values(lines: list[str], sections: dict[str, tuple[str, ...]]) -> 
                 out.setdefault(sec, {})[key] = kv[1]
     return out
 
+_CFGR_SVX_WIRING: dict[str, tuple[str, ...]] = {
+    "GLOBAL": ("LOGICS", "LINKS"),
+    "UsrpLogic": ("TYPE", "USRP_HOST", "USRP_TX_PORT", "USRP_RX_PORT", "DV_USER_INFOFILE", "EVENT_HANDLER",
+                  "JITTER_BUFFER_DELAY", "NET_LIMITER_THRESH", "LOCAL_LIMITER_THRESH"),
+    "ReflectorLogic": ("TYPE", "HOSTS", "HOST_PORT", "DEFAULT_TG", "MONITOR_TGS", "TG_SELECT_TIMEOUT",
+                       "ANNOUNCE_REMOTE_MIN_INTERVAL", "QSY_PENDING_TIMEOUT"),
+    "ReflectorLink": ("CONNECT_LOGICS", "DEFAULT_ACTIVE", "TIMEOUT"),
+    "SvxCtrlLogic": ("TYPE", "RX", "TX", "DTMF_CTRL_PTY", "SHORT_IDENT_INTERVAL", "LONG_IDENT_INTERVAL"),
+    "SvxCtrlRx": ("TYPE",),
+    "SvxCtrlTx": ("TYPE",),
+}
+_CFGR_SVX_LOGICS = frozenset({"UsrpLogic", "ReflectorLogic", "SvxCtrlLogic"})
+_CFGR_SVX_LINKS = frozenset({"ReflectorLink"})
+_CFGR_SVX_VAL_RE = re.compile(r"^[A-Za-z0-9_.:,+/@%=-]{0,300}$")
+
+def _cfgr_svx_parse(text: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    sec = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip()
+            out.setdefault(sec, {})
+            continue
+        if "=" in line and sec:
+            k, _, v = line.partition("=")
+            out[sec][k.strip()] = v.strip()
+    return out
+
+def _cfgr_capture_svx() -> tuple[dict | None, list[str]]:
+    text = _cfgr_text(_CFGR_SVX_CONF)
+    if text is None:
+        return None, [f"{_CFGR_SVX_CONF} not found. The SvxLink USRP build must be installed to save a Magic Box preset."]
+    cur = _cfgr_svx_parse(text)
+    glob = cur.get("GLOBAL", {})
+    logics = [x.strip() for x in glob.get("LOGICS", "").split(",") if x.strip()]
+    links = [x.strip() for x in glob.get("LINKS", "").split(",") if x.strip()]
+    odd = [x for x in logics if x not in _CFGR_SVX_LOGICS] + [x for x in links if x not in _CFGR_SVX_LINKS]
+    if odd:
+        return None, ["SvxLink here names " + ", ".join(odd) + " in LOGICS or LINKS. A preset carries only the bridge "
+                      "setup (the USRP link, the reflector link and the control logic), not a radio, so a Magic Box preset "
+                      "cannot be saved from this node."]
+    svx: dict[str, dict[str, str]] = {}
+    notes: list[str] = []
+    for sec, keys in _CFGR_SVX_WIRING.items():
+        got = {k: cur[sec][k] for k in keys if sec in cur and k in cur[sec]}
+        if not got:
+            continue
+        bad = [k for k, v in got.items() if not _CFGR_SVX_VAL_RE.match(v)]
+        if bad:
+            return None, [f"[{sec}] {', '.join(bad)} in svxlink.conf holds a value a preset does not carry. Nothing saved."]
+        svx[sec] = got
+    notes.append("SvxLink: the callsign, the reflector password (AUTH_KEY) and the radio sections are never saved.")
+    return svx, notes
+
+def _cfgr_apply_svx(svx: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str]]:
+    changes: dict[str, tuple[bytes, bytes]] = {}
+    notes: list[str] = []
+    cur_b = _cfgr_read(_CFGR_SVX_CONF)
+    if cur_b is None:
+        return changes, [f"{_CFGR_SVX_CONF} not found on this node, the SvxLink part was skipped"]
+    files = {_CFGR_SVX_CONF: _cfgr_lines(cur_b.decode("utf-8", "replace"))}
+    usrp_b = _cfgr_read(_CFGR_SVX_USRP)
+    if usrp_b is not None:
+        files[_CFGR_SVX_USRP] = _cfgr_lines(usrp_b.decode("utf-8", "replace"))
+    orig = {_CFGR_SVX_CONF: cur_b, _CFGR_SVX_USRP: usrp_b}
+    for sec, kvs in svx.items():
+        if sec == "GLOBAL":
+            continue
+        for path, lines in files.items():
+            if path == _CFGR_SVX_USRP and sec != "UsrpLogic":
+                continue
+            mask = _cfgr_managed_mask(lines)
+            if _cfgr_section_span(lines, mask, sec) is None:
+                if path == _CFGR_SVX_CONF:
+                    notes.append(f"svxlink.conf has no [{sec}]: the SVXLink tab creates it (step 8 or 11), so its values were left out")
+                continue
+            for k, v in kvs.items():
+                lines, _old, _ok = _cfgr_set_key(lines, sec, k, v)
+            files[path] = lines
+    glob = svx.get("GLOBAL", {})
+    if glob:
+        want = [x.strip() for key in ("LOGICS", "LINKS") for x in glob.get(key, "").split(",") if x.strip()]
+        after = set(_cfgr_svx_parse(_cfgr_join(files[_CFGR_SVX_CONF])))
+        if all(n in after for n in want):
+            for k, v in glob.items():
+                files[_CFGR_SVX_CONF], _old, _ok = _cfgr_set_key(files[_CFGR_SVX_CONF], "GLOBAL", k, v)
+        else:
+            notes.append("svxlink.conf's LOGICS and LINKS were left alone: " + ", ".join(n for n in want if n not in after)
+                         + " does not exist there yet")
+    for path, lines in files.items():
+        data = _cfgr_join(lines).encode("utf-8")
+        if data != orig[path]:
+            changes[path] = (orig[path] or b"", data)
+    return changes, notes
+
 def _cfgr_preset_path(pid: str) -> str:
     return os.path.join(_CFGR_DIR, "presets", pid, "preset.json")
 
@@ -17559,6 +17720,16 @@ def _cfgr_validate_preset(p: object) -> dict | None:
                 return None
         if p["modules"].get("chan_usrp") not in (None, "load", "noload"):
             return None
+        svx = p.get("svx")
+        if svx is not None:
+            if not isinstance(svx, dict):
+                return None
+            for sec, kvs in svx.items():
+                if sec not in _CFGR_SVX_WIRING or not isinstance(kvs, dict) or not kvs:
+                    return None
+                for k, v in kvs.items():
+                    if k not in _CFGR_SVX_WIRING[sec] or not isinstance(v, str) or not _CFGR_SVX_VAL_RE.match(v):
+                        return None
         for path, secs in p["ini"].items():
             if path not in _CFGR_INI_WIRING:
                 return None
@@ -17610,6 +17781,8 @@ def _cfgr_preset_summary(p: dict) -> list[str]:
     if not p["extensions"]:
         lines.append("  (none)")
     lines.append(f"chan_usrp.so (modules.conf): {p['modules'].get('chan_usrp') or 'not set, left alone'}")
+    for sec, kvs in (p.get("svx") or {}).items():
+        lines.append(f"svxlink.conf [{sec}]: " + ", ".join(f"{k}={v}" for k, v in kvs.items()))
     for path, secs in p["ini"].items():
         for sec, kvs in secs.items():
             lines.append(f"{path} [{sec}]: " + ", ".join(f"{k}={v}" for k, v in kvs.items()))
@@ -17624,6 +17797,12 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
         return {"success": False, "output": "\n".join(notes)}
     p["preset"] = pid
     p["label"] = _CFGR_PRESETS[pid]
+    if pid == "magic_box":
+        svx, svx_notes = _cfgr_capture_svx()
+        if svx is None:
+            return {"success": False, "output": "\n".join(svx_notes)}
+        p["svx"] = svx
+        notes = notes + svx_notes
     lines = [("Saved" if save else "Would save") + f" as preset '{_CFGR_PRESETS[pid]}' (wiring only, no callsign, IDs or passwords):", ""]
     lines += _cfgr_preset_summary(p)
     if skipped:
@@ -18515,6 +18694,10 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         data = _cfgr_join(new).encode("utf-8")
         if data != cur:
             changes[path] = (cur, data)
+    if p.get("svx"):
+        sv_changes, sv_notes = _cfgr_apply_svx(p["svx"])
+        changes.update(sv_changes)
+        notes += sv_notes
     am = _cfgr_read(_CFGR_ALLMON)
     if am is not None and _cfgr_read(_CFGR_RPT) is not None:
         want = {n["node"] for n in p["rpt"]["nodes"]}
@@ -20360,11 +20543,15 @@ function cfgGateways(btn, action) {
   cfgPost({action: action}, 'cfg-gw-out', btn);
 }
 
-function cfgPresetCapture(btn, save) {
-  if (save && !confirm('Save this node\'s wiring and private nodes as the Travel Node preset?\n\n' +
-                       'Only wiring is saved: no callsign, IDs or passwords. An existing Travel Node preset is replaced.\n' +
+function cfgPresetCapture(btn, save, pid) {
+  pid = pid || 'travel_node';
+  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
+  if (save && !confirm('Save this node\'s wiring and private nodes as the ' + name + ' preset?\n\n' +
+                       'Only wiring is saved: no callsign, IDs or passwords' + (pid === 'magic_box' ? ', no reflector password' : '') +
+                       '. An existing ' + name + ' preset is replaced.\n' +
                        'Use Preview first to see exactly what goes in.')) return;
-  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: 'travel_node'}, 'cfg-preset-out', btn);
+  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: pid},
+          pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
 }
 
 function cfgPnKind() {
@@ -20539,6 +20726,8 @@ function cfgRender(d) {
   cfgOnPointChange();
   var tp = (d.presets || {}).travel_node || {};
   document.getElementById('cfg-preset-state').textContent = tp.exists ? ('saved ' + tp.saved_at) : 'not saved on this node';
+  var mp = (d.presets || {}).magic_box || {};
+  document.getElementById('cfg-mpreset-state').textContent = mp.exists ? ('saved ' + mp.saved_at) : 'not saved on this node';
   cfgPnRender(d.private_nodes);
   var sb = document.getElementById('cfg-svx-bridge');
   if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
@@ -20983,6 +21172,23 @@ def _render_config_panel() -> str:
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
   </div>
 
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Magic Box preset</div>
+      <span class="cfg-hint" id="cfg-mpreset-state"></span></div>
+    <div class="step-body">Everything the Travel Node preset saves, plus the SvxLink bridge setup from svxlink.conf and its
+      svxlink.d/UsrpLogic.conf: which logics and links are on (LOGICS and LINKS), the USRP link (host and the two ports,
+      jitter buffer, limiters), the reflector (host, port, default and monitored talkgroups, timeouts), the reflector link and
+      the control logic. Never the callsign, the reflector password (AUTH_KEY), the EchoLink password or any radio sections
+      (a node whose SvxLink has its own radio cannot save this preset). Applying it changes only values in sections that already
+      exist in svxlink.conf; a section the SVXLink tab has not created yet (steps 8 and 11) is left out and named in the preview.
+      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts.</div>
+    <div class="step-actions">
+      <button class="btn-copy" onclick="cfgPresetCapture(this,false,'magic_box')">Preview</button>
+      <button class="btn-run" onclick="cfgPresetCapture(this,true,'magic_box')">Save as Magic Box</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-mpreset-out">(nothing run yet)</div>
+  </div>
+
   <div class="step-card" id="cfg-pn-card">
     <div class="step-head"><div class="step-title">Add private node</div>
       <span class="cfg-hint" id="cfg-pn-state"></span></div>
@@ -21110,7 +21316,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
-    ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
+    ("config", "Config", "t-config", "Restore point, save points, Travel Node and Magic Box presets"),
     ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -24208,6 +24414,17 @@ function _portVerdictLevel(v) {
   if (v === 'needed-but-not-open') { return 'warn'; }
   if (v === 'not-listening') { return 'info'; }
   return 'ok';
+}
+
+function iaxCheck(btn) {
+  var out = document.getElementById('iax-check-out');
+  btn.disabled = true;
+  out.style.display = '';
+  out.textContent = 'Checking...';
+  fetch('/api/ports/iax').then(function(r){ return r.json(); }).then(function(d) {
+    out.textContent = (d.success ? 'PASS  IAX port ' : 'FAIL  IAX port ') + d.port + '/udp\n' + (d.output || d.message || '');
+    btn.disabled = false;
+  }).catch(function() { out.textContent = 'Could not reach 44helper.'; btn.disabled = false; });
 }
 
 function refreshPorts() {
@@ -28860,13 +29077,13 @@ var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
   apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
-  half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', boot: 'split_tunnel', wiring: 'config',
+  half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
   tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab',
+  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -28944,10 +29161,13 @@ function @F@RunButtons(s) {
 function @F@Run(stage, preview, btn, isLong) {
   if (_@P@IsDirty) { alert('Save the form first: the step uses the saved form.'); return; }
   var label = stage.replace(/_/g, ' ');
+  if (stage === 'preset' && !preview) {
+    if (!confirm('Apply the preset? Private nodes that are not in the preset are removed, and the files it changes are saved as an automatic copy first. Did you read the Preview?')) { return; }
+  }
   var ask = isLong
     ? 'Start this step (' + label + ')? It installs software or changes the tunnel and can take a long time, up to an hour for a build. It keeps running if you close this page. It stops at the first failing step.'
     : 'Run this step (' + label + ')? It changes this node. An automatic copy of the config is saved first where the step writes config.';
-  if (!preview && !confirm(ask)) { return; }
+  if (!preview && stage !== 'preset' && !confirm(ask)) { return; }
   var body = {action: 'run_stage', profile: '@PROFILE@', stage: stage, preview: preview};
   var wg = document.getElementById('@P@-wg');
   if (stage === 'tunnel' && wg) { body.config_text = wg.value; }
@@ -29338,6 +29558,11 @@ def _render_ports_panel() -> str:
   <table id="ports-table" style="width:100%;border-collapse:collapse;font-family:var(--sans);font-size:var(--fs-base)"></table>
   <button class="btn-recheck" onclick="refreshPorts()">Re-check</button>
   <span style="font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);margin-left:.6rem" id="ports-checked-at"></span>
+  <div class="step-card" style="margin-top:.8rem"><div class="step-head"><div class="step-title">IAX check</div></div>
+    <div class="step-body">Reads the IAX port from <code>iax.conf</code>, sends an IAX POKE to it and shows Asterisk's <code>iax2 show</code> settings, peers, registry, channels and netstats.</div>
+    <div class="step-actions"><button class="btn-run" onclick="iaxCheck(this)">Run IAX check</button></div>
+    <div class="cmd-preview" id="iax-check-out" style="display:none;white-space:pre-wrap;max-height:360px;overflow-y:auto"></div>
+  </div>
 </div>
 """
 
@@ -30975,6 +31200,9 @@ def _route_services_status(query: dict) -> tuple[int, str, bytes]:
 def _route_ports_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_ports_status(_cfg)).encode("utf-8")
 
+def _route_ports_iax(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(build_iax_check()).encode("utf-8")
+
 def _route_firewall_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_firewall_status(_cfg)).encode("utf-8")
 
@@ -31339,6 +31567,7 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
                ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
+    systems = systems + [("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
@@ -31623,6 +31852,8 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "ports":
             state, detail = _bld_ports_stage(_bld_ports_gather(mode, installed))
+        elif sid == "preset":
+            state, detail = _bld_preset_state(profile)
         elif sid == "half":
             state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
         elif sid == "fullx":
@@ -31896,10 +32127,37 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
         lines += ["Not changed, check the Firewall card: " + x for x in g["exposed"]]
     return ok, lines
 
+_BLD_PRESET_ID = {"travel": "travel_node", "magic": "magic_box"}
+
+def _bld_preset_state(profile: str) -> tuple[str, str]:
+    pid = _BLD_PRESET_ID[profile]
+    label = _CFGR_PRESETS[pid]
+    p = _cfgr_load_preset(pid)
+    if p is None:
+        return "warn", f"No {label} preset is saved on this node (optional). Save one on a working node: Config tab, {label} preset card."
+    try:
+        changes, removed, _notes, _warnings, err = _cfgr_preset_plan(p)
+    except Exception as exc:
+        return "warn", "Could not read the files the preset changes: " + type(exc).__name__
+    if err:
+        return "warn", err
+    if not changes:
+        return "done", f"This node matches the {label} preset."
+    bits = [f"{len(changes)} file(s) would change"]
+    if removed:
+        bits.append("it removes private node(s) " + ", ".join(removed))
+    return "warn", "; ".join(bits) + ". Press Preview, then Run if it is right. It is optional and never blocks the steps after it."
+
+def _bld_run_preset(profile: str, preview: bool) -> tuple[bool, list[str]]:
+    res = _bld_cfg("preset_apply_preview" if preview else "preset_apply", {"preset": _BLD_PRESET_ID[profile]})
+    lines = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
+             for ln in _bld_out(res)]
+    return bool(res.get("success")), lines
+
 _BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
 _BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
-                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports"})
+                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32044,6 +32302,8 @@ def _bld_act_run_stage(payload: dict) -> dict:
                 ok, lines = _bld_run_svx_wire(preview)
             elif sid == "radio":
                 ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            elif sid == "preset":
+                ok, lines = _bld_run_preset(profile, preview)
             elif sid == "ports":
                 ok, lines = _bld_run_ports(preview, st["form"]["mode"], {p["key"]: p["state"] for p in _detect_installed_products()})
             elif sid == "reboot":
@@ -32616,6 +32876,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/router_install/status": _route_router_install_status,
     "/api/services/status": _route_services_status,
     "/api/ports/status": _route_ports_status,
+    "/api/ports/iax": _route_ports_iax,
     "/api/firewall/status": _route_firewall_status,
     "/api/firewall/half_status": _route_half_status,
     "/api/fullx/status": _route_fx_status,

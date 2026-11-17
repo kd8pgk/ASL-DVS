@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_55_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_56_20261117.py`. Newest entries first.
+
+## 0.1.56 (2026-11-17)
+
+A Magic Box preset, a preset step on both Build tabs and an IAX check on the Ports tab. This is a release: new routes, new actions and a new build step.
+
+- **Magic Box preset.** The Config tab has a second preset card. It saves what the Travel Node preset saves plus the SvxLink wiring from `svxlink.conf` and `svxlink.d/UsrpLogic.conf`: the LOGICS and LINKS lists, the USRP host and ports, the reflector host, port and talk groups, the link's CONNECT_LOGICS and the control logic's PTY and ident intervals. Callsigns, `CALL`, `AUTH_KEY` (the reflector password) and any radio section are never saved. A node whose SvxLink has its own radio (SimplexLogic and the like) is refused, because the preset is for a bridge.
+- **Apply.** Only sections the node already has are changed, key by key; missing sections are named and skipped, and LOGICS and LINKS are set only when every section they name exists. The preview lists the SvxLink files with the rest.
+- **Preset step on both Build tabs.** After the systems (after the reflector step on Magic Box): "Apply the Travel Node preset" and "Apply the Magic Box preset". Preview shows the changes; Run asks first. It never blocks later steps or Run the rest: no saved preset, or files that would change, show as a warning.
+- **IAX check (Ports tab).** The IAX row follows the `bindport` in `iax.conf` instead of a fixed 4569. A new "Run IAX check" button (`GET /api/ports/iax`) reads bindport and bindaddr, confirms the UDP port is bound, sends an IAX POKE and waits for the PONG, checks the firewalld zone, and shows `iax2 show settings`, `peers`, `registry`, `channels` and `netstats`.
+- **Tests.** `ci/test_h44_presets.py` and `ci/test_h44_iax.py`; `ci/test_h44_build.py` has the new stage order.
 
 ## 0.1.55 (2026-11-17)
 
