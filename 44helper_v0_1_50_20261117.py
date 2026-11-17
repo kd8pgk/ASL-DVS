@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.49"
+APP_VERSION = "0.1.50"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -28840,7 +28840,12 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       Nothing runs by itself.</div>
     <div id="@P@-where"></div>
     <div id="@P@-stages">Loading...</div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="@F@RunRest(this)">Run the rest</button>
+      <button class="btn-copy" onclick="@F@Report(this)">Build report</button>
+    </div>
     <div class="asl3-console shown" id="@P@-run-out" style="display:none"></div>
+    <textarea class="asl3-cmd-input" id="@P@-report" rows="14" spellcheck="false" readonly style="display:none;width:100%"></textarea>
   </div>
   <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
       <span class="cfg-hint" id="@P@-form-state"></span></div>
@@ -28981,6 +28986,30 @@ function @F@Run(stage, preview, btn, isLong) {
     if (stage === 'tunnel' && res && res.success && wg) { wg.value = ''; }
     if (res && res.job_key) { @F@Poll(res.job_key); }
     @F@Refresh();
+  });
+}
+
+function @F@RunRest(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the steps use the saved form.'); return; }
+  if (!confirm('Run the rest? It runs every open step in order: installs, the tunnel steps, config applies and fixes. It stops at the first step that fails or that has to be done on its own tab. It keeps going if you close this page.')) { return; }
+  var body = {action: 'run_rest', profile: '@PROFILE@'};
+  var wg = document.getElementById('@P@-wg');
+  if (wg && wg.value.trim()) { body.config_text = wg.value; }
+  @F@Post(body, '@P@-run-out', btn).then(function(res) {
+    if (res && res.success && wg) { wg.value = ''; }
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@Report(btn) {
+  var box = document.getElementById('@P@-report');
+  fetch('/api/build/report?profile=@PROFILE@').then(function(r) { return r.text(); }).then(function(t) {
+    box.value = t;
+    box.style.display = '';
+    box.focus();
+    box.select();
+    if (typeof copyTextToClipboard === 'function') { copyTextToClipboard(t, btn); }
   });
 }
 
@@ -31438,7 +31467,9 @@ def _bld_svx_stage(sid: str, g: dict, form: dict, radio: dict) -> tuple[str, str
     if sid == "svx_reflector":
         r = g["reflector"]
         if not r["host"]:
-            return "todo", "No reflector set: SVXLink tab, step 11."
+            if form.get("svx_host"):
+                return "todo", "No reflector set: SVXLink tab, step 11."
+            return "warn", "No reflector set (optional): SVXLink tab, step 11, when you want one."
         if form.get("svx_host") and (form["svx_host"] != r["host"] or (form.get("svx_port") and form["svx_port"] != r["port"])):
             return "todo", f"svxlink.conf has {r['host']}:{r['port']}, the form says {form['svx_host']}:{form.get('svx_port') or '?'}."
         if not r["key_set"]:
@@ -31583,14 +31614,18 @@ def build_build_status(profile: str = "travel") -> dict:
             state = "done" if restore else "todo"
             detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
         elif sid == "reboot":
-            state, detail = "manual", "Reboot at home, then read the Boot tab."
+            state, detail = "manual", ""
         stages.append({"id": sid, "label": label, "state": state, "detail": detail})
+    for s in stages:
+        if s["id"] == "reboot":
+            others = [x for x in stages if x["id"] != "reboot"]
+            s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
     prev_ok = True
     for s in stages:
         if s["state"] in ("todo",) and not prev_ok:
             s["state"] = "locked"
             s["detail"] = "Waits for the step before. " + s["detail"]
-        if s["state"] not in ("done", "manual"):
+        if s["state"] not in ("done", "manual", "warn"):
             prev_ok = False
     for s in stages:
         if s["id"] in _BLD_RUNNABLE and s["state"] in ("todo", "warn"):
@@ -31640,7 +31675,7 @@ def _bld_act_wg_check(payload: dict) -> dict:
 
 _BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
 _BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
-                           "asl3", "dvs", "m17", "svx", "tunnel"})
+                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot"})
 _BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio"})
 _BLD_RUN_MAX_LINES = 120
 
@@ -31786,6 +31821,9 @@ def _bld_act_run_stage(payload: dict) -> dict:
                 ok, lines = _bld_run_svx_wire(preview)
             elif sid == "radio":
                 ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            elif sid == "reboot":
+                _bld_mark_ready()
+                ok, lines = True, ["Marked ready. Reboot the node at home now, then open this tab again to see the result."]
             else:
                 res = _bld_cfg("save_restore")
                 ok, lines = bool(res.get("success")), _bld_out(res)
@@ -31965,34 +32003,199 @@ def _bld_client_ok(ip: str) -> bool:
         return False
     return a.is_loopback or a.is_private or a.is_link_local
 
-def _bld_start_long(sid: str, profile: str, form: dict, payload: dict) -> dict:
-    running = _bld_running_job()
-    if running:
-        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
-    key = f"{_BLD_JOB_PREFIX}{profile}_{sid}"
+def _bld_long_prepare(sid: str, form: dict, payload: dict) -> tuple[str, Callable[[str], dict] | None, str, list[str]]:
     if sid == "tunnel":
         if not _bld_client_ok(str(payload.get("_client_ip", ""))):
-            return {"success": False, "message": "Run the tunnel steps from the LAN address, not through the tunnel or from outside."}
+            return "Run the tunnel steps from the LAN address, not through the tunnel or from outside.", None, "", []
         text = payload.get("config_text", "")
         if not isinstance(text, str) or not text.strip():
-            return {"success": False, "message": "Paste the WireGuard config in the box under the form first. It is used once and not saved."}
+            return "Paste the WireGuard config in the box under the form first. It is used once and not saved.", None, "", []
         valid, msg = _validate_wg_config_text(text)
         if not valid:
-            return {"success": False, "message": "The config is not usable: " + msg}
+            return "The config is not usable: " + msg, None, "", []
         steps = _bld_tunnel_plan(form, text)
-        _start_python_job(key, lambda: _bld_tunnel_worker(key, steps))
-        log(f"OK: Build tab started the tunnel steps ({len(steps)} steps)")
-        return {"success": True, "message": f"Started: tunnel steps 1 to 6 ({len(steps)} actions).", "job_key": key}
+        return "", (lambda key: _bld_tunnel_worker(key, steps)), f"tunnel steps 1 to 6 ({len(steps)} actions)", []
     plan = _bld_install_plan(sid, form)
     if isinstance(plan, str):
-        return {"success": False, "message": plan}
+        return plan, None, "", []
     spec, steps = plan
-    _start_python_job(key, lambda: _bld_install_worker(key, spec, steps))
-    log(f"OK: Build tab started the {spec['name']} install ({len(steps)} steps)")
-    return {"success": True, "message": f"Started: {spec['name']} install, {len(steps)} steps.", "job_key": key,
-            "notes": [f"{s['num']}. {s['title']}" for s in steps]}
+    return ("", (lambda key: _bld_install_worker(key, spec, steps)), f"{spec['name']} install, {len(steps)} steps",
+            [f"{x['num']}. {x['title']}" for x in steps])
+
+def _bld_start_long(sid: str, profile: str, form: dict, payload: dict) -> dict:
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    key = f"{_BLD_JOB_PREFIX}{profile}_{sid}"
+    err, runner, what, notes = _bld_long_prepare(sid, form, payload)
+    if runner is None:
+        return {"success": False, "message": err}
+    _start_python_job(key, lambda: runner(key))
+    log(f"OK: Build tab started the {what}")
+    res = {"success": True, "message": "Started: " + what + ".", "job_key": key}
+    if notes:
+        res["notes"] = notes
+    return res
+
+_BLD_MARKS = "/etc/44helper/build_marks.json"
+_BLD_REST_MAX = 40
+
+def _bld_marks_load() -> dict:
+    try:
+        with open(_BLD_MARKS, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+def _bld_mark_ready() -> None:
+    os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
+    tmp = _BLD_MARKS + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"ready_at": int(time.time())}, f)
+    os.replace(tmp, _BLD_MARKS)
+
+def _bld_boot_ready_line() -> str:
+    bid = _bt_boot_id()
+    _all, now = _bt_boot_log_lines(bid)
+    for ln in reversed(now):
+        if re.search(r"\bnot ready\b", ln):
+            return ""
+        if re.search(r": ready ", ln):
+            return ln
+    return ""
+
+def _bld_reboot_state(others_done: bool, up: bool, age: float | None) -> tuple[str, str]:
+    ready_at = _bld_marks_load().get("ready_at")
+    if not isinstance(ready_at, int):
+        if others_done:
+            return "todo", "Press Run to mark the build ready, then reboot at home."
+        return "manual", "Reboot at home when the steps above are done."
+    if _bt_btime() <= ready_at:
+        return "manual", "Marked ready at " + _bt_fmt_time(ready_at) + ". Reboot now, then open this tab again."
+    line = _bld_boot_ready_line()
+    if not line:
+        return "warn", "Rebooted, but this boot's line in the boot log does not say ready yet. Read the Boot tab."
+    if os.path.exists(WG0_CONF_PATH) and (not up or age is None or age > _BLD_HS_FRESH):
+        return "warn", "Rebooted and ready, but the tunnel has no fresh handshake yet."
+    return "done", "Rebooted since the build: " + line.split(" boot ", 1)[-1][:120]
+
+def _bld_inline(sid: str, profile: str, st: dict, payload: dict, key: str) -> dict:
+    if sid in _BLD_LONG:
+        err, runner, _what, _notes = _bld_long_prepare(sid, st["form"], payload)
+        if runner is None:
+            return {"success": False, "message": err}
+        res = runner(key)
+        return {"success": bool(res.get("success")), "message": "done" if res.get("success") else "failed"}
+    return _bld_act_run_stage({"stage": sid, "profile": profile})
+
+def _bld_rest_worker(key: str, profile: str, payload: dict) -> dict:
+    last = ""
+    for _ in range(_BLD_REST_MAX):
+        st = build_build_status(profile)
+        nxt = next((s for s in st["stages"] if s["state"] in ("todo", "locked")), None)
+        if nxt is None:
+            rb = next((x for x in st["stages"] if x["id"] == "reboot"), {})
+            tail = "Every step is done." + (" Reboot now, then open this tab again." if str(rb.get("detail", "")).startswith("Marked ready") else "")
+            break
+        if nxt["state"] == "locked":
+            tail = f"Stopped: {nxt['label']} waits for a step that is not done. {nxt['detail']}"
+            break
+        if nxt["id"] not in _BLD_RUNNABLE:
+            tail = f"Stopped at {nxt['label']}: do it on its own tab. {nxt['detail']}"
+            break
+        if nxt["id"] == last:
+            tail = f"Stopped: {nxt['label']} is still open after it ran. {nxt['detail']}"
+            break
+        last = nxt["id"]
+        _job_append_output(key, f"== {nxt['label']} ==\n")
+        res = _bld_inline(nxt["id"], profile, st, payload, key)
+        for ln in res.get("notes") or []:
+            _job_append_output(key, str(ln) + "\n")
+        _job_append_output(key, str(res.get("message", "")) + "\n")
+        if not res.get("success"):
+            tail = f"Stopped: {nxt['label']} did not finish."
+            break
+    else:
+        tail = "Stopped: too many steps in one run."
+    return {"success": tail.startswith("Every step is done") or (tail.startswith("Stopped at") and "own tab" in tail),
+            "output": _job_status(key).get("output", "") + tail}
+
+def _bld_act_run_rest(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    st = build_build_status(profile)
+    pre = next((s for s in st["stages"] if s["id"] == "preflight"), None)
+    if pre is None or pre["state"] != "done":
+        return {"success": False, "message": "Finish the preflight first: " + (pre["detail"] if pre else "")}
+    key = f"{_BLD_JOB_PREFIX}{profile}_rest"
+    keep = {k: payload.get(k) for k in ("config_text", "_client_ip")}
+    _start_python_job(key, lambda: _bld_rest_worker(key, profile, keep))
+    log("OK: Build tab started Run the rest")
+    return {"success": True, "message": "Started: run the open steps in order.", "job_key": key}
+
+def build_build_report(profile: str = "travel") -> str:
+    profile = profile if profile in _BLD_PROFILES else "travel"
+    st = build_build_status(profile)
+    form = st["form"]
+    out = [f"Node Controller build report: {'Magic Box' if profile == 'magic' else 'Travel Node'}",
+           f"Generated {_cfgr_now()} by 44helper {APP_VERSION}", ""]
+    board = st.get("board", {})
+    out.append("Board: " + (board.get("model") or "unknown"))
+    out.append(f"Tunnel mode: {_BLD_MODES.get(form['mode'], form['mode'])}; wg0.conf is a {st.get('tunnel_kind') or 'none'} tunnel")
+    out += ["", "Steps"]
+    for i, s in enumerate(st["stages"], 1):
+        out.append(f"{i:>2}. {s['label']}: {s['state']}" + (f" - {s['detail']}" if s["detail"] else ""))
+    open_ = [s["label"] for s in st["stages"] if s["state"] in ("todo", "locked")]
+    warn = [s["label"] for s in st["stages"] if s["state"] == "warn"]
+    out += ["", "Still to do: " + (", ".join(open_) if open_ else "nothing")]
+    if warn:
+        out.append("Warnings: " + ", ".join(warn))
+    out += ["", "Form (no secrets are kept)"]
+    for k in ("callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb"):
+        out.append(f"  {k}: {form.get(k) or '(blank)'}")
+    if profile == "magic":
+        for k in ("svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"):
+            out.append(f"  {k}: {form.get(k) or '(blank)'}")
+    r = st["radio"]
+    out += ["", "Radio", f"  main node: {r.get('node') or '(none)'}, rxchannel {r.get('rxchannel') or '(none)'}, "
+            f"devstr {r['devstr'] if r.get('simpleusb_stanza') else '(no stanza)'}",
+            f"  Node Talker: {'installed' if r.get('nodetalker') else 'not installed'}; node 1921: "
+            f"{'present' if r.get('stanza_1921') else 'not there'}"]
+    for c in r.get("cards", []):
+        out.append(f"  USB card: {c['name']} {c['usbid']} devstr {c['devstr'] or '?'}")
+    out.append("  Phone nodes: " + (", ".join(r.get("phone_nodes") or []) or "none") + " (Node Controller adds them when Phone is on)")
+    try:
+        ok_pairs, warn_pairs = _cfgr_usrp_pairs()
+    except Exception:
+        ok_pairs, warn_pairs = [], ["could not read the USRP pairs"]
+    out += ["", "USRP pairs"] + ["  ok: " + x for x in ok_pairs] + ["  WARN: " + x for x in warn_pairs]
+    if "svx" in st:
+        v = st["svx"]
+        rf = v["reflector"]
+        out += ["", "SvxLink", f"  installed: {v['installed']}; service running: {v['active']}; used as: {v['use'] or 'no answer saved'}",
+                f"  reflector: {rf['host'] + ':' + rf['port'] if rf['host'] else 'not set'}; callsign {rf['callsign'] or '?'}; password {'set' if rf['key_set'] else 'not set'}",
+                f"  log: {v['log'] or 'nothing'}; reflector answers: {v['reachable']}; UDP 34000 open: {v['udp_open']}"]
+    out += ["", "Tool versions"]
+    try:
+        out += [f"  {k}: {v}" for k, v in _bt_versions().items()]
+    except Exception:
+        out.append("  (could not read)")
+    _all, now = _bt_boot_log_lines(_bt_boot_id())
+    out += ["", "This boot", "  " + ("\n  ".join(now) if now else "no line in the boot log yet")]
+    return "\n".join(out) + "\n"
+
+def _route_build_report(query: dict) -> tuple[int, str, bytes]:
+    try:
+        text = build_build_report((query.get("profile") or ["travel"])[0])
+    except Exception as exc:
+        log(f"FAIL: Build report: {type(exc).__name__}: {exc}")
+        return 500, "application/json", json.dumps({"message": "Could not make the report: " + type(exc).__name__}).encode("utf-8")
+    return 200, "text/plain; charset=utf-8", text.encode("utf-8")
 
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
     "wg_check": _bld_act_wg_check,
@@ -32066,6 +32269,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/action_status": _route_action_status,
     "/api/boot/status": _route_boot_status,
     "/api/build/status": _route_build_status,
+    "/api/build/report": _route_build_report,
     "/api/boot/section": _route_boot_section,
     "/api/boot/report": _route_boot_report,
     "/api/boot/snapshot": _route_boot_snapshot,

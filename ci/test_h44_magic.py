@@ -213,7 +213,9 @@ class Gather(Tmp):
 
     def test_reflector_stage(self):
         self.assertEqual(self.stage("svx_reflector", self.gather(CONF))[0], "done")
-        self.assertEqual(self.stage("svx_reflector", self.gather(CONF.replace("north.america.svxlink.net", "")))[0], "todo")
+        self.assertEqual(self.stage("svx_reflector", self.gather(CONF.replace("north.america.svxlink.net", "")))[0], "warn")
+        self.assertEqual(self.stage("svx_reflector", self.gather(CONF.replace("north.america.svxlink.net", "")),
+                                    dict(GOOD, svx_host="x.example.org", svx_port="5300"))[0], "todo")
         st, why = self.stage("svx_reflector", self.gather(CONF.replace(f'AUTH_KEY="{SECRET}"', 'AUTH_KEY=""')))
         self.assertEqual(st, "todo")
         self.assertIn("password", why)

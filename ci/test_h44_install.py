@@ -284,7 +284,7 @@ class RunStage(unittest.TestCase):
     def test_the_long_stages_are_runnable_and_flagged(self):
         self.assertTrue(h44._BLD_LONG <= h44._BLD_RUNNABLE)
         self.assertFalse(h44._BLD_LONG & h44._BLD_PREVIEWABLE)
-        for never in ("half", "fullx", "svx_reflector", "reboot", "preflight"):
+        for never in ("half", "fullx", "svx_reflector", "preflight"):
             self.assertNotIn(never, h44._BLD_RUNNABLE)
 
     def test_the_post_route_passes_the_client_address(self):

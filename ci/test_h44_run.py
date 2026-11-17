@@ -121,7 +121,7 @@ class Refusals(unittest.TestCase):
         ids = {i for m in ("half", "split", "full") for p in ("travel", "magic") for i, _ in h44._bld_stage_defs(m, p)}
         self.assertTrue(h44._BLD_RUNNABLE <= ids)
         self.assertTrue(h44._BLD_PREVIEWABLE <= h44._BLD_RUNNABLE)
-        for never in ("preflight", "half", "fullx", "svx_reflector", "reboot"):
+        for never in ("preflight", "half", "fullx", "svx_reflector"):
             self.assertNotIn(never, h44._BLD_RUNNABLE)
 
 

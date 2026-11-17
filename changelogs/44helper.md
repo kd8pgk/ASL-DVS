@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_49_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_50_20261117.py`. Newest entries first.
+
+## 0.1.50 (2026-11-17)
+
+Run the rest, the build report and the reboot test on the Travel Node and Magic Box tabs. This is a release: one button now runs many steps in a row, and a new route and settings file are added.
+
+- **Run the rest.** One button runs the open steps in order, in the background, until every step is done. It stops at the first step that fails, at one that makes no progress, at one that waits on a step that is not done, and at one that has to be done on its own tab (the half tunnel, the full-tunnel exceptions, the reflector connection); it says which. It needs the preflight done and no other build job running, runs the long steps in the same job (no nested jobs), takes at most 40 steps in a run, and keeps going when the page is closed. The WireGuard config in the box under the form is used for the tunnel step if one is reached; it is not saved.
+- **A warning no longer holds up the steps after it.** A step in the "check" state (for example the radio step with no USB card, or a Magic Box with no reflector) used to keep every later step waiting. Now only an open ("to do") step does.
+- **Reflector is optional.** With no reflector set and none in the form, the Magic Box step shows a warning, not "to do".
+- **Reboot test.** When every other step is done its Run button writes a marker (`/etc/44helper/build_marks.json`, mode 600) and says to reboot. After the reboot the step turns done when this boot's line in the boot log says ready and, if there is a tunnel, it has a fresh handshake; a reboot that is not ready, or has no handshake yet, shows a warning. It never reboots the node.
+- **Build report.** A button shows the report in a box and copies it: the steps and their states, what is still open, the form (it holds no secrets), the radio and USB cards, the USRP pairs, the SvxLink block on Magic Box (only whether a password is set), the tool versions and this boot's lines. `GET /api/build/report?profile=travel|magic` serves the same text.
+- **Tests.** `ci/test_h44_rest.py` (23 tests): the reboot states and the marker file, reading the boot log's ready line, the run-the-rest worker (order, each stop, the limit, a failure, no progress), starting it, long steps run inline, the lock rule for warnings, the report and its route, and the page script.
 
 ## 0.1.49 (2026-11-17)
 
