@@ -51,7 +51,11 @@ class FormRules(unittest.TestCase):
 
     def test_required_fields(self):
         e = self.errs(callsign="", node="", dmr_id="", nxdn_id="")
-        self.assertEqual(sorted(e), ["callsign", "dmr_id", "node", "nxdn_id"])
+        self.assertEqual(sorted(e), ["callsign", "dmr_id", "node"])
+
+    def test_nxdn_is_optional_but_checked_when_given(self):
+        self.assertEqual(self.errs(nxdn_id=""), {})
+        self.assertIn("nxdn_id", self.errs(nxdn_id="123456"))
 
     def test_patterns(self):
         self.assertIn("callsign", self.errs(callsign="K8"))

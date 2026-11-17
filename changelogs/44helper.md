@@ -1,6 +1,21 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_48_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_49_20261117.py`. Newest entries first.
+
+## 0.1.49 (2026-11-17)
+
+The installs and the tunnel steps run from the Travel Node and Magic Box tabs, and the NXDN ID is optional. This is a release: the two tabs can now install software and start the tunnel.
+
+- **NXDN ID is optional.** A blank NXDN ID no longer stops the build: the form accepts it, and the Pi Zero 2 W bundle fills its NXDN token with nothing (`Id=` stays empty, NXDN stays off). A value that is given must still be 1 to 5 digits. The same applies to the Config tab's Full config replacement, where the field is labelled "(optional)". No other bundle field is optional.
+- **Installs.** ASL3, DVSwitch, USRP2M17 and (Magic Box) SvxLink each get a Run button that starts their install steps in the background, one after another, through the same step runner, gates and jobs as the ASL3, DVSwitch, M17 and SVXLink tabs. It stops at the first failing step; the steps are safe to repeat. It keeps running if the page is closed, and the page picks the job up again when it is reopened. Only one build job runs at a time.
+  - ASL3: prerequisites, the repository, `asl3`, Allmon3, the node database utilities, removal of Allmon3's default account (this one may fail without stopping the run, for example when it is already gone) and the node database timer. Left out: Allmon3's admin password and service (Node Monitor replaces Allmon3), Cockpit, the appliance package, asl-menu (the bundle writes the node settings) and the Restore point (its own step).
+  - DVSwitch: the repository, the server, the services and gateways at boot, and starting after the network is ready. Bookworm only; on anything else nothing is started. Left out: the callsign step (the bundle writes it), Cockpit and the web-server clash steps.
+  - USRP2M17: git and the build tools, PHP, the clone, the installer with the form's callsign, adding the M17 node (skipped when `rpt.conf` already has it, as it does after the bundle), restarting Asterisk and the sudoers rule.
+  - SvxLink (USRP fork): the conflict check, dependencies, clone, user, build, the built-check, the locate step, UsrpLogic with ports 34000 and 32000 and the form's bridge or radio answer, and the service. The reflector steps stay on the SVXLink tab.
+  - Every command is built and checked before anything starts (a bad field stops the plan with nothing run). No planned step takes a password.
+- **Tunnel steps 1 to 6.** One Run button: the firewall and resolved prerequisites, the 44NetConnect zone, the inbound services (AllStarLink for split and half; AllStarLink and EchoLink for full), writing `wg0.conf`, attaching wg0 and starting the tunnel. It uses the WireGuard config pasted under the form, once; the config is not saved or logged, and the box is cleared when the job starts. It is written in the chosen mode's shape (AllowedIPs rewritten when it differs, as the tunnel tabs offer). It refuses to start from a non-LAN address (the tunnel address, a public address) or without a valid config. The half tunnel, the full-tunnel exceptions (the two steps that can cut a node off) and the reboot test stay on their own cards, which have the auto-undo timers.
+- **Progress.** The output follows under the checklist (the last 60 lines, polled every 2.5 s) and the status carries the latest build job, so a reload resumes the display.
+- **Tests.** `ci/test_h44_install.py` (33 tests): every planned step against the real step tables (it exists, is not manual, validates, takes no password), what each plan leaves out, the Bookworm rule, the M17 node skip, the worker (order, stop at the first failure, a step that will not start, the soft step, the wait timeout), the tunnel plan per mode, the LAN rule, one job at a time, the config never in a reply or an exception, the job info, the NXDN rule and the page script. The worker also ran two real steps through the real job system on Debian.
 
 ## 0.1.48 (2026-11-17)
 
