@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.65"
+APP_VERSION = "0.1.66"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -34408,230 +34408,63 @@ class Handler(BaseHTTPRequestHandler):
                        json.dumps({"success": ok, "output": msg}).encode("utf-8"))
             return
 
-        if path == "/api/router/config":
-            payload, err = self._read_json_body()
+        handler_fn = _POST_JSON.get(path)
+        if handler_fn is not None:
+            payload, err = ({}, None) if path in _POST_NO_BODY else self._read_json_body()
             if err is not None:
                 self._send(400, "application/json", err)
                 return
-            result = save_router_config(
-                _cfg,
-                payload.get("access_method", "none"),
-                payload.get("host", ""),
-                payload.get("user", ""),
-                payload.get("key_path", ""),
-                payload.get("poll_interval_sec", "60"),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/pi_install/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_guarded(_dispatch_pi_install_action, payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/router_install/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_router_install_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/firewall/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            payload["_client_ip"] = self._client_ip()
-            result = _dispatch_guarded(_dispatch_firewall_action, payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/build/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            payload["_client_ip"] = self._client_ip()
-            result = _dispatch_build_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/config/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_config_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/system_opt/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_system_opt_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path in ("/api/nodes/peer_add", "/api/nodes/peer_edit"):
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_upsert_peer(
-                _cfg,
-                str(payload.get("node", "")).strip(),
-                str(payload.get("ip", "")).strip(),
-                str(payload.get("port", "")).strip(),
-                str(payload.get("label", "")).strip(),
-                str(payload.get("helper_url", "")).strip(),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/nodes/peer_remove":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_remove_peer(_cfg, str(payload.get("node", "")).strip())
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/nodes/save_snippet":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_save_node_snippet(
-                _cfg,
-                str(payload.get("scope", "")).strip(),
-                str(payload.get("text", "")),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/asl3/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_asl3_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/dvswitch/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_dvswitch_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/svxlink/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_svxlink_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/m17/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_m17_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/amp/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_amp_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/cr/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_cr_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/cf/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_cf_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_update_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/repair/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_repair_action(payload if isinstance(payload, dict) else {})
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/guard/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_guard_action(payload if isinstance(payload, dict) else {})
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/quiet/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_quiet_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/lookup_installed":
-            result = action_update_lookup_installed()
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/lookup_policy":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_update_lookup_policy(str(payload.get("pkg", "")))
+            result = handler_fn(payload, self)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
         self._send(404, "text/plain; charset=utf-8", b"not found")
+
+def _post_router_config(p: dict, h: "Handler") -> dict:
+    return save_router_config(_cfg, p.get("access_method", "none"), p.get("host", ""), p.get("user", ""), p.get("key_path", ""),
+                              p.get("poll_interval_sec", "60"))
+
+def _post_with_ip(dispatch: Callable[[dict], dict]) -> Callable[[dict, "Handler"], dict]:
+    def run(p: dict, h: "Handler") -> dict:
+        p["_client_ip"] = h._client_ip()
+        return dispatch(p)
+    return run
+
+def _post_peer_upsert(p: dict, h: "Handler") -> dict:
+    return action_upsert_peer(_cfg, str(p.get("node", "")).strip(), str(p.get("ip", "")).strip(), str(p.get("port", "")).strip(),
+                              str(p.get("label", "")).strip(), str(p.get("helper_url", "")).strip())
+
+def _post_dict_only(dispatch: Callable[[dict], dict]) -> Callable[[dict, "Handler"], dict]:
+    return lambda p, h: dispatch(p if isinstance(p, dict) else {})
+
+_POST_NO_BODY = frozenset({"/api/update/lookup_installed"})
+
+_POST_JSON: dict[str, Callable[[dict, "Handler"], dict]] = {
+    "/api/router/config": _post_router_config,
+    "/api/pi_install/action": lambda p, h: _dispatch_guarded(_dispatch_pi_install_action, p),
+    "/api/router_install/action": lambda p, h: _dispatch_router_install_action(p),
+    "/api/firewall/action": _post_with_ip(lambda p: _dispatch_guarded(_dispatch_firewall_action, p)),
+    "/api/build/action": _post_with_ip(lambda p: _dispatch_build_action(p)),
+    "/api/config/action": lambda p, h: _dispatch_config_action(p),
+    "/api/system_opt/action": lambda p, h: _dispatch_system_opt_action(p),
+    "/api/nodes/peer_add": _post_peer_upsert,
+    "/api/nodes/peer_edit": _post_peer_upsert,
+    "/api/nodes/peer_remove": lambda p, h: action_remove_peer(_cfg, str(p.get("node", "")).strip()),
+    "/api/nodes/save_snippet": lambda p, h: action_save_node_snippet(_cfg, str(p.get("scope", "")).strip(), str(p.get("text", ""))),
+    "/api/asl3/action": lambda p, h: _dispatch_asl3_action(p),
+    "/api/dvswitch/action": lambda p, h: _dispatch_dvswitch_action(p),
+    "/api/svxlink/action": lambda p, h: _dispatch_svxlink_action(p),
+    "/api/m17/action": lambda p, h: _dispatch_m17_action(p),
+    "/api/amp/action": lambda p, h: _dispatch_amp_action(p),
+    "/api/cr/action": lambda p, h: _dispatch_cr_action(p),
+    "/api/cf/action": lambda p, h: _dispatch_cf_action(p),
+    "/api/update/action": lambda p, h: _dispatch_update_action(p),
+    "/api/repair/action": _post_dict_only(lambda p: _dispatch_repair_action(p)),
+    "/api/guard/action": _post_dict_only(lambda p: _dispatch_guard_action(p)),
+    "/api/quiet/action": lambda p, h: _dispatch_quiet_action(p),
+    "/api/update/lookup_installed": lambda p, h: action_update_lookup_installed(),
+    "/api/update/lookup_policy": lambda p, h: action_update_lookup_policy(str(p.get("pkg", ""))),
+}
 
 _HB_PROBE_SEC = 15.0
 _HB_HTTP_STALL_SEC = 45.0
