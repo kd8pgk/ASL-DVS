@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_65_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_66_20261117.py`. Newest entries first.
+
+## 0.1.66 (2026-11-17)
+
+The POST handler is a table. This is a release: the request handler's structure changes, with no change in what any route does. It is stage 2 of a tidy of the file.
+
+- **One table for the JSON routes.** The 24 POST routes that read a JSON body and answer JSON (router config, the Pi and router install actions, firewall, build, config, system options, the node peer routes, the ASL3, DVSwitch, SvxLink, M17, Ampersand, Cloudflare, update, repair, guard and quiet actions and the two update lookups) are now entries in `_POST_JSON`, the way the GET side already is. They replaced a 250-line chain of `if path ==` blocks that each read the body, handled its error and sent the answer. The login, logout and terminal routes stay in `do_POST`, because they use the handler's own methods.
+- **Unchanged.** The login and cross-site header checks still run before every route except login, a body error is still a 400, an unknown path is still a 404, firewall and build still receive the client address, repair and guard still accept only a dictionary, and the update lookup that takes no body still does not read one.
+- **Tests.** `ci/test_h44_post.py` pins the route list so none can be dropped by accident, and checks each of the behaviours above.
 
 ## 0.1.65 (2026-11-17)
 
