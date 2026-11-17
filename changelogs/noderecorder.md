@@ -2,6 +2,13 @@
 
 Current file: `noderecorder_v0_17_8_20261116.py`. Newest entries first.
 
+## 0.17.8.1 (2026-11-16)
+
+The Node Monitor quick-link button reads **Node Mon** instead of Nodemon. This is a cosmetic build: the button's text changed and nothing else, so the file name stays and it does not go to stable on its own.
+
+- The button still opens Node Monitor on port 7777, in the same place. Node Monitor's own title stays "Node Monitor".
+- Nothing else changes.
+
 ## 0.17.8 (2026-11-16)
 
 The Allmon3 quick-link button on the Setup tab is replaced by **Nodemon**, which opens Node Monitor (port 7777). This is a release: the page asks which tools are answering, and that check changed.
