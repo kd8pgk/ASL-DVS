@@ -28964,6 +28964,10 @@ function @F@RenderWhere(d) {
   } else if (/^44[.]/.test(host)) {
     msg = 'You opened this page at a 44 address. Do the tunnel steps from the LAN address.';
   }
+  var board = d.board || {};
+  if ('@PROFILE@' === 'magic' && board.zero2) {
+    msg = (msg ? msg + ' ' : '') + 'This node is a ' + board.model + ': Magic Box has fewer functions here. SysMon has no SVX tab on this build.';
+  }
   box.innerHTML = msg ? '<div class="ov-banner lvl-warn">' + cfgEsc(msg) + '</div>' : '';
 }
 
@@ -29075,8 +29079,9 @@ function @F@WgCheck(btn) {
 """
 
 _BLD_NOTE_TRAVEL = "<b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b>"
-_BLD_NOTE_MAGIC = ("<b>Magic Box runs on either build: the Pi Zero 2 W build or the full build.</b> It is the Travel Node tab plus the SvxLink "
-                   "install, wiring and checks. On the full build, SysMon's SVX tab runs the same SvxLink checks and edits svxlink.conf.")
+_BLD_NOTE_MAGIC = ("<b>Magic Box runs on the full build. The Pi Zero 2 W build limits its functions.</b> It is the Travel Node tab plus the SvxLink "
+                   "install, wiring and checks. SysMon's SVX tab, which runs the same SvxLink checks and edits svxlink.conf, is in the full build only; "
+                   "a Pi Zero 2 W has about 415 MB usable, so pause the node with Quiet System during the SvxLink install.")
 _BLD_SVX_ROWS = (
     '      <tr><td>SvxLink use</td><td><select id="@P@-svx_use" onchange="@F@Dirty()">'
     '<option value="bridge">Bridge under ASL3 (no radio of its own)</option>'
@@ -31195,6 +31200,12 @@ def _bld_machine() -> list[dict]:
         add("internet", "Internet", "fail", "cannot resolve deb.debian.org")
     return rows
 
+_BLD_MODEL = "/proc/device-tree/model"
+
+def _bld_board() -> dict:
+    model = _bld_read(_BLD_MODEL).replace("\x00", "").strip()
+    return {"model": model, "zero2": "zero 2" in model.lower()}
+
 def _bld_lan_addrs() -> dict:
     m = re.search(r"^\s*Address\s*=\s*(\d+\.\d+\.\d+\.\d+)", _bld_read(WG0_CONF_PATH), re.M | re.I)
     return {"wg0": m.group(1) if m else ""}
@@ -31508,7 +31519,8 @@ def build_build_status(profile: str = "travel") -> dict:
         if s["state"] not in ("done", "manual"):
             prev_ok = False
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
-           "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "checked_at": _cfgr_now()}
+           "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
+           "checked_at": _cfgr_now()}
     if svx is not None:
         out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
         out["svx"]["reachable"] = svx.get("reachable")

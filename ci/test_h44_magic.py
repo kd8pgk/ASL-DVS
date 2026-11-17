@@ -258,8 +258,9 @@ class Page(unittest.TestCase):
         html = h44._render_magic_panel()
         for k in ("svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"):
             self.assertIn(f'id="mbx-{k}"', html)
-        self.assertIn("Magic Box runs on either build", html)
-        self.assertIn("full build", html)
+        self.assertIn("Magic Box runs on the full build", html)
+        self.assertIn("limits its functions", html)
+        self.assertNotIn("either build", html)
         self.assertIn('id="panel-magic"', html)
         self.assertIn('id="mbx-svx"', html)
 
@@ -329,6 +330,13 @@ class Status(Tmp):
         self.assertEqual(by["svx"]["state"], "done")
         self.assertEqual(by["svx_reflector"]["state"], "done")
         self.assertIn(by["svx_wire"]["state"], ("todo", "locked"))
+
+    def test_board_detection(self):
+        for model, zero2 in (("Raspberry Pi Zero 2 W Rev 1.0\x00", True), ("Raspberry Pi 4 Model B Rev 1.4\x00", False), ("", False)):
+            with mock.patch.object(h44, "_BLD_MODEL", self.write("model", model)):
+                self.assertEqual(h44._bld_board()["zero2"], zero2, model)
+        with mock.patch.object(h44, "_BLD_MODEL", self.p("none")):
+            self.assertEqual(h44._bld_board(), {"model": "", "zero2": False})
 
     def test_unknown_profile_falls_back_to_travel(self):
         with mock.patch.object(h44, "_bld_form_load", lambda: dict(GOOD)), \
