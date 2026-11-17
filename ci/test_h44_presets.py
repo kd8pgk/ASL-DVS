@@ -284,11 +284,13 @@ class BuildStep(unittest.TestCase):
     def ids(self, mode, profile):
         return [i for i, _ in h44._bld_stage_defs(mode, profile)]
 
-    def test_the_preset_step_is_in_both_tabs_just_before_the_restore_point_and_reboot(self):
+    def test_the_preset_step_follows_the_values_steps_and_comes_before_the_checks(self):
         for mode in ("half", "split", "full", "none"):
             for profile in ("travel", "magic"):
                 ids = self.ids(mode, profile)
-                self.assertEqual(ids[-3:], ["preset", "save", "reboot"], (mode, profile))
+                self.assertEqual(ids[ids.index("identity") + 1:ids.index("identity") + 4], ["location", "passwords", "preset"], (mode, profile))
+                self.assertLess(ids.index("preset"), ids.index("wiring"))
+                self.assertLess(ids.index("preset"), ids.index("reboot"))
         labels = dict(h44._bld_stage_defs("half", "travel")), dict(h44._bld_stage_defs("half", "magic"))
         self.assertEqual(labels[0]["preset"], "Apply the Travel Node preset")
         self.assertEqual(labels[1]["preset"], "Apply the Magic Box preset")

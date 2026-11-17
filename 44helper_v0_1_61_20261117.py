@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.59"
+APP_VERSION = "0.1.61"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17855,7 +17855,8 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
 def _cfgr_bindport() -> str:
     b = _cfgr_read(_CFGR_IAX)
     if b is None:
-        return "4569"
+        want = _bld_form_load().get("iax_port", "")
+        return want if _cfgr_port_ok(want) else "4569"
     sec = ""
     for line in _cfgr_lines(b.decode("utf-8", "replace")):
         m = _CFGR_HDR_RE.match(line)
@@ -29106,9 +29107,7 @@ function piPasteCancel(boxId) {
 _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
   <div class="step-card"><div class="step-head"><div class="step-title">@TITLE@</div>
       <span class="cfg-hint" id="@P@-checked"></span></div>
-    <div class="step-body">@NOTE@ The standard config
-      bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
-      turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
+    <div class="step-body">@NOTE@ The whole build in order, from a bare Pi to a working node, with where each step stands read from this
       node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
       (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
       installs and the tunnel steps run in the background and keep going if you close the page; they stop at the first failing step. The
@@ -29140,6 +29139,25 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
       <tr><td>NXDN ID (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
       <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
+      <tr><td colspan="2"><b>Location</b> <span class="cfg-hint">(optional; the SvxLink node info and EchoLink use it. The locator is worked out from the coordinates.)</span></td></tr>
+      <tr><td>Sysop name</td><td><input type="text" class="asl3-cmd-input" id="@P@-sysop" maxlength="27" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-sysop"></span></td></tr>
+      <tr><td>Location (city, state)</td><td><input type="text" class="asl3-cmd-input" id="@P@-location" maxlength="27" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-location"></span></td></tr>
+      <tr><td>QTH name</td><td><input type="text" class="asl3-cmd-input" id="@P@-qth" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-qth"></span></td></tr>
+      <tr><td>Latitude / longitude</td><td><input type="text" class="asl3-cmd-input" id="@P@-lat" maxlength="10" autocomplete="off" placeholder="latitude" oninput="@F@Dirty()"> <input type="text" class="asl3-cmd-input" id="@P@-lon" maxlength="11" autocomplete="off" placeholder="longitude" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-lat"></span> <span class="cfg-hint" id="@P@-e-lon"></span></td></tr>
+      <tr><td colspan="2"><b>Passwords</b> <span class="cfg-hint">(optional; shown in the clear, kept on this node until the reboot test is done, then removed. Blank leaves the file as it is.)</span></td></tr>
+      <tr><td>ASL node password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_node" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_node"></span></td></tr>
+      <tr><td>BrandMeister password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_bm" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_bm"></span></td></tr>
+      <tr><td>AMI secret (blank: one is generated)</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ami" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ami"></span></td></tr>
+      <tr><td>Allmon3 admin password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_allmon" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_allmon"></span> <span class="cfg-hint">set once with allmon3-passwd (it is stored as a hash), then forgotten</span></td></tr>
+      <tr><td>EchoLink node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_node"></span></td></tr>
+      <tr><td>EchoLink password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_el" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_el"></span></td></tr>
+      <tr><td>TGIF password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_tgif" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_tgif"></span></td></tr>
+      <tr><td colspan="2"><details><summary>More (optional)</summary><table class="cfg-table">
+        <tr><td>ircDDB password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ircddb" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ircddb"></span></td></tr>
+        <tr><td>ircDDB remote password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ircddb_remote" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ircddb_remote"></span></td></tr>
+        <tr><td>IAX client secret</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_iax" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_iax"></span></td></tr>
+        <tr><td>DMR talker alias</td><td><input type="text" class="asl3-cmd-input" id="@P@-ta" maxlength="30" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-ta"></span></td></tr>
+      </table></details></td></tr>
       <tr><td>Suite build</td><td><select id="@P@-suite_build" onchange="@F@Dirty()"><option value="auto">Automatic (by the board)</option>
         <option value="pi02w">Pi Zero 2 W build</option><option value="full">Full build</option></select></td></tr>
       <tr><td>Suite channel</td><td><select id="@P@-suite_channel" onchange="@F@Dirty()"><option value="stable">Stable</option>
@@ -29150,6 +29168,7 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-actions">
       <button class="btn-run" onclick="@F@Save(this)">Save the form</button>
       <button class="btn-copy" onclick="@F@Reset(this)">Clear it</button>
+      <button class="btn-copy" onclick="@F@ClearSaved(this)">Remove the saved passwords</button>
     </div>
     <div class="asl3-console shown" id="@P@-form-out" style="display:none"></div>
     <div class="step-body" style="margin-top:.8rem">WireGuard config for this node. Paste it to check it before the tunnel step. It is not saved.</div>
@@ -29181,14 +29200,14 @@ var _@P@Data = null;
 var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
-  apply_asl3: 'config', iax_port: 'config', apply_dvs: 'config', apply_m17: 'config',
+  iax_port: 'config', identity: 'config', restart: 'config', registration: 'asl3', location: 'config', passwords: 'config', ready: '@TAB@',
   half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
-  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab', iax_port: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
+  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', iax_port: 'Config tab', identity: 'Config tab',
+  restart: 'Config tab', registration: 'ASL3 tab', location: 'Config tab, Identity card', passwords: 'Config tab, Identity card', ready: 'this tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -29508,6 +29527,11 @@ function @F@Save(btn) {
   @F@Post(@F@FormValues(), '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
 
+function @F@ClearSaved(btn) {
+  if (!confirm('Remove every saved password from the Preflight form? Files on this node do not change.')) return;
+  @F@Post({action: 'clear_saved'}, '@P@-form-out', btn).then(function() { @F@Refresh(); });
+}
+
 function @F@Reset(btn) {
   @F@Post({action: 'form_reset'}, '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
@@ -29533,6 +29557,8 @@ _BLD_SVX_ROWS = (
     '<span class="cfg-hint" id="@P@-e-svx_port"></span></td></tr>\n'
     '      <tr><td>Default talkgroup (0 = none)</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_tg" maxlength="6" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> '
     '<span class="cfg-hint" id="@P@-e-svx_tg"></span></td></tr>\n'
+    '      <tr><td>Reflector password (AUTH_KEY)</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_reflector" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-pw_reflector"></span></td></tr>\n'
     '      <tr><td>Monitored talkgroups</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_mon" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> '
     '<span class="cfg-hint" id="@P@-e-svx_mon"></span></td></tr>\n')
 _BLD_SVX_CARD = """<div class="step-card"><div class="step-head"><div class="step-title">SvxLink</div></div>
@@ -29546,8 +29572,12 @@ def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
             .replace("@P@", pfx).replace("@F@", fn))
 
-_BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
-_BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
+_BLD_LOCATION_FIELDS = ("sysop", "location", "qth", "lat", "lon")
+_BLD_SECRET_FIELDS = ("pw_node", "pw_bm", "pw_ami", "pw_allmon", "pw_el", "pw_tgif", "pw_reflector", "pw_ircddb", "pw_ircddb_remote", "pw_iax")
+_BLD_VALUE_FIELDS = _BLD_LOCATION_FIELDS + _BLD_SECRET_FIELDS + ("el_node", "ta")
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"] + [
+    k for k in _BLD_VALUE_FIELDS if k != "pw_reflector"]
+_BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "pw_reflector"]
 
 def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
     tab = "magic" if magic else "build"
@@ -31322,17 +31352,44 @@ def _route_actions_log_notes(query: dict) -> tuple[int, str, bytes]:
     body = json.dumps(list_known_good_router_notes()).encode("utf-8")
     return 200, "application/json", body
 
+_BLD_PREFILL = {
+    "callsign": "callsign", "dmrid": "dmr_id", "refl_host": "svx_host", "refl_port": "svx_port", "refl_tg": "svx_tg",
+    "refl_monitor": "svx_mon",
+}
+_BLD_PREFILL_STEP = {
+    ("configure_node_identity", "password"): "pw_bm", ("usrp_refl_conn", "refl_key"): "pw_reflector",
+    ("allmon3_set_admin", "password"): "pw_allmon", ("m17_asterisk_conf", "node"): "m17_node",
+}
+
+def _bld_prefill(obj: object, form: dict, step_id: str = "") -> object:
+    if isinstance(obj, list):
+        return [_bld_prefill(x, form, step_id) for x in obj]
+    if not isinstance(obj, dict):
+        return obj
+    sid = str(obj.get("id", "")) if "fields" in obj else step_id
+    out = {}
+    for k, v in obj.items():
+        out[k] = _bld_prefill(v, form, sid) if isinstance(v, (list, dict)) else v
+    if "type" in out and "default" in out and "id" in out and step_id:
+        key = _BLD_PREFILL_STEP.get((step_id, out["id"])) or (_BLD_PREFILL.get(out["id"]) if out["id"] in _BLD_PREFILL and step_id != "usrp_refl_test" else None)
+        if key and form.get(key) and not out["default"]:
+            out["default"] = form[key]
+    return out
+
+def _scripts_with_prefill(scripts: dict) -> bytes:
+    return json.dumps(_bld_prefill(scripts, _bld_form_load())).encode("utf-8")
+
 def _route_asl3_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_ASL3_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_ASL3_SCRIPTS)
 
 def _route_dvswitch_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_DVSWITCH_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_DVSWITCH_SCRIPTS)
 
 def _route_svxlink_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_SVXLINK_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_SVXLINK_SCRIPTS)
 
 def _route_m17_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_M17_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_M17_SCRIPTS)
 
 def _cr_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _CR_SCRIPTS.get(mode, {}).get(distro, []):
@@ -31383,10 +31440,10 @@ _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
 _BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
 _BLD_FIELDS = ("mode", "callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
-               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel")
+               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel") + _BLD_VALUE_FIELDS
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "iax_port": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
                 "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
-                "suite_build": "auto", "suite_channel": "stable"}
+                "suite_build": "auto", "suite_channel": "stable", **{k: "" for k in _BLD_VALUE_FIELDS}}
 _BLD_PROFILES = ("travel", "magic")
 _BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
 _BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
@@ -31402,6 +31459,25 @@ _BLD_FIELD_RES = {
     "m17_node": (re.compile(r"1[0-9]{3}"), "a node number from 1000 to 1999"),
 }
 _BLD_REQUIRED = ("callsign", "node", "dmr_id")
+_BLD_VALUE_RES = {
+    "pw_node": (r"[^\s:@;\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, : @ ; $, backtick or backslash"),
+    "pw_bm": (r"[^\s#\"'$`\\]{1,64}", "1 to 64 characters, no spaces, # quotes, $, backtick or backslash"),
+    "pw_ami": (r"[^\s\"';#%=\\$`]{1,64}", "1 to 64 characters, no spaces, quotes, ; # % = $, backtick or backslash"),
+    "pw_allmon": (r"[^\s\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, $, backtick or backslash"),
+    "pw_el": (r"[^\s;#\"'\\]{1,64}", "1 to 64 characters, no spaces, ; # or quotes"),
+    "pw_tgif": (r"[^\s\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, $, backtick or backslash"),
+    "pw_reflector": (r"[^\s#\"'\\]{1,64}", "1 to 64 characters, no spaces, # or quotes"),
+    "pw_ircddb": (r"[^\s\"'\\]{1,64}", "1 to 64 characters, no spaces, quotes or backslash"),
+    "pw_ircddb_remote": (r"[^\s\"'\\]{1,64}", "1 to 64 characters, no spaces, quotes or backslash"),
+    "pw_iax": (r"[^\s;\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, ; $, backtick or backslash"),
+    "el_node": (r"\d{1,7}", "1 to 7 digits"),
+    "ta": (r"[^\r\n;#\"'\\]{1,30}", "1 to 30 characters, no ; # or quotes"),
+    "sysop": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
+    "location": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
+    "qth": (r"[^\r\n\"\\]{1,40}", "1 to 40 characters, no quotes"),
+    "lat": (r"-?(90(\.0{1,6})?|[1-8]?[0-9](\.[0-9]{1,6})?)", "a latitude from -90 to 90"),
+    "lon": (r"-?(180(\.0{1,6})?|(1[0-7][0-9]|[1-9]?[0-9])(\.[0-9]{1,6})?)", "a longitude from -180 to 180"),
+}
 _BLD_HOST_RE = re.compile(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _BLD_MAX_BYPASS = 20
 _BLD_HS_FRESH = 180
@@ -31497,6 +31573,12 @@ def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> 
                 errs[k] = "required"
         elif _BLD_FIELD_RES[k][0].fullmatch(v) is None:
             errs[k] = "use " + _BLD_FIELD_RES[k][1]
+    for k, (rx, why) in _BLD_VALUE_RES.items():
+        v = form.get(k, "")
+        if v and re.fullmatch(rx, v) is None:
+            errs[k] = "use " + why
+    if bool(form.get("lat")) != bool(form.get("lon")):
+        errs["lon" if form.get("lat") else "lat"] = "give both latitude and longitude"
     iax = form.get("iax_port", "")
     if iax and not _cfgr_port_ok(iax):
         errs["iax_port"] = "use " + _BLD_FIELD_RES["iax_port"][1]
@@ -31671,17 +31753,17 @@ def _bld_lan_addrs() -> dict:
 
 def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
-    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"), ("iax_port", "Set the IAX port"),
-               ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
-               ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
+    systems = [("asl3", "ASL3"), ("iax_port", "Set the IAX port"), ("dvs", "DVSwitch"), ("m17", "USRP2M17")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
+    systems = systems + [("identity", "Set the callsign, node number and IDs"), ("location", "Set the location"),
+                         ("passwords", "Set the passwords"),
+                         ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
-    tail += [("radio", "Radio and Node Talker"),
-             ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset"),
-             ("save", "Restore point"), ("reboot", "Reboot test")]
+    tail += [("radio", "Radio and Node Talker"), ("restart", "Restart the services"), ("registration", "AllStarLink registration"),
+             ("ready", "Ready to reboot"), ("save", "Restore point"), ("reboot", "Reboot test")]
     ports = ("ports", "Open the ports")
     if mode == "none":
         return [("preflight", "Preflight")] + systems + [ports] + tail
@@ -31689,21 +31771,6 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
         return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
     return [("preflight", "Preflight"), tunnel] + systems + mid + [ports] + tail
-
-def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
-    call = form.get("callsign", "")
-    if stage == "apply_asl3":
-        rpt = _bld_read(_BLD_RPT)
-        ok = bool(node) and re.search(r"^\s*\[" + re.escape(node) + r"\]\s*\(node-main", rpt, re.M) is not None
-        return ok, ("" if ok else "No [" + (node or "node") + "](node-main) in rpt.conf yet.")
-    if stage == "apply_dvs":
-        text = _bld_read(_BLD_MMDVM)
-        ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-        ok = ok and bool(form.get("dmr_id")) and re.search(r"^Id=" + re.escape(form["dmr_id"]) + r"\s*$", text, re.M) is not None
-        return ok, ("" if ok else "MMDVM_Bridge.ini does not have this callsign and DMR ID yet.")
-    text = _bld_read(_BLD_M17INI)
-    ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-    return ok, ("" if ok else "USRP2M17.ini does not have this callsign yet.")
 
 _BLD_EXT = "/etc/asterisk/extensions.conf"
 
@@ -31910,7 +31977,6 @@ def build_build_status(profile: str = "travel") -> dict:
     except Exception:
         pn = {"available": False}
     restore = _cfgr_read_manifest(_cfgr_snap_dir("restore")) is not None
-    preset = _cfgr_load_preset("travel_node") is not None
     radio = _bld_radio(form, cards)
     mode = form["mode"]
     defs = _bld_stage_defs(mode, profile)
@@ -31952,12 +32018,16 @@ def build_build_status(profile: str = "travel") -> dict:
             have = inst(_BLD_PRODUCT[sid])
             state = "done" if have else "todo"
             detail = "installed" if have else ("not installed" if installed.get(_BLD_PRODUCT[sid], "absent") == "absent" else installed[_BLD_PRODUCT[sid]])
-        elif sid.startswith("apply_"):
-            if not inst(_BLD_PRODUCT[sid.split("_", 1)[1]]):
-                state, detail = "todo", "Needs the system installed first."
-            else:
-                ok, why = _bld_applied(sid, form, node)
-                state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
+        elif sid == "identity":
+            state, detail = _bld_identity_state(form)
+        elif sid == "restart":
+            state, detail = _bld_restart_state()
+        elif sid == "registration":
+            state, detail = _bld_registration_state(node)
+        elif sid in ("location", "passwords"):
+            state, detail = _bld_values_state(sid, form, profile)
+        elif sid == "ready":
+            state, detail = _bld_ready_state(stages, mode, up, age, form)
         elif sid.startswith("svx"):
             state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "ports":
@@ -31989,7 +32059,7 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_radio_state(radio)
         elif sid == "save":
             state = "done" if restore else "todo"
-            detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
+            detail = "Restore point saved." if restore else "No Restore point yet."
         elif sid == "reboot":
             state, detail = "manual", ""
         stages.append({"id": sid, "label": label, "state": state, "detail": detail})
@@ -31997,6 +32067,8 @@ def build_build_status(profile: str = "travel") -> dict:
         if s["id"] == "reboot":
             others = [x for x in stages if x["id"] != "reboot"]
             s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
+            if s["state"] == "done" and _bld_wipe_secrets():
+                form = dict(form, **{k: "" for k in _BLD_SECRET_FIELDS})
     prev_ok = True
     for s in stages:
         if s["state"] in ("todo",) and not prev_ok:
@@ -32241,6 +32313,273 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
 
 _BLD_PRESET_ID = {"travel": "travel_node", "magic": "magic_box"}
 
+def _bld_scan_values(group: str, fids: tuple[str, ...] = ()) -> list[str]:
+    scan = _cfgr_identity_scan()
+    return [str(r["value"]).strip() for r in scan["rows"]
+            if (group in r["groups"] if not fids else r["fid"] in fids) and str(r["value"]).strip()]
+
+def _bld_identity_wants(form: dict) -> list[tuple[str, str, tuple[str, ...]]]:
+    wants = [("callsign", form.get("callsign", "").upper(), ()), ("dmr", form.get("dmr_id", ""), ())]
+    if form.get("nxdn_id"):
+        wants.append(("nxdn", form["nxdn_id"], ("mb_nxdn_id", "var_nxdn_id")))
+    return wants
+
+def _bld_identity_state(form: dict) -> tuple[str, str]:
+    if not form.get("callsign") or not form.get("node") or not form.get("dmr_id"):
+        return "todo", "Fill in the callsign, node number and DMR ID in the Preflight first."
+    rpt = _cfgr_text(_CFGR_RPT)
+    if rpt is None:
+        return "todo", "rpt.conf is not on this node yet (the ASL3 install creates it)."
+    off: list[str] = []
+    if form["node"] not in _cfgr_node_public(rpt):
+        off.append("node number")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if not vals:
+            if group != "nxdn":
+                off.append(group)
+        elif any(v.upper() != want.upper() for v in vals):
+            off.append({"dmr": "DMR ID", "nxdn": "NXDN ID"}.get(group, group))
+    if off:
+        return "todo", "Does not match the form yet: " + ", ".join(off) + "."
+    return "done", "The callsign, node number and IDs in the files match the form."
+
+def _bld_run_identity(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    rpt = _cfgr_text(_CFGR_RPT)
+    public = _cfgr_node_public(rpt) if rpt is not None else []
+    steps: list[tuple[str, dict]] = []
+    if form["node"] not in public:
+        if len(public) == 1:
+            steps.append(("node " + public[0] + " -> " + form["node"], {"group": "node", "node": public[0], "value": form["node"]}))
+        elif not public:
+            lines.append("No node stanza in rpt.conf yet, so the node number is left alone.")
+        else:
+            lines.append("rpt.conf has more than one public node: change the node number on the Config tab, Identity card.")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if vals and all(v.upper() == want.upper() for v in vals):
+            continue
+        if group == "nxdn":
+            for r in _cfgr_identity_scan()["rows"]:
+                if r["fid"] in fids and str(r["value"]).strip() != want:
+                    steps.append((f"{r['label']} ({r['file']})", {"group": "alone", "rid": r["rid"], "value": want}))
+        else:
+            steps.append((group, {"group": group, "value": want, "callsign": want}))
+    if not steps:
+        lines.append("Nothing to change.")
+    for name, payload in steps:
+        res = _cfgr_act_id_set(payload, not preview)
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {name} =="] + _bld_out(res)
+    if not preview and steps:
+        lines.append("Restart the services afterwards (the Restart the services step).")
+    return ok, lines
+
+def _bld_restart_groups() -> list[str]:
+    inst = _cfgr_installed()
+    return [g for g in _CFGR_GROUPS if inst.get(g)]
+
+def _bld_restart_state() -> tuple[str, str]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return "done", "No system installed yet, so nothing to restart."
+    newest = 0.0
+    for g in groups:
+        for path in _CFGR_GROUPS[g]["files"]:
+            try:
+                newest = max(newest, os.stat(path).st_mtime)
+            except OSError:
+                continue
+    at = _bld_marks_load().get("restarted_at")
+    if not isinstance(at, int) or at < int(newest):
+        return "todo", "Config files changed since the last restart, or the services were never restarted from here."
+    return "done", "Restarted after the last config change."
+
+def _bld_run_restart() -> tuple[bool, list[str]]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return True, ["Nothing installed to restart."]
+    res = _cfgr_act_restart({"groups": groups})
+    ok = bool(res.get("success"))
+    if ok:
+        _bld_mark_set("restarted_at")
+    return ok, ["Restarting: " + ", ".join(_CFGR_GROUPS[g].get("label", g) for g in groups)] + _bld_out(res)
+
+def _bld_registration_state(node: str) -> tuple[str, str]:
+    if not shutil.which("asterisk"):
+        return "warn", "Asterisk is not installed yet."
+    try:
+        entries = asl_registration_info().get("entries", [])
+    except Exception:
+        entries = []
+    mine = [e for e in entries if not node or str(e.get("node")) == node] or entries
+    if any(e.get("registered") for e in mine):
+        e = next(e for e in mine if e.get("registered"))
+        return "done", f"Node {e['node']} is registered" + (f" as {e['ip']}:{e['port']}." if e.get("ip") else ".")
+    return "warn", ("Not registered with AllStarLink. Enter the node password (Config tab, Identity card: ASL node password), "
+                    "restart, then check again. A node that stays private needs no registration.")
+
+_BLD_GROUP_SETS = {"pw_node": "node_pw", "pw_bm": "bm_pw", "pw_ami": "ami"}
+_BLD_ALONE_SETS = {
+    "pw_bm": ("mb_dmr_pw",), "pw_el": ("el_pwd", "svx_el_pw"), "el_node": ("el_node",), "pw_tgif": ("var_tgif_pw",),
+    "pw_reflector": ("svx_refl_key",), "pw_ircddb": ("ircddb_pw",), "pw_ircddb_remote": ("ircddb_remote_pw",),
+    "pw_iax": ("iax_secret",), "ta": ("stfu_ta",),
+    "sysop": ("svx_el_sysop", "svx_ni_sysop"), "location": ("svx_el_location", "svx_ni_location"), "qth": ("svx_ni_qth",),
+    "lat": ("svx_ni_lat",), "lon": ("svx_ni_lon",), "locator": ("svx_ni_loc",),
+}
+_BLD_STEP_KEYS = {
+    "location": ("sysop", "location", "qth", "lat", "lon", "locator"),
+    "passwords": ("pw_node", "pw_bm", "pw_ami", "pw_el", "el_node", "pw_tgif", "pw_reflector", "pw_ircddb", "pw_ircddb_remote",
+                  "pw_iax", "ta"),
+}
+_BLD_NAMES = {
+    "pw_node": "ASL node password", "pw_bm": "BrandMeister password", "pw_ami": "AMI secret", "pw_el": "EchoLink password",
+    "el_node": "EchoLink node number", "pw_tgif": "TGIF password", "pw_reflector": "SvxLink reflector password",
+    "pw_ircddb": "ircDDB password", "pw_ircddb_remote": "ircDDB remote password", "pw_iax": "IAX client secret",
+    "ta": "DMR talker alias", "sysop": "sysop name", "location": "location", "qth": "QTH name", "lat": "latitude", "lon": "longitude",
+    "locator": "locator",
+}
+
+def _bld_locator(lat: str, lon: str) -> str:
+    try:
+        la, lo = float(lat) + 90.0, float(lon) + 180.0
+    except ValueError:
+        return ""
+    if not (0 <= la < 180 and 0 <= lo < 360):
+        return ""
+    f_lo, f_la = int(lo // 20), int(la // 10)
+    s_lo, s_la = int((lo % 20) // 2), int(la % 10)
+    x_lo, x_la = int(((lo % 2) * 12) // 1), int(((la % 1) * 24) // 1)
+    return chr(65 + f_lo) + chr(65 + f_la) + str(s_lo) + str(s_la) + chr(97 + x_lo) + chr(97 + x_la)
+
+def _bld_value_of(form: dict, key: str) -> str:
+    if key == "locator":
+        return _bld_locator(form.get("lat", ""), form.get("lon", ""))
+    return form.get(key, "")
+
+def _bld_values_plan(step: str, form: dict) -> tuple[list[tuple[str, dict]], list[str], list[str]]:
+    scan = _cfgr_identity_scan()
+    todo: list[tuple[str, dict]] = []
+    absent: list[str] = []
+    blank: list[str] = []
+    for key in _BLD_STEP_KEYS[step]:
+        want = _bld_value_of(form, key)
+        if not want:
+            blank.append(key)
+            continue
+        group = _BLD_GROUP_SETS.get(key)
+        if group:
+            vals = [str(r["value"]) for r in scan["rows"] if group in r["groups"] and str(r["value"]).strip()]
+            if not vals or any(v != want for v in vals):
+                todo.append((_BLD_NAMES[key], {"group": group, "value": want}))
+        fids = _BLD_ALONE_SETS.get(key, ())
+        rows = [r for r in scan["rows"] if r["fid"] in fids]
+        if fids and not rows and not group:
+            absent.append(_BLD_NAMES[key])
+        for r in rows:
+            if str(r["value"]) != want:
+                todo.append((f"{_BLD_NAMES[key]} ({r['label']})", {"group": "alone", "rid": r["rid"], "value": want}))
+    return todo, absent, blank
+
+def _bld_values_state(step: str, form: dict, profile: str) -> tuple[str, str]:
+    try:
+        todo, absent, blank = _bld_values_plan(step, form)
+    except Exception as exc:
+        return "warn", "Could not read the files: " + type(exc).__name__
+    keys = [k for k in _BLD_STEP_KEYS[step] if k != "pw_reflector" or profile == "magic"]
+    blank = [k for k in blank if k in keys]
+    if step == "passwords" and form.get("pw_allmon") and _bld_marks_load().get("allmon_set_at") is None:
+        todo.append(("Allmon3 admin password", {}))
+    if todo:
+        return "todo", "Not in the files yet: " + ", ".join(sorted({t[0].split(" (")[0] for t in todo})) + "."
+    if step == "passwords":
+        need = [k for k in ("pw_node", "pw_bm") if k in blank]
+        if profile == "magic" and "pw_reflector" in blank:
+            need.append("pw_reflector")
+        if need:
+            return "warn", "Not entered in the Preflight: " + ", ".join(_BLD_NAMES[k] for k in need) + ". Blank leaves the file as it is."
+        return "done", "The passwords in the files match the Preflight."
+    return "done", "The location in the files matches the Preflight." if len(blank) < len(keys) else "Nothing entered in the Preflight; left as it is."
+
+def _bld_secret_hint(text: str, form: dict) -> str:
+    for k in _BLD_SECRET_FIELDS:
+        v = form.get(k, "")
+        if v:
+            text = text.replace(v, "<hidden>")
+    return text
+
+def _bld_run_values(step: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    if step == "passwords" and not form.get("pw_ami"):
+        scan = _cfgr_identity_scan()
+        if scan["groups"].get("ami", {}).get("state") == "not set" and not preview:
+            gen = secrets.token_hex(12)
+            form = dict(form, pw_ami=gen)
+            with _BLD_LOCK:
+                _bld_form_write(dict(_bld_form_load(), pw_ami=gen))
+            lines.append("The AMI secret was empty, so a new one was generated and put in the Preflight form.")
+    todo, absent, _blank = _bld_values_plan(step, form)
+    if absent:
+        lines.append("Not on this node yet, left out: " + ", ".join(absent) + ".")
+    for name, payload in todo:
+        if not payload:
+            continue
+        res = _cfgr_act_id_set(payload, not preview)
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {name} =="] + [_bld_secret_hint(x, form) for x in _bld_out(res)]
+    if step == "passwords" and form.get("pw_allmon") and _bld_marks_load().get("allmon_set_at") is None:
+        if preview:
+            lines.append("== Allmon3 admin password == would be set with allmon3-passwd (user admin), then forgotten.")
+        elif shutil.which("allmon3-passwd") is None:
+            lines.append("allmon3-passwd is not installed yet, so the Allmon3 admin password was not set.")
+            ok = False
+        else:
+            res = _run_argv(["allmon3-passwd", "--password", form["pw_allmon"], "admin"], timeout=30)
+            ok = ok and res["success"]
+            lines.append("== Allmon3 admin password == " + ("set, and forgotten." if res["success"] else "failed: " + _bld_secret_hint(res["output"], form)[:200]))
+            if res["success"]:
+                _bld_mark_set("allmon_set_at")
+                with _BLD_LOCK:
+                    _bld_form_write(dict(_bld_form_load(), pw_allmon=""))
+    if not todo and not lines:
+        lines.append("Nothing to change.")
+    if not preview and todo:
+        lines.append("Restart the services afterwards (the Restart the services step).")
+    return ok, lines
+
+def _bld_wipe_secrets() -> bool:
+    form = _bld_form_load()
+    if not any(form.get(k) for k in _BLD_SECRET_FIELDS):
+        return False
+    with _BLD_LOCK:
+        _bld_form_write(dict(form, **{k: "" for k in _BLD_SECRET_FIELDS}))
+    log("OK: Build tab wiped the saved passwords")
+    return True
+
+def _bld_act_clear_saved(payload: dict) -> dict:
+    wiped = _bld_wipe_secrets()
+    return {"success": True, "message": "The saved passwords were removed from the Preflight." if wiped else "No passwords were saved."}
+
+def _bld_ready_state(stages: list[dict], mode: str, up: bool, age: float | None, form: dict) -> tuple[str, str]:
+    bad: list[str] = []
+    rs = next((x for x in stages if x["id"] == "restart"), None)
+    if rs is not None and rs["state"] != "done":
+        bad.append("restart the services first")
+    port = _cfgr_bindport()
+    bind = _iax_bindaddr()
+    host = "127.0.0.1" if bind in ("0.0.0.0", "", "::") else bind
+    ok, _msg = _iax_poke(host, int(port), 1.5)
+    if not ok:
+        bad.append(f"IAX does not answer on {port}/udp")
+    if mode != "none" and (not up or age is None or age > _BLD_HS_FRESH):
+        bad.append("the tunnel has no fresh handshake")
+    if bad:
+        return "todo", "Not ready: " + "; ".join(bad) + "."
+    return "done", f"IAX answers on {port}/udp" + ("" if mode == "none" else ", the tunnel handshake is fresh") + ", no restart pending."
+
 def _bld_iax_state(form: dict) -> tuple[str, str]:
     want = form.get("iax_port", "")
     cur = _cfgr_bindport()
@@ -32303,10 +32642,9 @@ def _bld_run_preset(profile: str, preview: bool, iax_port: str = "") -> tuple[bo
              for ln in _bld_out(res)]
     return bool(res.get("success")), lines
 
-_BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
-_BLD_RUNNABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
+_BLD_RUNNABLE = frozenset({"iax_port", "identity", "location", "passwords", "restart", "boot", "wiring", "svx_wire", "radio", "save",
                            "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"iax_port", "identity", "location", "passwords", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32317,25 +32655,6 @@ def _bld_cfg(action: str, payload: dict | None = None) -> dict:
     body = {"action": action}
     body.update(payload or {})
     return _dispatch_config_action(body)
-
-def _bld_run_apply(sid: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
-    group = _BLD_RUN_GROUP[sid]
-    lines: list[str] = []
-    m, _meta = _fcr_load()
-    if m is None:
-        res = _bld_cfg("bundle_fetch", {"ref": "main"})
-        lines += _bld_out(res)
-        if not res.get("success"):
-            return False, lines + ["The bundle could not be fetched, so nothing was written."]
-    body: dict = {"values": {k: form.get(k, "") for k in ("callsign", "node", "dmr_id", "nxdn_id")}, "groups": [group]}
-    if preview:
-        res = _bld_cfg("bundle_preview", body)
-    else:
-        body["confirm"] = True
-        res = _bld_cfg("bundle_apply", body)
-    out = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
-           for ln in _bld_out(res)]
-    return bool(res.get("success")), lines + out
 
 def _bld_run_wiring(preview: bool, which: tuple[str, ...]) -> tuple[bool, list[str]]:
     lines: list[str] = []
@@ -32434,14 +32753,20 @@ def _bld_act_run_stage(payload: dict) -> dict:
     if stage["state"] not in ("todo", "warn"):
         return {"success": False, "message": "Nothing to do: " + stage["detail"]}
     form = st["form"]
-    if (sid in _BLD_RUN_GROUP or sid in _BLD_LONG) and st["errors"]:
+    if (sid in _BLD_LONG or sid in ("identity", "iax_port", "location", "passwords")) and st["errors"]:
         return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
     if sid in _BLD_LONG:
         return _bld_start_long(sid, profile, form, payload)
     try:
         with _BLD_LOCK:
-            if sid in _BLD_RUN_GROUP:
-                ok, lines = _bld_run_apply(sid, form, preview)
+            if sid == "identity":
+                ok, lines = _bld_run_identity(form, preview)
+            elif sid == "location":
+                ok, lines = _bld_run_values("location", form, preview)
+            elif sid == "passwords":
+                ok, lines = _bld_run_values("passwords", form, preview)
+            elif sid == "restart":
+                ok, lines = _bld_run_restart()
             elif sid == "boot":
                 res = action_boot_order_apply()
                 ok, lines = bool(res.get("success")), _bld_out(res)
@@ -32688,7 +33013,15 @@ def _bld_mark_ready() -> None:
     tmp = _BLD_MARKS + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"ready_at": int(time.time())}, f)
+        json.dump(dict(_bld_marks_load(), ready_at=int(time.time())), f)
+    os.replace(tmp, _BLD_MARKS)
+
+def _bld_mark_set(key: str) -> None:
+    os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
+    tmp = _BLD_MARKS + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(dict(_bld_marks_load(), **{key: int(time.time())}), f)
     os.replace(tmp, _BLD_MARKS)
 
 def _bld_boot_ready_line() -> str:
@@ -32981,6 +33314,7 @@ _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
+    "clear_saved": _bld_act_clear_saved,
     "wg_check": _bld_act_wg_check,
     "run_stage": _bld_act_run_stage,
 }

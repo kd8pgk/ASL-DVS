@@ -88,7 +88,7 @@ class Stages(unittest.TestCase):
     def test_magic_adds_svx_after_m17_in_every_mode(self):
         for m in ("half", "split", "full"):
             ids = self.ids(m)
-            self.assertEqual(ids[ids.index("apply_m17") + 1:ids.index("apply_m17") + 4], ["svx", "svx_wire", "svx_reflector"], m)
+            self.assertEqual(ids[ids.index("m17") + 1:ids.index("m17") + 4], ["svx", "svx_wire", "svx_reflector"], m)
             self.assertLess(ids.index("wiring"), ids.index("svx_checks"))
             self.assertLess(ids.index("svx_checks"), ids.index("radio"))
 

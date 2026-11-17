@@ -38,7 +38,7 @@ devstr = keep
 """
 
 
-def status(state="todo", sid="apply_asl3", errors=None, form=None):
+def status(state="todo", sid="identity", errors=None, form=None):
     return {"form": dict(FORM, **(form or {})), "errors": errors or {}, "radio": {"cards": CARDS},
             "stages": [{"id": sid, "label": "Label " + sid, "state": state, "detail": "why"}]}
 
@@ -100,7 +100,7 @@ class GroupFilter(unittest.TestCase):
 class Refusals(unittest.TestCase):
     def run_stage(self, st, **payload):
         with mock.patch.object(h44, "build_build_status", lambda profile="travel": st):
-            return h44._bld_act_run_stage(dict({"stage": "apply_asl3", "profile": "travel"}, **payload))
+            return h44._bld_act_run_stage(dict({"stage": "identity", "profile": "travel"}, **payload))
 
     def test_unknown_and_unrunnable(self):
         self.assertFalse(self.run_stage(status(), stage="tunnel")["success"])
@@ -112,7 +112,7 @@ class Refusals(unittest.TestCase):
         self.assertIn("Nothing to do", self.run_stage(status("done"))["message"])
         self.assertIn("not part", self.run_stage(status(sid="boot"))["message"])
 
-    def test_apply_needs_a_clean_form(self):
+    def test_identity_needs_a_clean_form(self):
         r = self.run_stage(status(errors={"node": "required"}))
         self.assertFalse(r["success"])
         self.assertIn("node", r["message"])
@@ -141,36 +141,6 @@ class Dispatch(Tmp):
                 mock.patch.object(h44, "action_boot_order_apply", lambda: {"success": True, "output": "boot ok"}):
             res = h44._bld_act_run_stage({"stage": sid, "profile": "travel", "preview": preview})
         return res, calls
-
-    def test_apply_filters_to_its_group_and_uses_the_form(self):
-        res, calls = self.go("apply_dvs")
-        self.assertTrue(res["success"])
-        action, payload = calls[-1]
-        self.assertEqual(action, "bundle_apply")
-        self.assertEqual(payload["groups"], ["dvs"])
-        self.assertIs(payload["confirm"], True)
-        self.assertEqual(payload["values"], {"callsign": "KD8PGK", "node": "652701", "dmr_id": "3123456", "nxdn_id": "12345"})
-        self.assertNotIn("bundle_fetch", [c[0] for c in calls])
-
-    def test_restart_hint_points_at_the_config_tab(self):
-        res, _ = self.go("apply_asl3", cfg={"bundle_apply": {"success": True, "output": "ok\nUse the Restart buttons below when ready."}})
-        self.assertIn("Use Restart services on the Config tab when ready.", res["notes"])
-        self.assertNotIn("buttons below", "\n".join(res["notes"]))
-
-    def test_apply_fetches_only_when_not_staged(self):
-        _res, calls = self.go("apply_asl3", staged=False)
-        self.assertEqual([c[0] for c in calls], ["bundle_fetch", "bundle_apply"])
-
-    def test_failed_fetch_writes_nothing(self):
-        res, calls = self.go("apply_asl3", staged=False, cfg={"bundle_fetch": {"success": False, "output": "no network"}})
-        self.assertFalse(res["success"])
-        self.assertEqual([c[0] for c in calls], ["bundle_fetch"])
-
-    def test_preview_never_confirms(self):
-        res, calls = self.go("apply_m17", preview=True)
-        self.assertEqual(calls[-1][0], "bundle_preview")
-        self.assertNotIn("confirm", calls[-1][1])
-        self.assertIn("nothing was changed", res["message"])
 
     def test_boot_and_save(self):
         res, calls = self.go("boot")
