@@ -32464,8 +32464,9 @@ def _bld_suite_cmd(form: dict, tools: list[str]) -> str:
         env += [f"AUTO_CALLSIGN={form['callsign']}", f"AUTO_NODE={form['node']}"]
     args = f"--non-interactive --action=components --tools={','.join(tools)} --build={_bld_suite_build(form)}"
     u = _BLD_BOOTSTRAP_URL
-    return (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
-            f" | env {' '.join(env)} bash -s -- {args}")
+    script = (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
+              f" | env {' '.join(env)} bash -s -- {args}")
+    return "bash -c " + shlex.quote(script)
 
 def _bld_act_install_suite(payload: dict) -> dict:
     profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"

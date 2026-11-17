@@ -92,8 +92,18 @@ class Command(unittest.TestCase):
         with mock.patch.object(h44, "_bld_board", lambda: {"model": "Pi 4", "zero2": False}):
             return h44._bld_suite_cmd(dict(FORM, **(form or {})), list(tools))
 
+    def script(self, *a, **kw):
+        import shlex
+        parts = shlex.split(self.cmd(*a, **kw))
+        self.assertEqual(parts[:2], ["bash", "-c"])
+        self.assertEqual(len(parts), 3)
+        return parts[2]
+
+    def test_it_runs_under_bash_because_the_unit_job_uses_sh(self):
+        self.assertTrue(self.cmd().startswith("bash -c "))
+
     def test_shape(self):
-        c = self.cmd()
+        c = self.script()
         self.assertTrue(c.startswith("set -o pipefail; "))
         self.assertIn("curl -fsSL 'https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh'", c)
         self.assertIn("wget -q -O - ", c)
@@ -101,19 +111,20 @@ class Command(unittest.TestCase):
         self.assertIn("ASL_DVS_CHANNEL=stable AUTO_CALLSIGN=KD8PGK AUTO_NODE=652701", c)
 
     def test_only_valid_identity_reaches_the_shell(self):
-        c = self.cmd({"callsign": "x; rm -rf /", "node": "1 2"})
+        c = self.script({"callsign": "x; rm -rf /", "node": "1 2"})
         self.assertNotIn("AUTO_", c)
         self.assertNotIn("rm -rf", c)
-        c = self.cmd({"suite_channel": "x; reboot"})
+        c = self.script({"suite_channel": "x; reboot"})
         self.assertIn("ASL_DVS_CHANNEL=stable", c)
         self.assertNotIn("reboot", c)
 
     def test_channel_is_passed(self):
-        self.assertIn("ASL_DVS_CHANNEL=testing", self.cmd({"suite_channel": "testing"}))
+        self.assertIn("ASL_DVS_CHANNEL=testing", self.script({"suite_channel": "testing"}))
 
     def test_the_command_is_valid_shell(self):
         import subprocess
         self.assertEqual(subprocess.run(["bash", "-n", "-c", self.cmd()], capture_output=True).returncode, 0)
+        self.assertEqual(subprocess.run(["sh", "-n", "-c", self.cmd()], capture_output=True).returncode, 0)
 
 
 class Action(Tmp):
