@@ -288,7 +288,8 @@ class BuildStep(unittest.TestCase):
         for mode in ("half", "split", "full", "none"):
             for profile in ("travel", "magic"):
                 ids = self.ids(mode, profile)
-                self.assertEqual(ids[ids.index("identity") + 1:ids.index("identity") + 4], ["location", "passwords", "preset"], (mode, profile))
+                self.assertEqual(ids[ids.index("identity") + 1:ids.index("identity") + 4], ["location", "passwords", "stfu_setup"], (mode, profile))
+                self.assertEqual(ids[ids.index("stfu_setup") + 1:ids.index("stfu_setup") + 3], ["echolink", "preset"])
                 self.assertLess(ids.index("preset"), ids.index("wiring"))
                 self.assertLess(ids.index("preset"), ids.index("reboot"))
         labels = dict(h44._bld_stage_defs("half", "travel")), dict(h44._bld_stage_defs("half", "magic"))

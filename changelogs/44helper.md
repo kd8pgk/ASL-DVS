@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_61_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_62_20261117.py`. Newest entries first.
+
+## 0.1.62 (2026-11-17)
+
+STFU and EchoLink on both Build tabs. This is a release: new Preflight fields, one new action, three new steps and a changed ports rule.
+
+- **STFU (optional).** A Preflight group with the master server (a dropdown with "Other" and a text box; it starts on "not set"), the master port, the start talkgroup and the log level, plus an "Install STFU (apt)" button. The button needs the DVSwitch step done first, runs the same background apt job and package-health gate as the other installs, and is never required. STFU is a digital mode that Node Controller starts and stops, so the build neither enables the service nor stops MMDVM_Bridge.
+- **New steps "STFU (optional)" and "Set up STFU".** The first shows installed or not. The second writes BMAddress, BMPort, StartTG and LogLevel into `DVSwitch.ini` [STFU] (Preview and Run, automatic copy first, every other key left as it is); the ID, password and talker alias come from the existing steps. Both only warn, never block.
+- **EchoLink (optional).** A Preflight group: Use EchoLink (off by default), Runs in (automatic, ASL3 or SvxLink), the EchoLink callsign (with -L or -R), name, QTH and e-mail, and a fold for power, height, gain, direction, frequency and tone. The node number, password, latitude and longitude, sysop and location come from the fields already there.
+- **One owner.** EchoLink runs in the one service that has the radio. Automatic means ASL3. SvxLink owns it only when you pick it, on Magic Box with SvxLink using its own radio. The other service is switched off: ASL3 owning it loads `chan_echolink` and removes `ModuleEchoLink` from SvxLink's MODULES; SvxLink owning it writes `ModuleEchoLink.conf`, adds `ModuleEchoLink` to MODULES and sets `chan_echolink` to noload. The two are never on together.
+- **New step "Set up EchoLink"** after "Set up STFU". It writes `echolink.conf` ([el0]) or `ModuleEchoLink.conf` and the module switches. Preview and Run, automatic copy first, other keys left as they are. It shows a warning when EchoLink is on but the callsign, node number or password is still blank.
+- **Ports.** The Open the ports step opens the EchoLink ports (5198-5199/udp, 5200/tcp) only when EchoLink is on in the Preflight or already loaded, and lists them as ports to close otherwise.
+- **Tests.** `ci/test_h44_stfu_el.py`; the build, preset and ports tests follow the new order and rule.
 
 ## 0.1.61 (2026-11-17)
 

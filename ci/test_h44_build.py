@@ -240,8 +240,9 @@ class Stages(unittest.TestCase):
         return [i for i, _ in h44._bld_stage_defs(mode)]
 
     def test_half_order(self):
-        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "iax_port", "dvs", "m17", "identity", "location", "passwords", "preset", "half",
-                                            "ports", "boot", "wiring", "radio", "restart", "registration", "ready", "save", "reboot"])
+        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "iax_port", "dvs", "stfu", "m17", "identity", "location", "passwords",
+                                            "stfu_setup", "echolink", "preset", "half", "ports", "boot", "wiring", "radio", "restart",
+                                            "registration", "ready", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
         self.assertNotIn("half", self.ids("split"))
@@ -249,8 +250,8 @@ class Stages(unittest.TestCase):
 
     def test_full_puts_tunnel_after_the_systems(self):
         ids = self.ids("full")
-        self.assertEqual(ids[:9], ["preflight", "asl3", "iax_port", "dvs", "m17", "identity", "location", "passwords", "preset"])
-        self.assertEqual(ids[9:11], ["tunnel", "fullx"])
+        self.assertEqual(ids[:12], ["preflight", "asl3", "iax_port", "dvs", "stfu", "m17", "identity", "location", "passwords", "stfu_setup", "echolink", "preset"])
+        self.assertEqual(ids[12:14], ["tunnel", "fullx"])
         self.assertNotIn("half", ids)
 
     def test_every_mode_ends_the_same(self):
@@ -310,7 +311,11 @@ class Status(Tmp):
                 mock.patch.object(h44, "_bld_restart_state", lambda: ("todo", "x")), \
                 mock.patch.object(h44, "_bld_registration_state", lambda node: ("warn", "x")), \
                 mock.patch.object(h44, "_bld_values_state", lambda step, form, profile: ("warn", "x")), \
-                mock.patch.object(h44, "_bld_ready_state", lambda stages, mode, up, age, form: ("todo", "x")):
+                mock.patch.object(h44, "_bld_ready_state", lambda stages, mode, up, age, form: ("todo", "x")), \
+                mock.patch.object(h44, "_bld_stfu_state", lambda: ("warn", "x")), \
+                mock.patch.object(h44, "_bld_stfu_installed", lambda: False), \
+                mock.patch.object(h44, "_bld_stfu_setup_state", lambda form: ("warn", "x")), \
+                mock.patch.object(h44, "_bld_echolink_state", lambda form, profile: ("done", "x")):
             return h44.build_build_status()
 
     def by_id(self, st):
