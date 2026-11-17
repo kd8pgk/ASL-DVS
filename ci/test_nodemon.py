@@ -74,6 +74,26 @@ rxchannel = USRP/127.0.0.1:34018:32018
 """
 
 
+class EntryPoint(unittest.TestCase):
+    def path(self):
+        return sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nodemon_v*.py")))[-1]
+
+    def test_entry_point_is_the_last_statement(self):
+        import ast
+        with open(self.path(), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        guard = [i for i, n in enumerate(tree.body) if isinstance(n, ast.If)
+                 and isinstance(n.test, ast.Compare) and getattr(n.test.left, "id", "") == "__name__"]
+        self.assertEqual(len(guard), 1)
+        self.assertEqual(guard[0], len(tree.body) - 1, "a definition after the entry point is not defined when run as a script")
+
+    def test_runs_as_a_script(self):
+        import subprocess
+        r = subprocess.run([sys.executable, "-I", self.path(), "--version"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Node Monitor", r.stdout)
+
+
 class Parsers(unittest.TestCase):
     def test_xstat_links_modes_and_keying(self):
         r = nm.parse_xstat(XSTAT)

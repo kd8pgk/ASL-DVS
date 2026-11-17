@@ -2786,12 +2786,6 @@ def main():
         uninstall_service()
         return 0
     return run_server()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 def _nm_ami_credentials(conf_path, user="", secret=""):
     if user and secret:
         return user, secret
@@ -2900,3 +2894,7 @@ def _nm_sess_new(store, policy, now, stamp="", ip=""):
     store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
                                  "renew": now, "stamp": stamp, "ip": ip}
     return token, int(min(idle, hard) - now if hard else idle - now)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -18,6 +18,7 @@ The page is served over TLS only, login sessions are bound to the client's addre
 - **Firewall.** Opening and closing the port handle a ufw IPv6 rule and a timed-out firewall command.
 - **Config.** `bridge_nodes` sets the node-number-to-bridge map (default `1999:34001,1917:34008,1900:34000,1921:34018`). `save_config` refuses a non-numeric `main_node`, a port outside 1024–65535, and a non-IPv4 `bind_addr`.
 - **Password hash.** A root hash that libcrypt cannot check is logged once by type (for example `$y$` needs libxcrypt 4.4 or later). The hash itself is never logged.
+- **A failed request answers 500.** If a handler raises, the reply is a 500 with a message, and the reason is written to the log. The connection is no longer dropped without a word.
 - The version is 0.7.0. Existing nodes need the new config keys above before the upgrade, or the install creates them.
 
 ## 0.6.0 (2026-11-16)
