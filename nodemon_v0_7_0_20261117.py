@@ -462,10 +462,6 @@ def _revoke_all_sessions():
     with _sessions_lock:
         return sess_drop_all(_sessions)
 
-def _logout_session(token):
-    with _sessions_lock:
-        return sess_drop(_sessions, token)
-
 def _auth_lockout_remaining(client_ip, wan=False):
     with _lock_lock:
         return lock_wait(_lock_state, client_ip, time.time(), wan)
@@ -2522,7 +2518,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"ok": False, "error": "Wrong password."})
             return
         if path == "/api/logout":
-            _logout_session(self._token())
+            _revoke_all_sessions()
             self._json(200, {"ok": True}, {"Set-Cookie": self._cookie("", 0)})
             return
         if not self._authed():

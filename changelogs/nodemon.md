@@ -10,7 +10,7 @@ The page is served over TLS only, login sessions are bound to the client's addre
 - **Install makes a certificate.** When no TLS is configured, `--install` creates a self-signed certificate in `/etc/asl_dvs/tls` (10 years) and writes the paths to `nodemon.conf`.
 - **Sessions are bound to the client's address.** A session presented from another address is refused and dropped. `session_bind_ip = off` turns this off.
 - **Proxy headers only from `trusted_proxies`.** `CF-Connecting-IP`, `X-Real-IP` and `X-Forwarded-For` count only from a listed address. Any other request carrying them is treated as internet traffic.
-- **Logout ends only the caller's session.** Each session is limited to 10 per address.
+- **Logout ends every session**, as in every tool (shared policy). Each address is limited to 10 sessions.
 - **Reboot and Shutdown ask for the root password** and are hidden from users who are not root. A wrong password returns 403.
 - **Nothing sensitive without login.** `/api/health` and `/api/whoami` give only `{"ok": true}` (and `authed` in whoami) before login.
 - **AMI.** The account chosen for the manager interface must have write rights (`write = all` or `system`). Commands are cut off after 15 s, so a stalled Asterisk cannot hold the command lock.
