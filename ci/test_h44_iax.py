@@ -2,8 +2,11 @@ import glob
 import importlib.util
 import os
 import re
+import shutil
 import socket
 import struct
+import subprocess
+import tempfile
 import sys
 import threading
 import unittest
@@ -112,6 +115,18 @@ class Table(unittest.TestCase):
         self.assertIn("iaxCheck(this)", h44._render_ports_panel())
         with open(h44.__file__, encoding="utf-8") as f:
             self.assertIn("function iaxCheck", f.read())
+
+
+class PageScript(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_every_page_script_parses(self):
+        js = "\n".join(getattr(h44, n) for n in dir(h44) if n.startswith("_JS_") and isinstance(getattr(h44, n), str))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "page.js")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(js)
+            r = subprocess.run(["node", "--check", path], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[:600])
 
 
 if __name__ == "__main__":
