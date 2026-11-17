@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.57"
+APP_VERSION = "0.1.58"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17720,6 +17720,8 @@ def _cfgr_validate_preset(p: object) -> dict | None:
                 return None
         if p["modules"].get("chan_usrp") not in (None, "load", "noload"):
             return None
+        if "iax_port" in p and not _cfgr_port_ok(p["iax_port"]):
+            return None
         svx = p.get("svx")
         if svx is not None:
             if not isinstance(svx, dict):
@@ -17769,7 +17771,10 @@ def _cfgr_load_preset(pid: str) -> dict | None:
         return None
 
 def _cfgr_preset_summary(p: dict) -> list[str]:
-    lines = ["Private nodes (rpt.conf):"]
+    lines = []
+    if p.get("iax_port"):
+        lines.append(f"IAX port (iax.conf bindport): {p['iax_port']}")
+    lines.append("Private nodes (rpt.conf):")
     for n in p["rpt"]["nodes"]:
         lines.append(f"  {n['node']}: stanzas {', '.join('[' + s['name'] + ']' for s in n['stanzas'])}"
                      + (f"; [nodes] {n['nodes_line']}" if n["nodes_line"] else "; no [nodes] line"))
@@ -17797,6 +17802,7 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
         return {"success": False, "output": "\n".join(notes)}
     p["preset"] = pid
     p["label"] = _CFGR_PRESETS[pid]
+    p["iax_port"] = _cfgr_bindport()
     if pid == "magic_box":
         svx, svx_notes = _cfgr_capture_svx()
         if svx is None:
@@ -17833,6 +17839,52 @@ def _cfgr_bindport() -> str:
         if sec == "general" and kv and kv[0].lower() == "bindport" and _CFGR_PORT_RE.match(kv[1]):
             return kv[1]
     return "4569"
+
+def _cfgr_port_ok(v: object) -> bool:
+    return isinstance(v, str) and _CFGR_PORT_RE.match(v) is not None and 1024 <= int(v) <= 65535
+
+def _cfgr_nodes_port(lines: list[str], port: str) -> tuple[list[str], list[str]]:
+    mask = _cfgr_managed_mask(lines)
+    secs = _cfgr_sections(lines, mask)
+    sec = next((x for x in secs if x["name"].lower() == "nodes"), None)
+    if sec is None:
+        return list(lines), []
+    local = {x["name"] for x in secs if x["name"].isdigit()}
+    new = list(lines)
+    changed: list[str] = []
+    for i in range(sec["start"] + 1, sec["end"]):
+        kv = None if mask[i] else _cfgr_kv(lines[i])
+        if not kv or kv[0] not in local:
+            continue
+        fixed = _cfgr_local_nodes_line(lines[i], port)
+        if fixed != lines[i]:
+            new[i] = fixed
+            changed.append(kv[0])
+    return new, changed
+
+def _cfgr_iax_set(port: str, with_rpt: bool = True) -> tuple[dict[str, tuple[bytes, bytes]], list[str]]:
+    changes: dict[str, tuple[bytes, bytes]] = {}
+    notes: list[str] = []
+    cur = _cfgr_read(_CFGR_IAX)
+    if cur is None:
+        notes.append(f"{_CFGR_IAX} not found on this node, so the IAX port was not set")
+    else:
+        new, old, ok = _cfgr_set_key(_cfgr_lines(cur.decode("utf-8", "replace")), "general", "bindport", port)
+        if not ok:
+            notes.append("iax.conf has no [general] section, so the IAX port was not set")
+        else:
+            data = _cfgr_join(new).encode("utf-8")
+            if data != cur:
+                changes[_CFGR_IAX] = (cur, data)
+                notes.append(f"iax.conf bindport: {old or '(not set, 4569)'} -> {port}")
+    if with_rpt:
+        rb = _cfgr_read(_CFGR_RPT)
+        if rb is not None:
+            new, nodes = _cfgr_nodes_port(_cfgr_lines(rb.decode("utf-8", "replace")), port)
+            if nodes:
+                changes[_CFGR_RPT] = (rb, _cfgr_join(new).encode("utf-8"))
+                notes.append("rpt.conf [nodes]: IAX port set to " + port + " for " + ", ".join(nodes))
+    return changes, notes
 
 def _cfgr_local_nodes_line(line: str, port: str) -> str:
     return _CFGR_RADIO_LOCAL_RE.sub(lambda m: m.group(1) + ("" if port == "4569" else ":" + port) + "/", line)
@@ -18656,11 +18708,13 @@ def _cfgr_listening_report() -> dict:
 def _route_config_listeners(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_cfgr_listening_report()).encode("utf-8")
 
-def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
+def _cfgr_preset_plan(p: dict, iax_port: str = "") -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
     changes: dict[str, tuple[bytes, bytes]] = {}
     notes: list[str] = []
     warnings: list[str] = []
     removed: list[str] = []
+    want_port = iax_port if _cfgr_port_ok(iax_port) else (p.get("iax_port") or "")
+    port = want_port or _cfgr_bindport()
     for path in (_CFGR_RPT, _CFGR_EXT, _CFGR_MOD):
         cur = _cfgr_read(path)
         if cur is None:
@@ -18668,10 +18722,14 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
             continue
         lines = _cfgr_lines(cur.decode("utf-8", "replace"))
         if path == _CFGR_RPT:
-            new, removed, added, err, id_notes = _cfgr_apply_rpt(lines, p, _cfgr_bindport())
+            new, removed, added, err, id_notes = _cfgr_apply_rpt(lines, p, port)
             if new is None:
                 return {}, [], [], [], err
             notes += id_notes
+            if want_port:
+                new, fixed_nodes = _cfgr_nodes_port(new, want_port)
+                if fixed_nodes:
+                    notes.append("rpt.conf [nodes]: IAX port set to " + want_port + " for " + ", ".join(fixed_nodes))
             mask = _cfgr_managed_mask(lines)
             managed = sorted(h for h in _cfgr_managed_headers(lines, mask) if _cfgr_is_private(h))
             if managed:
@@ -18684,6 +18742,13 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         data = _cfgr_join(new).encode("utf-8")
         if data != cur:
             changes[path] = (cur, data)
+    if want_port:
+        iax_changes, iax_notes = _cfgr_iax_set(want_port, with_rpt=False)
+        changes.update(iax_changes)
+        notes += iax_notes
+        if iax_changes:
+            warnings.append(f"The IAX port changes to {want_port}. Restart Asterisk for it to take effect, and open {want_port}/udp "
+                            "in the firewall (Ports tab, or the Open the ports step).")
     for path, secs in p["ini"].items():
         cur = _cfgr_read(path)
         if cur is None:
@@ -18730,7 +18795,10 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
     p = _cfgr_load_preset(pid)
     if p is None:
         return {"success": False, "output": f"No '{_CFGR_PRESETS.get(pid, pid)}' preset is saved on this node yet."}
-    changes, removed, notes, warnings, err = _cfgr_preset_plan(p)
+    iax_port = str(payload.get("iax_port") or "")
+    if iax_port and not _cfgr_port_ok(iax_port):
+        return {"success": False, "output": "The IAX port must be a number from 1024 to 65535."}
+    changes, removed, notes, warnings, err = _cfgr_preset_plan(p, iax_port)
     if err:
         return {"success": False, "output": "Preset not applied: " + err}
     lines: list[str] = [f"WARNING: {w}" for w in warnings]
@@ -29032,6 +29100,7 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
         <span class="cfg-hint">Save the form to reorder the steps above.</span></td></tr>
       <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-callsign" maxlength="10" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-callsign"></span></td></tr>
       <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-node"></span></td></tr>
+      <tr><td>IAX port (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-iax_port" maxlength="5" inputmode="numeric" autocomplete="off" placeholder="blank keeps iax.conf as it is" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-iax_port"></span></td></tr>
       <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
       <tr><td>NXDN ID (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
       <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
@@ -29076,13 +29145,13 @@ var _@P@Data = null;
 var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
-  apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
+  apply_asl3: 'config', iax_port: 'config', apply_dvs: 'config', apply_m17: 'config',
   half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
-  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
+  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab', iax_port: 'Config tab',
   apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
@@ -29441,7 +29510,7 @@ def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
             .replace("@P@", pfx).replace("@F@", fn))
 
-_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
 _BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
 
 def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
@@ -31277,9 +31346,9 @@ _BLD_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
 _BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
-_BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
+_BLD_FIELDS = ("mode", "callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
                "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel")
-_BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
+_BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "iax_port": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
                 "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
                 "suite_build": "auto", "suite_channel": "stable"}
 _BLD_PROFILES = ("travel", "magic")
@@ -31293,6 +31362,7 @@ _BLD_FIELD_RES = {
     "node": (re.compile(r"[0-9]{4,7}"), "4 to 7 digits"),
     "dmr_id": (re.compile(r"[0-9]{7}"), "7 digits"),
     "nxdn_id": (re.compile(r"[0-9]{1,5}"), "1 to 5 digits"),
+    "iax_port": (re.compile(r"[0-9]{4,5}"), "a port from 1024 to 65535 (ASL3 suggests 4560 to 4580)"),
     "m17_node": (re.compile(r"1[0-9]{3}"), "a node number from 1000 to 1999"),
 }
 _BLD_REQUIRED = ("callsign", "node", "dmr_id")
@@ -31391,6 +31461,9 @@ def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> 
                 errs[k] = "required"
         elif _BLD_FIELD_RES[k][0].fullmatch(v) is None:
             errs[k] = "use " + _BLD_FIELD_RES[k][1]
+    iax = form.get("iax_port", "")
+    if iax and not _cfgr_port_ok(iax):
+        errs["iax_port"] = "use " + _BLD_FIELD_RES["iax_port"][1]
     m17 = form.get("m17_node", "")
     if _BLD_FIELD_RES["m17_node"][0].fullmatch(m17) is None:
         errs["m17_node"] = "use " + _BLD_FIELD_RES["m17_node"][1]
@@ -31562,7 +31635,7 @@ def _bld_lan_addrs() -> dict:
 
 def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
-    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"),
+    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"), ("iax_port", "Set the IAX port"),
                ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
                ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
     if profile == "magic":
@@ -31852,8 +31925,10 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "ports":
             state, detail = _bld_ports_stage(_bld_ports_gather(mode, installed))
+        elif sid == "iax_port":
+            state, detail = _bld_iax_state(form)
         elif sid == "preset":
-            state, detail = _bld_preset_state(profile)
+            state, detail = _bld_preset_state(profile, form.get("iax_port", ""))
         elif sid == "half":
             state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
         elif sid == "fullx":
@@ -32129,14 +32204,51 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
 
 _BLD_PRESET_ID = {"travel": "travel_node", "magic": "magic_box"}
 
-def _bld_preset_state(profile: str) -> tuple[str, str]:
+def _bld_iax_state(form: dict) -> tuple[str, str]:
+    want = form.get("iax_port", "")
+    cur = _cfgr_bindport()
+    if not want:
+        return "done", f"No IAX port in the form: iax.conf keeps bindport {cur}."
+    if not _cfgr_port_ok(want):
+        return "todo", "The IAX port in the form is not valid."
+    if _cfgr_read(_CFGR_IAX) is None:
+        return "todo", "iax.conf is not on this node yet."
+    changes, _notes = _cfgr_iax_set(want)
+    if not changes:
+        return "done", f"iax.conf bindport is {want}."
+    return "todo", f"iax.conf bindport is {cur}; the form says {want}."
+
+def _bld_run_iax(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    port = form.get("iax_port", "")
+    changes, notes = _cfgr_iax_set(port)
+    lines: list[str] = []
+    for path, (old, new) in changes.items():
+        lines += list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(),
+                                           f"now: {path}", f"after: {path}", lineterm=""))
+    lines += notes
+    if not changes or preview:
+        return True, lines
+    groups = [g for g in _CFGR_GROUPS if any(path in _CFGR_GROUPS[g]["files"] for path in changes)]
+    auto_id, _dropped = _cfgr_auto_point("IAX port " + port, groups)
+    lines.append(f"Current files saved first as automatic copy {auto_id}.")
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, mode)
+        ok = ok and not res.startswith("NOT")
+        lines.append(f"  {path}: {res}")
+    lines.append(f"Restart Asterisk for the new port to take effect, and open {port}/udp in the firewall (the Open the ports step does).")
+    log(f"{'OK' if ok else 'FAIL'}: Build IAX port set to {port}")
+    return ok, lines
+
+def _bld_preset_state(profile: str, iax_port: str = "") -> tuple[str, str]:
     pid = _BLD_PRESET_ID[profile]
     label = _CFGR_PRESETS[pid]
     p = _cfgr_load_preset(pid)
     if p is None:
         return "warn", f"No {label} preset is saved on this node (optional). Save one on a working node: Config tab, {label} preset card."
     try:
-        changes, removed, _notes, _warnings, err = _cfgr_preset_plan(p)
+        changes, removed, _notes, _warnings, err = _cfgr_preset_plan(p, iax_port)
     except Exception as exc:
         return "warn", "Could not read the files the preset changes: " + type(exc).__name__
     if err:
@@ -32148,16 +32260,16 @@ def _bld_preset_state(profile: str) -> tuple[str, str]:
         bits.append("it removes private node(s) " + ", ".join(removed))
     return "warn", "; ".join(bits) + ". Press Preview, then Run if it is right. It is optional and never blocks the steps after it."
 
-def _bld_run_preset(profile: str, preview: bool) -> tuple[bool, list[str]]:
-    res = _bld_cfg("preset_apply_preview" if preview else "preset_apply", {"preset": _BLD_PRESET_ID[profile]})
+def _bld_run_preset(profile: str, preview: bool, iax_port: str = "") -> tuple[bool, list[str]]:
+    res = _bld_cfg("preset_apply_preview" if preview else "preset_apply", {"preset": _BLD_PRESET_ID[profile], "iax_port": iax_port})
     lines = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
              for ln in _bld_out(res)]
     return bool(res.get("success")), lines
 
 _BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
-_BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
+_BLD_RUNNABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
                            "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32302,8 +32414,10 @@ def _bld_act_run_stage(payload: dict) -> dict:
                 ok, lines = _bld_run_svx_wire(preview)
             elif sid == "radio":
                 ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            elif sid == "iax_port":
+                ok, lines = _bld_run_iax(form, preview)
             elif sid == "preset":
-                ok, lines = _bld_run_preset(profile, preview)
+                ok, lines = _bld_run_preset(profile, preview, form.get("iax_port", ""))
             elif sid == "ports":
                 ok, lines = _bld_run_ports(preview, st["form"]["mode"], {p["key"]: p["state"] for p in _detect_installed_products()})
             elif sid == "reboot":

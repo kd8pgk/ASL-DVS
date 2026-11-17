@@ -301,7 +301,7 @@ class BuildStep(unittest.TestCase):
 
     def state(self, profile, preset, plan=None):
         with mock.patch.object(h44, "_cfgr_load_preset", lambda pid: preset), \
-                mock.patch.object(h44, "_cfgr_preset_plan", lambda p: plan):
+                mock.patch.object(h44, "_cfgr_preset_plan", lambda p, port="": plan):
             return h44._bld_preset_state(profile)
 
     def test_states(self):
@@ -334,7 +334,7 @@ class BuildStep(unittest.TestCase):
         with mock.patch.object(h44, "_bld_cfg", fake):
             ok, lines = h44._bld_run_preset("magic", True)
             ok2, lines2 = h44._bld_run_preset("travel", False)
-        self.assertEqual(calls, [("preset_apply_preview", {"preset": "magic_box"}), ("preset_apply", {"preset": "travel_node"})])
+        self.assertEqual(calls, [("preset_apply_preview", {"preset": "magic_box", "iax_port": ""}), ("preset_apply", {"preset": "travel_node", "iax_port": ""})])
         self.assertTrue(ok and ok2)
         self.assertIn("Use Restart services on the Config tab when ready.", lines)
 

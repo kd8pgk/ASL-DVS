@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_57_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_58_20261117.py`. Newest entries first.
+
+## 0.1.58 (2026-11-17)
+
+The IAX port is set in the Preflight and carried by the presets, on both Build tabs. This is a release: a new form field, a new build step and a new preset key.
+
+- **Preflight field.** "IAX port (optional)" on the Travel Node and Magic Box tabs, saved with the form in `/etc/44helper/build.json`. A port from 1024 to 65535 (ASL3 suggests 4560 to 4580). Blank leaves `iax.conf` as it is.
+- **New step "Set the IAX port"** after "Apply the ASL3 config". It has Preview and Run (Run saves an automatic copy first). It sets `bindport` in `iax.conf` and the port on this node's local lines in the `[nodes]` list of `rpt.conf` (lines for nodes on other servers are not touched). The step shows done when the form is blank or the files already match. Restart Asterisk afterwards; the Open the ports step then opens the new port.
+- **Presets carry the port.** Saving a Travel Node or Magic Box preset records the node's `bindport`; applying it sets `bindport` and the local `[nodes]` ports, and the preview says to restart Asterisk. Older presets without a port leave `iax.conf` alone.
+- **The form wins.** On a Build tab, the port in the Preflight form overrides the one in the preset when the preset step runs, so the node ends on the port you typed.
+- **Tests.** `ci/test_h44_iaxport.py`; `ci/test_h44_build.py` has the new step order.
 
 ## 0.1.57 (2026-11-17)
 

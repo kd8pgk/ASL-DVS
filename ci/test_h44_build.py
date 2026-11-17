@@ -240,7 +240,7 @@ class Stages(unittest.TestCase):
         return [i for i, _ in h44._bld_stage_defs(mode)]
 
     def test_half_order(self):
-        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17",
+        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17",
                                             "apply_m17", "preset", "half", "ports", "boot", "wiring", "radio", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
@@ -249,8 +249,8 @@ class Stages(unittest.TestCase):
 
     def test_full_puts_tunnel_after_the_systems(self):
         ids = self.ids("full")
-        self.assertEqual(ids[:8], ["preflight", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17", "apply_m17", "preset"])
-        self.assertEqual(ids[8:10], ["tunnel", "fullx"])
+        self.assertEqual(ids[:9], ["preflight", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17", "apply_m17", "preset"])
+        self.assertEqual(ids[9:11], ["tunnel", "fullx"])
         self.assertNotIn("half", ids)
 
     def test_every_mode_ends_the_same(self):
