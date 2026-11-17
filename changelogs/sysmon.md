@@ -2,6 +2,13 @@
 
 Current file: `sysmon_v6_13_101_20261116.py`. Newest entries first.
 
+## 6.13.101.1 (2026-11-16)
+
+The Node Monitor quick-link button reads **Node Mon** instead of Nodemon. This is a cosmetic build: the button's text changed and nothing else, so the file name stays and it does not go to stable on its own.
+
+- The button still opens Node Monitor on port 7777, in the same place. Node Monitor's own title stays "Node Monitor".
+- Nothing else changes.
+
 ## 6.13.101 (2026-11-16)
 
 A new **SVX** tab for SvxLink, the bridge between the node and a reflector. Full build only. This is a release: a tab, a route and page logic are new.

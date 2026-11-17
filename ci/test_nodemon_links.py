@@ -19,7 +19,7 @@ LABELS = {
 
     "noderecorder": "Node Mon",
 
-    "sysmon": "Nodemon",
+    "sysmon": "Node Mon",
 
     "sysmon_pi02w": "Nodemon",
 

@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.101"
+VERSION      = "6.13.101.1"
 BUILD_DATE   = "20261113"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -3025,7 +3025,7 @@ body.tab-edit #zone-content{
 
 <div id="ql-bar">
   <a id="lnk-nodemon" class="ql-btn" href="http://localhost:7777/" target="_blank" rel="noopener"
-     title="Node Monitor">Nodemon</a>
+     title="Node Monitor">Node Mon</a>
   <a id="lnk-dvswitch" class="ql-btn" href="/dvswitch" target="_blank" rel="noopener"
      title="DVSwitch dashboard">DVSwitch</a>
   <a id="lnk-cockpit" class="ql-btn" href="http://localhost:9090/" target="_blank" rel="noopener"
