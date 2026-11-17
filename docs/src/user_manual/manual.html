@@ -68,7 +68,7 @@
     <li><span class="no">12</span>The Dashboard</li>
     <li><span class="no">13</span>instmon</li>
     <li><span class="no">14</span>wifimon and wifi_menu.sh</li>
-    <li><span class="no">15</span>Node Talker, Node Recorder, Pibrary and Terminal Monitor</li>
+    <li><span class="no">15</span>Node Talker, Node Recorder, Node Monitor, Pibrary and Terminal Monitor</li>
     <li class="pt">Part V · Reference</li>
     <li><span class="no">16</span>Troubleshooting and recovery</li>
     <li><span class="no">A</span>Appendices: ports, files, services, launcher, glossary</li>
@@ -173,6 +173,7 @@ sudo systemctl status sysmon</pre>
     <tr><th>Tool</th><th>Port</th><th>What it is for</th></tr>
     <tr><td>Node Talker</td><td class="port">8993</td><td>Listen to the node's audio on your phone and talk with push-to-talk; connect and tune favorites. It has an Android app, Node Talker Mobile (Chapter 15).</td></tr>
     <tr><td>Node Recorder</td><td class="port">8995 (HTTPS)</td><td>Records the node's audio on a schedule, or on demand, to WAV, then MP3, Opus or FLAC, on a USB drive in preference to the SD card (section 15.7).</td></tr>
+    <tr><td>Node Monitor</td><td class="port">7777</td><td>Every node on the Pi, its links and its ASL3 registration on one page, with link commands and a DisCon button for each node (section 15.8).</td></tr>
     <tr><td>Pibrary</td><td class="port">9000</td><td>A media library for a USB or SD drive: movies, audio and PDFs in the browser (section 15.7).</td></tr>
     <tr><td>Terminal Monitor</td><td class="port">7878 (HTTPS)</td><td>top, htop or btop and a root shell in the browser, for the local network only. Never installed unless you say yes (section 15.7).</td></tr>
   </table>
@@ -192,6 +193,8 @@ sudo systemctl status sysmon</pre>
     <tr><td>Change WiFi network</td><td>wifimon</td></tr>
     <tr><td>Listen to the node, or talk, from my phone</td><td>Node Talker (Chapter 15)</td></tr>
     <tr><td>Record the node's audio on a schedule</td><td>Node Recorder (section 15.7)</td></tr>
+    <tr><td>See every node and what it is linked to, or drop its links</td><td>Node Monitor (section 15.8)</td></tr>
+    <tr><td>Check or set up SvxLink and its reflector <span class="badge full">FULL</span></td><td>SysMon, SVX tab (section 6.5); 44helper, SVXLink tab (section 9.4)</td></tr>
   </table>
 
   <h2><span class="n">1.3</span>A first look at each page</h2>
@@ -284,11 +287,11 @@ sudo systemctl status sysmon</pre>
     <div class="box"><h4 style="color:var(--cyan)">Pi Zero 2 W build <span class="badge pi">PI02W</span></h4>
       <p>For the 512 MB Pi Zero 2 W. This manual is written for it.</p>
       <ul><li>Dashboard: every tab is kept. It searches the AllStar and EchoLink lists from disk instead of memory, and refreshes less often.</li>
-        <li>SysMon: drops the Firewall, Reg, Net, Zello and Console tabs to save memory.</li></ul></div>
+        <li>SysMon: drops the Firewall, Reg, Net, Zello, SVX and Console tabs to save memory.</li></ul></div>
     <div class="box"><h4 style="color:var(--org)">Full build <span class="badge full">FULL</span></h4>
       <p>For a Pi 3, 4 or 5.</p>
       <ul><li>Dashboard: the same tabs, and it keeps the lists in memory.</li>
-        <li>SysMon: all 19 tabs. Chapter 6 covers the five extra ones.</li></ul></div>
+        <li>SysMon: all 20 tabs. Chapter 6 covers the six extra ones.</li></ul></div>
   </div>
   <p><b>Which build am I running?</b> Look at the version in the page header. A Pi Zero 2 W build version ends
     in <code>-pi02w</code>, for example <code>6.13.67.11-pi02w</code>. A full build version doesn't, for example
@@ -402,17 +405,24 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_99_0_20261110.py --install</pre>
+<pre>sudo python3 instmon_v2_111_0_20261116.py --install</pre>
       From 2.45.0 the install also downloads the manuals (PDF) from GitHub, so they are on instmon's Manuals card
       straight away. With no internet the install still finishes, and instmon downloads them once it can reach GitHub.</li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
-<pre>sudo bash install_all_v7_5_0_20261110.sh</pre>
-      A tool with no file in the usual places is downloaded from GitHub (the stable build by default). Node Talker, Node
-      Recorder, Pibrary and Terminal Monitor are asked about only when they are not installed (default no), or asked for with
-      <code>INSTALL_NODETALKER=1</code>, <code>INSTALL_NODERECORDER=1</code>, <code>INSTALL_PIBRARY=1</code> or
-      <code>--with-termon</code>; <code>--suite</code> asks for the first three without prompting, and never for Terminal
-      Monitor, which gives a root shell to anyone on the LAN who knows the password. <code>--download-only</code> fetches
-      the files of every tool that is not installed into instmon's library and installs nothing.</li>
+<pre>sudo bash install_all_v7_8_0_20261116.sh</pre>
+      Or, on a node with nothing installed, do steps 1 to 3 in one line:
+<pre>curl -fsSL https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh | sudo bash</pre>
+      The installer shows the Pi it runs on, then a start menu: <b>1</b> full first install (the whole suite and the manuals), <b>2</b> full upgrade
+      (installed tools to the newest build of the channel; nothing is added), <b>3</b> full replace (reinstall every tool and complete the suite),
+      <b>4</b> component install (tool by tool), <b>5</b> reset only, <b>q</b> quit. It lists a plan before anything changes
+      (back up, install, manuals, reset, check, start) and asks <code>Go ahead?</code>; the reset (<b>D</b>) stops the tools in order, clears failed marks
+      and deletes the saved sign-ins, so everyone signs in again. A tool with no file in the usual places is downloaded from GitHub (the stable
+      build by default). On a new node the whole suite is installed: the Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder,
+      Pibrary and Node Monitor. <code>--core</code> keeps a fresh install to the first four. Terminal Monitor is never part of the suite: it
+      gives a root shell to anyone on the LAN who knows the password, so it needs its own yes (<code>--with-termon</code> or
+      <code>INSTALL_TERMON=1</code>). <code>--download-only</code> fetches the files of every tool that is not installed into instmon's library and
+      installs nothing. Without a terminal, <code>--non-interactive --action=first|upgrade|replace|components</code> does the same unattended,
+      with <code>--tools=nodemon,pibrary</code> to choose tools for <code>components</code>.</li>
   </ol>
   <p>The installer picks the build for you: the Pi Zero 2 W build on a Pi Zero 2 W, the full build on anything else.
     If one build is already installed, it keeps that build. When it finishes, it checks that each tool is running
@@ -428,6 +438,7 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
     <tr><td>instmon</td><td class="mono">http://&lt;pi-address&gt;:8990</td><td>Every tool shows as installed and running.</td></tr>
     <tr><td>wifimon</td><td class="mono">http://&lt;pi-address&gt;:8991</td><td>Answer "Turn the watchdogs on?" (below).</td></tr>
     <tr><td>44helper</td><td class="mono">http://&lt;pi-address&gt;:9997</td><td>Take a restore point on the Config tab (Chapter 11).</td></tr>
+    <tr><td>Node Monitor (if installed)</td><td class="mono">http://&lt;pi-address&gt;:7777</td><td>The Overview shows your nodes up and the ASL3 registration "Registered" (section 15.8).</td></tr>
   </table>
   <h3>wifimon's watchdogs</h3>
   <p>A new wifimon starts with both watchdogs off: it shows WiFi and voltage, but won't act on them. On your first
@@ -475,11 +486,11 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
 <pre><span class="c"># remove one tool</span>
 sudo python3 /usr/local/bin/sysmon.py --uninstall
 <span class="c"># remove every tool except instmon</span>
-sudo bash uninstall_all_v1_10_0_20261110.sh</pre>
+sudo bash uninstall_all_v1_11_0_20261116.sh</pre>
   <p>Your settings in <code>/etc/asl_dvs/</code>, instmon's library and wifimon's config stay in place. Remove
     instmon last, with its own <code>--uninstall</code>. The script also removes Terminal Monitor when it is installed
-    (its settings, certificate and <code>termon</code> user stay). It does not remove Node Recorder or Pibrary: use
-    instmon's Uninstall button for them.</p>
+    (its settings, certificate and <code>termon</code> user stay), and Node Monitor (its settings in <code>/etc/asl_dvs/nodemon.conf</code> stay).
+    It does not remove Node Recorder or Pibrary: use instmon's Uninstall button for them.</p>
 
   <div class="uth">
     <span class="lbl">UNDER THE HOOD</span>
@@ -564,7 +575,7 @@ sudo bash uninstall_all_v1_10_0_20261110.sh</pre>
   <figure>
     <div class="mock">
       <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · Log Out · v6.13.83-pi02w</span></div>
-      <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
+      <div class="row" style="padding-top:.5em"><span class="btn">Node Mon</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
         <div class="card"><b>Load</b><span class="v ok">0.42 / 0.51 / 0.48</span></div>
@@ -585,7 +596,7 @@ sudo bash uninstall_all_v1_10_0_20261110.sh</pre>
   <table>
     <tr><th>Part</th><th>What it shows or does</th></tr>
     <tr><td>Header</td><td>Your callsign and node number, how long the Pi has been up, and SysMon's version.</td></tr>
-    <tr><td>Quick links</td><td>Open Allmon3, the DVSwitch page, Cockpit, the USRP2M17 page and wifimon in a new tab. <b>Node Control</b> goes back to the Dashboard.</td></tr>
+    <tr><td>Quick links</td><td>Open Node Monitor (the <b>Node Mon</b> button, from SysMon 6.13.100; it replaced Allmon3), the DVSwitch page, Cockpit, the USRP2M17 page and wifimon in a new tab. <b>Node Control</b> goes back to the Dashboard.</td></tr>
     <tr><td>Status strip</td><td>Host name, load, memory, CPU temperature and power health (below).</td></tr>
     <tr><td>Tabs</td><td>One per view. You can hide the ones you don't use on the Edit tab (Chapter 5).</td></tr>
     <tr><td>Radio 1 to 5</td><td>Saved sets of radio audio settings. Pressing one applies it (Chapter 5, Tune tab).</td></tr>
@@ -1241,11 +1252,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 <section class="chapter" id="ch6">
   <div class="kicker">Chapter 6 · SysMon <span class="badge full">FULL</span></div>
   <h1 class="ch">Full-build tabs</h1>
-  <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
-    save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
+  <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds six tabs the Pi Zero 2 W build leaves out to
+    save memory: Firewall, Reg, Net, Zello, SVX and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs. From 6.13.71-pi02w the Pi Zero 2 W build has the Reg tab again (6.2).</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_83_20261013.py</code>
-    (version <code>6.13.95</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_101_20261116.py</code>
+    (version <code>6.13.101.1</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
   <figure>
@@ -1254,10 +1265,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <span class="tab on" style="background:var(--org)">Firewall</span><span class="tab">Journal</span><span class="tab">ASL-DVS</span>
       <span class="tab on" style="background:var(--org)">Reg</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span>
       <span class="tab on" style="background:var(--org)">Net</span><span class="tab">DVSM</span><span class="tab">STFU</span><span class="tab">M17</span>
-      <span class="tab on" style="background:var(--org)">Zello</span><span class="tab">SD Card</span><span class="tab">Security</span>
+      <span class="tab on" style="background:var(--org)">Zello</span><span class="tab on" style="background:var(--org)">SVX</span><span class="tab">SD Card</span><span class="tab">Security</span>
       <span class="tab on" style="background:var(--org)">Console</span><span class="tab">Edit</span>
     </div></div>
-    <figcaption><b>Figure 6.1 · Illustration.</b> The full build's 19 tabs. The five highlighted are covered here.</figcaption>
+    <figcaption><b>Figure 6.1 · Illustration.</b> The full build's 20 tabs. The six highlighted are covered here.</figcaption>
   </figure>
 
   <h2><span class="n">6.1</span>Firewall tab</h2>
@@ -1326,7 +1337,38 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="call care"><span class="t">CAREFUL</span>The override holds your Zello password in plain text, and
     the editor shows it. Save writes it at once; Restart applies it.</div>
 
-  <h2><span class="n">6.5</span>Console tab</h2>
+  <h2><span class="n">6.5</span>SVX tab</h2>
+  <p>For SvxLink, the program that joins the node to an SvxReflector (its talkgroups, set up by the SVXLink tab of 44helper, section 9.4).
+    It is listed like STFU, M17 and Zello, and you can hide it on the Edit tab. A node that saved its tab list before 6.13.101 gets the
+    tab once; after the next save on the Edit tab, the tick box is yours. The tab opens with the Checks card, then two cards for changing things.</p>
+  <table>
+    <tr><th>Card</th><th>Shows or does</th></tr>
+    <tr><td>Checks</td><td>One row per check, each <b>PASS</b>, <b>FAIL</b>, <b>WARN</b> or <b>INFO</b>, with a line on what to do. The count is in the card's header. It runs when the tab opens and on <b>Refresh</b>, not in the background. <b>Restart svxlink-usrp</b> is at the bottom.</td></tr>
+    <tr><td>Connect to a reflector</td><td>The same change as 44helper's SVXLink step 11: host, port, password, default talkgroup and monitored talkgroups. It sets <code>[ReflectorLogic]</code> (your callsign comes from the file), adds the control logic and <code>[ReflectorLink]</code>, and restarts <code>svxlink-usrp</code>. A blank password keeps the one already set. Safe to run again; a copy of the first version is kept as <code>svxlink.conf.44helper-bak</code>.</td></tr>
+    <tr><td>Config editor</td><td>A plain text editor for the SvxLink files: <code>svxlink.conf</code>, <code>svxlink.d/*.conf</code> and the other <code>.conf</code> and <code>.json</code> files beside them. <b>Save</b> checks the file first and keeps the previous version; <b>Restore previous</b> swaps it back (press it again to undo that). It never restarts the service by itself.</td></tr>
+  </table>
+  <h3>The checks</h3>
+  <table>
+    <tr><th>Row</th><th>Passes when</th></tr>
+    <tr><td>SvxLink service running</td><td>The USRP build (<code>/usr/local/bin/svxlink</code>) is installed and <code>svxlink-usrp</code> is active. If it is not installed the card says so and stops there.</td></tr>
+    <tr><td>Config reads cleanly</td><td><code>svxlink.conf</code> has no comment after a value, every name in <code>LOGICS</code> and <code>LINKS</code> has its own section, and the ports are numbers.</td></tr>
+    <tr><td>Reflector settings</td><td>Host, port, callsign and key are set, and the callsign matches the node's (a difference is a WARN).</td></tr>
+    <tr><td>Reflector reachable</td><td>A short TCP connection to the reflector's port works (3 seconds). This is the only check that opens a connection.</td></tr>
+    <tr><td>Logged in to the reflector</td><td>The last login line in SvxLink's log (<code>/var/log/svxlink</code>) is <i>Authentication OK</i>, not a disconnect or a refusal.</td></tr>
+    <tr><td>USRP ports mirror rpt.conf</td><td>SvxLink's two ports match a node's <code>rxchannel = USRP/127.0.0.1:RX:TX</code> in <code>rpt.conf</code>. That node is the bridge node (1900 by convention).</td></tr>
+    <tr><td>Bridge node loaded in Asterisk</td><td>Asterisk lists the bridge node under <code>rpt localnodes</code>.</td></tr>
+    <tr><td>Dialplan line for the bridge</td><td><code>extensions.conf</code> has <code>exten =&gt; 1900,1,Rpt(1900)</code>. The old <code>rpt,1900</code> form fails: ASL3 rejects it.</td></tr>
+    <tr><td>Node line has a host and port</td><td>The bridge node's line in <code>[nodes]</code> reads <code>radio@127.0.0.1[:port]/1900,NONE</code>, with the port Asterisk really listens on (<code>iax.conf</code> <code>bindport</code>).</td></tr>
+    <tr><td>Control device</td><td>The terminal device Node Controller's SVX tab uses to pick talkgroups exists. Shown when a control logic is set up.</td></tr>
+    <tr><td>Bridge ports closed to the network</td><td>The firewall does not allow the bridge's UDP ports. A WARN when SvxLink listens on all interfaces and nothing blocks them.</td></tr>
+    <tr><td>Warnings in the SvxLink log</td><td>INFO: how many of the last 200 lines are warnings or errors, and the latest one.</td></tr>
+    <tr><td>Talkgroup now selected</td><td>INFO: the talkgroup SvxLink last selected, and whether the reflector link is on.</td></tr>
+  </table>
+  <p>A FAIL row names the fix, for example "44helper, Config tab, Add SvxLink bridge node". SysMon only edits and checks; it repairs nothing by itself.</p>
+  <div class="call care"><span class="t">CAREFUL</span>Changing anything here needs the root login. The editor shows the file as it is, including the reflector
+    password; the checks and the Connect card never show it.</div>
+
+  <h2><span class="n">6.6</span>Console tab</h2>
   <p>A live Asterisk console (<code>asterisk -rvvv</code>) in the browser, plus one-click buttons for the commands you'd
     otherwise type.</p>
   <h3>Switching it on and opening it</h3>
@@ -1387,6 +1429,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       as <code>Environment=</code> lines (<code>USRP_BIND</code>, <code>USRP_HOST</code>, <code>USRP_RXPORT</code>, <code>USRP_TXPORT</code>,
       gains and the Zello keys). Expected ports: RX 34012, TX 32012, node 1918. Live status parses
       <code>Keyed:</code> and <code>UnKeyed:</code> lines from the journal.</p>
+    <h3>SVX</h3>
+    <ul>
+      <li><code>GET /api/svx</code> runs the checks. <code>POST /api/svx</code> takes one action: <code>read</code>, <code>save</code>, <code>restore</code>, <code>restart</code> or <code>connect</code>. All of them need the login; every one except the first needs root.</li>
+      <li>The editor lists the <code>.conf</code> and <code>.json</code> files in <code>/usr/local/etc/svxlink</code> and its <code>svxlink.d</code> folder, and refuses any other name. A save writes <code>NAME.sysmon-bak</code> first and replaces the file in one step.</li>
+      <li>A save is refused for an empty file, Windows line endings, JSON that does not parse, a line that is not <code>NAME=value</code>, a comment after a value (SvxLink reads it as part of the value), a port that is not a number, or a <code>LOGICS</code> or <code>LINKS</code> name with no section.</li>
+      <li>Connect checks each field (host, port, password of at most 128 characters with no quote or backslash, talkgroup numbers) before it writes <code>svxlink.conf</code> and restarts <code>svxlink-usrp</code>.</li>
+    </ul>
     <h3>Console</h3>
     <ul>
       <li>The on/off switch is the file <code>/etc/sysmon/console.enable</code>. It must be a plain file owned by root and not writable by anyone else, or the console stays off. The page writes who switched it on, from where and when. You can also create or remove it from a shell.</li>
@@ -1548,7 +1597,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Verdict</th><th>Means</th></tr>
     <tr><td class="ok">OK</td><td>As it should be.</td></tr>
     <tr><td class="bad">over-exposed</td><td>A port that must never be public is open: a dashboard, Cockpit, AMI, a loopback-only bridge port, or a gateway command port.</td></tr>
-    <tr><td class="warn">needed-but-not-open</td><td>A port other nodes must reach (IAX2 4569, EchoLink 5198-5199, VOTER 1667, Ampersand hub 4568) is running but not open, so inbound links will fail. Not shown until a tunnel is set up.</td></tr>
+    <tr><td class="warn">needed-but-not-open</td><td>A port other nodes must reach (IAX2 4569, EchoLink 5198-5199 and 5200, VOTER 1667, Ampersand hub 4568) is running but not open, so inbound links will fail. Not shown until a tunnel is set up.</td></tr>
     <tr><td style="color:var(--muted)">not-listening</td><td>Nothing is running on it, which is normal for software you don't use.</td></tr>
   </table>
 
@@ -1641,10 +1690,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li>Every POST needs the login cookie and an <code>X-Requested-With</code> header (CSRF protection). Wrong passwords share one 5-try lockout across the login, the terminal and other password prompts.</li>
     </ul>
     <h3>Port roles</h3>
-    <p>Each reference port has a role. <b>peer-inbound</b> ports (4569, 5198-5199, 1667 and 4568, all UDP) should be
+    <p>Each reference port has a role. <b>peer-inbound</b> ports (4569, 5198-5199, 1667 and 4568, all UDP, and EchoLink's 5200, TCP) should be
       open when used. <b>mgmt-LAN</b> ports (5038, 8080, 8989, 9090, 9997 and 9999) and <b>loopback-only</b> ports
-      (31100, 31103, 32008, 34008, 32012, 34012, and the command ports 6073-6075 and 54321) must never be exposed.
-      <b>outbound-only</b> (7844, Cloudflare) never needs an opening. "Exposed" means in the 44NetConnect zone
+      (31100, 31103, 32008, 34008, 32012, 34012, SvxLink's USRP pair 34000 and 32000, the test reflector's 5300, TCP and UDP,
+      and the command ports 6073-6075 and 54321) must never be exposed. SvxLink listens on every interface, not only 127.0.0.1,
+      so keep UDP 34000 closed in the firewall.
+      <b>outbound-only</b> ports never need an opening: 7844 (Cloudflare), and from 44helper 0.1.45 a TCP and UDP row for each reflector your
+      <code>svxlink.conf</code> names (for example <code>north.america.svxlink.net</code> on 35300); their "running" follows <code>svxlink-usrp</code>. "Exposed" means in the 44NetConnect zone
       (Pi-hosted), in the router's forwards (router, single address), or the whole subnet (router, routed subnet
       with masquerade off).</p>
   </div>
@@ -1909,9 +1961,20 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">9.4</span>SVXLink tab</h2>
   <table>
     <tr><th>Script</th><th>What it installs</th></tr>
-    <tr><td><b>USRP fork</b> (default)</td><td>Builds DL1HRC's unofficial SvxLink fork from source. It adds a UsrpLogic module, so SvxLink can talk to the DVSwitch bridges over USRP. Steps: conflict check, build dependencies, clone, create the svxlink user, configure and build, check the USRP part built, locate files, switch UsrpLogic on and set its ports (including <code>LINKS=LinkToUsrp</code>), and install and start the <code>svxlink-usrp</code> service from the page. Installs under <code>/usr/local</code>.</td></tr>
+    <tr><td><b>USRP fork</b> (default)</td><td>Builds DL1HRC's unofficial SvxLink fork from source. It adds a UsrpLogic module, so SvxLink can talk to the DVSwitch bridges over USRP. Steps: conflict check, build dependencies, clone, create the svxlink user, configure and build, check the USRP part built, locate files, switch UsrpLogic on and set its ports, and install and start the <code>svxlink-usrp</code> service from the page. Installs under <code>/usr/local</code>. Optional steps run a test reflector on the node (10), connect to a reflector (11) and set the callsign (12).</td></tr>
     <tr><td>Bookworm / Trixie</td><td>Debian's own <code>svxlink-server</code> package: install, ALSA utilities, add the svxlink user to the audio and serial groups, enable at boot, set callsign. Sound-card and PTT/COS settings stay at their defaults; set them by hand for your hardware.</td></tr>
   </table>
+  <h3>Bridge or radio (step 8)</h3>
+  <p>Step 8 asks <b>How will SvxLink be used here?</b> (from 44helper 0.1.44). Used with ASL3 it is a <b>bridge with no radio</b>: ASL3 owns the radio, so SvxLink
+    must not open a sound card or serial port of its own. That is the default. A node set up before this still has the stock radio logic
+    (<code>SimplexLogic</code>) in <code>svxlink.conf</code>, which opens the sound card and the HID and serial pins that Asterisk's SimpleUSB uses.</p>
+  <table>
+    <tr><th>Answer</th><th>What step 8 does</th></tr>
+    <tr><td>Bridge under ASL3 (no radio)</td><td>Makes sure UsrpLogic is in <code>LOGICS</code>, takes out any radio logic (a Simplex or Repeater logic whose receiver is not a Dummy one) and any link that joined it, such as <code>LinkToUsrp</code>. The control logic and reflector link that step 11 adds are kept. The ports and callsign are set as before.</td></tr>
+    <tr><td>With its own radio</td><td>Keeps the radio logic, joins it to UsrpLogic in <code>[LinkToUsrp]</code>, and writes the sound card and the squelch and PTT pins into its receiver and transmitter sections: a USB sound card with CM108 HID pins, serial port pins, or Raspberry Pi GPIO. Leave the fields at <b>auto</b> for the first USB sound card and the usual device and pins (VOL_DN and GPIO3, CTS and DTRRTS, lines 22 and 17). <b>Radio also joins the reflector</b> (off by default) adds the radio to the reflector link.</td></tr>
+  </table>
+  <p>The radio fields show only for the radio answer. The step stops, changing nothing, if Asterisk's SimpleUSB or USBRadio node uses the same USB device, or has an empty <code>devstr</code> while the node has only one USB sound card. Run step 8 again with the other answer to switch: the radio sections are never deleted, so going back restores them.
+    The previous <code>svxlink.conf</code> is kept as <code>svxlink.conf.44helper-prev</code>, beside the first version, <code>.44helper-bak</code>. The answer is saved in <code>/etc/44helper/44helper.conf</code> under <code>[svxlink]</code>, and step 11 reads it. A node with no saved answer counts as a bridge. Restart <code>svxlink-usrp</code> afterwards.</p>
   <div class="call care"><span class="t">CAREFUL</span>The USRP fork is unofficial and bench-tested only. It is not
     merged upstream, and its build-step note flags an unpatched crash from a crafted packet. The package and the
     fork can't run at the same time. One purge covers both: it stops both services, purges the package, and offers
@@ -2185,6 +2248,14 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <code>[nodes]</code> line on this node's IAX port and, if ticked, an extension in <code>[radio-secure]</code>. Leave the number blank for the next free one
     (it skips numbers already in rpt.conf and 1921, 1999 and 1917). Choose <b>Plain</b> or <b>USRP bridge</b> (with the other program's port). <b>Preview</b> writes
     nothing; <b>Add node</b> saves an automatic copy first, adds the node to Allmon3 and does not restart Asterisk. Nodes added here are listed with <b>Preview remove</b> and <b>Remove</b>.</p>
+  <p><b>Add SvxLink bridge node</b> (when SvxLink is installed) does it in one step: it adds the bridge node (1900 with ports 34000 and 32000, or the next free ones; a number typed above is used instead) and sets SvxLink's USRP ports to match.</p>
+  <p>The card also checks <code>rpt.conf</code> and <code>extensions.conf</code> and offers a fix, with <b>Preview fix</b> first, an automatic save point and no Asterisk restart:</p>
+  <table>
+    <tr><th>Warning</th><th>Fix</th></tr>
+    <tr><td><code>extensions.conf</code> has the old <code>exten =&gt; NODE,1,rpt,NODE</code> line (ASL3 rejects it, so links to the node fail)</td><td><b>Fix exten lines</b> changes it to <code>Rpt(NODE)</code>. New lines are written that way from 44helper 0.1.41.</td></tr>
+    <tr><td>A <code>[nodes]</code> line with no host, ending in another node number, with a port other than <code>bindport</code> in <code>iax.conf</code>, a node with two lines, or a node with no line</td><td><b>Fix [nodes] lines</b> rewrites this server's node lines as <code>N = radio@127.0.0.1[:bindport]/N,NONE</code> and keeps trailing comments. Lines for nodes on other servers are named but never changed. Every write to <code>rpt.conf</code> from this tab also tidies <code>[nodes]</code> (0.1.42).</td></tr>
+    <tr><td>An <code>events</code>, <code>functions</code>, <code>morse</code>, <code>telemetry</code> or similar line names a section that does not exist (for example <code>events = events-652705</code> with the section called <code>[events-652706]</code>)</td><td><b>Fix section names</b> renames the one unused section that differs by up to two characters. If there is no clear match the line is named for fixing by hand. Lines inside blocks that Node Talker or another tool manages are left alone (0.1.43).</td></tr>
+  </table>
   <h3>Full config replacement</h3>
   <p>For a Pi Zero 2 W: <b>Get bundle from GitHub</b> downloads the standard config from <code>configs/pi02w/</code> (every file checked against its sha256 and size),
     you fill in callsign, node number, DMR ID and NXDN ID, <b>Preview</b> shows what would change, and <b>Replace config</b> saves an automatic restore point first.
@@ -2319,7 +2390,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <figure>
     <div class="mock">
       <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROLLER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.108-pi02w</span></div>
-      <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
+      <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Node Mon</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
         <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
       <div class="tabs" style="padding-top:0"><span class="tab">ASL</span><span class="tab">Echo</span><span class="tab on" style="background:var(--blu)">DMR</span><span class="tab">STFU</span><span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span><span class="tab">XLX</span><span class="tab">M17</span><span class="tab">Phone</span><span class="tab">EDIT</span></div>
@@ -2350,7 +2421,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>Part</th><th>What it does</th></tr>
     <tr><td>Header</td><td>Callsign, node number, uptime, Log Out, version.</td></tr>
-    <tr><td>Quick links</td><td>Allmon3, the DVSwitch page, Cockpit, instmon, wifimon and SysMon. SysMon is greyed out while it isn't running.</td></tr>
+    <tr><td>Quick links</td><td>Node Mon (Node Monitor, port 7777; it replaced Allmon3 in 9.3.113), the DVSwitch page, Cockpit, instmon, wifimon and SysMon. SysMon is greyed out while it isn't running. The Node Mon button does not check that Node Monitor is installed.</td></tr>
     <tr><td>Indicator</td><td>What you are connected to now (talkgroup, node or reflector). The dots light while traffic passes.</td></tr>
     <tr><td>Search row</td><td>Every mode tab except DMR and Phone. Search the full list (AllStar nodes, EchoLink stations, reflectors, talkgroups) and pick one, then <b>Connect</b>, <b>LH</b> or <b>Save</b>. On most tabs you can also type what you want straight into the search box and press <b>Connect</b> or Enter, even when it isn't in the list (section 12.2). FCS and M17 have menus only.</td></tr>
     <tr><td>DMR row</td><td>The DMR tab keeps its own row: network menu, talkgroup box, <b>Connect</b>, <b>LH</b> and <b>Save</b>.</td></tr>
@@ -2990,12 +3061,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 
 <section class="chapter" id="ch15">
   <div class="kicker">Chapter 15 · Node Talker</div>
-  <h1 class="ch">Node Talker, Node Recorder, Pibrary and Terminal Monitor</h1>
+  <h1 class="ch">Node Talker, Node Recorder, Node Monitor, Pibrary and Terminal Monitor</h1>
   <p class="ch-lede">Node Talker puts one node in your phone's browser: it plays the node's audio about half a second
     behind, transmits with push-to-talk, and connects or tunes up to 15 favorites. Open it at
     <code>http://&lt;pi-address&gt;:8993</code>; it moves you to <code>https://</code>. It is optional, and the same
     file runs on the Pi Zero 2 W and the full build. It was called Node Listen before 0.6.0. This chapter is a summary
-    for Node Talker 0.10.27, followed by the other three optional tools (section 15.7). The <b>Node Talker Manual</b> (<code>docs/ASL-DVS_Node_Talker_Manual.pdf</code>) covers receive and transmit audio,
+    for Node Talker 0.10.27, with the later changes noted where they apply, followed by the other optional tools (sections 15.7 and 15.8). The <b>Node Talker Manual</b> (<code>docs/ASL-DVS_Node_Talker_Manual.pdf</code>) covers receive and transmit audio,
     every setting, the meters and the Audio check in detail.</p>
 
   <h2><span class="n">15.1</span>Before you start</h2>
@@ -3035,6 +3106,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Where</th><th>Settings</th></tr>
     <tr><td>Receive (node, RX card)</td><td><b>Cut below 300 Hz</b> (removes hum and the lower CTCSS tones), <b>CTCSS notch</b> (removes the one tone you enter, off by default), <b>Automatic level</b>, <b>Squelch-tail gate</b> (Off, Light, Strong), <b>RX gain</b> (±12 dB), <b>Listen buffer</b> (page audio; Node Talker Mobile has its own receive buffer).</td></tr>
     <tr><td>Transmit (node, Audio levels and Settings cards)</td><td><b>TX gain</b> (±12 dB, soft limit), <b>TX buffer</b>, time-out (120 s), busy lockout.</td></tr>
+    <tr><td>Your own transmission in a recording</td><td>From 0.10.51 Node Talker also hands the audio you send to Node Recorder, so a recording holds both sides. Before, only what came back from the node was recorded, and your own voice (a parrot test where you only heard the parrot) was missing.</td></tr>
     <tr><td>Microphone (browser)</td><td>Browser processing, <b>Mic gain</b>, Voice filter or Radio voice, Noise gate, Leveler; in Node Talker Mobile 0.10.13 and later the app applies the same settings. <b>Test mic</b> reports level, peak, background and limiter use with a bar meter; <b>Test through the node</b> (Tests card) sends it out and back.</td></tr>
     <tr><td>Playback (browser)</td><td>16-bit audio, Smooth playback, auto-listen, the spectrum, keep the screen on.</td></tr>
   </table>
@@ -3051,7 +3123,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <b>Tests on this node</b> turns each test on or off for every phone; the Pi refuses the tone tests, balancing and the
     kerchunk test while they are off. The <b>Data</b> card downloads every number in one file (inside Node Talker Mobile 0.10.15 or later the app's Save dialog saves it). The Node Talker Manual has the details.</p>
 
-  <h2><span class="n">15.5</span>Favorites: ASL, EchoLink, DVSwitch and M17</h2>
+  <h2><span class="n">15.5</span>Favorites: ASL, EchoLink, DVSwitch, M17 and SvxLink</h2>
+  <p>A link to the SvxLink bridge node (1900, found from the USRP ports 34000 and 32000 in <code>rpt.conf</code>) shows an <b>SVX</b> badge under the push-to-talk button with the tuned talkgroup, for example <code>SVX  TG 240</code>, read from SvxLink's own log. Other labels: <i>no talkgroup</i>, <i>reflector not connected</i>, <i>reflector link off</i>, <i>talkgroup unknown</i> and <i>SvxLink stopped</i>. With an AllStar node linked as well, the AllStar node stays the main badge and the SVX talkgroup is the small tag after it (Node Talker 0.10.50).</p>
   <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 15. Open the card,
     then <b>Add row</b> adds one; the menu picks the mode, then the number and a name; ✕ removes it; <b>Save
     favorites</b> keeps them. <b>From the Dashboard…</b> lists the Dashboard's favorites, and <b>Add</b> copies one (a
@@ -3139,6 +3212,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     (<code>/etc/asl_dvs/termon_tls/</code>). A <b>Shell account</b> setting runs the terminal as a normal user instead of root. It opens its port in the firewall
     on install and closes it on uninstall, and writes audit lines to the journal and syslog.</p>
 
+
+  <h2><span class="n">15.8</span>Node Monitor</h2>
+  <p>Node Monitor (port 7777, service <code>nodemon</code>) shows every node on the Pi, what each is linked to, and whether each is registered with ASL3. It has its own
+    login with the root password, and its settings are in <code>/etc/asl_dvs/nodemon.conf</code>. It replaced Allmon3 (the <b>Node Mon</b> button in the Dashboard and SysMon opens it).
+    Tabs: <b>Overview</b> (one row per node, with Disconnect and Disconnect All), <b>Main node</b>, <b>Private nodes</b> and <b>Log</b>.</p>
+  <table>
+    <tr><th>Part</th><th>Meaning</th></tr>
+    <tr><td>Linked to</td><td>Only the node's <b>direct</b> links: the nodes Asterisk reports with a <code>Conn:</code> line, plus one still connecting. A node linked to a hub, such as the East Coast Reflector, shows the hub, not the hub's whole roster.</td></tr>
+    <tr><td>Other nodes on the links (N)</td><td>A closed line under the links; it opens to the node numbers behind them. Asterisk does not say which link each one is behind, so they are not grouped.</td></tr>
+    <tr><td>Links on the nodes</td><td>The Overview count of direct links, so a hub's roster is not counted again for every node that can see it.</td></tr>
+    <tr><td>Disconnect · Disconnect All</td><td>Drop that node's direct links. They never touch the nodes behind a hub.</td></tr>
+  </table>
+  <p>The <b>Connections</b> tab was removed in 0.6.0: the Overview and node tabs show the same links, so it only repeated them.</p>
 </section>
 
 <section class="part">
@@ -3325,22 +3411,26 @@ free -m; zramctl</pre>
     <tr><td class="port">9000/tcp</td><td>Pibrary</td><td>LAN or VPN only</td></tr>
     <tr><td class="port">7878/tcp</td><td>Terminal Monitor (HTTPS)</td><td>LAN only</td></tr>
     <tr><td class="port">8993/tcp</td><td>Node Talker</td><td>LAN or VPN; the internet only with <code>allow_wan</code> (section 15.6)</td></tr>
+    <tr><td class="port">7777/tcp</td><td>Node Monitor</td><td>LAN or VPN only</td></tr>
   </table>
   <h2>The node</h2>
   <table>
     <tr><th>Port</th><th>Used by</th><th>Reach</th></tr>
     <tr><td class="port">4569/udp</td><td>IAX2, AllStar links</td><td>open to peers</td></tr>
-    <tr><td class="port">5198–5199/udp</td><td>EchoLink / SvxLink</td><td>open to peers if used</td></tr>
+    <tr><td class="port">5198–5199/udp · 5200/tcp</td><td>EchoLink</td><td>open to peers if used</td></tr>
     <tr><td class="port">1667/udp</td><td>VOTER / RTCM</td><td>open to peers if used</td></tr>
     <tr><td class="port">4568/udp</td><td>Ampersand hub IAX</td><td>open to peers if used</td></tr>
     <tr><td class="port">5038/tcp</td><td>Asterisk AMI</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34001 / 32001</td><td>USRP: node 1999 ↔ Analog_Bridge</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">34000 / 32000</td><td>USRP: node 1900 ↔ SvxLink (SvxLink listens on every interface, so keep 34000/udp closed)</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34008 / 32008</td><td>USRP: node 1917 ↔ USRP2M17</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34018 / 32018</td><td>USRP: node 1921 ↔ Node Talker (push-to-talk)</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">9995/udp</td><td>Copy of node 1921's transmit audio, Node Talker to Node Recorder</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">6200/udp</td><td>Node audio to Node Talker (the <code>outstreamcmd</code> feed)</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34012 / 32012</td><td>USRP: node 1918 ↔ Zello bridge</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">31100 / 31103</td><td>Analog_Bridge ↔ MMDVM_Bridge (DMR; other modes use their own 3xx00 ranges)</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">5300/tcp+udp</td><td>Test SvxReflector on the node (44helper SVXLink step 10)</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">35300 and the like</td><td>SvxLink to a reflector named in <code>svxlink.conf</code></td><td>outbound</td></tr>
     <tr><td class="port">17010 → 17000</td><td>USRP2M17 → M17 reflectors</td><td>outbound</td></tr>
     <tr><td class="port">62031</td><td>BrandMeister (STFU)</td><td>outbound</td></tr>
     <tr><td class="port">6073 / 6074 / 6075</td><td>YSF / P25 / NXDN gateway command ports</td><td>127.0.0.1 only</td></tr>
@@ -3380,7 +3470,9 @@ free -m; zramctl</pre>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/</td><td>tool versions, scripts, configs; <code>config/wg0.conf</code>; <code>config_restore/</code></td><td>instmon, 44helper</td></tr>
     <tr><td class="mono">/etc/sysmon/sysmon.conf</td><td>SysMon settings, pinned list, radio presets</td><td>SysMon</td></tr>
     <tr><td class="mono">/etc/sysmon/console.enable</td><td>console switch (full build)</td><td>SysMon / you</td></tr>
-    <tr><td class="mono">/etc/44helper/44helper.conf</td><td>44helper settings, tunnels, router, peers</td><td>44helper</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper.conf</td><td>44helper settings, tunnels, router, peers; <code>[svxlink] use=</code> (bridge or radio) and <code>radio_reflector=</code></td><td>44helper</td></tr>
+    <tr><td class="mono">/usr/local/etc/svxlink/svxlink.conf · svxlink.d/</td><td>SvxLink config; copies <code>.44helper-bak</code> (first), <code>.44helper-prev</code> (before the last change) and <code>.sysmon-bak</code> (SysMon's editor)</td><td>44helper, SysMon (SVX tab), you</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodemon.conf</td><td>Node Monitor settings</td><td>Node Monitor</td></tr>
     <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td><td>44helper / you</td></tr>
     <tr><td class="mono">/etc/wifimon/wifimon.conf</td><td>wifimon settings and reconnect list</td><td>wifimon</td></tr>
     <tr><td class="mono">/var/log/wifimon/</td><td>shutdown reports</td><td>wifimon</td></tr>
@@ -3410,6 +3502,7 @@ free -m; zramctl</pre>
     <tr><td class="mono">44helper</td><td>44helper</td><td class="port">9997</td></tr>
     <tr><td class="mono">nodetalker</td><td>Node Talker (Restart=always, WatchdogSec=60; also answers to <code>nodelisten</code>)</td><td class="port">8993</td></tr>
     <tr><td class="mono">noderecorder</td><td>Node Recorder</td><td class="port">8995</td></tr>
+    <tr><td class="mono">nodemon</td><td>Node Monitor</td><td class="port">7777</td></tr>
     <tr><td class="mono">pibrary</td><td>Pibrary</td><td class="port">9000</td></tr>
     <tr><td class="mono">termon · termon-helper</td><td>Terminal Monitor (web page, and its root helper)</td><td class="port">7878</td></tr>
     <tr><td class="mono">claude-remote</td><td>Claude Remote (44helper's tab; runs as the login user)</td><td></td></tr>
@@ -3424,7 +3517,8 @@ free -m; zramctl</pre>
     <tr><td class="mono">firewalld</td><td>firewall</td><td></td></tr>
     <tr><td class="mono">cloudflared</td><td>Cloudflare Tunnel</td><td></td></tr>
     <tr><td class="mono">cockpit.socket</td><td>Cockpit</td><td class="port">9090</td></tr>
-    <tr><td class="mono">svxlink / svxlink-usrp</td><td>SvxLink</td><td></td></tr>
+    <tr><td class="mono">svxlink-usrp</td><td>SvxLink USRP build (the bridge to node 1900)</td><td></td></tr>
+    <tr><td class="mono">svxreflector</td><td>test reflector on the node (44helper SVXLink step 10)</td><td class="port">5300</td></tr>
     <tr><td class="mono">amp-server / amp-hub</td><td>Ampersand</td><td></td></tr>
     <tr><td class="mono">asl-dvs-reinstall</td><td>44helper Config reinstall job (temporary)</td><td></td></tr>
   </table>
