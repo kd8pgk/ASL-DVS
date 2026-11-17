@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_58_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_59_20261117.py`. Newest entries first.
+
+## 0.1.59 (2026-11-17)
+
+Built-in default presets, and the preset step moves to the end of the build. This is a release: new data, a new action and a new step order.
+
+- **Default presets.** Travel Node and Magic Box each come with a built-in default, so a new node has a preset without capturing one first. Travel Node: private nodes 1999 (DVSwitch bridge) and 1917 (M17), the `chan_usrp` module and IAX port 4574. Magic Box: the same plus private node 1900 with its extension and the SvxLink bridge wiring (UsrpLogic 34000/32000, the reflector link and control logic). They carry no callsign, ID or password, and not Node Talker's own node 1921.
+- **Your own presets.** "Save as Travel Node" and "Save as Magic Box" on the Config tab still save this node's wiring, and a saved preset is used instead of the default. A new "Use the built-in default" button on each card deletes your saved preset (`POST` action `preset_reset`); it changes no files on the node. The cards say which one is in use.
+- **Where it applies.** Preview and Apply on the Config tab and the Build tabs use the saved preset when there is one, else the default. The Build step names which one it checked.
+- **Step order.** On both Build tabs "Apply the Travel Node preset" and "Apply the Magic Box preset" now come after "Radio and Node Talker" and before "Restore point" and "Reboot test", so the restore point holds the preset.
+- **Tests.** `ci/test_h44_default_presets.py`; `ci/test_h44_build.py` and `ci/test_h44_presets.py` have the new order.
 
 ## 0.1.58 (2026-11-17)
 

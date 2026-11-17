@@ -265,7 +265,7 @@ class Actions(unittest.TestCase):
                 self.assertTrue(res["success"], res["output"])
                 got = h44._cfgr_load_preset("magic_box")
                 self.assertEqual(got["svx"], {"UsrpLogic": {"USRP_RX_PORT": "34000"}})
-                self.assertIsNone(h44._cfgr_load_preset("travel_node"))
+                self.assertTrue(h44._cfgr_load_preset("travel_node")["_default"])
 
 
 class Plan(Tmp):
@@ -284,12 +284,11 @@ class BuildStep(unittest.TestCase):
     def ids(self, mode, profile):
         return [i for i, _ in h44._bld_stage_defs(mode, profile)]
 
-    def test_the_preset_step_is_in_both_tabs_after_the_systems(self):
+    def test_the_preset_step_is_in_both_tabs_just_before_the_restore_point_and_reboot(self):
         for mode in ("half", "split", "full", "none"):
-            t = self.ids(mode, "travel")
-            self.assertEqual(t[t.index("apply_m17") + 1], "preset", mode)
-            m = self.ids(mode, "magic")
-            self.assertEqual(m[m.index("svx_reflector") + 1], "preset", mode)
+            for profile in ("travel", "magic"):
+                ids = self.ids(mode, profile)
+                self.assertEqual(ids[-3:], ["preset", "save", "reboot"], (mode, profile))
         labels = dict(h44._bld_stage_defs("half", "travel")), dict(h44._bld_stage_defs("half", "magic"))
         self.assertEqual(labels[0]["preset"], "Apply the Travel Node preset")
         self.assertEqual(labels[1]["preset"], "Apply the Magic Box preset")

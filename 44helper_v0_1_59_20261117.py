@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.58"
+APP_VERSION = "0.1.59"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17060,7 +17060,8 @@ def build_config_status() -> dict:
     presets = {}
     for pid, plabel in _CFGR_PRESETS.items():
         p = _cfgr_load_preset(pid)
-        presets[pid] = {"label": plabel, "exists": p is not None, "saved_at": (p or {}).get("saved_at", "")}
+        presets[pid] = {"label": plabel, "exists": p is not None, "default": bool((p or {}).get("_default")),
+                        "saved_at": (p or {}).get("saved_at", "")}
     return {
         "library": _CFGR_DIR,
         "order": list(_CFGR_GROUPS),
@@ -17761,14 +17762,40 @@ def _cfgr_prune_legacy(p: object) -> object:
                 pruned.append(f"{os.path.basename(path)} [{sec}]")
     return {**p, "ini": keep, "_pruned": pruned}
 
+_CFGR_DEFAULT_PRESETS_JSON = '''{"magic_box":{"extensions":[{"context":"radio-secure","lines":["exten => 1900,1,Rpt(1900)"],"node":"1900"}],"iax_port":"4574","ini":{},"modules":{"chan_usrp":"load"},"rpt":{"nodes":[{"node":"1900","nodes_line":"1900 = radio@127.0.0.1:4574/1900,NONE","stanzas":[{"lines":["[1900](node-main)","rxchannel = USRP/127.0.0.1:34000:32000","duplex = 0","hangtime = 0","althangtime = 0","holdofftelem = 1","telemdefault = 0","telemdynamic = 0","linktolink = no","nounkeyct = 1","tx_timeout = 170000"],"name":"1900"}]},{"node":"1917","nodes_line":"1917 = radio@127.0.0.1:4574/1917,NONE","stanzas":[{"lines":["[1917](node-main)","rxchannel = USRP/127.0.0.1:34008:32008","duplex = 0","hangtime = 100","linktolink = no"],"name":"1917"}]},{"node":"1999","nodes_line":"1999 = radio@127.0.0.1:4574/1999,NONE","stanzas":[{"lines":["[1999](node-main)","rxchannel = USRP/127.0.0.1:34001:32001","duplex = 0","hangtime = 100","linktolink = no"],"name":"1999"}]}]},"svx":{"GLOBAL":{"LINKS":"ReflectorLink","LOGICS":"UsrpLogic,ReflectorLogic,SvxCtrlLogic"},"ReflectorLink":{"CONNECT_LOGICS":"SvxCtrlLogic:9:TG,UsrpLogic,ReflectorLogic","DEFAULT_ACTIVE":"1"},"ReflectorLogic":{"ANNOUNCE_REMOTE_MIN_INTERVAL":"300","DEFAULT_TG":"0","HOSTS":"north.america.svxlink.net","HOST_PORT":"35300","MONITOR_TGS":"0","QSY_PENDING_TIMEOUT":"15","TG_SELECT_TIMEOUT":"3600","TYPE":"Reflector"},"SvxCtrlLogic":{"DTMF_CTRL_PTY":"/var/lib/svxlink/dtmf_ctrl","LONG_IDENT_INTERVAL":"0","RX":"SvxCtrlRx","SHORT_IDENT_INTERVAL":"0","TX":"SvxCtrlTx","TYPE":"Simplex"},"SvxCtrlRx":{"TYPE":"Dummy"},"SvxCtrlTx":{"TYPE":"Dummy"},"UsrpLogic":{"DV_USER_INFOFILE":"/usr/local/etc/svxlink/dv_users.json","EVENT_HANDLER":"/usr/local/share/svxlink/events.tcl","JITTER_BUFFER_DELAY":"400","LOCAL_LIMITER_THRESH":"-1.0","NET_LIMITER_THRESH":"-1.0","TYPE":"Usrp","USRP_HOST":"127.0.0.1","USRP_RX_PORT":"34000","USRP_TX_PORT":"32000"}}},"travel_node":{"extensions":[],"iax_port":"4574","ini":{},"modules":{"chan_usrp":"load"},"rpt":{"nodes":[{"node":"1917","nodes_line":"1917 = radio@127.0.0.1:4574/1917,NONE","stanzas":[{"lines":["[1917](node-main)","rxchannel = USRP/127.0.0.1:34008:32008","duplex = 0","hangtime = 100","linktolink = no"],"name":"1917"}]},{"node":"1999","nodes_line":"1999 = radio@127.0.0.1:4574/1999,NONE","stanzas":[{"lines":["[1999](node-main)","rxchannel = USRP/127.0.0.1:34001:32001","duplex = 0","hangtime = 100","linktolink = no"],"name":"1999"}]}]}}}'''
+
+def _cfgr_default_preset(pid: str) -> dict | None:
+    try:
+        raw = json.loads(_CFGR_DEFAULT_PRESETS_JSON).get(pid)
+    except ValueError:
+        return None
+    p = _cfgr_validate_preset(raw) if raw is not None else None
+    if p is not None:
+        p["_default"] = True
+    return p
+
 def _cfgr_load_preset(pid: str) -> dict | None:
     if pid not in _CFGR_PRESETS:
         return None
     try:
         with open(_cfgr_preset_path(pid), "r") as f:
-            return _cfgr_validate_preset(_cfgr_prune_legacy(json.load(f)))
+            saved = _cfgr_validate_preset(_cfgr_prune_legacy(json.load(f)))
     except (OSError, ValueError):
-        return None
+        saved = None
+    return saved if saved is not None else _cfgr_default_preset(pid)
+
+def _cfgr_act_preset_reset(payload: dict) -> dict:
+    pid = str(payload.get("preset", ""))
+    if pid not in _CFGR_PRESETS:
+        return {"success": False, "output": "Unknown preset."}
+    try:
+        os.remove(_cfgr_preset_path(pid))
+    except FileNotFoundError:
+        return {"success": True, "output": f"No saved {_CFGR_PRESETS[pid]} preset on this node: the built-in default is already in use."}
+    except OSError as exc:
+        return {"success": False, "output": f"Could not remove the saved preset: {exc}"}
+    log(f"OK: CONFIG preset reset to the built-in default: {pid}")
+    return {"success": True, "output": f"Your saved {_CFGR_PRESETS[pid]} preset was removed. The built-in default is in use again."}
 
 def _cfgr_preset_summary(p: dict) -> list[str]:
     lines = []
@@ -20325,6 +20352,7 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "restore": _cfgr_act_restore,
     "diff": _cfgr_act_diff,
     "restart": _cfgr_act_restart,
+    "preset_reset": _cfgr_act_preset_reset,
     "preset_capture_preview": lambda p: _cfgr_act_preset_capture(p, False),
     "preset_capture": lambda p: _cfgr_act_preset_capture(p, True),
     "preset_apply_preview": lambda p: _cfgr_act_preset_apply(p, False),
@@ -20611,6 +20639,12 @@ function cfgGateways(btn, action) {
   cfgPost({action: action}, 'cfg-gw-out', btn);
 }
 
+function cfgPresetReset(btn, pid) {
+  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
+  if (!confirm('Remove your saved ' + name + ' preset and use the built-in default again?\n\nYour saved preset is deleted. Files on this node do not change.')) return;
+  cfgPost({action: 'preset_reset', preset: pid}, pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
+}
+
 function cfgPresetCapture(btn, save, pid) {
   pid = pid || 'travel_node';
   var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
@@ -20793,9 +20827,9 @@ function cfgRender(d) {
   if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
   cfgOnPointChange();
   var tp = (d.presets || {}).travel_node || {};
-  document.getElementById('cfg-preset-state').textContent = tp.exists ? ('saved ' + tp.saved_at) : 'not saved on this node';
+  document.getElementById('cfg-preset-state').textContent = tp.default ? 'built-in default in use' : (tp.exists ? ('your saved preset, ' + tp.saved_at) : 'not available');
   var mp = (d.presets || {}).magic_box || {};
-  document.getElementById('cfg-mpreset-state').textContent = mp.exists ? ('saved ' + mp.saved_at) : 'not saved on this node';
+  document.getElementById('cfg-mpreset-state').textContent = mp.default ? 'built-in default in use' : (mp.exists ? ('your saved preset, ' + mp.saved_at) : 'not available');
   cfgPnRender(d.private_nodes);
   var sb = document.getElementById('cfg-svx-bridge');
   if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
@@ -21231,11 +21265,12 @@ def _render_config_panel() -> str:
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
       [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
       [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. Run it on the travel node; apply it on any node from the Restore list
-      above.</div>
+      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. A built-in default is used until you save your own from a node you have set up the way you want; saving replaces it, and "Use the built-in default"
+      brings it back. Apply it on any node from the Restore list above, or from the Build tabs.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
       <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
+      <button class="btn-copy" onclick="cfgPresetReset(this,'travel_node')">Use the built-in default</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
   </div>
@@ -21249,10 +21284,11 @@ def _render_config_panel() -> str:
       the control logic. Never the callsign, the reflector password (AUTH_KEY), the EchoLink password or any radio sections
       (a node whose SvxLink has its own radio cannot save this preset). Applying it changes only values in sections that already
       exist in svxlink.conf; a section the SVXLink tab has not created yet (steps 8 and 11) is left out and named in the preview.
-      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts.</div>
+      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts. It also has a built-in default, replaced when you save your own.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false,'magic_box')">Preview</button>
       <button class="btn-run" onclick="cfgPresetCapture(this,true,'magic_box')">Save as Magic Box</button>
+      <button class="btn-copy" onclick="cfgPresetReset(this,'magic_box')">Use the built-in default</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-mpreset-out">(nothing run yet)</div>
   </div>
@@ -31640,11 +31676,12 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
                ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
-    systems = systems + [("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
-    tail += [("radio", "Radio and Node Talker"), ("save", "Restore point"), ("reboot", "Reboot test")]
+    tail += [("radio", "Radio and Node Talker"),
+             ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset"),
+             ("save", "Restore point"), ("reboot", "Reboot test")]
     ports = ("ports", "Open the ports")
     if mode == "none":
         return [("preflight", "Preflight")] + systems + [ports] + tail
@@ -32254,8 +32291,8 @@ def _bld_preset_state(profile: str, iax_port: str = "") -> tuple[str, str]:
     if err:
         return "warn", err
     if not changes:
-        return "done", f"This node matches the {label} preset."
-    bits = [f"{len(changes)} file(s) would change"]
+        return "done", f"This node matches the {label} preset" + (" (built-in default)." if p.get("_default") else " (your saved preset).")
+    bits = [f"{len(changes)} file(s) would change from the {label} preset" + (" (built-in default)" if p.get("_default") else " (your saved preset)")]
     if removed:
         bits.append("it removes private node(s) " + ", ".join(removed))
     return "warn", "; ".join(bits) + ". Press Preview, then Run if it is right. It is optional and never blocks the steps after it."
