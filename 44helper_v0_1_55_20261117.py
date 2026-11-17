@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.54"
+APP_VERSION = "0.1.55"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -16132,22 +16132,10 @@ def _cfgr_identity_scan() -> dict:
     files = sorted({r["file"] for r in rows})
     return {"bands": _CFGR_ID_BANDS, "groups": groups, "rows": rows, "files": files}
 
-def _cfgr_identity_public(reveal: bool = False) -> dict:
+def _cfgr_identity_public() -> dict:
     d = _cfgr_identity_scan()
-    public = sorted({r["value"] for r in d["rows"] if "node" in r["groups"] and r["value"].isdigit()
-                     and len(r["value"]) >= 4 and not _cfgr_is_private(r["value"])}, key=len, reverse=True)
     for r in d["rows"]:
-        if not reveal:
-            r["raw"] = _CFGR_ID_MASK if r["set"] else ""
-            r["value"] = _CFGR_ID_MASK if r["value"] else ""
-            for n in public:
-                r["where"] = re.sub(r"(?<!\d)" + re.escape(n) + r"(?!\d)", _CFGR_ID_MASK, r["where"])
-            r["scope"] = ""
         r.pop("form", None)
-    for g in d["groups"].values():
-        for s in g["scopes"]:
-            s["scope"] = "" if not reveal else s["scope"]
-    d["revealed"] = reveal
     d["checked_at"] = _cfgr_now()
     return d
 
@@ -20135,13 +20123,10 @@ def _dispatch_config_action(payload: dict) -> dict:
             log(f"FAIL: CONFIG {action}: {exc}")
             return {"success": False, "output": f"Failed: {exc}"}
 
-_CFGR_REVEALED: set[str] = set()
-_CFGR_REVEAL_LOCK = threading.Lock()
-
 def _route_config_identity(query: dict) -> tuple[int, str, bytes]:
     with _CFGR_LOCK:
         try:
-            body = _cfgr_identity_public(False)
+            body = _cfgr_identity_public()
         except Exception as exc:
             log(f"FAIL: CONFIG identity scan: {type(exc).__name__}: {exc}")
             body = {"error": "Could not read the config files: " + type(exc).__name__}
@@ -20725,7 +20710,6 @@ function cfgIdRender(d) {
     'Phone accounts: the dashboard rewrites the dvs_phone files from phone.json on every Phone-tab Apply. Checked ' + cfgEsc(d.checked_at || '') + '.</div>';
 }
 
-var CFG_ID_REVEALED = false;
 var CFG_ID_CALL = '';
 var CFG_ID_SET_UI = {
   dmr: {max: 7, ph: '7 DIGITS', btn: 'Set everywhere', re: /^[0-9]{7}$/, msg: 'A DMR ID is exactly 7 digits.'},
@@ -20821,68 +20805,11 @@ function cfgIdSetCall(btn) {
   });
 }
 
-function cfgIdButtons() {
-  document.getElementById('cfg-id-reveal-btn').style.display = CFG_ID_REVEALED ? 'none' : '';
-  document.getElementById('cfg-id-hide-btn').style.display = CFG_ID_REVEALED ? '' : 'none';
-}
-
-function cfgIdPostReveal(pw) {
-  return fetch('/api/config/identity_reveal', {
-    method: 'POST', cache: 'no-store',
-    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify(pw ? {password: pw} : {})
-  }).then(function(r) { return r.json(); });
-}
-
 function cfgIdLoad() {
-  if (CFG_ID_REVEALED) {
-    return cfgIdPostReveal('').then(function(d) {
-      if (!CFG_ID_REVEALED) return;
-      if (!d.success) { CFG_ID_REVEALED = false; cfgIdButtons(); return cfgIdLoad(); }
-      CFG_ID = d; cfgIdRender(d);
-    }).catch(function(e) { cfgIdRender({error: 'Could not read identity: ' + e}); });
-  }
-  return fetch('/api/config/identity').then(function(r) { return r.json(); }).then(function(d) {
-    if (CFG_ID_REVEALED) return;
+  return fetch('/api/config/identity', {cache: 'no-store'}).then(function(r) { return r.json(); }).then(function(d) {
     CFG_ID = d;
     cfgIdRender(d);
   }).catch(function(e) { cfgIdRender({error: 'Could not read identity: ' + e}); });
-}
-
-function cfgIdAskReveal() {
-  document.getElementById('cfg-id-auth').style.display = '';
-  document.getElementById('cfg-id-err').textContent = '';
-  var pw = document.getElementById('cfg-id-pw');
-  pw.value = '';
-  pw.focus();
-}
-
-function cfgIdCancel() {
-  document.getElementById('cfg-id-pw').value = '';
-  document.getElementById('cfg-id-auth').style.display = 'none';
-}
-
-function cfgIdReveal() {
-  var pwEl = document.getElementById('cfg-id-pw');
-  var err = document.getElementById('cfg-id-err');
-  if (!pwEl.value) { err.textContent = 'Enter the root password.'; return; }
-  var btn = document.getElementById('cfg-id-go');
-  btn.disabled = true;
-  cfgIdPostReveal(pwEl.value).then(function(d) {
-    btn.disabled = false;
-    if (!d.success) { err.textContent = d.output || d.error || 'Not revealed.'; return; }
-    pwEl.value = '';
-    document.getElementById('cfg-id-auth').style.display = 'none';
-    CFG_ID_REVEALED = true; cfgIdButtons();
-    CFG_ID = d; cfgIdRender(d);
-  }).catch(function(e) { btn.disabled = false; err.textContent = 'Request failed: ' + e; });
-}
-
-function cfgIdHide() {
-  CFG_ID_REVEALED = false; cfgIdButtons();
-  fetch('/api/config/identity_hide', {method: 'POST',
-    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: '{}'})
-    .finally(function() { cfgIdLoad(); });
 }
 
 var CFG_BUNDLE_SIG = '';
@@ -21112,23 +21039,11 @@ def _render_config_panel() -> str:
     <div class="step-head"><div class="step-title">Identity</div>
       <span class="cfg-hint" id="cfg-id-state"></span></div>
     <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
-      same value. Values are masked; Reveal shows them all, passwords included, after the root password, until you press
-      Hide or reload the page. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
+      same value. Every value is shown in the clear, passwords included: this page needs the root login, and anyone looking
+      at the screen can read them. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
       to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic save point. It
       restarts nothing. Change other values in their file, or for phone accounts on the dashboard's Phone tab.
       The Travel Node preset never carries any of these.</div>
-    <div class="step-actions">
-      <button class="btn-copy" id="cfg-id-reveal-btn" onclick="cfgIdAskReveal()">Reveal</button>
-      <button class="btn-copy" id="cfg-id-hide-btn" style="display:none" onclick="cfgIdHide()">Hide</button>
-    </div>
-    <div class="term-auth" id="cfg-id-auth" style="display:none">
-      <div>Enter the root password to show the values.</div>
-      <input type="password" id="cfg-id-pw" autocomplete="current-password" placeholder="root password"
-             onkeydown="if(event.key==='Enter')cfgIdReveal();if(event.key==='Escape')cfgIdCancel();">
-      <button class="btn-run" id="cfg-id-go" onclick="cfgIdReveal()">Reveal</button>
-      <button class="btn-copy" onclick="cfgIdCancel()">Cancel</button>
-      <span id="cfg-id-err" style="color:var(--red)"></span>
-    </div>
     <div id="cfg-id"></div>
     <div class="asl3-console shown placeholder" id="cfg-id-call-out">(type a value on a section line and press its Set button)</div>
   </div>
@@ -33039,50 +32954,6 @@ class Handler(BaseHTTPRequestHandler):
         ok, msg = _term_switch(True, ip)
         reply(200 if ok else 500, ok, msg)
 
-    def _identity_reveal(self) -> None:
-        def reply(code: int, body: dict) -> None:
-            self._send(code, "application/json", json.dumps(body).encode("utf-8"),
-                       extra_headers={"Cache-Control": "no-store"})
-        ip = self._client_ip()
-        payload, err = self._read_json_body()
-        if err is not None:
-            self._send(400, "application/json", err)
-            return
-        key = _session_key(self._session_token())
-        pw = str(payload.get("password", ""))
-        if not pw:
-            with _CFGR_REVEAL_LOCK:
-                granted = key in _CFGR_REVEALED
-            if not granted:
-                reply(403, {"success": False, "output": "Enter the root password."})
-                return
-        else:
-            locked_until = _login_is_locked(ip)
-            if locked_until is not None:
-                reply(429, {"success": False,
-                            "output": f"Too many failed attempts -- try again in {max(0, int(locked_until - time.time()))}s"})
-                return
-            if not _verify_root_password(pw):
-                _login_record_failure(ip)
-                log(f"Config: wrong root password from {ip} for identity reveal")
-                reply(403, {"success": False, "output": "Wrong root password."})
-                return
-            _login_record_success(ip)
-            with _auth_lock:
-                live = set(_sessions)
-            with _CFGR_REVEAL_LOCK:
-                _CFGR_REVEALED.intersection_update(live)
-                _CFGR_REVEALED.add(key)
-            log(f"Config: identity values revealed to {ip}")
-        with _CFGR_LOCK:
-            try:
-                body = _cfgr_identity_public(True)
-            except Exception as exc:
-                log(f"FAIL: CONFIG identity scan: {type(exc).__name__}: {exc}")
-                body = {"error": "Could not read the config files: " + type(exc).__name__}
-        body["success"] = "error" not in body
-        reply(200, body)
-
     def _term_open(self) -> None:
         def reply(code: int, ok: bool, msg: str, **extra) -> None:
             self._send(code, "application/json",
@@ -33251,16 +33122,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/term/open":
             self._term_open()
-            return
-
-        if path == "/api/config/identity_reveal":
-            self._identity_reveal()
-            return
-
-        if path == "/api/config/identity_hide":
-            with _CFGR_REVEAL_LOCK:
-                _CFGR_REVEALED.discard(_session_key(self._session_token()))
-            self._send(200, "application/json", b'{"success": true}')
             return
 
         if path == "/api/term/enable":

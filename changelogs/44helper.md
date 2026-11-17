@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_54_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_55_20261117.py`. Newest entries first.
+
+## 0.1.55 (2026-11-17)
+
+The Config tab's Identity card shows every value in the clear, and Reveal and Hide are gone. This is a release: the card, one route's answer and two routes change.
+
+- **No masking.** The card lists callsigns, IDs and passwords as they are in the config files, including passwords. It used to show bullets until you pressed Reveal and typed the root password. The page still needs the root login to open at all; `GET /api/config/identity` answers only to a logged-in session and is not cached. Anyone who can see the screen can now read the passwords, so keep the page off shared screens.
+- **Removed.** The Reveal and Hide buttons, the root-password box, `POST /api/config/identity_reveal`, `POST /api/config/identity_hide` and the per-session record of who had revealed. The wrong-password lockout that Reveal used is no longer involved here.
+- **Not changed.** The Set buttons on the card (callsign everywhere, DMR ID, node, passwords) work as before. Their previews still show a password they are about to write as bullets; the Travel Node preset still never carries any of these values.
+- **Tests.** `ci/test_h44_identity.py` replaces "masked until revealed" with three tests: every value (a password included) is in the clear and no bullets appear, the reveal code and its page parts are gone, and the identity route answers with the real values. The login rules for the route are covered by the existing server tests.
 
 ## 0.1.54 (2026-11-17)
 

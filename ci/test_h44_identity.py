@@ -848,12 +848,33 @@ class SvxReadRows(SvxBase):
         for fid in ("svx_el_pw", "svx_el_sysop", "svx_el_location"):
             self.assertTrue(r[fid]["settable"], fid)
 
-    def test_values_are_masked_until_revealed(self):
-        pub = {r["fid"]: r for r in h44._cfgr_identity_public(False)["rows"]}
-        self.assertEqual(pub["svx_el_pw"]["raw"], h44._CFGR_ID_MASK)
-        self.assertEqual(pub["svx_simplex_call"]["raw"], h44._CFGR_ID_MASK)
-        rev = {r["fid"]: r for r in h44._cfgr_identity_public(True)["rows"]}
-        self.assertEqual(rev["svx_el_pw"]["raw"], "MyPass")
+    def test_values_are_shown_in_the_clear(self):
+        d = h44._cfgr_identity_public()
+        pub = {r["fid"]: r for r in d["rows"]}
+        self.assertEqual(pub["svx_el_pw"]["raw"], "MyPass")
+        self.assertEqual(pub["svx_el_pw"]["value"], "MyPass")
+        self.assertEqual(pub["svx_simplex_call"]["raw"], "AA1AA")
+        self.assertNotIn(h44._CFGR_ID_MASK, str(d["rows"]))
+        self.assertNotIn("revealed", d)
+        for r in d["rows"]:
+            self.assertNotIn("form", r)
+
+    def test_there_is_no_reveal_any_more(self):
+        import inspect
+        self.assertEqual(list(inspect.signature(h44._cfgr_identity_public).parameters), [])
+        for gone in ("_CFGR_REVEALED", "_CFGR_REVEAL_LOCK"):
+            self.assertFalse(hasattr(h44, gone), gone)
+        with open(h44.__file__, encoding="utf-8") as f:
+            src = f.read()
+        for text in ("identity_reveal", "identity_hide", "cfgIdAskReveal", "cfgIdReveal", "cfgIdHide", "cfg-id-reveal-btn",
+                     "cfg-id-hide-btn", "cfg-id-pw", "CFG_ID_REVEALED"):
+            self.assertNotIn(text, src, text)
+
+    def test_the_identity_route_still_answers(self):
+        status, ctype, body = h44._route_config_identity({})
+        self.assertEqual((status, ctype), (200, "application/json"))
+        self.assertIn(b"svx_el_pw", body)
+        self.assertIn(b"MyPass", body)
 
 
 class SvxSectionWrites(SvxBase):
