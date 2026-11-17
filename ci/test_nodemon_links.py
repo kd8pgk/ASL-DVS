@@ -21,7 +21,7 @@ LABELS = {
 
     "sysmon": "Node Mon",
 
-    "sysmon_pi02w": "Nodemon",
+    "sysmon_pi02w": "Node Mon",
 
     "nodecontrol": "Nodemon",
 
