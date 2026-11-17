@@ -140,6 +140,16 @@ class Gather(Tmp):
         self.assertIn("8989/tcp is open to the tunnel side", why)
         self.assertTrue(any("34000/udp" in x for x in g["exposed"]))
 
+    def test_without_the_tunnel_zone_it_says_to_run_the_tunnel_steps(self):
+        self.unit("cockpit.socket")
+        g = self.gather(zone(self.GOOD_LAN), None)
+        self.assertFalse(g["tunnel_zone"])
+        st, why = h44._bld_ports_stage(g)
+        self.assertEqual(st, "todo")
+        self.assertIn("run the tunnel steps first", why)
+        g = self.gather(zone(self.GOOD_LAN), None, installed={})
+        self.assertEqual(h44._bld_ports_stage(g)[0], "done")
+
     def test_no_firewall_running(self):
         g = self.gather(zone(), zone(), running=False)
         self.assertEqual(h44._bld_ports_stage(g)[0], "warn")
@@ -162,7 +172,7 @@ class Run(Tmp):
             out = h44._bld_run_ports(preview, "half", {})
         return out, calls
 
-    G = {"running": True, "default_zone": "public", "notes": ["note"], "exposed": ["8989/tcp is open to the tunnel side"],
+    G = {"running": True, "tunnel_zone": True, "default_zone": "public", "notes": ["note"], "exposed": ["8989/tcp is open to the tunnel side"],
          "rows": [], "missing": [{"zone": "lan", "spec": "9997/tcp", "why": "44helper"},
                                  {"zone": "tunnel", "spec": "4569/udp", "why": "IAX2"}]}
 
@@ -188,6 +198,13 @@ class Run(Tmp):
         (ok, lines), _ = self.run_ports(self.G, False, {"firewall-cmd --permanent --zone=public --add-port=9997/tcp": {"success": False, "output": "denied"}})
         self.assertFalse(ok)
         self.assertTrue(any("FAILED to open 9997/tcp" in ln and "denied" in ln for ln in lines))
+
+    def test_tunnel_rows_are_skipped_without_the_zone(self):
+        g = dict(self.G, tunnel_zone=False, exposed=[])
+        (ok, lines), calls = self.run_ports(g, False)
+        self.assertFalse(ok)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any(ln.startswith("skipped 4569/udp") and "Run the tunnel steps first" in ln for ln in lines))
 
     def test_nothing_to_open(self):
         g = dict(self.G, missing=[], exposed=[])

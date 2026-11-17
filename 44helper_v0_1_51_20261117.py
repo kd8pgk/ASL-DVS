@@ -31738,12 +31738,14 @@ def _bld_ports_gather(mode: str, installed: dict) -> dict:
     rc, _ = _ov_q(["firewall-cmd", "--state"])
     cockpit = any(os.path.exists(f"{d}/cockpit.socket") for d in _BLD_UNIT_DIRS)
     rows, notes = _bld_ports_plan(mode, installed, cockpit)
-    out = {"running": rc == 0, "rows": rows, "notes": notes, "default_zone": "", "exposed": [], "missing": []}
+    out = {"running": rc == 0, "rows": rows, "notes": notes, "default_zone": "", "exposed": [], "missing": [],
+           "tunnel_zone": True}
     if rc != 0:
         return out
     _rc, dz = _ov_q(["firewall-cmd", "--get-default-zone"])
     out["default_zone"] = dz.strip() or "public"
     zones = {"lan": _bld_zone_state(out["default_zone"]), "tunnel": _bld_zone_state(FIREWALLD_ZONE)}
+    out["tunnel_zone"] = zones["tunnel"] is not None
     for r in rows:
         zs = zones[r["zone"]]
         r["open"] = bool(zs and _bld_zone_open(zs, r["spec"]))
@@ -31766,6 +31768,8 @@ def _bld_ports_gather(mode: str, installed: dict) -> dict:
 def _bld_ports_stage(g: dict) -> tuple[str, str]:
     if not g["running"]:
         return "warn", "firewalld is not running, so no port is blocked and there is nothing to open."
+    if g["missing"] and not g["tunnel_zone"] and any(r["zone"] == "tunnel" for r in g["missing"]):
+        return "todo", f"The {FIREWALLD_ZONE} zone does not exist yet: run the tunnel steps first."
     if g["missing"]:
         names = ", ".join(f"{r['spec']} {r['why']}" for r in g["missing"][:5])
         return "todo", f"{len(g['missing'])} port(s) to open: {names}" + ("..." if len(g["missing"]) > 5 else "")
@@ -31781,6 +31785,10 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
     ok = True
     for r in g["missing"]:
         zone = g["default_zone"] if r["zone"] == "lan" else FIREWALLD_ZONE
+        if r["zone"] == "tunnel" and not g["tunnel_zone"]:
+            ok = False
+            lines.append(f"skipped {r['spec']} ({r['why']}): the {FIREWALLD_ZONE} zone does not exist yet. Run the tunnel steps first.")
+            continue
         if preview:
             lines.append(f"would open {r['spec']} ({r['why']}) in zone {zone}")
             continue
