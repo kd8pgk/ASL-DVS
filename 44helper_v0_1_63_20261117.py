@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.61"
+APP_VERSION = "0.1.63"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -20345,7 +20345,56 @@ def _pn_status() -> dict:
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
 
+_FULL_NOTE = ("A save point is a full copy of this node's config files, passwords included. It stays on this node, and Restore puts it "
+              "back here. A snapshot is the same files as one text file with the passwords left out: use it to build another node "
+              "(confputter) or to read. They are not the same thing.")
+_FULL_SNAP_DIR = "/etc/asl_dvs/instmon_library/snapshots"
+_FULL_CONFGETTER = "/usr/local/bin/confgetter.sh"
+_FULL_SNAP_RE = re.compile(r"^confgetter_[A-Za-z0-9_.-]+_\d{8}-\d{6}\.md$")
+
+def _full_point_name(callsign: str) -> str:
+    call = re.sub(r"[^A-Za-z0-9]", "", callsign.upper())[:10] or "node"
+    return f"Finished {call} {time.strftime('%Y-%m-%d')}"
+
+def _full_save_point(callsign: str) -> dict:
+    name = _full_point_name(callsign)
+    for p in _cfgr_list_points():
+        if p["kind"] == "user" and p["label"] == name:
+            return {"success": True, "name": name, "output": f"Save point '{name}' already exists. Nothing new was saved.", "existing": True}
+    res = _cfgr_act_create_point({"name": name})
+    res["name"] = name
+    return res
+
+def _full_snapshot() -> dict:
+    if not os.path.isfile(_FULL_CONFGETTER):
+        return {"success": False, "output": "confgetter is not installed on this node. Install it from the Config getter list on instmon, then try again."}
+    before = set(_full_snap_names())
+    r = _run_argv(["bash", _FULL_CONFGETTER], timeout=180)
+    after = [n for n in _full_snap_names() if n not in before] or _full_snap_names()[:1]
+    if not r["success"] or not after:
+        return {"success": False, "output": "confgetter did not finish: " + str(r.get("output", ""))[-300:]}
+    path = os.path.join(_FULL_SNAP_DIR, after[0])
+    return {"success": True, "path": path, "name": after[0],
+            "output": f"Snapshot written: {path}\nPasswords are left out. Download it from the Config getter list on instmon; apply it on another node with confputter."}
+
+def _full_snap_names() -> list[str]:
+    try:
+        names = [n for n in os.listdir(_FULL_SNAP_DIR) if _FULL_SNAP_RE.match(n)]
+    except OSError:
+        return []
+    return sorted(names, reverse=True)
+
+def _cfgr_act_full_save(payload: dict) -> dict:
+    res = _full_save_point(_bld_form_load().get("callsign", ""))
+    res["output"] = res.get("output", "") + "\n\n" + _FULL_NOTE
+    return res
+
+def _cfgr_act_full_snapshot(payload: dict) -> dict:
+    return _full_snapshot()
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "full_save": _cfgr_act_full_save,
+    "full_snapshot": _cfgr_act_full_snapshot,
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
     "create_point": _cfgr_act_create_point,
@@ -20640,21 +20689,16 @@ function cfgGateways(btn, action) {
   cfgPost({action: action}, 'cfg-gw-out', btn);
 }
 
-function cfgPresetReset(btn, pid) {
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (!confirm('Remove your saved ' + name + ' preset and use the built-in default again?\n\nYour saved preset is deleted. Files on this node do not change.')) return;
-  cfgPost({action: 'preset_reset', preset: pid}, pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
+function cfgFullSave(btn) {
+  if (!confirm('Save a full copy of this node\'s config files now, passwords included? It stays on this node as a save point.')) return;
+  cfgPost({action: 'full_save'}, 'cfg-full-out', btn).then(function(res) {
+    if (res && res.success) { cfgFullSnapshot(btn, true); }
+  });
 }
 
-function cfgPresetCapture(btn, save, pid) {
-  pid = pid || 'travel_node';
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (save && !confirm('Save this node\'s wiring and private nodes as the ' + name + ' preset?\n\n' +
-                       'Only wiring is saved: no callsign, IDs or passwords' + (pid === 'magic_box' ? ', no reflector password' : '') +
-                       '. An existing ' + name + ' preset is replaced.\n' +
-                       'Use Preview first to see exactly what goes in.')) return;
-  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: pid},
-          pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
+function cfgFullSnapshot(btn, ask) {
+  if (ask && !confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) return;
+  cfgPost({action: 'full_snapshot'}, 'cfg-full-out', btn);
 }
 
 function cfgPnKind() {
@@ -20827,10 +20871,6 @@ function cfgRender(d) {
   sel.innerHTML = o || '<option value="">(nothing saved yet)</option>';
   if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
   cfgOnPointChange();
-  var tp = (d.presets || {}).travel_node || {};
-  document.getElementById('cfg-preset-state').textContent = tp.default ? 'built-in default in use' : (tp.exists ? ('your saved preset, ' + tp.saved_at) : 'not available');
-  var mp = (d.presets || {}).magic_box || {};
-  document.getElementById('cfg-mpreset-state').textContent = mp.default ? 'built-in default in use' : (mp.exists ? ('your saved preset, ' + mp.saved_at) : 'not available');
   cfgPnRender(d.private_nodes);
   var sb = document.getElementById('cfg-svx-bridge');
   if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
@@ -21261,37 +21301,17 @@ def _render_config_panel() -> str:
   </div>
 
   <div class="step-card">
-    <div class="step-head"><div class="step-title">Travel Node preset</div>
-      <span class="cfg-hint" id="cfg-preset-state"></span></div>
-    <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
-      [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
-      [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. A built-in default is used until you save your own from a node you have set up the way you want; saving replaces it, and "Use the built-in default"
-      brings it back. Apply it on any node from the Restore list above, or from the Build tabs.</div>
+    <div class="step-head"><div class="step-title">Save the full config</div>
+      <span class="cfg-hint" id="cfg-full-state"></span></div>
+    <div class="step-body"><b>Save point</b>: a full copy of this node's config files, passwords included, kept on this node. Restore puts it back
+      here. <b>Snapshot</b>: the same files as one text file with the passwords left out. Use it to build another node (confputter) or to read.
+      They are not the same thing, so this card can make both. The wiring presets are no longer saved here: the built-in Travel Node and
+      Magic Box presets feed the Build tabs, and a preset saved earlier is still read and can be applied from the Restore list above.</div>
     <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'travel_node')">Use the built-in default</button>
+      <button class="btn-run" onclick="cfgFullSave(this)">Save the full config</button>
+      <button class="btn-copy" onclick="cfgFullSnapshot(this)">Copy the configs for another node (snapshot)</button>
     </div>
-    <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Magic Box preset</div>
-      <span class="cfg-hint" id="cfg-mpreset-state"></span></div>
-    <div class="step-body">Everything the Travel Node preset saves, plus the SvxLink bridge setup from svxlink.conf and its
-      svxlink.d/UsrpLogic.conf: which logics and links are on (LOGICS and LINKS), the USRP link (host and the two ports,
-      jitter buffer, limiters), the reflector (host, port, default and monitored talkgroups, timeouts), the reflector link and
-      the control logic. Never the callsign, the reflector password (AUTH_KEY), the EchoLink password or any radio sections
-      (a node whose SvxLink has its own radio cannot save this preset). Applying it changes only values in sections that already
-      exist in svxlink.conf; a section the SVXLink tab has not created yet (steps 8 and 11) is left out and named in the preview.
-      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts. It also has a built-in default, replaced when you save your own.</div>
-    <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false,'magic_box')">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true,'magic_box')">Save as Magic Box</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'magic_box')">Use the built-in default</button>
-    </div>
-    <div class="asl3-console shown placeholder" id="cfg-mpreset-out">(nothing run yet)</div>
+    <div class="asl3-console shown placeholder" id="cfg-full-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-pn-card">
@@ -21421,7 +21441,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
-    ("config", "Config", "t-config", "Restore point, save points, Travel Node and Magic Box presets"),
+    ("config", "Config", "t-config", "Restore point, save points, snapshot"),
     ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -29158,6 +29178,27 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
         <tr><td>IAX client secret</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_iax" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_iax"></span></td></tr>
         <tr><td>DMR talker alias</td><td><input type="text" class="asl3-cmd-input" id="@P@-ta" maxlength="30" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-ta"></span></td></tr>
       </table></details></td></tr>
+      <tr><td colspan="2"><b>STFU</b> <span class="cfg-hint">(optional; BrandMeister terminal mode. Node Controller starts it when you pick the STFU mode.)</span></td></tr>
+      <tr><td>Master server</td><td><select id="@P@-stfu_master" onchange="@F@Dirty()"><option value="">(not set: pick one)</option>@STFUMASTERS@<option value="other">Other (type it below)</option></select> <input type="text" class="asl3-cmd-input" id="@P@-stfu_other" maxlength="253" autocomplete="off" placeholder="other master address" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_master"></span> <span class="cfg-hint" id="@P@-e-stfu_other"></span></td></tr>
+      <tr><td>Master port (blank: 54006)</td><td><input type="text" class="asl3-cmd-input" id="@P@-stfu_port" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_port"></span></td></tr>
+      <tr><td>Start talkgroup</td><td><input type="text" class="asl3-cmd-input" id="@P@-stfu_tg" maxlength="7" inputmode="numeric" autocomplete="off" placeholder="for example 3166" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_tg"></span></td></tr>
+      <tr><td>Log level</td><td><select id="@P@-stfu_log" onchange="@F@Dirty()"><option value="">(leave as it is)</option><option value="0">0 none</option><option value="1">1 debug</option><option value="2">2 message</option><option value="3">3 info</option><option value="4">4 warning</option><option value="5">5 error</option></select> <span class="cfg-hint" id="@P@-e-stfu_log"></span></td></tr>
+      <tr><td>Install</td><td><button class="btn-run" onclick="@F@InstallStfu(this)">Install STFU (apt)</button> <span class="cfg-hint" id="@P@-stfu-state"></span></td></tr>
+      <tr><td colspan="2"><b>EchoLink</b> <span class="cfg-hint">(optional; it runs in the one service that has the radio, never in both)</span></td></tr>
+      <tr><td>Use EchoLink</td><td><select id="@P@-el_enable" onchange="@F@Dirty()"><option value="">Off (left as it is)</option><option value="1">On</option></select> <span class="cfg-hint" id="@P@-e-el_enable"></span> <span class="cfg-hint" id="@P@-el-owner"></span></td></tr>
+      <tr><td>Runs in</td><td><select id="@P@-el_owner" onchange="@F@Dirty()"><option value="auto">Automatic (ASL3, which has the radio)</option><option value="asl3">ASL3</option><option value="svx">SvxLink (only with its own radio, Magic Box)</option></select> <span class="cfg-hint" id="@P@-e-el_owner"></span></td></tr>
+      <tr><td>EchoLink callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_call" maxlength="9" autocomplete="off" placeholder="KD8PGK-L" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_call"></span></td></tr>
+      <tr><td>EchoLink name</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_name" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_name"></span></td></tr>
+      <tr><td>EchoLink QTH</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_qth" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_qth"></span></td></tr>
+      <tr><td>EchoLink e-mail</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_email" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_email"></span></td></tr>
+      <tr><td colspan="2"><details><summary>EchoLink station details (optional)</summary><table class="cfg-table">
+        <tr><td>Power (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_power" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_power"></span></td></tr>
+        <tr><td>Height (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_height" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_height"></span></td></tr>
+        <tr><td>Gain (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_gain" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_gain"></span></td></tr>
+        <tr><td>Direction (0 to 8)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_dir" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_dir"></span></td></tr>
+        <tr><td>Frequency (MHz)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_freq" maxlength="9" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_freq"></span></td></tr>
+        <tr><td>CTCSS tone (Hz)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_tone" maxlength="5" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_tone"></span></td></tr>
+      </table></details></td></tr>
       <tr><td>Suite build</td><td><select id="@P@-suite_build" onchange="@F@Dirty()"><option value="auto">Automatic (by the board)</option>
         <option value="pi02w">Pi Zero 2 W build</option><option value="full">Full build</option></select></td></tr>
       <tr><td>Suite channel</td><td><select id="@P@-suite_channel" onchange="@F@Dirty()"><option value="stable">Stable</option>
@@ -29186,6 +29227,13 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
+  <div class="step-card" id="@P@-finish" style="display:none"><div class="step-head"><div class="step-title">Build finished: save the full config</div></div>
+    <div class="step-body" id="@P@-finish-note"></div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="@F@FinishSave(this)">Save the full config</button>
+    </div>
+    <div class="asl3-console shown" id="@P@-finish-out" style="display:none"></div>
+  </div>
   @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
       SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
@@ -29194,20 +29242,24 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
 </div>
 """
 
+_BLD_STFU_MASTERS = (("3104.master.brandmeister.network", "3104: North America"),)
+_BLD_PANEL_TMPL = _BLD_PANEL_TMPL.replace(
+    "@STFUMASTERS@", "".join(f'<option value="{h}">{n}</option>' for h, n in _BLD_STFU_MASTERS))
+
 _BLD_JS_TMPL = r"""
 var _@P@Fields = @FIELDS@;
 var _@P@Data = null;
 var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
-  iax_port: 'config', identity: 'config', restart: 'config', registration: 'asl3', location: 'config', passwords: 'config', ready: '@TAB@',
+  iax_port: 'config', identity: 'config', restart: 'config', registration: 'asl3', stfu: 'dvswitch', stfu_setup: 'config', echolink: 'config', location: 'config', passwords: 'config', ready: '@TAB@',
   half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
   tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', iax_port: 'Config tab', identity: 'Config tab',
-  restart: 'Config tab', registration: 'ASL3 tab', location: 'Config tab, Identity card', passwords: 'Config tab, Identity card', ready: 'this tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
+  restart: 'Config tab', registration: 'ASL3 tab', stfu: 'DVSwitch tab', stfu_setup: 'Config tab', echolink: 'Config tab', location: 'Config tab, Identity card', passwords: 'Config tab, Identity card', ready: 'this tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -29486,6 +29538,7 @@ function @F@Refresh() {
     @F@RenderSvx(d);
     @F@RenderApt(d);
     @F@RenderSuite(d);
+    @F@RenderExtras(d);
     if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
     document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
@@ -29525,6 +29578,41 @@ function @F@FormValues() {
 
 function @F@Save(btn) {
   @F@Post(@F@FormValues(), '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
+}
+
+function @F@InstallStfu(btn) {
+  if (!confirm('Install STFU now? It runs apt as root in the background and needs DVSwitch installed first.')) { return; }
+  @F@Post({action: 'install_stfu', profile: '@PROFILE@'}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@FinishSave(btn) {
+  @F@Post({action: 'finish_save', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function(res) {
+    if (!res || !res.success) { return; }
+    if (confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) {
+      @F@Post({action: 'finish_snapshot', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function() { @F@Refresh(); });
+    } else { @F@Refresh(); }
+  });
+}
+
+function @F@RenderExtras(d) {
+  var fin = d.finish || {};
+  var box = document.getElementById('@P@-finish');
+  if (box) {
+    box.style.display = fin.done ? '' : 'none';
+    var note = document.getElementById('@P@-finish-note');
+    if (note) {
+      note.textContent = (fin.note || '') + (fin.save_name ? ' Save point made: ' + fin.save_name + '.' : '') +
+        (fin.snapshot_name ? ' Snapshot: ' + fin.snapshot_name + '.' : '') + (fin.confgetter ? '' : ' confgetter is not installed, so only the save point can be made.');
+    }
+  }
+  var x = d.extras || {};
+  var a = document.getElementById('@P@-stfu-state');
+  if (a) { a.textContent = x.stfu_installed ? 'installed' : 'not installed'; }
+  var b = document.getElementById('@P@-el-owner');
+  if (b) { b.textContent = x.el_owner_text || ''; }
 }
 
 function @F@ClearSaved(btn) {
@@ -29574,7 +29662,9 @@ def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list
 
 _BLD_LOCATION_FIELDS = ("sysop", "location", "qth", "lat", "lon")
 _BLD_SECRET_FIELDS = ("pw_node", "pw_bm", "pw_ami", "pw_allmon", "pw_el", "pw_tgif", "pw_reflector", "pw_ircddb", "pw_ircddb_remote", "pw_iax")
-_BLD_VALUE_FIELDS = _BLD_LOCATION_FIELDS + _BLD_SECRET_FIELDS + ("el_node", "ta")
+_BLD_EL_FIELDS = ("el_enable", "el_owner", "el_call", "el_name", "el_qth", "el_email", "el_power", "el_height", "el_gain", "el_dir", "el_freq", "el_tone")
+_BLD_STFU_FIELDS = ("stfu_master", "stfu_other", "stfu_port", "stfu_tg", "stfu_log")
+_BLD_VALUE_FIELDS = _BLD_LOCATION_FIELDS + _BLD_SECRET_FIELDS + ("el_node", "ta") + _BLD_EL_FIELDS + _BLD_STFU_FIELDS
 _BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"] + [
     k for k in _BLD_VALUE_FIELDS if k != "pw_reflector"]
 _BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "pw_reflector"]
@@ -31444,6 +31534,7 @@ _BLD_FIELDS = ("mode", "callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "iax_port": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
                 "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
                 "suite_build": "auto", "suite_channel": "stable", **{k: "" for k in _BLD_VALUE_FIELDS}}
+_BLD_DEFAULT["el_owner"] = "auto"
 _BLD_PROFILES = ("travel", "magic")
 _BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
 _BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
@@ -31475,6 +31566,16 @@ _BLD_VALUE_RES = {
     "sysop": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
     "location": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
     "qth": (r"[^\r\n\"\\]{1,40}", "1 to 40 characters, no quotes"),
+    "el_call": (r"[A-Za-z0-9]{3,7}-[LRlr]", "your callsign with -L or -R, for example KD8PGK-L"),
+    "el_name": (r"[^\r\n;#\"'\\]{1,40}", "1 to 40 characters, no ; # or quotes"),
+    "el_qth": (r"[^\r\n;#\"'\\]{1,40}", "1 to 40 characters, no ; # or quotes"),
+    "el_email": (r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,120}\.[A-Za-z]{2,}", "an e-mail address"),
+    "el_power": (r"[0-9]", "a digit 0 to 9"), "el_height": (r"[0-9]", "a digit 0 to 9"), "el_gain": (r"[0-9]", "a digit 0 to 9"),
+    "el_dir": (r"[0-8]", "a digit 0 to 8"), "el_freq": (r"[0-9]{1,4}(\.[0-9]{1,4})?", "a frequency in MHz"),
+    "el_tone": (r"[0-9]{1,3}(\.[0-9])?", "a tone in Hz"),
+    "stfu_master": (r"other|(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*", "a master server from the list"),
+    "stfu_other": (r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*", "a host name"),
+    "stfu_port": (r"[0-9]{1,5}", "a port from 1 to 65535"), "stfu_tg": (r"[0-9]{1,7}", "a talkgroup number"), "stfu_log": (r"[0-5]", "a level 0 to 5"),
     "lat": (r"-?(90(\.0{1,6})?|[1-8]?[0-9](\.[0-9]{1,6})?)", "a latitude from -90 to 90"),
     "lon": (r"-?(180(\.0{1,6})?|(1[0-7][0-9]|[1-9]?[0-9])(\.[0-9]{1,6})?)", "a longitude from -180 to 180"),
 }
@@ -31518,6 +31619,9 @@ def _bld_form_clean(payload: dict) -> dict:
     if form["suite_channel"] not in _BLD_SUITE_CHANNELS:
         form["suite_channel"] = _BLD_DEFAULT["suite_channel"]
     form["callsign"] = form["callsign"].upper()
+    form["el_call"] = form["el_call"].upper()
+    if not form["el_owner"]:
+        form["el_owner"] = "auto"
     return form
 
 def _bld_form_write(form: dict) -> None:
@@ -31577,6 +31681,14 @@ def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> 
         v = form.get(k, "")
         if v and re.fullmatch(rx, v) is None:
             errs[k] = "use " + why
+    if form.get("el_enable", "") not in ("", "1"):
+        errs["el_enable"] = "use off or on"
+    if form.get("el_owner", "auto") not in ("auto", "asl3", "svx"):
+        errs["el_owner"] = "use automatic, ASL3 or SvxLink"
+    if form.get("stfu_master", "") == "other" and not form.get("stfu_other"):
+        errs["stfu_other"] = "type the master server address"
+    if form.get("stfu_port") and "stfu_port" not in errs and not 1 <= int(form["stfu_port"]) <= 65535:
+        errs["stfu_port"] = "use a port from 1 to 65535"
     if bool(form.get("lat")) != bool(form.get("lon")):
         errs["lon" if form.get("lat") else "lat"] = "give both latitude and longitude"
     iax = form.get("iax_port", "")
@@ -31753,11 +31865,11 @@ def _bld_lan_addrs() -> dict:
 
 def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
-    systems = [("asl3", "ASL3"), ("iax_port", "Set the IAX port"), ("dvs", "DVSwitch"), ("m17", "USRP2M17")]
+    systems = [("asl3", "ASL3"), ("iax_port", "Set the IAX port"), ("dvs", "DVSwitch"), ("stfu", "STFU (optional)"), ("m17", "USRP2M17")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
     systems = systems + [("identity", "Set the callsign, node number and IDs"), ("location", "Set the location"),
-                         ("passwords", "Set the passwords"),
+                         ("passwords", "Set the passwords"), ("stfu_setup", "Set up STFU"), ("echolink", "Set up EchoLink"),
                          ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
@@ -32026,6 +32138,12 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_registration_state(node)
         elif sid in ("location", "passwords"):
             state, detail = _bld_values_state(sid, form, profile)
+        elif sid == "stfu":
+            state, detail = _bld_stfu_state()
+        elif sid == "stfu_setup":
+            state, detail = _bld_stfu_setup_state(form)
+        elif sid == "echolink":
+            state, detail = _bld_echolink_state(form, profile)
         elif sid == "ready":
             state, detail = _bld_ready_state(stages, mode, up, age, form)
         elif sid.startswith("svx"):
@@ -32082,6 +32200,9 @@ def build_build_status(profile: str = "travel") -> dict:
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
+    out["finish"] = _bld_finish_info(next((x for x in stages if x["id"] == "reboot"), {}).get("state") == "done")
+    out["extras"] = {"stfu_installed": _bld_stfu_installed(),
+                     "el_owner_text": {"": "EchoLink stays off.", "asl3": "EchoLink will run in ASL3.", "svx": "EchoLink will run in SvxLink."}[_bld_el_owner(form, profile)]}
     out["job"] = _bld_job_info(profile)
     out["apt"] = _bld_apt_state(form.get("mode", "half"))
     out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form.get("suite_channel", "stable")}
@@ -32148,7 +32269,7 @@ def _bld_skipped_ports(installed: dict) -> list[tuple[str, str]]:
     for key, (name, specs) in _BLD_COMPONENT_PORTS.items():
         if not have[key]:
             out += [(spec, name) for spec in specs]
-    if not have["asl3"] and not have["svx"]:
+    if (not have["asl3"] and not have["svx"]) or not _bld_el_wanted():
         out += [(spec, "EchoLink") for spec in _BLD_ECHOLINK_PORTS]
     return out
 
@@ -32201,7 +32322,7 @@ def _bld_ports_plan(mode: str, installed: dict, cockpit: bool) -> tuple[list[dic
     peers = "lan" if mode == "none" else "tunnel"
     if asl3:
         rows.append({"zone": peers, "spec": "4569/udp", "why": "AllStarLink IAX2"})
-    if mode != "split" and (asl3 or svx):
+    if mode != "split" and (asl3 or svx) and _bld_el_wanted():
         rows.append({"zone": peers, "spec": "5198-5199/udp", "why": "EchoLink"})
         rows.append({"zone": peers, "spec": "5200/tcp", "why": "EchoLink (direct)"})
     if installed.get("dvs") == "installed":
@@ -32550,6 +32671,232 @@ def _bld_run_values(step: str, form: dict, preview: bool) -> tuple[bool, list[st
         lines.append("Restart the services afterwards (the Restart the services step).")
     return ok, lines
 
+_BLD_DVSINI = "/opt/MMDVM_Bridge/DVSwitch.ini"
+_BLD_MODULES = "/etc/asterisk/modules.conf"
+_BLD_STFU_BIN = "/opt/STFU/STFU"
+
+def _bld_write_changes(label: str, changes: dict, notes: list[str], preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    for path, (old, new) in changes.items():
+        lines += list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(),
+                                           f"now: {path}", f"after: {path}", lineterm=""))
+    lines += notes
+    if not changes:
+        lines.append("Nothing to change.")
+    if not changes or preview:
+        return True, lines
+    groups = [g for g in _CFGR_GROUPS if any(path in _CFGR_GROUPS[g]["files"] for path in changes)]
+    auto_id, _dropped = _cfgr_auto_point(label, groups)
+    lines.append(f"Current files saved first as automatic copy {auto_id}.")
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, mode)
+        ok = ok and not res.startswith("NOT")
+        lines.append(f"  {path}: {res}")
+    lines.append("Restart the services afterwards (the Restart the services step).")
+    log(f"{'OK' if ok else 'FAIL'}: Build {label}")
+    return ok, lines
+
+def _bld_ini_changes(path: str, section: str, wanted: dict[str, str]) -> tuple[dict, list[str]]:
+    cur = _cfgr_read(path)
+    if cur is None:
+        return {}, [f"{path} is not on this node yet."]
+    lines = _cfgr_lines(cur.decode("utf-8", "replace"))
+    notes: list[str] = []
+    for key, value in wanted.items():
+        lines, _old, ok = _cfgr_set_key(lines, section, key, value)
+        if not ok:
+            notes.append(f"{path} has no [{section}] section, so {key} was not set.")
+            break
+    data = _cfgr_join(lines).encode("utf-8")
+    return ({path: (cur, data)} if data != cur else {}), notes
+
+def _bld_ini_has(path: str, section: str, wanted: dict[str, str]) -> bool:
+    text = _cfgr_text(path)
+    if text is None:
+        return False
+    cur = _cfgr_ini_sections(text).get(section.lower(), {})
+    return all(cur.get(k.lower(), "") == v for k, v in wanted.items())
+
+def _bld_stfu_installed() -> bool:
+    if os.path.exists(_BLD_STFU_BIN):
+        return True
+    pk = _installed_dpkg_all()
+    return bool(pk) and "stfu" in pk
+
+def _bld_stfu_master(form: dict) -> str:
+    m = form.get("stfu_master", "")
+    return form.get("stfu_other", "") if m == "other" else m
+
+def _bld_stfu_wanted(form: dict) -> dict[str, str]:
+    pairs = (("BMAddress", _bld_stfu_master(form)), ("BMPort", form.get("stfu_port", "")), ("StartTG", form.get("stfu_tg", "")),
+             ("LogLevel", form.get("stfu_log", "")))
+    return {k: v for k, v in pairs if v}
+
+def _bld_stfu_state() -> tuple[str, str]:
+    if _bld_stfu_installed():
+        return "done", "STFU is installed."
+    return "warn", "STFU is not installed (optional). Use Install STFU in the Preflight; it needs the DVSwitch step first."
+
+def _bld_stfu_setup_state(form: dict) -> tuple[str, str]:
+    if not _bld_stfu_installed():
+        return "warn", "STFU is not installed (optional)."
+    wanted = _bld_stfu_wanted(form)
+    if not wanted:
+        return "warn", "No STFU values in the Preflight; DVSwitch.ini is left as it is. Without a master server STFU will not connect."
+    if not _bld_ini_has(_BLD_DVSINI, "STFU", wanted):
+        return "todo", "DVSwitch.ini [STFU] does not match the Preflight yet."
+    if "BMAddress" not in wanted:
+        return "warn", "The settings match, but no master server is picked: STFU will not connect."
+    return "done", "DVSwitch.ini [STFU] matches the Preflight."
+
+def _bld_run_stfu(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    if not _bld_stfu_installed():
+        return False, ["STFU is not installed. Use Install STFU in the Preflight first."]
+    wanted = _bld_stfu_wanted(form)
+    if not wanted:
+        return True, ["No STFU values in the Preflight, so nothing was changed."]
+    changes, notes = _bld_ini_changes(_BLD_DVSINI, "STFU", wanted)
+    return _bld_write_changes("STFU settings", changes, notes, preview)
+
+def _bld_act_install_stfu(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    if _bld_stfu_installed():
+        return {"success": True, "message": "STFU is already installed."}
+    if {p["key"]: p["state"] for p in _detect_installed_products()}.get("dvs") != "installed":
+        return {"success": False, "message": "Install DVSwitch first: the stfu package comes from its repository."}
+    cmd = _bld_apt_cmd(["stfu"])
+    gate = _pkg_health_gate(cmd)
+    if gate:
+        return {"success": False, "message": "The package system has unfinished installs. Fix it on the Update tab first, then try again.",
+                "notes": str(gate.get("output", "")).splitlines()[-12:]}
+    key = f"{_BLD_JOB_PREFIX}{profile}_stfu"
+    _start_unit_job(key, cmd)
+    log("OK: Build tab started the STFU apt install")
+    return {"success": True, "message": "Started: apt install stfu.", "job_key": key}
+
+def _bld_el_owner(form: dict, profile: str) -> str:
+    if form.get("el_enable") != "1":
+        return ""
+    if form.get("el_owner") == "svx" and profile == "magic" and form.get("svx_use") == "radio":
+        return "svx"
+    return "asl3"
+
+def _bld_el_live() -> bool:
+    mod = _cfgr_text(_BLD_MODULES)
+    if mod is not None and _cfgr_module_state(_cfgr_lines(mod), "chan_echolink") in ("load", "preload", "require"):
+        return True
+    svx = _cfgr_text(_CFGR_SVX_CONF)
+    return svx is not None and re.search(r"^\s*MODULES\s*=.*\bModuleEchoLink\b", svx, re.M) is not None
+
+def _bld_el_wanted() -> bool:
+    return _bld_form_load().get("el_enable") == "1" or _bld_el_live()
+
+def _bld_module_set(lines: list[str], name: str, want: str) -> list[str]:
+    mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re(name)
+    out = list(lines)
+    found = False
+    for i, line in enumerate(lines):
+        mm = None if mask[i] else rx.match(line)
+        if mm:
+            found = True
+            if mm.group(2) not in ("require", "preload"):
+                out[i] = mm.group(1) + want + mm.group(3)
+    if not found:
+        secs = _cfgr_sections(lines, mask)
+        sec = next((x for x in secs if x["name"].lower() == "modules"), None)
+        if sec is None:
+            out += ["", "[modules]", f"{want} => {name}.so"]
+        else:
+            last = sec["start"]
+            for i in range(sec["start"] + 1, sec["end"]):
+                if lines[i].strip():
+                    last = i
+            out.insert(last + 1, f"{want} => {name}.so")
+    return out
+
+def _bld_svx_el_modules(lines: list[str], want: bool) -> tuple[list[str], bool]:
+    out = list(lines)
+    changed = False
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*MODULES\s*=\s*)(.*?)(\s*)$", line)
+        if not m:
+            continue
+        mods = [x.strip() for x in m.group(2).split(",") if x.strip()]
+        if want and "ModuleEchoLink" not in mods and mods:
+            mods.append("ModuleEchoLink")
+        elif not want and "ModuleEchoLink" in mods:
+            mods.remove("ModuleEchoLink")
+        else:
+            continue
+        out[i] = m.group(1) + ",".join(mods) + m.group(3)
+        changed = True
+    return out, changed
+
+def _bld_el_changes(form: dict, profile: str) -> tuple[dict, list[str]]:
+    owner = _bld_el_owner(form, profile)
+    changes: dict = {}
+    notes: list[str] = []
+    if not owner:
+        return changes, notes
+    if owner == "asl3":
+        want = {"call": form.get("el_call", ""), "name": form.get("el_name", ""), "qth": form.get("el_qth", ""),
+                "email": form.get("el_email", ""), "lat": form.get("lat", ""), "lon": form.get("lon", ""), "node": form.get("el_node", ""),
+                "astnode": form.get("node", ""), "context": "radio-secure", "power": form.get("el_power", ""),
+                "height": form.get("el_height", ""), "gain": form.get("el_gain", ""), "dir": form.get("el_dir", ""),
+                "freq": form.get("el_freq", ""), "tone": form.get("el_tone", "")}
+        c, n = _bld_ini_changes(_CFGR_ECHOLINK, "el0", {k: v for k, v in want.items() if v})
+        changes.update(c)
+        notes += n
+    else:
+        want = {"CALLSIGN": form.get("el_call", ""), "SYSOPNAME": form.get("sysop", "") or form.get("el_name", ""),
+                "LOCATION": form.get("location", "") or form.get("el_qth", "")}
+        c, n = _bld_ini_changes(_CFGR_SVX_EL, "ModuleEchoLink", {k: v for k, v in want.items() if v})
+        changes.update(c)
+        notes += n
+    mod = _cfgr_read(_BLD_MODULES)
+    if mod is not None:
+        new = _cfgr_join(_bld_module_set(_cfgr_lines(mod.decode("utf-8", "replace")), "chan_echolink", "load" if owner == "asl3" else "noload")).encode("utf-8")
+        if new != mod:
+            changes[_BLD_MODULES] = (mod, new)
+    svx = _cfgr_read(_CFGR_SVX_CONF)
+    if svx is not None:
+        lines, hit = _bld_svx_el_modules(_cfgr_lines(svx.decode("utf-8", "replace")), owner == "svx")
+        if hit:
+            changes[_CFGR_SVX_CONF] = (svx, _cfgr_join(lines).encode("utf-8"))
+        elif owner == "svx" and not re.search(r"^\s*MODULES\s*=.*ModuleEchoLink", svx.decode("utf-8", "replace"), re.M):
+            notes.append("svxlink.conf has no MODULES line for the radio logic: add ModuleEchoLink to it on the SVXLink tab.")
+    return changes, notes
+
+def _bld_echolink_state(form: dict, profile: str) -> tuple[str, str]:
+    owner = _bld_el_owner(form, profile)
+    if not owner:
+        return "done", "EchoLink is left off in the Preflight."
+    missing = [n for k, n in (("el_call", "callsign"), ("el_node", "node number"), ("pw_el", "password")) if not form.get(k)]
+    try:
+        changes, _notes = _bld_el_changes(form, profile)
+    except Exception as exc:
+        return "warn", "Could not read the files: " + type(exc).__name__
+    who = "ASL3" if owner == "asl3" else "SvxLink"
+    if changes:
+        return "todo", f"EchoLink runs in {who}; its files do not match the Preflight yet."
+    if missing:
+        return "warn", f"EchoLink runs in {who}. Still to enter in the Preflight: " + ", ".join(missing) + "."
+    return "done", f"EchoLink runs in {who} and the files match the Preflight."
+
+def _bld_run_echolink(form: dict, profile: str, preview: bool) -> tuple[bool, list[str]]:
+    if not _bld_el_owner(form, profile):
+        return True, ["EchoLink is left off in the Preflight, so nothing was changed."]
+    changes, notes = _bld_el_changes(form, profile)
+    owner = _bld_el_owner(form, profile)
+    notes.insert(0, "EchoLink runs in " + ("ASL3 (chan_echolink); SvxLink's EchoLink module is switched off." if owner == "asl3"
+                                            else "SvxLink (ModuleEchoLink); Asterisk's chan_echolink is switched off."))
+    return _bld_write_changes("EchoLink", changes, notes, preview)
+
 def _bld_wipe_secrets() -> bool:
     form = _bld_form_load()
     if not any(form.get(k) for k in _BLD_SECRET_FIELDS):
@@ -32642,9 +32989,9 @@ def _bld_run_preset(profile: str, preview: bool, iax_port: str = "") -> tuple[bo
              for ln in _bld_out(res)]
     return bool(res.get("success")), lines
 
-_BLD_RUNNABLE = frozenset({"iax_port", "identity", "location", "passwords", "restart", "boot", "wiring", "svx_wire", "radio", "save",
+_BLD_RUNNABLE = frozenset({"iax_port", "identity", "location", "passwords", "stfu_setup", "echolink", "restart", "boot", "wiring", "svx_wire", "radio", "save",
                            "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
-_BLD_PREVIEWABLE = frozenset({"iax_port", "identity", "location", "passwords", "wiring", "svx_wire", "radio", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"iax_port", "identity", "location", "passwords", "stfu_setup", "echolink", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32753,7 +33100,7 @@ def _bld_act_run_stage(payload: dict) -> dict:
     if stage["state"] not in ("todo", "warn"):
         return {"success": False, "message": "Nothing to do: " + stage["detail"]}
     form = st["form"]
-    if (sid in _BLD_LONG or sid in ("identity", "iax_port", "location", "passwords")) and st["errors"]:
+    if (sid in _BLD_LONG or sid in ("identity", "iax_port", "location", "passwords", "stfu_setup", "echolink")) and st["errors"]:
         return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
     if sid in _BLD_LONG:
         return _bld_start_long(sid, profile, form, payload)
@@ -32765,6 +33112,10 @@ def _bld_act_run_stage(payload: dict) -> dict:
                 ok, lines = _bld_run_values("location", form, preview)
             elif sid == "passwords":
                 ok, lines = _bld_run_values("passwords", form, preview)
+            elif sid == "stfu_setup":
+                ok, lines = _bld_run_stfu(form, preview)
+            elif sid == "echolink":
+                ok, lines = _bld_run_echolink(form, profile, preview)
             elif sid == "restart":
                 ok, lines = _bld_run_restart()
             elif sid == "boot":
@@ -33016,12 +33367,12 @@ def _bld_mark_ready() -> None:
         json.dump(dict(_bld_marks_load(), ready_at=int(time.time())), f)
     os.replace(tmp, _BLD_MARKS)
 
-def _bld_mark_set(key: str) -> None:
+def _bld_mark_set(key: str, value: object = None) -> None:
     os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
     tmp = _BLD_MARKS + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(dict(_bld_marks_load(), **{key: int(time.time())}), f)
+        json.dump(dict(_bld_marks_load(), **{key: int(time.time()) if value is None else value}), f)
     os.replace(tmp, _BLD_MARKS)
 
 def _bld_boot_ready_line() -> str:
@@ -33308,13 +33659,45 @@ def _bld_act_install_apt(payload: dict) -> dict:
     log(f"OK: Build tab started the apt install ({', '.join(pkgs)})")
     return {"success": True, "message": "Started: apt install " + " ".join(pkgs) + ".", "job_key": key}
 
+def _bld_finish_done(profile: str) -> bool:
+    st = build_build_status(profile)
+    return next((x for x in st["stages"] if x["id"] == "reboot"), {}).get("state") == "done"
+
+def _bld_act_finish_save(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if not _bld_finish_done(profile):
+        return {"success": False, "message": "This is available once the Reboot test shows done."}
+    res = _full_save_point(_bld_form_load().get("callsign", ""))
+    if res.get("success"):
+        _bld_mark_set("finish_save_at")
+        _bld_mark_set("finish_save_name", res["name"])
+    return {"success": bool(res.get("success")), "message": res.get("output", ""), "name": res.get("name", "")}
+
+def _bld_act_finish_snapshot(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if not _bld_finish_done(profile):
+        return {"success": False, "message": "This is available once the Reboot test shows done."}
+    res = _full_snapshot()
+    if res.get("success"):
+        _bld_mark_set("finish_snapshot_at")
+        _bld_mark_set("finish_snapshot_name", res["name"])
+    return {"success": bool(res.get("success")), "message": res.get("output", ""), "path": res.get("path", "")}
+
+def _bld_finish_info(done: bool) -> dict:
+    marks = _bld_marks_load()
+    return {"done": done, "note": _FULL_NOTE, "save_name": str(marks.get("finish_save_name", "")),
+            "snapshot_name": str(marks.get("finish_snapshot_name", "")), "confgetter": os.path.isfile(_FULL_CONFGETTER)}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "finish_save": _bld_act_finish_save,
+    "finish_snapshot": _bld_act_finish_snapshot,
     "install_apt": _bld_act_install_apt,
     "install_suite": _bld_act_install_suite,
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
     "clear_saved": _bld_act_clear_saved,
+    "install_stfu": _bld_act_install_stfu,
     "wg_check": _bld_act_wg_check,
     "run_stage": _bld_act_run_stage,
 }

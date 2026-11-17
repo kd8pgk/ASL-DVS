@@ -33,6 +33,12 @@ class Tmp(unittest.TestCase):
         self.d = tempfile.TemporaryDirectory()
         self.addCleanup(self.d.cleanup)
 
+        patcher = mock.patch.object(h44, "_bld_el_wanted", lambda: self.el_wanted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    el_wanted = True
+
     def unit(self, name):
         open(os.path.join(self.d.name, name), "w").close()
 
@@ -343,6 +349,20 @@ class Run(Tmp):
         self.assertIn("ports", h44._BLD_RUNNABLE)
         self.assertIn("ports", h44._BLD_PREVIEWABLE)
         self.assertNotIn("ports", h44._BLD_LONG)
+
+
+class EchoLinkWanted(Tmp):
+    def test_ports_follow_the_echolink_choice(self):
+        self.el_wanted = False
+        with mock.patch.object(h44, "_BLD_UNIT_DIRS", (self.d.name,)):
+            rows, _ = h44._bld_ports_plan("half", ALL, False)
+        self.assertFalse([r for r in rows if r["why"].startswith("EchoLink")])
+        self.assertIn(("5198-5199/udp", "EchoLink"), h44._bld_skipped_ports(ALL))
+        self.el_wanted = True
+        with mock.patch.object(h44, "_BLD_UNIT_DIRS", (self.d.name,)):
+            rows, _ = h44._bld_ports_plan("half", ALL, False)
+        self.assertTrue([r for r in rows if r["why"].startswith("EchoLink")])
+        self.assertNotIn(("5198-5199/udp", "EchoLink"), h44._bld_skipped_ports(ALL))
 
 
 if __name__ == "__main__":

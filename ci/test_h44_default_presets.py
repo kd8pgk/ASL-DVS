@@ -92,12 +92,10 @@ class Loading(unittest.TestCase):
         self.assertIn("already in use", h44._cfgr_act_preset_reset({"preset": "magic_box"})["output"])
         self.assertFalse(h44._cfgr_act_preset_reset({"preset": "nope"})["success"])
 
-    def test_the_action_and_buttons_exist(self):
+    def test_the_reset_action_stays_for_older_callers(self):
         with open(h44.__file__, encoding="utf-8") as f:
             src = f.read()
         self.assertIn('"preset_reset": _cfgr_act_preset_reset', src)
-        self.assertIn("cfgPresetReset(this,'magic_box')", src)
-        self.assertIn("cfgPresetReset(this,'travel_node')", src)
 
     def test_the_build_step_names_where_the_preset_comes_from(self):
         plan = ({}, [], [], [], "")
