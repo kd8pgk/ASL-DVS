@@ -160,6 +160,79 @@ class Gather(Tmp):
         self.assertEqual((g["missing"], g["exposed"]), ([], []))
 
 
+class Skipped(Tmp):
+    def skipped(self, installed):
+        return h44._bld_skipped_ports(installed)
+
+    def names(self, installed):
+        return sorted({n for _s, n in self.skipped(installed)})
+
+    def test_every_component_missing(self):
+        self.assertEqual(self.names({}), ["AllStarLink", "DVSwitch", "EchoLink", "SvxLink", "USRP2M17"])
+
+    def test_an_installed_component_keeps_its_ports(self):
+        self.assertEqual(self.names({"asl3": "installed", "dvs": "installed", "svx": "installed", "usrp2m17": "installed"}), [])
+        self.assertEqual(self.names({"asl3": "installed", "dvs": "installed", "svx": "installed"}), ["USRP2M17"])
+        self.assertNotIn("DVSwitch", self.names({"dvs": "installed"}))
+        self.assertNotIn("AllStarLink", self.names({"asl3": "installed"}))
+
+    def test_echolink_stays_while_asl3_or_svxlink_is_installed(self):
+        self.assertNotIn("EchoLink", self.names({"asl3": "installed"}))
+        self.assertNotIn("EchoLink", self.names({"svx": "installed"}))
+        self.assertIn("EchoLink", self.names({"dvs": "installed", "usrp2m17": "installed"}))
+
+    def test_a_broken_or_absent_product_counts_as_skipped(self):
+        self.assertIn("USRP2M17", self.names({"usrp2m17": "broken"}))
+        self.assertIn("USRP2M17", self.names({"usrp2m17": "absent"}))
+
+    def test_tool_cockpit_and_ssh_ports_are_never_in_the_list(self):
+        specs = {s for s, _n in self.skipped({})}
+        for port in ("22/tcp", "9090/tcp", "9997/tcp", "8989/tcp", "9999/tcp", "7878/tcp"):
+            self.assertNotIn(port, specs)
+
+    def test_close_arguments(self):
+        z = zone(ports=["34008/udp", "33000-35000/udp"], services=["iax2"])
+        self.assertEqual(h44._bld_close_args(z, "34008/udp"), (["--remove-port=34008/udp"], ""))
+        self.assertEqual(h44._bld_close_args(z, "4569/udp"), (["--remove-service=iax2"], ""))
+        args, why = h44._bld_close_args(z, "34000/udp")
+        self.assertEqual(args, [])
+        self.assertIn("wider range", why)
+
+
+class CloseGather(Gather):
+    def test_open_ports_of_missing_components_are_found_in_both_zones(self):
+        g = self.gather(zone(self.GOOD_LAN + ["34008/udp"]), zone(["4569/udp", "5198-5199/udp", "5200/tcp", "32008/udp"]),
+                        installed={"asl3": "installed"})
+        got = sorted((c["zone"], c["spec"], c["why"]) for c in g["to_close"])
+        self.assertEqual(got, [("44NetConnect", "32008/udp", "USRP2M17"), ("public", "34008/udp", "USRP2M17")])
+        st, why = h44._bld_ports_stage(g)
+        self.assertEqual(st, "todo")
+        self.assertIn("to close for components that are not installed", why)
+        self.assertEqual(g["exposed"], [])
+
+    def test_installed_components_are_not_closed_but_still_warned_about(self):
+        g = self.gather(zone(self.GOOD_LAN + ["34008/udp"]), zone(["4569/udp", "5198-5199/udp", "5200/tcp"]))
+        self.assertEqual(g["to_close"], [])
+        self.assertTrue(any("34008/udp" in x for x in g["exposed"]))
+
+    def test_a_service_opened_port_is_closed_as_a_service(self):
+        g = self.gather(zone(self.GOOD_LAN), zone(services=["iax2"]), installed={})
+        self.assertEqual([c["args"] for c in g["to_close"] if c["spec"] == "4569/udp"], [["--remove-service=iax2"]])
+
+    def test_a_range_cover_is_a_note_not_a_change(self):
+        g = self.gather(zone(self.GOOD_LAN + ["33000-35000/udp"]), zone([]), installed={"asl3": "installed"})
+        self.assertEqual([c for c in g["to_close"] if c["spec"] == "34008/udp"], [])
+        self.assertTrue(any("wider range" in n for n in g["close_notes"]))
+
+    def test_an_accept_zone_is_left_alone(self):
+        g = self.gather(zone(accept=True), zone(accept=True), installed={})
+        self.assertEqual((g["to_close"], g["exposed"]), ([], []))
+
+    def test_without_the_tunnel_zone_only_the_lan_zone_is_checked(self):
+        g = self.gather(zone(self.GOOD_LAN + ["34008/udp"]), None, installed={"asl3": "installed"})
+        self.assertEqual([(c["zone"], c["spec"]) for c in g["to_close"]], [("public", "34008/udp")])
+
+
 class Run(Tmp):
     def run_ports(self, g, preview, results=None):
         calls = []
@@ -172,7 +245,7 @@ class Run(Tmp):
             out = h44._bld_run_ports(preview, "half", {})
         return out, calls
 
-    G = {"running": True, "tunnel_zone": True, "default_zone": "public", "notes": ["note"], "exposed": ["8989/tcp is open to the tunnel side"],
+    G = {"running": True, "tunnel_zone": True, "default_zone": "public", "to_close": [], "close_notes": [], "notes": ["note"], "exposed": ["8989/tcp is open to the tunnel side"],
          "rows": [], "missing": [{"zone": "lan", "spec": "9997/tcp", "why": "44helper"},
                                  {"zone": "tunnel", "spec": "4569/udp", "why": "IAX2"}]}
 
@@ -193,6 +266,7 @@ class Run(Tmp):
         self.assertNotIn(["firewall-cmd", f"--zone={h44.FIREWALLD_ZONE}", "--add-port=9997/tcp"], calls)
         self.assertTrue(any(ln.startswith("Not changed") for ln in lines))
         self.assertFalse(any("--remove" in " ".join(c) for c in calls))
+        self.assertIn("No port is open for a component that is not installed.", lines)
 
     def test_a_failure_is_reported(self):
         (ok, lines), _ = self.run_ports(self.G, False, {"firewall-cmd --permanent --zone=public --add-port=9997/tcp": {"success": False, "output": "denied"}})
@@ -205,6 +279,33 @@ class Run(Tmp):
         self.assertFalse(ok)
         self.assertEqual(len(calls), 2)
         self.assertTrue(any(ln.startswith("skipped 4569/udp") and "Run the tunnel steps first" in ln for ln in lines))
+
+    def test_closing_removes_now_and_permanently_and_only_what_was_found(self):
+        g = dict(self.G, missing=[], exposed=[], to_close=[
+            {"zone": "public", "spec": "34008/udp", "why": "USRP2M17", "args": ["--remove-port=34008/udp"]},
+            {"zone": "44NetConnect", "spec": "4569/udp", "why": "AllStarLink", "args": ["--remove-service=iax2"]}], close_notes=["x: wide"])
+        (ok, lines), calls = self.run_ports(g, False)
+        self.assertTrue(ok)
+        self.assertEqual(calls, [["firewall-cmd", "--zone=public", "--remove-port=34008/udp"],
+                                 ["firewall-cmd", "--permanent", "--zone=public", "--remove-port=34008/udp"],
+                                 ["firewall-cmd", "--zone=44NetConnect", "--remove-service=iax2"],
+                                 ["firewall-cmd", "--permanent", "--zone=44NetConnect", "--remove-service=iax2"]])
+        self.assertIn("closed 34008/udp (USRP2M17 is not installed) in zone public", lines)
+        self.assertIn("Not changed: x: wide", lines)
+
+    def test_closing_preview_changes_nothing(self):
+        g = dict(self.G, missing=[], exposed=[], to_close=[{"zone": "public", "spec": "34008/udp", "why": "USRP2M17",
+                                                          "args": ["--remove-port=34008/udp"]}])
+        (ok, lines), calls = self.run_ports(g, True)
+        self.assertEqual(calls, [])
+        self.assertIn("would close 34008/udp (USRP2M17 is not installed) in zone public", lines)
+
+    def test_a_close_failure_is_reported(self):
+        g = dict(self.G, missing=[], exposed=[], to_close=[{"zone": "public", "spec": "34008/udp", "why": "USRP2M17",
+                                                          "args": ["--remove-port=34008/udp"]}])
+        (ok, lines), _ = self.run_ports(g, False, {"firewall-cmd --zone=public --remove-port=34008/udp": {"success": False, "output": "denied"}})
+        self.assertFalse(ok)
+        self.assertTrue(any("FAILED to close 34008/udp" in ln and "denied" in ln for ln in lines))
 
     def test_nothing_to_open(self):
         g = dict(self.G, missing=[], exposed=[])

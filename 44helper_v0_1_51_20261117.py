@@ -31684,6 +31684,33 @@ _BLD_SUITE_PORTS = (("nodecontrol", 8989, "Dashboard"), ("sysmon", 9999, "SysMon
 _BLD_SERVICE_PORT = {"ssh": (22, "tcp"), "cockpit": (9090, "tcp"), "iax2": (4569, "udp")}
 _BLD_MGMT_EXPOSED = frozenset({22, 5038, 8080, 9090} | {p for _u, p, _n in _BLD_SUITE_PORTS})
 
+_BLD_COMPONENT_PORTS = {
+    "asl3": ("AllStarLink", ("4569/udp",)),
+    "dvs": ("DVSwitch", ("31100/udp", "31103/udp", "6073/udp", "6074/udp", "6075/udp", "54321/udp")),
+    "usrp2m17": ("USRP2M17", ("34008/udp", "32008/udp")),
+    "svx": ("SvxLink", ("34000/udp", "32000/udp", "5300/tcp", "5300/udp")),
+}
+_BLD_ECHOLINK_PORTS = ("5198-5199/udp", "5200/tcp")
+
+def _bld_skipped_ports(installed: dict) -> list[tuple[str, str]]:
+    have = {k: installed.get(k) == "installed" for k in ("asl3", "dvs", "usrp2m17", "svx")}
+    out: list[tuple[str, str]] = []
+    for key, (name, specs) in _BLD_COMPONENT_PORTS.items():
+        if not have[key]:
+            out += [(spec, name) for spec in specs]
+    if not have["asl3"] and not have["svx"]:
+        out += [(spec, "EchoLink") for spec in _BLD_ECHOLINK_PORTS]
+    return out
+
+def _bld_close_args(zs: dict, spec: str) -> tuple[list[str], str]:
+    lo, hi, proto = _bld_port_spec(spec)
+    if spec in zs["ports"]:
+        return [f"--remove-port={spec}"], ""
+    svc = next((n for n, pr in _BLD_SERVICE_PORT.items() if n in zs["services"] and pr == (lo, proto) and lo == hi), "")
+    if svc:
+        return [f"--remove-service={svc}"], ""
+    return [], f"{spec} is inside a wider range in this zone: close it by hand on the Firewall card"
+
 def _bld_unit_exists(unit: str) -> bool:
     return any(os.path.exists(f"{d}/{unit}") for d in _BLD_UNIT_DIRS)
 
@@ -31739,7 +31766,7 @@ def _bld_ports_gather(mode: str, installed: dict) -> dict:
     cockpit = any(os.path.exists(f"{d}/cockpit.socket") for d in _BLD_UNIT_DIRS)
     rows, notes = _bld_ports_plan(mode, installed, cockpit)
     out = {"running": rc == 0, "rows": rows, "notes": notes, "default_zone": "", "exposed": [], "missing": [],
-           "tunnel_zone": True}
+           "tunnel_zone": True, "to_close": [], "close_notes": []}
     if rc != 0:
         return out
     _rc, dz = _ov_q(["firewall-cmd", "--get-default-zone"])
@@ -31751,6 +31778,17 @@ def _bld_ports_gather(mode: str, installed: dict) -> dict:
         r["open"] = bool(zs and _bld_zone_open(zs, r["spec"]))
         if not r["open"]:
             out["missing"].append(r)
+    for spec, name in _bld_skipped_ports(installed):
+        for z in ("lan", "tunnel"):
+            zs = zones[z]
+            if zs and not zs["accept"] and _bld_zone_open(zs, spec):
+                args, why = _bld_close_args(zs, spec)
+                zname = out["default_zone"] if z == "lan" else FIREWALLD_ZONE
+                if args:
+                    out["to_close"].append({"zone": zname, "spec": spec, "why": name, "args": args})
+                else:
+                    out["close_notes"].append(f"{name}: {why}")
+    closing = {c["spec"] for c in out["to_close"]}
     tun = zones["tunnel"]
     if tun and not tun["accept"]:
         for p in sorted(_BLD_MGMT_EXPOSED):
@@ -31761,7 +31799,7 @@ def _bld_ports_gather(mode: str, installed: dict) -> dict:
         zs = zones[z]
         if zs and not zs["accept"]:
             for spec in loop:
-                if _bld_zone_open(zs, spec):
+                if spec not in closing and _bld_zone_open(zs, spec):
                     out["exposed"].append(f"{spec} (loopback only) is open")
     return out
 
@@ -31770,9 +31808,14 @@ def _bld_ports_stage(g: dict) -> tuple[str, str]:
         return "warn", "firewalld is not running, so no port is blocked and there is nothing to open."
     if g["missing"] and not g["tunnel_zone"] and any(r["zone"] == "tunnel" for r in g["missing"]):
         return "todo", f"The {FIREWALLD_ZONE} zone does not exist yet: run the tunnel steps first."
+    bits = []
     if g["missing"]:
-        names = ", ".join(f"{r['spec']} {r['why']}" for r in g["missing"][:5])
-        return "todo", f"{len(g['missing'])} port(s) to open: {names}" + ("..." if len(g["missing"]) > 5 else "")
+        bits.append(f"{len(g['missing'])} port(s) to open: " + ", ".join(f"{r['spec']} {r['why']}" for r in g["missing"][:4]))
+    if g["to_close"]:
+        bits.append(f"{len(g['to_close'])} port(s) to close for components that are not installed: "
+                    + ", ".join(f"{c['spec']} {c['why']}" for c in g["to_close"][:4]))
+    if bits:
+        return "todo", "; ".join(bits)
     if g["exposed"]:
         return "warn", "Open that should not be: " + "; ".join(g["exposed"][:4])
     return "done", f"{len(g['rows'])} port(s) open. " + " ".join(g["notes"])
@@ -31797,8 +31840,21 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
         good = a["success"] and b["success"]
         ok = ok and good
         lines.append(("opened " if good else "FAILED to open ") + f"{r['spec']} ({r['why']}) in zone {zone}" + ("" if good else ": " + (a["output"] or b["output"])))
+    for c in g["to_close"]:
+        if preview:
+            lines.append(f"would close {c['spec']} ({c['why']} is not installed) in zone {c['zone']}")
+            continue
+        a = _run_argv(["firewall-cmd", f"--zone={c['zone']}"] + c["args"])
+        b = _run_argv(["firewall-cmd", "--permanent", f"--zone={c['zone']}"] + c["args"])
+        good = a["success"] and b["success"]
+        ok = ok and good
+        lines.append(("closed " if good else "FAILED to close ") + f"{c['spec']} ({c['why']} is not installed) in zone {c['zone']}"
+                     + ("" if good else ": " + (a["output"] or b["output"])))
     if not g["missing"]:
         lines.append("Every needed port is already open.")
+    if not g["to_close"]:
+        lines.append("No port is open for a component that is not installed.")
+    lines += ["Not changed: " + x for x in g["close_notes"]]
     lines += g["notes"]
     if g["exposed"]:
         lines += ["Not changed, check the Firewall card: " + x for x in g["exposed"]]
