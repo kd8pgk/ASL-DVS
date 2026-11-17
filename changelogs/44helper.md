@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_56_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_57_20261117.py`. Newest entries first.
+
+## 0.1.57 (2026-11-17)
+
+Fixes a broken page in 0.1.56. This is a release: page JavaScript changes.
+
+- **Fixed.** In 0.1.56 the IAX check button's code carried a line break inside a JavaScript string, so the whole page script failed to load. Every tab stayed on "Checking..." and the Overview check never finished. The string is now written correctly.
+- **Test.** `ci/test_h44_iax.py` now runs `node --check` over all of the page's JavaScript, so a script error fails CI.
 
 ## 0.1.56 (2026-11-17)
 
