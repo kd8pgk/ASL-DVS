@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_45_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_46_20261117.py`. Newest entries first.
+
+## 0.1.46 (2026-11-17)
+
+A Build tab: the order of work for a travel node, with each step's state read from the node. This is a release: a new tab, two new routes and a new settings file. It only reads and checks; nothing it does installs or changes the node's configuration.
+
+- **The checklist.** One row per step, in the order that suits the tunnel mode chosen: Preflight, the tunnel steps 1 to 6, ASL3, DVSwitch, USRP2M17 (each followed by applying its part of the Pi Zero 2 W bundle), the half tunnel (half mode) or the full-tunnel exceptions (full mode), the boot order, the wiring checks, the radio check, the Restore point and the reboot test. A half or split build sets the tunnel up first; a full build puts it after the systems, because a full tunnel takes the Pi's own internet through the tunnel. A row waits ("waits") until the one before it is done. Each state comes from the node's own files, units and handshake, so the page resumes after a reload or a reboot. Each row names the tab that does the step.
+- **Preflight form.** Tunnel mode, callsign, ASL node, DMR ID, NXDN ID, M17 node number, the USB sound card and, for the full tunnel, a bypass list. It is saved in `/etc/44helper/build.json` (root only, mode 600) and holds no passwords or keys. Fields are checked with the same patterns as the Pi Zero 2 W bundle. The M17 node number may not be 1999, 1921 or the main node.
+- **Machine checks.** Operating system (Bookworm, or Trixie with a note that DVSwitch has Bookworm packages only), swap, memory, free disk, root password set, ufw not active, clock synchronised, names resolve. A failing check keeps Preflight open. The page warns when it was opened at the tunnel address.
+- **WireGuard config check.** Paste the node's config to see what the tunnel step would change in it. It runs the same check as the tunnel tab, answers with notes only, and neither saves nor logs the config or its key.
+- **Radio and Node Talker.** The USB sound cards are detected from `/proc/asound` and matched to their `/sys/bus/usb` names. With no card, `devstr` stays empty and the row shows a warning, not a failure. With one card `devstr` stays empty (SimpleUSB takes the first card). With more than one, the card to use must be picked in the form. The row also compares the main node's `rxchannel` in `rpt.conf` with SimpleUSB and lists Node Talker, node 1921 and the phone nodes 1001 and 1002. The phone nodes are only mentioned: Node Controller adds them when the Phone tab is turned on, and this tab never creates or removes them.
+- **Routes.** `GET /api/build/status` and `POST /api/build/action` (`form_save`, `form_reset`, `wg_check`; root only; errors carry a `message`).
+- **Tests.** `ci/test_h44_build.py` (48 tests): form rules, USB detection against a fake `/proc` and `/sys`, the radio states, stage order for each mode, the apply checks, the locking, the routes and the root check.
+- **Not in this release.** The run buttons for the installs, the bundle applies and the tunnel steps; they come in later releases of this tab.
 
 ## 0.1.45 (2026-11-17)
 
