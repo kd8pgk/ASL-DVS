@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.66"
+APP_VERSION = "0.1.67"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -13265,65 +13265,73 @@ def _half_lan_ip(dev: str) -> str:
                 return toks[toks.index("inet") + 1].split("/")[0]
     return ""
 
-def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
-    v = ctx["values"]
-    bl = ctx.get("baseline") or {}
-    now = time.time()
-    res: list[dict] = []
+def _chk(n: int, group: str, title: str, level: str, text: str, hint: str = "") -> list[dict]:
+    return [{"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint}]
 
-    def add(n, group, title, level, text, hint=""):
-        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
+def _chk_state(ctx: dict, client_ip: str) -> dict:
+    return {"ctx": ctx, "v": ctx["values"], "bl": ctx.get("baseline") or {}, "now": time.time(), "client_ip": client_ip}
 
-    def late(level_if_early="wait"):
-        return level_if_early if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
+def _chk_late(c: dict, level_if_early: str = "wait") -> str:
+    return level_if_early if c["now"] - c["ctx"]["ref"] < _HALF_WAIT_SEC else "fail"
 
+def _chk_was(failing: bool) -> str:
+    return " (was already failing before the test)" if failing else ""
+
+def _chk_handshake(c: dict, since: str, hint_down: str, hint_wait: str, hint_stale: str) -> tuple[str, str, str]:
+    now = c["now"]
     rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
     stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
     if rc != 0:
-        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.",
-            "Check the WireGuard key and config on the tunnel tab. This isn't the half-tunnel rules.")
-    elif not stamps or max(stamps) == 0:
-        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["up_at"] < 60 else "fail",
-            "No contact with the 44Net server yet.",
-            "Re-run checks in a minute. If it stays red, check the key and Endpoint on the tunnel tab.")
-    else:
-        age = int(now - max(stamps))
-        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail",
-            f"Last heard from the 44Net server {age}s ago.",
-            "" if age <= 180 else "The tunnel stopped talking. Check the tunnel tab.")
+        return "fail", "wg0 isn't up.", hint_down
+    if not stamps or max(stamps) == 0:
+        return "wait" if now - c["ctx"][since] < 60 else "fail", "No contact with the 44Net server yet.", hint_wait
+    age = int(now - max(stamps))
+    return "pass" if age <= 180 else "fail", f"Last heard from the 44Net server {age}s ago.", "" if age <= 180 else hint_stale
 
-    rules_text = _half_q(["ip", "-4", "rule", "show"])[1]
+def _half_chk_1(c: dict) -> list[dict]:
+    level, text, hint = _chk_handshake(
+        c, "up_at", "Check the WireGuard key and config on the tunnel tab. This isn't the half-tunnel rules.",
+        "Re-run checks in a minute. If it stays red, check the key and Endpoint on the tunnel tab.",
+        "The tunnel stopped talking. Check the tunnel tab.")
+    return _chk(1, "Tunnel", "Tunnel is up", level, text, hint)
+
+def _half_chk_2(c: dict) -> list[dict]:
+    ctx = c["ctx"]
+    c["rules_text"] = _half_q(["ip", "-4", "rule", "show"])[1]
     md = _half_main_default()
     if ctx["mode"] == "testing":
         temp = _half_wg_text(_HALF_TEMP_CONF) or ""
         half_on = "Table = off" in temp and _wg0_interface_present()
     else:
         half_on = _half_conf_is_permanent(_half_wg_text()) and _systemctl_is_active("wg-quick@wg0")
-    full_rules = "lookup 51820" in rules_text
+    full_rules = "lookup 51820" in c["rules_text"]
     if half_on and not full_rules and not md["dev"].startswith("wg"):
-        add(2, "Tunnel", "Running in half mode", "pass", "The tunnel is up with Table = off.")
-    else:
-        add(2, "Tunnel", "Running in half mode", "fail",
-            "Full-tunnel rules are loaded." if full_rules else "The tunnel isn't running in half mode.",
-            "Use Undo now, then start again from Check first." if ctx["mode"] == "testing"
-            else "Restart the tunnel: systemctl restart wg-quick@wg0")
+        return _chk(2, "Tunnel", "Running in half mode", "pass", "The tunnel is up with Table = off.")
+    return _chk(2, "Tunnel", "Running in half mode", "fail",
+                "Full-tunnel rules are loaded." if full_rules else "The tunnel isn't running in half mode.",
+                "Use Undo now, then start again from Check first." if ctx["mode"] == "testing"
+                else "Restart the tunnel: systemctl restart wg-quick@wg0")
 
+def _half_chk_3(c: dict) -> list[dict]:
     conflicts = _half_direct_conflicts()
-    add(3, "Tunnel", "No conflicting rules", "fail" if conflicts else "pass",
-        ("Outbound block rules found: " + " | ".join(conflicts)) if conflicts else "No outbound block rules.",
-        "Remove the Full Tunnel outbound-port blocks before going on." if conflicts else "")
+    return _chk(3, "Tunnel", "No conflicting rules", "fail" if conflicts else "pass",
+                ("Outbound block rules found: " + " | ".join(conflicts)) if conflicts else "No outbound block rules.",
+                "Remove the Full Tunnel outbound-port blocks before going on." if conflicts else "")
 
-    dev, _src, raw = _half_route_dev(["1.1.1.1"])
+def _half_chk_4(c: dict) -> list[dict]:
+    dev, _src, _raw = _half_route_dev(["1.1.1.1"])
     ok4 = bool(dev) and not dev.startswith("wg")
-    add(4, "Normal route", "Internet still uses the normal link", "pass" if ok4 else "fail",
-        f"1.1.1.1 goes out {dev or '?'}.",
-        "" if ok4 else "This is what broke things last time. Use Undo now.")
+    return _chk(4, "Normal route", "Internet still uses the normal link", "pass" if ok4 else "fail", f"1.1.1.1 goes out {dev or '?'}.",
+                "" if ok4 else "This is what broke things last time. Use Undo now.")
 
+def _half_chk_5(c: dict) -> list[dict]:
     rc5, out5 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
-    add(5, "Normal route", "DNS works", "pass" if rc5 == 0 and out5 else "fail",
-        "allstarlink.org resolves." if rc5 == 0 and out5 else "Name lookups are failing.",
-        "" if rc5 == 0 and out5 else "DVSwitch and usrp2m17 dial by name, so they'll drop. Use Undo now.")
+    return _chk(5, "Normal route", "DNS works", "pass" if rc5 == 0 and out5 else "fail",
+                "allstarlink.org resolves." if rc5 == 0 and out5 else "Name lookups are failing.",
+                "" if rc5 == 0 and out5 else "DVSwitch and usrp2m17 dial by name, so they'll drop. Use Undo now.")
 
+def _half_chk_6(c: dict) -> list[dict]:
+    v, bl, client_ip = c["v"], c["bl"], c["client_ip"]
     problems: list[str] = []
     seen: list[str] = []
     if client_ip and not client_ip.startswith("127.") and client_ip != "::1":
@@ -13347,13 +13355,13 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
                 continue
         seen.append(f"{name} :{port}")
     if problems:
-        add(6, "Normal route", "LAN tools still respond", "fail", "; ".join(problems),
-            "Last time the LAN pages went unresponsive. Use Undo now.")
-    elif seen:
-        add(6, "Normal route", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
-    else:
-        add(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+        return _chk(6, "Normal route", "LAN tools still respond", "fail", "; ".join(problems), "Last time the LAN pages went unresponsive. Use Undo now.")
+    if seen:
+        return _chk(6, "Normal route", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    return _chk(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
 
+def _half_chk_7(c: dict) -> list[dict]:
+    v, ctx = c["v"], c["ctx"]
     table = _half_q(["ip", "-4", "route", "show", "table", _HALF_TABLE])[1]
     if v.get("fwmark"):
         net_dev, _ns, _nr = _half_route_dev(["44.0.0.1"])
@@ -13371,31 +13379,35 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         main44 = _half_q(["ip", "-4", "route", "show", "dev", "wg0"])[1] if _wg0_interface_present() else ""
         ok7 = "default dev wg0" in table and all(n in main44 for n in _HALF_NETS)
         text7 = f"Table {_HALF_TABLE} and the 44Net routes are in place." if ok7 else "The tunnel route table or 44Net routes are missing."
-    add(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail", text7,
-        "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
+    return _chk(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail", text7,
+                "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
 
-    specs = _half_rule_specs(v)
-    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", rules_text)]
-    add(8, "Half-tunnel pieces", "Routing rules are loaded", "fail" if missing else "pass",
-        ("Missing at priority " + ", ".join(missing)) if missing else f"All {len(specs)} rules loaded.",
-        "Undo now, then run the steps again." if missing and ctx["mode"] == "testing" else
-        ("Restart the tunnel." if missing else ""))
+def _half_chk_8(c: dict) -> list[dict]:
+    specs = _half_rule_specs(c["v"])
+    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", c["rules_text"])]
+    return _chk(8, "Half-tunnel pieces", "Routing rules are loaded", "fail" if missing else "pass",
+                ("Missing at priority " + ", ".join(missing)) if missing else f"All {len(specs)} rules loaded.",
+                "Undo now, then run the steps again." if missing and c["ctx"]["mode"] == "testing" else
+                ("Restart the tunnel." if missing else ""))
 
+def _half_chk_9(c: dict) -> list[dict]:
+    v = c["v"]
     bad9: list[str] = []
     good9: list[str] = []
     iax = str(v.get("iax_port", "4569"))
     dev9, src9, _r9 = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", iax])
-    (good9 if dev9 == "wg0" and src9 == v.get("addr44") else bad9).append(
-        f"IAX {iax} -> {dev9 or '?'} from {src9 or '?'}")
+    (good9 if dev9 == "wg0" and src9 == v.get("addr44") else bad9).append(f"IAX {iax} -> {dev9 or '?'} from {src9 or '?'}")
     if v.get("use_uid_rule") and v.get("asterisk_uid") is not None:
         devu, _su, _ru = _half_route_dev(["1.1.1.1", "uid", str(v["asterisk_uid"])])
         (good9 if devu == "wg0" else bad9).append(f"Asterisk user -> {devu or '?'}")
     if v.get("echolink"):
         deve, _se, _re = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", "5198"])
         (good9 if deve == "wg0" else bad9).append(f"EchoLink -> {deve or '?'}")
-    add(9, "Half-tunnel pieces", "ASL traffic really goes into the tunnel", "fail" if bad9 else "pass",
-        "; ".join(bad9 + good9), "The rules are loaded but traffic doesn't follow them." if bad9 else "")
+    return _chk(9, "Half-tunnel pieces", "ASL traffic really goes into the tunnel", "fail" if bad9 else "pass", "; ".join(bad9 + good9),
+                "The rules are loaded but traffic doesn't follow them." if bad9 else "")
 
+def _half_chk_10(c: dict) -> list[dict]:
+    v = c["v"]
     zone = _fw_zone_of_iface("wg0") or v.get("zone") or ""
     closed = [pp for pp in (v.get("ports") or []) if not zone or not _half_port_covered(zone, pp)]
     rp_all, rp_wg = _half_rp_value("all"), _half_rp_value("wg0")
@@ -13408,62 +13420,68 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         bad10.append("not open on " + (zone or "?") + ": " + ", ".join(closed))
     if rp_eff == 1 or rp_eff < 0:
         bad10.append(f"return-path check is strict (all={rp_all or '?'}, wg0={rp_wg or '?'})")
-    add(10, "Half-tunnel pieces", "Ports open in the tunnel's zone, return-path check loose", "fail" if bad10 else "pass",
-        "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
-        "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and ctx["mode"] == "testing" else "")
+    return _chk(10, "Half-tunnel pieces", "Ports open in the tunnel's zone, return-path check loose", "fail" if bad10 else "pass",
+                "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
+                "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and c["ctx"]["mode"] == "testing" else "")
 
-    def was(key: str, failing: bool) -> str:
-        return " (was already failing before the test)" if failing else ""
-
-    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+def _half_chk_11(c: dict) -> list[dict]:
+    d, bd = _half_probe_dvs(), c["bl"].get("dvs") or {}
     if not d["installed"]:
-        add(11, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
-    elif not d["active"]:
-        add(11, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was("dvs", not bd.get("active")),
-            "Check the DVSwitch tab or the dashboard.")
-    elif d["dmr"] == "out":
-        add(11, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was("dvs", bd.get("dmr") == "out"),
-            "Check checks 4 and 5 first; DVSwitch needs the normal route and DNS.")
-    elif d["dmr"] == "in":
-        add(11, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
-    else:
-        add(11, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+        return _chk(11, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    if not d["active"]:
+        return _chk(11, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + _chk_was(not bd.get("active")),
+                    "Check the DVSwitch tab or the dashboard.")
+    if d["dmr"] == "out":
+        return _chk(11, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + _chk_was(bd.get("dmr") == "out"),
+                    "Check checks 4 and 5 first; DVSwitch needs the normal route and DNS.")
+    if d["dmr"] == "in":
+        return _chk(11, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    return _chk(11, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
 
-    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+def _half_chk_12(c: dict) -> list[dict]:
+    u, bu = _half_probe_usrp(), c["bl"].get("usrp") or {}
     if not u["installed"]:
-        add(12, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
-    elif u["active"]:
-        add(12, "Services", "usrp2m17 connected", "pass", "Running.")
-    else:
-        add(12, "Services", "usrp2m17 connected", "fail", "Stopped" + was("usrp", not bu.get("active")),
-            "Check the M17 tab or the dashboard.")
+        return _chk(12, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    if u["active"]:
+        return _chk(12, "Services", "usrp2m17 connected", "pass", "Running.")
+    return _chk(12, "Services", "usrp2m17 connected", "fail", "Stopped" + _chk_was(not bu.get("active")), "Check the M17 tab or the dashboard.")
 
-    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+def _half_chk_13(c: dict) -> list[dict]:
+    v = c["v"]
+    r, br = _half_probe_reg(v.get("addr44", "")), c["bl"].get("reg") or {}
     if not r["available"] and r["why"] == "not installed":
-        add(13, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
-    elif not r["available"]:
-        add(13, "Services", "ASL registration shows your 44 address", "fail",
-            "Asterisk isn't running" + was("reg", not br.get("available")), "Start ASL, then re-run checks.")
-    elif r["has44"]:
-        add(13, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
-    else:
-        shown = ", ".join(sorted(set(r["ips"]))) or "nothing yet"
-        hint = ("Registration can take a few minutes to update. Re-run checks."
-                if late() == "wait" else
-                "Registration is going out the normal route. Asterisk needs its own user for that (see Check first notes).")
-        add(13, "Services", "ASL registration shows your 44 address", late(), f"Shows {shown}.", hint)
+        return _chk(13, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    if not r["available"]:
+        return _chk(13, "Services", "ASL registration shows your 44 address", "fail", "Asterisk isn't running" + _chk_was(not br.get("available")),
+                    "Start ASL, then re-run checks.")
+    if r["has44"]:
+        return _chk(13, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    shown = ", ".join(sorted(set(r["ips"]))) or "nothing yet"
+    hint = ("Registration can take a few minutes to update. Re-run checks."
+            if _chk_late(c) == "wait" else
+            "Registration is going out the normal route. Asterisk needs its own user for that (see Check first notes).")
+    return _chk(13, "Services", "ASL registration shows your 44 address", _chk_late(c), f"Shows {shown}.", hint)
 
-    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+def _half_chk_14(c: dict) -> list[dict]:
+    e, be = _half_probe_el(bool(c["v"].get("echolink"))), c["bl"].get("el") or {}
     if not e["enabled"]:
-        add(14, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
-    elif e["entries"] is None:
-        add(14, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version. Check it on the dashboard.")
-    elif e["entries"] > 0:
-        add(14, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
-    else:
-        add(14, "Services", "EchoLink logged in", late(),
-            "Directory list is empty" + was("el", (be.get("entries") or 0) == 0 and be.get("entries") is not None),
-            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+        return _chk(14, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    if e["entries"] is None:
+        return _chk(14, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version. Check it on the dashboard.")
+    if e["entries"] > 0:
+        return _chk(14, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    return _chk(14, "Services", "EchoLink logged in", _chk_late(c),
+                "Directory list is empty" + _chk_was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
+                "The directory can take a few minutes. Re-run checks." if _chk_late(c) == "wait" else "EchoLink can't reach its directory.")
+
+_HALF_CHECKS = (_half_chk_1, _half_chk_2, _half_chk_3, _half_chk_4, _half_chk_5, _half_chk_6, _half_chk_7, _half_chk_8, _half_chk_9,
+                _half_chk_10, _half_chk_11, _half_chk_12, _half_chk_13, _half_chk_14)
+
+def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    c = _chk_state(ctx, client_ip)
+    res: list[dict] = []
+    for fn in _HALF_CHECKS:
+        res += fn(c)
     return res
 
 def _half_checks_summary(results: list[dict]) -> dict:
@@ -14379,87 +14397,72 @@ def _fx_ctx() -> dict | None:
                 "ref": perm.get("restarted_at") or perm.get("made_at") or time.time()}
     return None
 
-def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
-    v = ctx["values"]
-    bl = ctx.get("baseline") or {}
-    now = time.time()
-    res: list[dict] = []
+def _fx_chk_1(c: dict) -> list[dict]:
+    level, text, hint = _chk_handshake(c, "ref", "Check the tunnel steps on this tab.", "Re-run checks in a minute. If it stays red, check the key and Endpoint.",
+                                       "The tunnel stopped talking.")
+    return _chk(1, "Tunnel", "Tunnel is up", level, text, hint)
 
-    def add(n, group, title, level, text, hint=""):
-        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
-
-    def late():
-        return "wait" if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
-
-    undo = "Use Undo now." if ctx["mode"] == "testing" else "Restart the tunnel: systemctl restart wg-quick@wg0"
-    rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
-    stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
-    if rc != 0:
-        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.", "Check the tunnel steps on this tab.")
-    elif not stamps or max(stamps) == 0:
-        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["ref"] < 60 else "fail", "No contact with the 44Net server yet.",
-            "Re-run checks in a minute. If it stays red, check the key and Endpoint.")
-    else:
-        age = int(now - max(stamps))
-        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail", f"Last heard from the 44Net server {age}s ago.",
-            "" if age <= 180 else "The tunnel stopped talking.")
-
+def _fx_chk_2(c: dict) -> list[dict]:
     rules = _half_q(["ip", "-4", "rule", "show"])[1]
     full_ok = "lookup 51820" in rules and "suppress_prefixlength 0" in rules
-    add(2, "Tunnel", "Full-tunnel rules are loaded", "pass" if full_ok else "fail",
-        "wg-quick's table 51820 rules are in place." if full_ok else "wg-quick's full-tunnel rules are missing.",
-        "" if full_ok else "Restart the tunnel: systemctl restart wg-quick@wg0")
+    return _chk(2, "Tunnel", "Full-tunnel rules are loaded", "pass" if full_ok else "fail",
+                "wg-quick's table 51820 rules are in place." if full_ok else "wg-quick's full-tunnel rules are missing.",
+                "" if full_ok else "Restart the tunnel: systemctl restart wg-quick@wg0")
 
+def _fx_chk_3(c: dict) -> list[dict]:
     dev3, src3, _r3 = _half_route_dev(["1.1.1.1"])
-    add(3, "Tunnel", "Internet goes into the tunnel", "pass" if dev3 == "wg0" else "fail",
-        f"1.1.1.1 goes out {dev3 or '?'}" + (f" from {src3}" if src3 else "") + ".",
-        "" if dev3 == "wg0" else "The full tunnel isn't carrying the internet. " + undo)
+    return _chk(3, "Tunnel", "Internet goes into the tunnel", "pass" if dev3 == "wg0" else "fail",
+                f"1.1.1.1 goes out {dev3 or '?'}" + (f" from {src3}" if src3 else "") + ".",
+                "" if dev3 == "wg0" else "The full tunnel isn't carrying the internet. " + c["undo"])
 
+def _fx_chk_4(c: dict) -> list[dict]:
     my = check_myip()
     if my.get("ip"):
-        good = bool(v.get("addr44")) and my["ip"] == v.get("addr44")
-        add(4, "Tunnel", "The internet sees your 44 address", "pass" if good else "fail",
-            f"connect.44net.cloud/myip reports {my['ip']}.",
-            "" if good else "Your traffic isn't leaving through 44Net. " + undo)
-    else:
-        add(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
-            "No answer through the tunnel. Check checks 1 and 3.")
+        good = bool(c["v"].get("addr44")) and my["ip"] == c["v"].get("addr44")
+        return _chk(4, "Tunnel", "The internet sees your 44 address", "pass" if good else "fail", f"connect.44net.cloud/myip reports {my['ip']}.",
+                    "" if good else "Your traffic isn't leaving through 44Net. " + c["undo"])
+    return _chk(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
+                "No answer through the tunnel. Check checks 1 and 3.")
 
-    lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
+def _fx_chk_5(c: dict) -> list[dict]:
+    lan_ip, gw_dev = c["v"].get("lan_ip", ""), c["v"].get("gw_dev", "")
     if lan_ip and gw_dev:
         dev5, _s5, _r5 = _half_route_dev(["1.1.1.1", "from", lan_ip])
-        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "pass" if dev5 == gw_dev else "fail",
-            f"Traffic from {lan_ip} goes out {dev5 or '?'}.",
-            "" if dev5 == gw_dev else ("Step 2 isn't in place. " + undo))
-    else:
-        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "fail", "No LAN address found.",
-            "Check first didn't find the normal link.")
+        return _chk(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "pass" if dev5 == gw_dev else "fail",
+                    f"Traffic from {lan_ip} goes out {dev5 or '?'}.", "" if dev5 == gw_dev else ("Step 2 isn't in place. " + c["undo"]))
+    return _chk(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "fail", "No LAN address found.",
+                "Check first didn't find the normal link.")
 
-    bypass = ctx.get("bypass") or {}
+def _fx_chk_6(c: dict) -> list[dict]:
+    bypass = c["ctx"].get("bypass") or {}
     resolved = bypass.get("resolved") or {}
     ports = bypass.get("ports") or []
+    gw_dev = c["v"].get("gw_dev", "")
     if not resolved and not ports:
-        add(6, "Exceptions", "Bypass list uses the normal link", "skip", "The bypass list is empty.")
-    else:
-        bad6: list[str] = []
-        good6: list[str] = []
-        for h, ips in resolved.items():
-            for ip in ips:
-                d, _s, _r = _half_route_dev([ip])
-                (good6 if d == gw_dev else bad6).append(f"{h} {ip} -> {d or '?'}")
-            if not ips:
-                bad6.append(f"{h} couldn't be looked up")
-        for p in ports:
-            d, _s, _r = _half_route_dev(["1.1.1.1", "ipproto", "udp", "dport", str(p)])
-            (good6 if d == gw_dev else bad6).append(f"UDP {p} -> {d or '?'}")
-        add(6, "Exceptions", "Bypass list uses the normal link", "fail" if bad6 else "pass", "; ".join(bad6 + good6),
-            "Some bypass entries still go into the tunnel. " + undo if bad6 else "")
+        return _chk(6, "Exceptions", "Bypass list uses the normal link", "skip", "The bypass list is empty.")
+    bad6: list[str] = []
+    good6: list[str] = []
+    for h, ips in resolved.items():
+        for ip in ips:
+            d, _s, _r = _half_route_dev([ip])
+            (good6 if d == gw_dev else bad6).append(f"{h} {ip} -> {d or '?'}")
+        if not ips:
+            bad6.append(f"{h} couldn't be looked up")
+    for p in ports:
+        d, _s, _r = _half_route_dev(["1.1.1.1", "ipproto", "udp", "dport", str(p)])
+        (good6 if d == gw_dev else bad6).append(f"UDP {p} -> {d or '?'}")
+    return _chk(6, "Exceptions", "Bypass list uses the normal link", "fail" if bad6 else "pass", "; ".join(bad6 + good6),
+                "Some bypass entries still go into the tunnel. " + c["undo"] if bad6 else "")
 
+def _fx_chk_7(c: dict) -> list[dict]:
     rc7, out7 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
-    add(7, "Normal use", "DNS works", "pass" if rc7 == 0 and out7 else "fail",
-        "allstarlink.org resolves." if rc7 == 0 and out7 else "Name lookups are failing.",
-        "" if rc7 == 0 and out7 else "Check the DNS card (4a) on this tab. " + undo)
+    return _chk(7, "Normal use", "DNS works", "pass" if rc7 == 0 and out7 else "fail",
+                "allstarlink.org resolves." if rc7 == 0 and out7 else "Name lookups are failing.",
+                "" if rc7 == 0 and out7 else "Check the DNS card (4a) on this tab. " + c["undo"])
 
+def _fx_chk_8(c: dict) -> list[dict]:
+    v, bl, client_ip = c["v"], c["bl"], c["client_ip"]
+    lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
     problems: list[str] = []
     seen: list[str] = []
     if client_ip and not client_ip.startswith("127."):
@@ -14481,61 +14484,67 @@ def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
                 continue
         seen.append(f"{name} :{port}")
     if problems:
-        add(8, "Normal use", "LAN tools still respond", "fail", "; ".join(problems), "The LAN pages may hang. " + undo)
-    elif seen:
-        add(8, "Normal use", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
-    else:
-        add(8, "Normal use", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+        return _chk(8, "Normal use", "LAN tools still respond", "fail", "; ".join(problems), "The LAN pages may hang. " + c["undo"])
+    if seen:
+        return _chk(8, "Normal use", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    return _chk(8, "Normal use", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
 
-    def was(failing: bool) -> str:
-        return " (was already failing before the test)" if failing else ""
-
-    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+def _fx_chk_9(c: dict) -> list[dict]:
+    d, bd = _half_probe_dvs(), c["bl"].get("dvs") or {}
     if not d["installed"]:
-        add(9, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
-    elif not d["active"]:
-        add(9, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was(not bd.get("active")),
-            "Check the DVSwitch tab or the dashboard.")
-    elif d["dmr"] == "out":
-        add(9, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was(bd.get("dmr") == "out"),
-            "Put the DMR master on the bypass list (step 3) if it won't take the 44 address.")
-    elif d["dmr"] == "in":
-        add(9, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
-    else:
-        add(9, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+        return _chk(9, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    if not d["active"]:
+        return _chk(9, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + _chk_was(not bd.get("active")),
+                    "Check the DVSwitch tab or the dashboard.")
+    if d["dmr"] == "out":
+        return _chk(9, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + _chk_was(bd.get("dmr") == "out"),
+                    "Put the DMR master on the bypass list (step 3) if it won't take the 44 address.")
+    if d["dmr"] == "in":
+        return _chk(9, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    return _chk(9, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
 
-    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+def _fx_chk_10(c: dict) -> list[dict]:
+    u, bu = _half_probe_usrp(), c["bl"].get("usrp") or {}
     if not u["installed"]:
-        add(10, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
-    else:
-        add(10, "Services", "usrp2m17 connected", "pass" if u["active"] else "fail",
-            "Running." if u["active"] else "Stopped" + was(not bu.get("active")), "" if u["active"] else "Check the M17 tab.")
+        return _chk(10, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    return _chk(10, "Services", "usrp2m17 connected", "pass" if u["active"] else "fail",
+                "Running." if u["active"] else "Stopped" + _chk_was(not bu.get("active")), "" if u["active"] else "Check the M17 tab.")
 
-    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+def _fx_chk_11(c: dict) -> list[dict]:
+    v = c["v"]
+    r, br = _half_probe_reg(v.get("addr44", "")), c["bl"].get("reg") or {}
     if not r["available"] and r["why"] == "not installed":
-        add(11, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
-    elif not r["available"]:
-        add(11, "Services", "ASL registration shows your 44 address", "fail",
-            "Asterisk isn't running" + was(not br.get("available")), "Start ASL, then re-run checks.")
-    elif r["has44"]:
-        add(11, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
-    else:
-        add(11, "Services", "ASL registration shows your 44 address", late(),
-            f"Shows {', '.join(sorted(set(r['ips']))) or 'nothing yet'}.",
-            "Registration can take a few minutes to update. Re-run checks." if late() == "wait"
-            else "Registration isn't going out the tunnel. Check checks 3 and 4.")
+        return _chk(11, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    if not r["available"]:
+        return _chk(11, "Services", "ASL registration shows your 44 address", "fail", "Asterisk isn't running" + _chk_was(not br.get("available")),
+                    "Start ASL, then re-run checks.")
+    if r["has44"]:
+        return _chk(11, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    return _chk(11, "Services", "ASL registration shows your 44 address", _chk_late(c, "wait"),
+                f"Shows {', '.join(sorted(set(r['ips']))) or 'nothing yet'}.",
+                "Registration can take a few minutes to update. Re-run checks." if _chk_late(c, "wait") == "wait"
+                else "Registration isn't going out the tunnel. Check checks 3 and 4.")
 
-    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+def _fx_chk_12(c: dict) -> list[dict]:
+    e, be = _half_probe_el(bool(c["v"].get("echolink"))), c["bl"].get("el") or {}
     if not e["enabled"]:
-        add(12, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
-    elif e["entries"] is None:
-        add(12, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version.")
-    elif e["entries"] > 0:
-        add(12, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
-    else:
-        add(12, "Services", "EchoLink logged in", late(),
-            "Directory list is empty" + was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
-            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+        return _chk(12, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    if e["entries"] is None:
+        return _chk(12, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version.")
+    if e["entries"] > 0:
+        return _chk(12, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    return _chk(12, "Services", "EchoLink logged in", _chk_late(c, "wait"),
+                "Directory list is empty" + _chk_was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
+                "The directory can take a few minutes. Re-run checks." if _chk_late(c, "wait") == "wait" else "EchoLink can't reach its directory.")
+
+_FX_CHECKS = (_fx_chk_1, _fx_chk_2, _fx_chk_3, _fx_chk_4, _fx_chk_5, _fx_chk_6, _fx_chk_7, _fx_chk_8, _fx_chk_9, _fx_chk_10, _fx_chk_11, _fx_chk_12)
+
+def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    c = _chk_state(ctx, client_ip)
+    c["undo"] = "Use Undo now." if ctx["mode"] == "testing" else "Restart the tunnel: systemctl restart wg-quick@wg0"
+    res: list[dict] = []
+    for fn in _FX_CHECKS:
+        res += fn(c)
     return res
 
 def action_fx_run_checks(client_ip: str = "") -> dict:

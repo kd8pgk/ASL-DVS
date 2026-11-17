@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_66_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_67_20261117.py`. Newest entries first.
+
+## 0.1.67 (2026-11-17)
+
+The half-tunnel and full-tunnel check lists are split into one function per check. This is a release: the structure of two functions changes, with no change in any check. It is stage 3 of a tidy of the file.
+
+- **Before the change, tests.** `ci/test_h44_checklists.py` records what both lists give for 100 scenarios (every check passing, each check failing in each way, the wait-versus-fail time limits on both sides of the boundary, the half and full variants, testing and permanent mode) in `ci/golden/h44_checklists.json`, taken from the old code. The recorded answers have to match exactly.
+- **The change.** `_half_check_list` (200 lines) and `_fx_check_list` (158 lines) are now short loops over `_HALF_CHECKS` (14 functions) and `_FX_CHECKS` (12 functions), one function per numbered check, with the shared parts (the result shape, the wait-or-fail rule, the "was already failing" note and the handshake check) written once. Each check keeps its number, group, title, text and hint, and the commands are run in the same order.
+- **Not changed.** What each check looks at, its pass, fail, wait or skip answer, its text and hints, and the order of the results.
+- **Tests.** The recorded-answers test passes unchanged against the old and the new code, and three deliberate edits to the old code (a time limit, a title and a pass test) each made it fail.
 
 ## 0.1.66 (2026-11-17)
 

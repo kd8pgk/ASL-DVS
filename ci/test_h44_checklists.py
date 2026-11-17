@@ -19,7 +19,7 @@ def newest(pattern):
     return sorted(glob.glob(os.path.join(ROOT, pattern)), key=key)[-1]
 
 
-spec = importlib.util.spec_from_file_location("h44_checklists_under_test", newest("44helper_v[0-9]*.py"))
+spec = importlib.util.spec_from_file_location("h44_checklists_under_test", os.environ.get("H44_UNDER_TEST") or newest("44helper_v[0-9]*.py"))
 h44 = importlib.util.module_from_spec(spec)
 sys.modules["h44_checklists_under_test"] = h44
 spec.loader.exec_module(h44)
@@ -40,17 +40,17 @@ def base_world():
     }
 
 
-def half_ctx(mode="permanent", ref_age=10, **v):
+def half_ctx(mode="permanent", ref_age=10, up_age=None, **v):
     values = {"gw_dev": "eth0", "gw_via": "192.168.1.1", "fwmark": "", "endpoint": "", "iax_port": "4569", "addr44": "44.1.2.3",
               "use_uid_rule": False, "asterisk_uid": None, "echolink": True, "ports": ["4569/udp"], "zone": "44NetConnect", "lan_ip": "192.168.1.5"}
     values.update(v)
     return {"values": values, "baseline": {"tools": [80], "dvs": {"active": True, "dmr": "in"}, "usrp": {"active": True},
                                            "reg": {"available": True}, "el": {"entries": 50}},
-            "ref": NOW - ref_age, "up_at": NOW - ref_age, "mode": mode, "bypass": {"hosts": [], "ports": [], "resolved": {}}}
+            "ref": NOW - ref_age, "up_at": NOW - (ref_age if up_age is None else up_age), "mode": mode, "bypass": {"hosts": [], "ports": [], "resolved": {}}}
 
 
-def fx_ctx(mode="permanent", ref_age=10, **v):
-    ctx = half_ctx(mode, ref_age, **v)
+def fx_ctx(mode="permanent", ref_age=10, up_age=None, **v):
+    ctx = half_ctx(mode, ref_age, ref_age + 5000 if up_age is None else up_age, **v)
     ctx["bypass"] = {"hosts": [], "ports": [], "resolved": {}}
     return ctx
 
@@ -112,6 +112,8 @@ def half_scenarios():
     add("early_60", lambda w: w.update(wg_out=""), ref_age=60)
     add("late_359", lambda w: w.update(reg={"available": True, "why": "", "ips": ["203.0.113.9"], "has44": False}), ref_age=359)
     add("late_360", lambda w: w.update(reg={"available": True, "why": "", "ips": ["203.0.113.9"], "has44": False}), ref_age=360)
+    add("wg_no_contact_up_old", lambda w: w.update(wg_out=""), ref_age=20, up_age=500)
+    add("wg_no_contact_up_new", lambda w: w.update(wg_out=""), ref_age=500, up_age=20)
     add("not_half_full_rules", lambda w: w.update(rules="1100:\n1101:\nlookup 51820"))
     add("not_half_wg_default", lambda w: w.update(md_dev="wg0"))
     add("not_half_testing", lambda w: w.update(perm=False), mode="testing")
@@ -191,6 +193,8 @@ def fx_scenarios():
     add("early_60", lambda w: w.update(wg_out=""), ref_age=60)
     add("late_359", lambda w: w.update(reg={"available": True, "why": "", "ips": ["203.0.113.9"], "has44": False}), ref_age=359)
     add("late_360", lambda w: w.update(reg={"available": True, "why": "", "ips": ["203.0.113.9"], "has44": False}), ref_age=360)
+    add("wg_no_contact_ref_new", lambda w: w.update(wg_out=""), ref_age=20, up_age=9000)
+    add("wg_no_contact_ref_old", lambda w: w.update(wg_out=""), ref_age=500, up_age=20)
     add("full_rules_missing", lambda w: w.update(rules=""))
     add("full_rules_no_suppress", lambda w: w.update(rules="lookup 51820"))
     add("internet_not_in_tunnel", lambda w: route(w, ["1.1.1.1"], "eth0"))
