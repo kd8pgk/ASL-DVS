@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.44"
+APP_VERSION = "0.1.45"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -11477,6 +11477,8 @@ _SERVICE_UNIT_DEFS: list[tuple[str, str, str, bool]] = [
     ("Analog_Bridge (DVSwitch)", "analog_bridge.service", "AllStarLink / DVSwitch", False),
     ("md380-emu (DVSwitch)", "md380-emu.service", "AllStarLink / DVSwitch", False),
     ("SvxLink", "svxlink.service", "SVXLink", False),
+    ("SvxLink (USRP build, svxlink-usrp)", "svxlink-usrp.service", "SVXLink", False),
+    ("SvxReflector (test server)", "svxreflector.service", "SVXLink", False),
     ("Ampersand Server (amp-server)", "amp-server.service", "Ampersand", False),
     ("Ampersand Hub (amp-hub)", "amp-hub.service", "Ampersand", False),
     ("Cloudflare Tunnel (cloudflared)", "cloudflared.service", "Cloudflare Tunnel", False),
@@ -11499,6 +11501,10 @@ _SERVICE_PORT_DEFS: list[tuple[str, int, str, str, bool]] = [
     ("USRP2M17 USRP leg (Asterisk listen)", 32008, "udp", "M17", False),
     ("Ampersand web UI (amp-server/amp-hub)", 8080, "tcp", "Ampersand", True),
     ("Ampersand IAX (amp-hub default)", 4568, "udp", "Ampersand", False),
+    ("SvxLink USRP leg (SvxLink listen)", 34000, "udp", "SVXLink", True),
+    ("SvxLink USRP leg (Asterisk listen)", 32000, "udp", "SVXLink", False),
+    ("SvxReflector (test server, TCP)", 5300, "tcp", "SVXLink", True),
+    ("SvxReflector (test server, UDP)", 5300, "udp", "SVXLink", True),
 ]
 
 def build_services_status(cfg: configparser.ConfigParser) -> dict:
@@ -11525,6 +11531,7 @@ def build_services_status(cfg: configparser.ConfigParser) -> dict:
 _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("IAX2", "4569", "udp", "AllStarLink IAX2 — primary 44Net Connect use case", False),
     ("EchoLink", "5198-5199", "udp", "EchoLink — Asterisk app_echolink or SvxLink's EchoLink module", False),
+    ("EchoLink (TCP)", "5200", "tcp", "EchoLink direct connections, used together with 5198-5199/udp — Asterisk app_echolink or SvxLink's EchoLink module", False),
     ("VOTER/RTCM", "1667", "udp", "VOTER/RTCM", False),
     ("Asterisk AMI", "5038", "tcp", "Asterisk Manager Interface — especially risky if public", True),
     ("USRP2M17", "34008", "udp", "M17 gateway USRP leg (target app, e.g. USRP2M17-Selector) — loopback-only, never needs forwarding", False),
@@ -11542,6 +11549,10 @@ _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("Cockpit", "9090", "tcp", "System management UI", True),
     ("Ampersand web UI", "8080", "tcp", "amp-server / amp-hub web UI — should stay private (bind to LAN or firewall it)", True),
     ("Ampersand IAX (hub)", "4568", "udp", "amp-hub default IAX port — use a distinct port from Asterisk's 4569 if both run on one box", False),
+    ("SvxLink USRP (SvxLink listen)", "34000", "udp", "SvxLink's USRP link to ASL3's bridge node (rxchannel = USRP/127.0.0.1:34000:32000) — loopback-only, never needs forwarding. SvxLink listens on every interface, not only 127.0.0.1, so keep it closed in the firewall", True),
+    ("SvxLink USRP (ASL listen)", "32000", "udp", "The ASL3 end of the SvxLink USRP link (the bridge node's rxchannel) — loopback-only, never needs forwarding", False),
+    ("SvxReflector (test server, TCP)", "5300", "tcp", "The test reflector from step 10 of the SvxLink tab listens here. Only this node's own SvxLink needs to reach it: keep TCP and UDP 5300 closed in the firewall. A real reflector is reached outbound on its own port (see the SvxLink reflector rows)", True),
+    ("SvxReflector (test server, UDP)", "5300", "udp", "The test reflector's audio port, the same number as its TCP port — keep it closed in the firewall", True),
     ("Cloudflare Tunnel (edge)", "7844", "udp", "cloudflared outbound edge connection (QUIC, with TCP fallback) — OUTBOUND-ONLY, never an inbound opening or a forward. A Cloudflare Tunnel needs no inbound opening or port forward (only this outbound connection), so no port here maps to what the tunnel exposes — that is managed in the Zero Trust dashboard and cannot be enumerated locally", False),
 ]
 
@@ -11566,6 +11577,11 @@ _PORT_ROLES: dict[str, tuple[str, str]] = {
     "9090/tcp":         ("System management",     "mgmt-LAN"),
     "8080/tcp":         ("Ampersand",             "mgmt-LAN"),
     "4568/udp":         ("Ampersand",             "peer-inbound"),
+    "5200/tcp":         ("AllStarLink / SVXLink",  "peer-inbound"),
+    "34000/udp":        ("SvxLink",               "loopback-only"),
+    "32000/udp":        ("SvxLink",               "loopback-only"),
+    "5300/tcp":         ("SvxLink",               "loopback-only"),
+    "5300/udp":         ("SvxLink",               "loopback-only"),
     "7844/udp":         ("Cloudflare Tunnel",     "outbound-only"),
 }
 
@@ -11587,8 +11603,52 @@ def _ref_port_listening(port: str, proto: str) -> bool:
         return False
     return any(_local_port_listening(n, p) for n in nums for p in (proto, proto + "6"))
 
-def _ref_running(label: str, port: str, proto: str, running_labels: set) -> bool:
+_SVX_RUNNING_LABELS = ("SvxLink (USRP build, svxlink-usrp)", "SvxLink")
+
+def _svx_reflector_targets() -> list[tuple[str, str]]:
+    raw = _cfgr_read(_CFGR_SVX_CONF)
+    if raw is None:
+        return []
+    inside = False
+    hosts = ""
+    port = "5300"
+    for line in raw.decode("utf-8", "replace").splitlines():
+        s = line.strip()
+        if s.startswith("["):
+            inside = s.lower() == "[reflectorlogic]"
+            continue
+        if not inside or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k, v = k.strip().upper(), v.strip().strip('"')
+        if k == "HOSTS":
+            hosts = v
+        elif k == "HOST_PORT" and v.isdigit():
+            port = v
+    out: list[tuple[str, str]] = []
+    for item in [h.strip() for h in hosts.split(",") if h.strip()]:
+        host, _, p = item.partition(":")
+        p = p if p.isdigit() else port
+        if host.lower() in ("127.0.0.1", "localhost", "::1") or not 0 < int(p) < 65536:
+            continue
+        if (host, p) not in out:
+            out.append((host, p))
+    return out
+
+def _svx_reflector_rows() -> list[tuple[str, str, str, str, bool, str, str]]:
+    rows = []
+    for host, p in _svx_reflector_targets():
+        for proto in ("tcp", "udp"):
+            rows.append((f"SvxLink reflector, outbound ({host})", p, proto,
+                         f"SvxLink's ReflectorLogic connects OUT to {host}:{p} (signalling on TCP, audio on UDP, "
+                         "the same port number). Outbound-only: it needs no inbound opening and no forward", False,
+                         "SvxLink", "outbound-only"))
+    return rows
+
+def _ref_running(label: str, port: str, proto: str, running_labels: set, dyn: set | None = None) -> bool:
     key = f"{port}/{proto}"
+    if dyn and key in dyn and label.startswith("SvxLink reflector, outbound"):
+        return any(x in running_labels for x in _SVX_RUNNING_LABELS)
     if key in _PORT_RUNNING_LABEL:
         return _PORT_RUNNING_LABEL[key] in running_labels
     return label in running_labels or _ref_port_listening(port, proto)
@@ -11614,6 +11674,9 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
     my_port = cfg.getint("server", "port", fallback=9997)
     reference = [t + _port_role(t[1], t[2]) for t in _PORTS_REFERENCE]
     reference.append(("44helper", str(my_port), "tcp", "This dashboard", True, "Dashboards", "mgmt-LAN"))
+    svx_out = _svx_reflector_rows()
+    reference.extend(svx_out)
+    dyn = {f"{r[1]}/{r[2]}" for r in svx_out}
 
     services_status = build_services_status(cfg)
     running_labels = {
@@ -11632,7 +11695,7 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
             port_proto = f"{port}/{proto}"
             exposed = port_proto in exposed_set or label.lower() in exposed_set
             rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed,
-                                   _ref_running(label, port, proto, running_labels), system, role))
+                                   _ref_running(label, port, proto, running_labels, dyn), system, role))
     elif router_mode in ("router_single", "router_subnet"):
         raw_forwards = cfg.get("tunnels", "tunnel.router.forwards", fallback="")
         forwarded_ports = {e.split(":", 1)[1] for e in raw_forwards.split(",") if ":" in e}
@@ -11645,11 +11708,11 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
             port_proto = f"{port}/{proto}"
             exposed = zone_open or port_proto in forwarded_ports
             rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed,
-                                   _ref_running(label, port, proto, running_labels), system, role))
+                                   _ref_running(label, port, proto, running_labels, dyn), system, role))
     else:
         for label, port, proto, purpose, flag_public, system, role in reference:
             rows.append(_ports_row(label, port, proto, purpose, flag_public, False,
-                                   _ref_running(label, port, proto, running_labels), system, role, tunnel=False))
+                                   _ref_running(label, port, proto, running_labels, dyn), system, role, tunnel=False))
 
     return {"rows": rows, "exposure_source": exposure_source, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
