@@ -296,9 +296,14 @@ class RunStage(unittest.TestCase):
             self.assertNotIn(never, h44._BLD_RUNNABLE)
 
     def test_the_post_route_passes_the_client_address(self):
-        with open(newest("44helper_v[0-9]*.py"), encoding="utf-8") as f:
-            src = f.read()
-        self.assertIn('payload["_client_ip"] = self._client_ip()\n            result = _dispatch_build_action(payload)', src)
+        class Fake:
+            def _client_ip(self):
+                return "9.9.9.9"
+
+        seen = []
+        with mock.patch.object(h44, "_dispatch_build_action", lambda p: seen.append(dict(p)) or {}):
+            h44._POST_JSON["/api/build/action"]({"a": 1}, Fake())
+        self.assertEqual(seen, [{"a": 1, "_client_ip": "9.9.9.9"}])
 
 
 class JobInfo(unittest.TestCase):
