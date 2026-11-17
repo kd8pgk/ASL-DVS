@@ -241,7 +241,7 @@ class Wipe(unittest.TestCase):
 
     def test_the_status_wipes_when_the_reboot_test_is_done(self):
         h44._bld_form_write(h44._bld_form_clean(dict(BASE, pw_node="a")))
-        with mock.patch.object(h44, "_bld_reboot_state", lambda *a: ("done", "ok")), mock.patch.object(h44, "_bld_machine", lambda: []), \
+        with mock.patch.object(h44, "_BS_DIR", os.path.join(self.d.name, "saves")), mock.patch.object(h44, "_bld_reboot_state", lambda *a: ("done", "ok")), mock.patch.object(h44, "_bld_machine", lambda: []), \
                 mock.patch.object(h44, "_detect_installed_products", lambda force=False: []), mock.patch.object(h44, "_bld_usb_cards", lambda: []), \
                 mock.patch.object(h44, "_wg0_interface_present", lambda: False), mock.patch.object(h44, "_firewalld_zone_info_cached", lambda: None), \
                 mock.patch.object(h44, "status_boot_order", lambda: {"done": True, "missing": []}), \

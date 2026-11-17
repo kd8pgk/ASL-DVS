@@ -81,7 +81,7 @@ class CallsignStillWorks(Base):
         self.assertIn("Callsign=BB2BB", self.fs.files["/opt/MMDVM_Bridge/MMDVM_Bridge.ini"])
         self.assertIn("call = BB2BB-L", self.fs.files["/etc/asterisk/echolink.conf"])
         self.assertIn("|iBB2BB", self.fs.files["/etc/asterisk/rpt.conf"])
-        self.assertIn("Automatic save point: test-point", r["output"])
+        self.assertIn("Automatic Config Save: test-point", r["output"])
 
     def test_old_action_names_still_answer(self):
         a = h44._cfgr_act_id_set_callsign({"callsign": "BB2BB"}, False)
