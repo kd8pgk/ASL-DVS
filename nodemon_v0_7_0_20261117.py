@@ -25,8 +25,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.6.0"
-DATE_STR = "2026-11-16"
+VERSION = "0.7.0"
+DATE_STR = "2026-11-17"
 APP_NAME = "Node Monitor"
 PORT = 7777
 
@@ -58,6 +58,7 @@ UNIT_SVX = "svxlink-usrp"
 MAX_JSON_BYTES = 64 * 1024
 GZIP_MIN_BYTES = 600
 POLL_MIN_SEC = 1
+EXIT_NO_TLS = 78
 POLL_MAX_SEC = 30
 PRIVATE_MIN = 1000
 PRIVATE_MAX = 1999
@@ -214,12 +215,6 @@ def _atomic_write(path, data, mode=0o644, like=None):
     else:
         atomic_write(path, data, mode=mode)
 
-def _remove_quiet(path):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
 _AUTH_ACCOUNT = "root"
 
 def _read_shadow_hash(account):
@@ -234,11 +229,13 @@ def _read_shadow_hash(account):
     return None
 
 _libcrypt_handle = None
+_libcrypt_name = None
+_hash_warned = set()
 
 _crypt_lock = threading.Lock()
 
 def _crypt_verify(password, stored_hash):
-    global _libcrypt_handle
+    global _libcrypt_handle, _libcrypt_name
     if _libcrypt_handle is None:
         import ctypes
         import ctypes.util
@@ -252,6 +249,7 @@ def _crypt_verify(password, stored_hash):
                 lib.crypt.restype = ctypes.c_char_p
                 lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
                 found = lib
+                _libcrypt_name = name
                 break
             except (OSError, AttributeError):
                 continue
@@ -268,9 +266,19 @@ def _crypt_verify(password, stored_hash):
     except Exception as exc:
         log_event(f"_crypt_verify: crypt(3) call failed: {exc}", "warn")
         return False
-    if result is None:
+    if result is None or result.startswith("*"):
+        _warn_hash_once(stored_hash)
         return False
     return hmac.compare_digest(result, stored_hash)
+
+def _warn_hash_once(stored_hash):
+    parts = stored_hash.split("$")
+    prefix = parts[1] if stored_hash.startswith("$") and len(parts) > 2 else "unknown"
+    if prefix in _hash_warned:
+        return
+    _hash_warned.add(prefix)
+    log_event(f"Root password hash type ${prefix}$ was not accepted by {_libcrypt_name or 'libcrypt'}; "
+              "login is refused. Yescrypt ($y$) needs libxcrypt 4.4 or later.", "warn")
 
 def _verify_root_password(password):
     if not password:
@@ -281,7 +289,8 @@ def _verify_root_password(password):
     except ImportError:
         pass
     except Exception as exc:
-        log_event(f"_verify_root_password: PAM check errored, trying shadow fallback: {exc}", "warn")
+        log_event(f"_verify_root_password: PAM check errored, login refused: {exc}", "warn")
+        return False
     try:
         stored = _read_shadow_hash(_AUTH_ACCOUNT)
         if not stored or stored[0] in ("!", "*"):
@@ -315,6 +324,9 @@ def sess_stamp(password_hash):
 
 def sess_dead(rec, now):
     return rec["idle"] <= now or bool(rec["abs"] and rec["abs"] <= now)
+
+SESS_PER_IP_MAX = 10
+
 
 def sess_new(store, policy, now, stamp="", ip=""):
     import secrets
@@ -434,14 +446,14 @@ def _pw_stamp():
         _stamp_cache[1] = value
     return _stamp_cache[1]
 
-def _issue_session():
+def _issue_session(ip=""):
     with _sessions_lock:
-        return sess_new(_sessions, _SESS_POLICY, _sess_now(), _pw_stamp())
+        return _nm_sess_new(_sessions, _SESS_POLICY, _sess_now(), _pw_stamp(), ip)
 
-def _check_session(token):
+def _check_session(token, ip=None):
     _sess_local.renew = 0
     with _sessions_lock:
-        ok, renew, age = sess_check(_sessions, token, _SESS_POLICY, _sess_now(), _pw_stamp())
+        ok, renew, age = sess_check(_sessions, token, _SESS_POLICY, _sess_now(), _pw_stamp(), ip=ip)
     if ok and renew:
         _sess_local.renew = age
     return ok
@@ -449,6 +461,10 @@ def _check_session(token):
 def _revoke_all_sessions():
     with _sessions_lock:
         return sess_drop_all(_sessions)
+
+def _logout_session(token):
+    with _sessions_lock:
+        return sess_drop(_sessions, token)
 
 def _auth_lockout_remaining(client_ip, wan=False):
     with _lock_lock:
@@ -499,12 +515,12 @@ def _sd_notify(message):
     except (OSError, ValueError):
         return False
 
-def _http_responsive(port, tls=False):
+def _http_responsive(port, tls=False, host="127.0.0.1"):
     try:
         if tls:
-            conn = http.client.HTTPSConnection("127.0.0.1", port, timeout=5, context=ssl._create_unverified_context())
+            conn = http.client.HTTPSConnection(host, port, timeout=5, context=ssl._create_unverified_context())
         else:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn = http.client.HTTPConnection(host, port, timeout=5)
         try:
             conn.request("GET", "/api/health")
             resp = conn.getresponse()
@@ -517,6 +533,32 @@ def _http_responsive(port, tls=False):
 
 class AmiRefused(Exception):
     pass
+
+def _ami_sections(text):
+    out = []
+    cur = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and "]" in line:
+            cur = {"name": line[1:line.index("]")].strip(), "secret": "", "write": ""}
+            out.append(cur)
+            continue
+        if cur is not None and "=" in line:
+            k, _, v = line.partition("=")
+            k = k.strip().lower()
+            v = v.strip()
+            if " ;" in v:
+                v = v.split(" ;", 1)[0].strip()
+            if k == "secret":
+                cur["secret"] = v
+            elif k == "write":
+                cur["write"] = v.lower()
+    return out
+
+
+_ami_pick_logged = set()
 
 def ami_credentials(conf_path, user="", secret=""):
     if user and secret:
@@ -547,6 +589,7 @@ def ami_credentials(conf_path, user="", secret=""):
     if name and word and section.lower() != "general":
         return name, word
     return "", ""
+
 
 def _ami_msg(**fields):
     return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
@@ -823,7 +866,10 @@ _FONTS = r"""@font-face{font-family:"Readex Pro";font-style:normal;font-weight:4
 @font-face{font-family:"Readex Pro";font-style:normal;font-weight:700;font-display:swap;src:url(data:font/woff2;base64,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) format("woff2")}"""
 
 
-DEFAULT_CONFIG = {"port": PORT, "poll_sec": 3, "allow_wan": False, "main_node": ""}
+DEFAULT_CONFIG = {"port": PORT, "poll_sec": 3, "allow_wan": False, "main_node": "",
+                  "bind_addr": "0.0.0.0", "cert_file": "", "key_file": "", "https": False,
+                  "session_bind_ip": True, "trusted_proxies": [],
+                  "bridge_nodes": "1999:34001,1917:34008,1900:34000,1921:34018", "bridge_map": {}}
 _config = dict(DEFAULT_CONFIG)
 _config_lock = threading.Lock()
 
@@ -845,8 +891,57 @@ def _cfg_get(key):
         return _config[key]
 
 
+def _clean_bind(text):
+    text = str(text).strip() or "0.0.0.0"
+    try:
+        return text if ipaddress.ip_address(text).version == 4 else "0.0.0.0"
+    except ValueError:
+        return "0.0.0.0"
+
+
+def _tls_on():
+    return bool(_cfg_get("cert_file") and _cfg_get("key_file"))
+
+
+def _secure_cookies():
+    return bool(_cfg_get("https") or _tls_on())
+
+
+def _health_host():
+    bind = _cfg_get("bind_addr")
+    return "127.0.0.1" if bind == "0.0.0.0" else bind
+
+
+def _parse_nets(text):
+    out = []
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            log_event(f"Config: ignoring trusted_proxies entry {part!r}", "warn")
+    return out
+
+
+def _parse_bridges(text):
+    out = {}
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        node, _, port = part.partition(":")
+        if node.strip().isdigit() and port.strip().isdigit():
+            out[node.strip()] = int(port.strip())
+        else:
+            log_event(f"Config: ignoring bridge_nodes entry {part!r}", "warn")
+    return out
+
+
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
+    cfg["bridge_map"] = _parse_bridges(cfg["bridge_nodes"])
     cp = configparser.ConfigParser(interpolation=None)
     try:
         cp.read(CONFIG_PATH, encoding="utf-8")
@@ -859,16 +954,45 @@ def load_config():
         cfg["allow_wan"] = _parse_bool(sec.get("allow_wan", "off"))
         node = sec.get("main_node", "").strip()
         cfg["main_node"] = node if node.isdigit() else ""
+        cfg["bind_addr"] = _clean_bind(sec.get("bind_addr", "0.0.0.0"))
+        cfg["cert_file"] = sec.get("cert_file", "").strip()
+        cfg["key_file"] = sec.get("key_file", "").strip()
+        cfg["https"] = _parse_bool(sec.get("https", "off"))
+        cfg["session_bind_ip"] = _parse_bool(sec.get("session_bind_ip", "on"))
+        cfg["trusted_proxies"] = _parse_nets(sec.get("trusted_proxies", ""))
+        cfg["bridge_nodes"] = str(sec.get("bridge_nodes", DEFAULT_CONFIG["bridge_nodes"]))
+        cfg["bridge_map"] = _parse_bridges(cfg["bridge_nodes"])
     with _config_lock:
         _config.clear()
         _config.update(cfg)
 
 
+_CONFIG_KEYS = ("port", "poll_sec", "allow_wan", "main_node", "bind_addr", "cert_file", "key_file",
+                "https", "session_bind_ip", "trusted_proxies", "bridge_nodes")
+
+
+def _cfg_text(key, value):
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, list):
+        return ",".join(str(x) for x in value)
+    return str(value)
+
+
 def save_config(cfg):
-    text = (f"[{CONFIG_SECTION}]\nport = {cfg['port']}\npoll_sec = {cfg['poll_sec']}\n"
-            f"allow_wan = {'on' if cfg['allow_wan'] else 'off'}\nmain_node = {cfg['main_node']}\n")
+    main = str(cfg.get("main_node", ""))
+    if main and not main.isdigit():
+        raise ValueError("main_node must be a node number")
+    if not 1024 <= int(cfg.get("port", PORT)) <= 65535:
+        raise ValueError("port must be between 1024 and 65535")
+    bind = str(cfg.get("bind_addr", "0.0.0.0"))
+    if _clean_bind(bind) != bind:
+        raise ValueError("bind_addr must be an IPv4 address")
+    lines = [f"[{CONFIG_SECTION}]"]
+    for key in _CONFIG_KEYS:
+        lines.append(f"{key} = {_cfg_text(key, cfg.get(key, DEFAULT_CONFIG[key]))}")
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    _atomic_write(CONFIG_PATH, text, 0o644)
+    _atomic_write(CONFIG_PATH, "\n".join(lines) + "\n", 0o644)
 
 
 def _is_private_node(name):
@@ -877,7 +1001,6 @@ def _is_private_node(name):
 
 _BRIDGE_KINDS = {34001: ("dvswitch", "DVSwitch bridge"), 34008: ("m17", "M17 bridge"),
                  34000: ("svx", "SvxLink bridge"), 34018: ("nodetalker", "Node Talker transmit")}
-_BRIDGE_BY_NODE = {"1999": 34001, "1917": 34008, "1900": 34000, "1921": 34018}
 _USRP_RX_RE = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
 
 
@@ -898,7 +1021,7 @@ def node_plan():
     kind = {}
     for n in names:
         m = _USRP_RX_RE.match(scan["rx"].get(n, ""))
-        port = int(m.group(1)) if m else _BRIDGE_BY_NODE.get(n)
+        port = int(m.group(1)) if m else _cfg_get("bridge_map").get(n)
         if port in _BRIDGE_KINDS:
             kind[n] = _BRIDGE_KINDS[port]
     want = _cfg_get("main_node")
@@ -1053,7 +1176,11 @@ class Monitor:
                     n += 1
                     aid = f"nm{n}"
                     sock.sendall(_ami_msg(ActionID=aid, **fields))
-                    return _ami_read_for(fh, aid)
+                    guard = _cap_time(sock, AMI_REPLY_SEC * 2)
+                    try:
+                        return _ami_read_for(fh, aid)
+                    finally:
+                        guard.cancel()
 
                 loaded = parse_localnodes(ask(Action="Command", Command="rpt localnodes"))
                 regs = parse_registrations(ask(Action="Command", Command="rpt show registrations"))
@@ -1085,7 +1212,7 @@ class Monitor:
                 if not self._wanted():
                     self.wake_event.wait()
                 continue
-            user, secret = ami_credentials(AMI_CONF)
+            user, secret = _nm_ami_credentials(AMI_CONF)
             if not user or not secret:
                 self._down(f"no AMI login found in {AMI_CONF}")
             elif self.refused == (user, secret):
@@ -1326,8 +1453,7 @@ def quick_links():
 
 
 def build_status(authed=True):
-    if authed:
-        MON.touch()
+    if authed and MON._wanted():
         end = time.monotonic() + WAKE_WAIT_SEC
         while MON.waiting() and time.monotonic() < end:
             time.sleep(0.1)
@@ -1405,12 +1531,26 @@ COMMANDS = (
 _COMMAND_BY_OP = {c["op"]: c for c in COMMANDS}
 
 
+def _safe_shutdown(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+def _cap_time(sock, seconds):
+    timer = threading.Timer(seconds, _safe_shutdown, args=(sock,))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 def ami_command(line):
-    user, secret = ami_credentials(AMI_CONF)
+    user, secret = _nm_ami_credentials(AMI_CONF)
     if not user or not secret:
         raise OSError(f"no AMI login found in {AMI_CONF}")
     with _cmd_lock:
         sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
+        guard = _cap_time(sock, 15.0)
         try:
             fh = sock.makefile("rb")
             if not fh.readline(256).startswith(b"Asterisk Call Manager"):
@@ -1426,6 +1566,7 @@ def ami_command(line):
                 pass
             return reply
         finally:
+            guard.cancel()
             sock.close()
 
 
@@ -1710,6 +1851,7 @@ __CSS__</style>
 
 _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, current = 'ov', status = null, logSince = 0, timer = null, COMMANDS = [];
+let isRoot = false;
 const bars = {};
 const discoBusy = {};
 let disconMsg = null;
@@ -1747,7 +1889,7 @@ async function login(ev) {
   const d = await api('/api/login', {method: 'POST', body: {password: $('pw').value}});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; await loadCommands(); render(); } else $('login-msg').textContent = d.error || 'Login failed.';
+  if (d.ok) { authed = true; await refreshWho(); await loadCommands(); render(); } else $('login-msg').textContent = d.error || 'Login failed.';
 }
 async function logout() { await api('/api/logout', {method: 'POST', body: {}}); authed = false; render(); }
 function showTab(name) {
@@ -2060,6 +2202,7 @@ async function poll() {
   if (!authed) return;
   if (timer) clearTimeout(timer);
   if (document.visibilityState !== 'hidden') {
+    await api('/api/wake', {method: 'POST', body: {}});
     const d = await api('/api/status');
     if (d && d.ok !== false && d.ami) renderAll(d);
     else if (d && d.error === 'Server unreachable.') {
@@ -2096,14 +2239,22 @@ async function sysAction(kind) {
   const ask = {reboot: 'Reboot the system?', shutdown: 'Shut down the system?'};
   const path = {reboot: '/api/system/reboot', shutdown: '/api/system/shutdown'};
   if (!window.confirm(ask[kind])) return;
+  const pw = window.prompt('Type the root password to ' + (kind === 'reboot' ? 'reboot' : 'shut down') + ' the node:');
+  if (!pw) return;
   const msg = $('sysmsg');
   ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = true; });
   msg.className = 'sysmsg';
   msg.textContent = 'Sending...';
-  const d = await api(path[kind], {method: 'POST', body: {}});
+  const d = await api(path[kind], {method: 'POST', body: {password: pw}});
   ['sys-disc', 'sys-reboot', 'sys-shutdown'].forEach((id) => { $(id).disabled = false; });
   msg.className = 'sysmsg ' + (d.ok ? 'ok' : 'err');
   msg.textContent = d.ok ? d.message : (d.error || 'It failed.');
+}
+async function refreshWho() {
+  const w = await api('/api/whoami');
+  isRoot = !!w.root;
+  $('sys-reboot').classList.toggle('hidden', !isRoot);
+  $('sys-shutdown').classList.toggle('hidden', !isRoot);
 }
 async function loadCommands() {
   const d = await api('/api/commands');
@@ -2112,7 +2263,7 @@ async function loadCommands() {
 (async () => {
   const d = await api('/api/whoami');
   authed = !!d.authed;
-  if (authed) await loadCommands();
+  if (authed) { await refreshWho(); await loadCommands(); }
   render();
 })();
 """
@@ -2157,18 +2308,23 @@ class Handler(BaseHTTPRequestHandler):
         return self.client_address[0] if self.client_address else "?"
 
     def _proxied(self):
+        return bool(self.headers is not None and any(h in self.headers for h in _PROXY_HEADERS))
+
+    def _from_trusted_proxy(self):
         peer = _parse_ip(self._peer())
-        return bool(peer is not None and peer.is_loopback and self.headers is not None
-                    and any(h in self.headers for h in _PROXY_HEADERS))
+        return bool(peer is not None and any(peer in net for net in _cfg_get("trusted_proxies")))
 
     def _ip(self):
-        if self._proxied():
+        if self._proxied() and self._from_trusted_proxy():
             fwd = (self.headers.get("CF-Connecting-IP") or self.headers.get("X-Real-IP")
                    or self.headers.get("X-Forwarded-For", "").split(",")[-1]).strip()
             ip = _parse_ip(fwd)
             return str(ip) if ip is not None else "proxied"
         ip = _parse_ip(self._peer())
         return str(ip) if ip is not None else self._peer()
+
+    def _session_ip(self):
+        return self._ip() if _cfg_get("session_bind_ip") else None
 
     def _wan(self):
         return self._proxied() or not _is_lan(self._peer())
@@ -2185,10 +2341,10 @@ class Handler(BaseHTTPRequestHandler):
         return sess_token_from(cookie, _SESSION_COOKIE_NAME) or ""
 
     def _authed(self):
-        return _check_session(self._token())
+        return _check_session(self._token(), self._session_ip())
 
     def _cookie(self, token, max_age):
-        return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, False)
+        return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, _secure_cookies())
 
     def _head(self, code, ctype, headers):
         self.send_response(code)
@@ -2257,6 +2413,20 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body if isinstance(body, dict) else None
 
+    def _reauth(self, body, ip):
+        wan = self._wan()
+        wait = _auth_lockout_remaining(ip, wan)
+        if wait > 0:
+            self._json(429, {"ok": False, "error": f"Too many attempts. Try again in {int(wait) + 1} s."})
+            return False
+        if _verify_root_password(str(body.get("password", ""))):
+            _record_auth_success(ip)
+            return True
+        _record_auth_failure(ip, wan)
+        log_event(f"Failed root password for a power action from {ip}", "warn")
+        self._json(403, {"ok": False, "error": "Wrong root password."})
+        return False
+
     def do_HEAD(self):
         self.do_GET()
 
@@ -2273,10 +2443,13 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/", "/index.html"):
                 self._send_page()
             elif path == "/api/health":
-                self._json(200, {"ok": True, "version": VERSION})
+                self._json(200, {"ok": True, "version": VERSION} if authed else {"ok": True})
             elif path == "/api/whoami":
-                self._json(200, {"ok": True, "authed": authed, "version": VERSION,
-                                 "backend": _root_backend_available()})
+                if authed:
+                    self._json(200, {"ok": True, "authed": True, "version": VERSION,
+                                     "backend": _root_backend_available(), "root": os.geteuid() == 0})
+                else:
+                    self._json(200, {"ok": True, "authed": False})
             elif path == "/api/commands":
                 self._json(200, {"ok": True, "commands": list(COMMANDS)})
             elif path == "/api/status":
@@ -2317,7 +2490,7 @@ class Handler(BaseHTTPRequestHandler):
             where = " (internet)" if wan else ""
             if _verify_root_password(str(body.get("password", ""))):
                 _record_auth_success(ip)
-                token, age = _issue_session()
+                token, age = _issue_session(self._session_ip() or "")
                 log_event(f"Login from {ip}{where}", "warn" if wan else "ok")
                 self._json(200, {"ok": True}, {"Set-Cookie": self._cookie(token, age)})
             else:
@@ -2326,11 +2499,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"ok": False, "error": "Wrong password."})
             return
         if path == "/api/logout":
-            _revoke_all_sessions()
+            _logout_session(self._token())
             self._json(200, {"ok": True}, {"Set-Cookie": self._cookie("", 0)})
             return
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
+            return
+        if path == "/api/wake":
+            MON.touch()
+            self._json(200, {"ok": True})
             return
         if path == "/api/command":
             self._json(200, run_command(body, ip))
@@ -2339,7 +2516,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, node_discon(body.get("node"), ip))
             return
         if path in ("/api/system/reboot", "/api/system/shutdown"):
-            self._json(200, system_power(path.rsplit("/", 1)[1], ip))
+            what = path.rsplit("/", 1)[1]
+            if os.geteuid() == 0 and not self._reauth(body, ip):
+                return
+            self._json(200, system_power(what, ip))
             return
         self._json(404, {"ok": False, "error": "Not found."})
 
@@ -2348,6 +2528,28 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 32
+    max_threads = 32
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(self.max_threads)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            log_event(f"Refused connection from {client_address[0]}: too many open connections", "warn")
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
@@ -2367,24 +2569,51 @@ def _watchdog_loop(port):
     period = max(5.0, min(period, 300.0))
     while True:
         try:
-            if _http_responsive(port):
+            if _http_responsive(port, _tls_on(), _health_host()):
                 _sd_notify("WATCHDOG=1")
         except Exception:
             pass
         time.sleep(period)
 
 
+def _transport_error():
+    if _tls_on():
+        return None
+    if _cfg_get("https") and _cfg_get("bind_addr") in ("127.0.0.1", "::1"):
+        return None
+    if _cfg_get("https"):
+        return ("https = on but bind_addr is not 127.0.0.1: a TLS proxy must be the only way in. "
+                "Set bind_addr = 127.0.0.1 or configure cert_file and key_file.")
+    return ("TLS is required: set cert_file and key_file in nodemon.conf, or set https = on with "
+            "bind_addr = 127.0.0.1 behind a TLS proxy. Not starting.")
+
+
 def run_server():
     load_config()
+    err = _transport_error()
+    if err:
+        log_event(err, "err")
+        return EXIT_NO_TLS
     port = _cfg_get("port")
     try:
-        httpd = Server(("0.0.0.0", port), Handler)
+        httpd = Server((_cfg_get("bind_addr"), port), Handler)
     except OSError as exc:
         log_event(f"Cannot listen on port {port}: {exc}", "err")
         return 1
+    if _tls_on():
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.load_cert_chain(_cfg_get("cert_file"), _cfg_get("key_file"))
+            httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True, do_handshake_on_connect=False)
+        except (OSError, ssl.SSLError) as exc:
+            log_event(f"TLS setup failed, not starting: {exc}", "err")
+            httpd.server_close()
+            return 1
     threading.Thread(target=MON.loop, name="ami-poll", daemon=True).start()
     threading.Thread(target=_watchdog_loop, args=(port,), name="watchdog", daemon=True).start()
-    log_event(f"{APP_NAME} v{VERSION} on http port {port}", "ok")
+    scheme = "https" if _tls_on() else "http"
+    log_event(f"{APP_NAME} v{VERSION} on {scheme} {_cfg_get('bind_addr')}:{port}", "ok")
     _sd_notify("READY=1")
 
     def _on_term(signum, frame):
@@ -2412,6 +2641,7 @@ NotifyAccess=main
 ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {run_path}
 Restart=always
 RestartSec=3s
+RestartPreventExitStatus=78
 TimeoutStartSec=60
 WatchdogSec=60s
 StandardOutput=journal
@@ -2420,6 +2650,27 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
+
+
+def _ensure_tls():
+    if _tls_on() or _cfg_get("https"):
+        return
+    tls_dir = os.path.join(CONFIG_DIR, "tls")
+    os.makedirs(tls_dir, mode=0o700, exist_ok=True)
+    cert = os.path.join(tls_dir, "nodemon.crt")
+    key = os.path.join(tls_dir, "nodemon.key")
+    host = socket.gethostname() or "localhost"
+    san = f"subjectAltName=DNS:{host},DNS:localhost,IP:127.0.0.1"
+    r = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
+                        "-keyout", key, "-out", cert, "-subj", "/CN=" + host, "-addext", san],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise SystemExit("Could not create a TLS certificate with openssl: " + (r.stderr or r.stdout).strip())
+    os.chmod(key, 0o600)
+    os.chmod(cert, 0o644)
+    save_config(dict(_config, cert_file=cert, key_file=key))
+    load_config()
+    print(f"  [+] Created a self-signed TLS certificate in {tls_dir} (replace it with a CA-signed one if you have one)")
 
 
 def install_service():
@@ -2445,9 +2696,17 @@ def install_service():
     if not os.path.exists(CONFIG_PATH):
         save_config(dict(_config))
         print(f"  [+] Wrote {CONFIG_PATH}")
+    _ensure_tls()
+    err = _transport_error()
+    if err:
+        print("Error: " + err)
+        sys.exit(1)
     _atomic_write(SYSTEMD_SERVICE_PATH, service_content(INSTALL_BIN_PATH), 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
-    mark, msg = open_firewall_port(_cfg_get("port"))
+    try:
+        mark, msg = _nm_open_firewall_port(_cfg_get("port"))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        mark, msg = "!", f"could not open the firewall port: {exc}"
     print(f"  [{mark}] {msg}")
     for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
         r = _systemctl(*args)
@@ -2484,7 +2743,10 @@ def uninstall_service():
         print(f"  [-] Removed {INSTALL_DIR}")
     _remove_launcher_if_unused()
     print(f"  Settings kept in {CONFIG_PATH}")
-    mark, msg = close_firewall_port(_cfg_get("port"))
+    try:
+        mark, msg = _nm_close_firewall_port(_cfg_get("port"))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        mark, msg = "!", f"could not close the firewall port: {exc}"
     print(f"  [{mark}] {msg}")
 
 
@@ -2505,3 +2767,113 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _nm_ami_credentials(conf_path, user="", secret=""):
+    if user and secret:
+        return user, secret
+    try:
+        with open(conf_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "", ""
+    cands = [s for s in _ami_sections(text) if s["name"].lower() != "general" and s["secret"]]
+    if not cands:
+        return "", ""
+    pick = next((s for s in cands if {t.strip() for t in s["write"].split(",")} & {"all", "system"}), None)
+    if pick is None:
+        pick = cands[0]
+        if conf_path not in _ami_pick_logged:
+            _ami_pick_logged.add(conf_path)
+            log_event(f"AMI: no account in {conf_path} has write rights; using {pick['name']}, Asterisk may refuse commands", "warn")
+    return pick["name"], pick["secret"]
+
+
+def _nm_open_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        target = subprocess.run(["firewall-cmd", "--zone=" + zone, "--get-target"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if target == "ACCEPT" or subprocess.run(check, capture_output=True, text=True,
+                                                timeout=10).stdout.strip() == "yes":
+            return "=", "%s is already open in firewalld zone %s" % (spec, zone)
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "+", "opened %s in firewalld zone %s (now and after a reboot)" % (spec, zone)
+        return "!", "could not open %s in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s(\s+\(v6\))?\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+            return "=", "%s is already open in ufw" % spec
+        subprocess.run(["ufw", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "+", "opened %s in ufw" % spec
+        return "!", "could not open %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so %s is not blocked" % spec
+
+
+def _nm_close_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        was_open = subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes"
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "!", "could not close %s in firewalld zone %s" % (spec, zone)
+        if was_open:
+            return "-", "closed %s in firewalld zone %s" % (spec, zone)
+        return "=", "%s was not open in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s(\s+\(v6\))?\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if not re.search(allow, status, re.M):
+            return "=", "%s was not open in ufw" % spec
+        status = ""
+        for _ in range(4):
+            subprocess.run(["ufw", "--force", "delete", "allow", spec], capture_output=True, text=True, timeout=10)
+            status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+            if not re.search(allow, status, re.M):
+                break
+        if re.search(allow, status, re.M):
+            return "!", "could not close %s in ufw" % spec
+        if "Default: allow (incoming)" in status:
+            return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
+        return "-", "closed %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+
+def _nm_sess_new(store, policy, now, stamp="", ip=""):
+    import secrets
+    for key in [k for k, r in store.items() if sess_dead(r, now)]:
+        del store[key]
+    while len(store) >= policy["max"]:
+        del store[min(store, key=lambda k: store[k]["born"])]
+    if ip:
+        mine = sorted((k for k, r in store.items() if r.get("ip") == ip), key=lambda k: store[k]["born"])
+        for k in mine[:max(0, len(mine) - (SESS_PER_IP_MAX - 1))]:
+            del store[k]
+    token = secrets.token_hex(32)
+    idle = now + policy["idle"]
+    hard = now + policy["absolute"] if policy["absolute"] else 0
+    store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
+                                 "renew": now, "stamp": stamp, "ip": ip}
+    return token, int(min(idle, hard) - now if hard else idle - now)
