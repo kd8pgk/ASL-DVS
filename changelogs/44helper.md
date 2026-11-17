@@ -10,7 +10,7 @@ The preflight installs the Node Controller suite in the background. This is a re
 - **Only what is missing.** It runs `--non-interactive --action=components --tools=<the missing ones> --build=<pi02w or full>`, so tools that are installed are not reinstalled or restarted, and 44helper (the running service) is left alone. With nothing missing it says so and starts nothing.
 - **Two new form fields, on both tabs.** Suite build (automatic by the board, Pi Zero 2 W or full) and Suite channel (stable, or testing which is `main`). The installer gets the saved callsign and node number for a node that has no `asl_dvs.conf` yet; on such a node, without a valid callsign and node, the button asks you to fill them in first. Only values that match the form's patterns reach the shell command.
 - **One build job at a time.** The suite job counts as the build job, so it cannot overlap an install, the tunnel steps or Run the rest (the installer and those steps use apt).
-- **Tests.** `ci/test_h44_suite.py` (22 tests): which tools count as installed, the build and channel choices, the command (shape, only valid values in it, valid shell), the action (only the missing tools, nothing to do, refused while another job runs, the identity rule, the job key per tab) and the page script.
+- **Tests.** `ci/test_h44_suite.py` (21 tests): which tools count as installed, the build and channel choices, the command (shape, only valid values in it, valid shell), the action (only the missing tools, nothing to do, refused while another job runs, the identity rule, the job key per tab) and the page script.
 
 ## 0.1.51 (2026-11-17)
 
