@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_50_20261116.py`. Newest entries first.
+Current file: `nodetalker_v0_10_51_20261117.py`. Newest entries first.
+
+## 0.10.51 (2026-11-17)
+
+Node Recorder now records your own transmission. This is a release: Node Talker sends the transmit audio to a second place.
+
+- **The problem.** Node Recorder records what node 1921, Node Talker's transmit node, hears from its links. Your own voice goes into node 1921, so it never came back out, and a recording held only the other side. A call to the parrot node gave the parrot's reply and none of your call.
+- **The fix.** Every USRP packet Node Talker sends to Asterisk for a transmission (the audio, and the silence that follows when you unkey) is also sent to Node Recorder's audio port, 127.0.0.1:9995, the same port that already carries the received audio. A recording then holds your call, followed by the reply.
+- **Nothing changes for Asterisk.** The packet to the node is sent first and unchanged. If Node Recorder is not running, the copy is dropped and the transmission is not affected.
+- **Both directions at once.** Your audio and received audio share one stream, so they are laid end to end. If both are heard at the same moment they are interleaved, not mixed. Node Talker's busy lockout, which is on by default, stops you from transmitting while the channel is busy, so this is rare.
+- **Node Recorder is unchanged.** It already accepts these packets on that port.
 
 ## 0.10.50.1 (2026-11-16)
 

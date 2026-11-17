@@ -62,6 +62,8 @@ jobs:
         run: python3 ci/test_nodetalker_services.py
       - name: SvxLink badge tests (Node Talker)
         run: python3 ci/test_nodetalker_svx.py
+      - name: Node Talker transmit audio to the recorder tests
+        run: python3 ci/test_nodetalker_tx_record.py
       - name: Link, tune and disconnect tests (Node Recorder)
         run: python3 ci/test_noderecorder_links.py
       - name: Slow link tests (Node Recorder)

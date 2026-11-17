@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.50.1"
+VERSION = "0.10.51"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Talker"
 
@@ -6847,8 +6847,14 @@ class Talker:
         with self.send_lock:
             self.seq = (self.seq + 1) & 0x7FFFFFFF
             head = USRP_HEADER.pack(b"USRP", self.seq, 0, 1 if keyup else 0, 0, 0, 0, 0)
+            packet = head + payload
+            sock = self._socket()
             try:
-                self._socket().sendto(head + payload, ("127.0.0.1", TX_USRP_SEND))
+                sock.sendto(packet, ("127.0.0.1", TX_USRP_SEND))
+            except OSError:
+                pass
+            try:
+                sock.sendto(packet, ("127.0.0.1", RECORDER_FWD_PORT))
             except OSError:
                 pass
 
