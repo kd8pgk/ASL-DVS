@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_46_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_47_20261117.py`. Newest entries first.
+
+## 0.1.47 (2026-11-17)
+
+A Magic Box tab: the Travel Node tab plus the SvxLink install, wiring and checks. This is a release: a new tab, and the Travel Node code now serves two tabs. Like the Travel Node tab it only reads and checks.
+
+- **Same page, more rows.** The tab is the Travel Node tab (preflight form, machine checks, WireGuard config check, the checklist, the radio check) with these steps added after USRP2M17: **SvxLink** (installed, service running), **SvxLink bridge wiring**, **Reflector**, and **SvxLink checks** after the wiring checks. It says on the page that it runs on the Pi Zero 2 W build or the full build, and that on the full build SysMon's SVX tab runs the same SvxLink checks and edits `svxlink.conf`.
+- **Form.** Five more fields, saved with the others in `/etc/44helper/build.json`: how SvxLink is used (bridge under ASL3, or with its own radio), the reflector host and port, the default talkgroup and the monitored talkgroups. The reflector password is never asked for or kept here: it is entered on the SVXLink tab, step 11. The Travel Node tab ignores these fields.
+- **Bridge wiring.** Done when step 8 was run for the answer in the form (the saved `[svxlink] use=` agrees), a bridge has no radio logic left in `LOGICS` (a Simplex or Repeater logic whose receiver is not a Dummy one), SvxLink's USRP ports pair with the node in `rpt.conf` (1900 by convention), `extensions.conf` has `exten => 1900,1,Rpt(1900)` and `[nodes]` has a line for 1900. A radio answer is flagged if Asterisk's SimpleUSB also uses a sound card.
+- **Reflector.** Done when `svxlink.conf` names a reflector, matches the form's host and port when they are filled in, and has a password set (only whether one is set is read). A callsign that differs from the form's is a warning.
+- **SvxLink checks.** The service is running; `svxlink.conf` has no comment after a value and a section for every name in `LOGICS` and `LINKS`; UDP 34000 is not open in the 44Net firewall zone; SvxLink's log says `Authentication OK`; and the reflector's port answers (a 3 second TCP connection, the only check that opens one).
+- **Routes.** `GET /api/build/status?profile=magic`; the form action takes `profile`. Unknown profiles fall back to Travel Node.
+- **Tests.** `ci/test_h44_magic.py` (34 tests): stage order for each tunnel mode, the form rules, parsing and the radio-logic test, each stage's states, that neither the status nor the form carries the reflector key, panel ids that do not collide, every id the page script uses, and the profile on the routes.
+- **Not in this release.** Run buttons, as for Travel Node.
 
 ## 0.1.46 (2026-11-17)
 

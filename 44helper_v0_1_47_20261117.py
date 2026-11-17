@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.46"
+APP_VERSION = "0.1.47"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14857,6 +14857,7 @@ header {
 .tab.t-update{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-boot{--mc:var(--amber);--mc-rgb:255,208,64}
 .tab.t-build{--mc:var(--teal);--mc-rgb:0,255,229}
+.tab.t-magic{--mc:var(--purple);--mc-rgb:212,102,255}
 .tab.t-services{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ports{--mc:var(--purple);--mc-rgb:212,102,255}
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
@@ -21130,6 +21131,7 @@ def _render_config_panel() -> str:
 TABS: list[tuple[str, str, str, str]] = [
     ("overview", "Overview", "t-overview", "Stage 2"),
     ("build", "Travel Node", "t-build", "0.1.46: travel node build order, preflight, radio check"),
+    ("magic", "Magic Box", "t-magic", "0.1.47: Travel Node plus SvxLink install, wiring and checks"),
     ("router_install", "Router Install", "t-router-install", "Steps 1-2a: Stage 4 — Steps 3-11 (Model C): Stage 5 (done) — Model B: Stage 6"),
     ("full_tunnel", "Full Tunnel", "t-full-tunnel", "Stage 3"),
     ("split_tunnel", "Split Tunnel", "t-split-tunnel", "Stage 3"),
@@ -21970,6 +21972,7 @@ function clickTab(id) {
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
   if (id === 'build' && typeof buildRefresh === 'function') { buildRefresh(); }
+  if (id === 'magic' && typeof magicRefresh === 'function') { magicRefresh(); }
 }
 
 function fwToolsDock(id) {
@@ -28814,98 +28817,99 @@ function piPasteCancel(boxId) {
 }
 """
 
-def _render_build_panel() -> str:
-    return """
-<div class="tab-panel hidden" id="panel-build">
-  <div class="step-card"><div class="step-head"><div class="step-title">Build a travel node</div>
-      <span class="cfg-hint" id="bld-checked"></span></div>
-    <div class="step-body"><b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b> The standard config
+_BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
+  <div class="step-card"><div class="step-head"><div class="step-title">@TITLE@</div>
+      <span class="cfg-hint" id="@P@-checked"></span></div>
+    <div class="step-body">@NOTE@ The standard config
       bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
       turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
       node, not from memory. This first version only reads and checks: it saves the form below and nothing else. Each row links
       to the tab that does the step. Pick the tunnel mode first; the order changes with it.</div>
-    <div id="bld-where"></div>
-    <div id="bld-stages">Loading...</div>
+    <div id="@P@-where"></div>
+    <div id="@P@-stages">Loading...</div>
   </div>
   <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
-      <span class="cfg-hint" id="bld-form-state"></span></div>
+      <span class="cfg-hint" id="@P@-form-state"></span></div>
     <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). It holds no
       passwords and no keys: the WireGuard config below is checked and then forgotten.</div>
     <table class="cfg-table">
-      <tr><td>Tunnel mode</td><td><select id="bld-mode" onchange="buildDirty();buildShowBypass()">
+      <tr><td>Tunnel mode</td><td><select id="@P@-mode" onchange="@F@Dirty();@F@ShowBypass()">
         <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
         <option value="split">Split tunnel (44Net only)</option>
         <option value="full">Full tunnel with exceptions (everything through the tunnel)</option></select>
         <span class="cfg-hint">Save the form to reorder the steps above.</span></td></tr>
-      <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="bld-callsign" maxlength="10" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-callsign"></span></td></tr>
-      <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="bld-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-node"></span></td></tr>
-      <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="bld-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-dmr_id"></span></td></tr>
-      <tr><td>NXDN ID</td><td><input type="text" class="asl3-cmd-input" id="bld-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-nxdn_id"></span></td></tr>
-      <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="bld-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="buildDirty()"> <span class="cfg-hint" id="bld-e-m17_node"></span></td></tr>
-      <tr><td>USB sound card</td><td><select id="bld-usb" onchange="buildDirty()"></select> <span class="cfg-hint" id="bld-e-usb"></span></td></tr>
-      <tr id="bld-bypass-row" style="display:none"><td>Bypass list (full tunnel only)</td><td><textarea class="asl3-cmd-input" id="bld-bypass" rows="2" spellcheck="false" placeholder="host names, IPv4 addresses or UDP ports, separated by spaces or commas" oninput="buildDirty()"></textarea> <span class="cfg-hint" id="bld-e-bypass"></span></td></tr>
+      <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-callsign" maxlength="10" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-callsign"></span></td></tr>
+      <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-node"></span></td></tr>
+      <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
+      <tr><td>NXDN ID</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
+      <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
+      <tr><td>USB sound card</td><td><select id="@P@-usb" onchange="@F@Dirty()"></select> <span class="cfg-hint" id="@P@-e-usb"></span></td></tr>
+@SVXROWS@      <tr id="@P@-bypass-row" style="display:none"><td>Bypass list (full tunnel only)</td><td><textarea class="asl3-cmd-input" id="@P@-bypass" rows="2" spellcheck="false" placeholder="host names, IPv4 addresses or UDP ports, separated by spaces or commas" oninput="@F@Dirty()"></textarea> <span class="cfg-hint" id="@P@-e-bypass"></span></td></tr>
     </table>
     <div class="step-actions">
-      <button class="btn-run" onclick="buildSave(this)">Save the form</button>
-      <button class="btn-copy" onclick="buildReset(this)">Clear it</button>
+      <button class="btn-run" onclick="@F@Save(this)">Save the form</button>
+      <button class="btn-copy" onclick="@F@Reset(this)">Clear it</button>
     </div>
-    <div class="asl3-console shown" id="bld-form-out" style="display:none"></div>
+    <div class="asl3-console shown" id="@P@-form-out" style="display:none"></div>
     <div class="step-body" style="margin-top:.8rem">WireGuard config for this node. Paste it to check it before the tunnel step. It is not saved.</div>
-    <textarea class="asl3-cmd-input" id="bld-wg" rows="5" spellcheck="false" autocomplete="off" style="width:100%"></textarea>
-    <div class="step-actions"><button class="btn-copy" onclick="buildWgCheck(this)">Check this config</button></div>
-    <div class="asl3-console shown" id="bld-wg-out" style="display:none"></div>
-    <div id="bld-machine" style="margin-top:.8rem"></div>
+    <textarea class="asl3-cmd-input" id="@P@-wg" rows="5" spellcheck="false" autocomplete="off" style="width:100%"></textarea>
+    <div class="step-actions"><button class="btn-copy" onclick="@F@WgCheck(this)">Check this config</button></div>
+    <div class="asl3-console shown" id="@P@-wg-out" style="display:none"></div>
+    <div id="@P@-machine" style="margin-top:.8rem"></div>
   </div>
-  <div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
+  @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
       SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
-    <div id="bld-radio">Loading...</div>
+    <div id="@P@-radio">Loading...</div>
   </div>
 </div>
 """
 
-_JS_BUILD = r"""
-var _bldData = null;
-var _bldIsDirty = false;
-var _bldTabs = {
+_BLD_JS_TMPL = r"""
+var _@P@Fields = @FIELDS@;
+var _@P@Data = null;
+var _@P@IsDirty = false;
+var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
   apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
   half: 'split_tunnel', fullx: 'full_tunnel', boot: 'split_tunnel', wiring: 'config',
-  radio: 'config', save: 'config', reboot: 'boot', preflight: 'build'
+  radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
+  svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
-var _bldStageNames = {
+var _@P@StageNames = {
   tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
   apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
-  reboot: 'Boot tab', preflight: 'this tab'
+  reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
+  svx_checks: 'SVXLink tab'
 };
 
-function buildDirty() { _bldIsDirty = true; }
+function @F@Dirty() { _@P@IsDirty = true; }
 
-function buildShowBypass() {
-  var m = document.getElementById('bld-mode');
-  var row = document.getElementById('bld-bypass-row');
+function @F@ShowBypass() {
+  var m = document.getElementById('@P@-mode');
+  var row = document.getElementById('@P@-bypass-row');
   if (m && row) { row.style.display = m.value === 'full' ? '' : 'none'; }
 }
 
-function buildTone(l) {
+function @F@Tone(l) {
   var c = (l === 'ok' || l === 'done') ? 'var(--green)' : ((l === 'warn') ? 'var(--amber)' : ((l === 'fail') ? 'var(--red)' : 'var(--muted)'));
   return 'color:' + c + ';font-weight:bold';
 }
 
-function buildStateLabel(s) {
+function @F@StateLabel(s) {
   return {done: 'done', todo: 'to do', locked: 'waits', warn: 'check', manual: 'by hand'}[s] || s;
 }
 
-function buildFillForm(d) {
+function @F@FillForm(d) {
   var f = d.form || {};
-  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'bypass'].forEach(function(k) {
-    var el = document.getElementById('bld-' + k);
+  _@P@Fields.forEach(function(k) {
+    var el = document.getElementById('@P@-' + k);
     if (el) { el.value = f[k] || ''; }
   });
-  var mode = document.getElementById('bld-mode');
+  var mode = document.getElementById('@P@-mode');
   if (mode) { mode.value = f.mode || 'half'; }
-  var sel = document.getElementById('bld-usb');
+  var sel = document.getElementById('@P@-usb');
   if (sel) {
     var h = '<option value="">(none picked)</option>';
     ((d.radio && d.radio.cards) || []).forEach(function(c) {
@@ -28914,44 +28918,44 @@ function buildFillForm(d) {
     sel.innerHTML = h;
     sel.value = f.usb || '';
   }
-  buildShowBypass();
+  @F@ShowBypass();
 }
 
-function buildShowErrors(d) {
+function @F@ShowErrors(d) {
   var errs = d.errors || {};
-  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'usb', 'bypass'].forEach(function(k) {
-    var el = document.getElementById('bld-e-' + k);
+  _@P@Fields.concat(['usb']).forEach(function(k) {
+    var el = document.getElementById('@P@-e-' + k);
     if (el) { el.textContent = errs[k] ? errs[k] : ''; el.style.color = errs[k] ? 'var(--amber)' : ''; }
   });
   var n = Object.keys(errs).length;
-  var st = document.getElementById('bld-form-state');
+  var st = document.getElementById('@P@-form-state');
   if (st) { st.textContent = n ? n + ' to fix' : 'complete'; }
 }
 
-function buildRenderStages(d) {
+function @F@RenderStages(d) {
   var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th></tr>';
   (d.stages || []).forEach(function(s, i) {
-    var tab = _bldTabs[s.id];
-    var where = tab && tab !== 'build'
-      ? '<a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' + cfgEsc(_bldStageNames[s.id] || tab) + '</a>'
-      : cfgEsc(_bldStageNames[s.id] || '');
-    h += '<tr><td>' + (i + 1) + '</td><td>' + cfgEsc(s.label) + '</td><td style="' + buildTone(s.state) + '">' +
-         cfgEsc(buildStateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td></tr>';
+    var tab = _@P@Tabs[s.id];
+    var where = tab && tab !== '@TAB@'
+      ? '<a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' + cfgEsc(_@P@StageNames[s.id] || tab) + '</a>'
+      : cfgEsc(_@P@StageNames[s.id] || '');
+    h += '<tr><td>' + (i + 1) + '</td><td>' + cfgEsc(s.label) + '</td><td style="' + @F@Tone(s.state) + '">' +
+         cfgEsc(@F@StateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td></tr>';
   });
-  document.getElementById('bld-stages').innerHTML = h + '</table>';
+  document.getElementById('@P@-stages').innerHTML = h + '</table>';
 }
 
-function buildRenderMachine(d) {
+function @F@RenderMachine(d) {
   var h = '<table class="cfg-table"><tr><th>Machine check</th><th>Result</th><th>Detail</th></tr>';
   (d.machine || []).forEach(function(r) {
-    h += '<tr><td>' + cfgEsc(r.label) + '</td><td style="' + buildTone(r.level) + '">' + cfgEsc(r.level) +
+    h += '<tr><td>' + cfgEsc(r.label) + '</td><td style="' + @F@Tone(r.level) + '">' + cfgEsc(r.level) +
          '</td><td>' + cfgEsc(r.detail) + '</td></tr>';
   });
-  document.getElementById('bld-machine').innerHTML = h + '</table>';
+  document.getElementById('@P@-machine').innerHTML = h + '</table>';
 }
 
-function buildRenderWhere(d) {
-  var box = document.getElementById('bld-where');
+function @F@RenderWhere(d) {
+  var box = document.getElementById('@P@-where');
   var wg = (d.addrs && d.addrs.wg0) || '';
   var host = location.hostname;
   var msg = '';
@@ -28963,7 +28967,7 @@ function buildRenderWhere(d) {
   box.innerHTML = msg ? '<div class="ov-banner lvl-warn">' + cfgEsc(msg) + '</div>' : '';
 }
 
-function buildRenderRadio(d) {
+function @F@RenderRadio(d) {
   var r = d.radio || {};
   var h = '<table class="cfg-table"><tr><th>Item</th><th>Value</th></tr>';
   h += '<tr><td>Main node</td><td>' + cfgEsc(r.node || 'not set yet') + '</td></tr>';
@@ -28980,29 +28984,52 @@ function buildRenderRadio(d) {
     h += '<tr><td>' + cfgEsc(c.name) + '</td><td>' + cfgEsc(c.usbid) + '</td><td>' + cfgEsc(c.devstr || '?') + '</td><td>' +
          (c.radio_chip ? cfgEsc(c.radio_chip) + ' (likely)' : 'unknown') + '</td></tr>';
   });
-  document.getElementById('bld-radio').innerHTML = h + '</table>';
+  document.getElementById('@P@-radio').innerHTML = h + '</table>';
 }
 
-function buildRefresh() {
-  return fetch('/api/build/status').then(function(r) { return r.json(); }).then(function(d) {
+function @F@RenderSvx(d) {
+  var box = document.getElementById('@P@-svx');
+  var v = d.svx;
+  if (!box || !v) { return; }
+  var r = v.reflector || {};
+  var rows = [
+    ['SvxLink', v.installed ? ('installed, service ' + (v.active ? 'running' : 'not running')) : 'not installed'],
+    ['Used as', v.use ? v.use : 'no answer saved (counts as a bridge)'],
+    ['Radio logic in svxlink.conf', (v.radio_logics || []).length ? v.radio_logics.join(', ') : 'none'],
+    ['USRP pair', v.pair ? ('node ' + v.pair.node + ', ' + (v.pair.state === 'ok' ? 'matches' : v.pair.state)) : 'none found'],
+    ['Dialplan Rpt() line for 1900', v.exten ? 'present' : 'missing'],
+    ['[nodes] line for 1900', v.nodes_line ? 'present' : 'missing'],
+    ['Reflector', r.host ? (r.host + ':' + r.port + ' as ' + (r.callsign || '?') + ', password ' + (r.key_set ? 'set' : 'not set')) : 'not set up'],
+    ['Reflector login (SvxLink log)', v.log === 'connected' ? 'Authentication OK' : (v.log === 'down' ? 'disconnected' : (v.log === 'connecting' ? 'connecting' : 'nothing yet'))],
+    ['Reflector answers', v.reachable === true ? 'yes' : (v.reachable === false ? 'no' : 'not checked')],
+    ['UDP 34000 open in the 44Net zone', v.udp_open ? 'yes: close it' : 'no']
+  ];
+  var h = '<table class="cfg-table"><tr><th>Item</th><th>Value</th></tr>';
+  rows.forEach(function(x) { h += '<tr><td>' + cfgEsc(x[0]) + '</td><td>' + cfgEsc(x[1]) + '</td></tr>'; });
+  box.innerHTML = h + '</table>';
+}
+
+function @F@Refresh() {
+  return fetch('/api/build/status?profile=@PROFILE@').then(function(r) { return r.json(); }).then(function(d) {
     if (!d || !d.stages) {
-      document.getElementById('bld-stages').textContent = (d && d.message) || 'Could not read the node.';
+      document.getElementById('@P@-stages').textContent = (d && d.message) || 'Could not read the node.';
       return;
     }
-    _bldData = d;
-    document.getElementById('bld-checked').textContent = d.checked_at || '';
-    if (!_bldIsDirty) { buildFillForm(d); }
-    buildShowErrors(d);
-    buildRenderStages(d);
-    buildRenderMachine(d);
-    buildRenderWhere(d);
-    buildRenderRadio(d);
+    _@P@Data = d;
+    document.getElementById('@P@-checked').textContent = d.checked_at || '';
+    if (!_@P@IsDirty) { @F@FillForm(d); }
+    @F@ShowErrors(d);
+    @F@RenderStages(d);
+    @F@RenderMachine(d);
+    @F@RenderWhere(d);
+    @F@RenderRadio(d);
+    @F@RenderSvx(d);
   }).catch(function(e) {
-    document.getElementById('bld-stages').textContent = 'Request failed: ' + e;
+    document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
   });
 }
 
-function buildPost(payload, outId, btn) {
+function @F@Post(payload, outId, btn) {
   if (btn) { btn.disabled = true; }
   var out = document.getElementById(outId);
   if (out) { out.style.display = ''; out.className = 'asl3-console shown placeholder'; out.textContent = 'Working...'; }
@@ -29025,27 +29052,69 @@ function buildPost(payload, outId, btn) {
   });
 }
 
-function buildFormValues() {
-  var v = {action: 'form_save', mode: document.getElementById('bld-mode').value, usb: document.getElementById('bld-usb').value};
-  ['callsign', 'node', 'dmr_id', 'nxdn_id', 'm17_node', 'bypass'].forEach(function(k) {
-    v[k] = document.getElementById('bld-' + k).value;
+function @F@FormValues() {
+  var v = {action: 'form_save', profile: '@PROFILE@', mode: document.getElementById('@P@-mode').value, usb: document.getElementById('@P@-usb').value};
+  _@P@Fields.forEach(function(k) {
+    v[k] = document.getElementById('@P@-' + k).value;
   });
   return v;
 }
 
-function buildSave(btn) {
-  buildPost(buildFormValues(), 'bld-form-out', btn).then(function() { _bldIsDirty = false; buildRefresh(); });
+function @F@Save(btn) {
+  @F@Post(@F@FormValues(), '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
 
-function buildReset(btn) {
-  buildPost({action: 'form_reset'}, 'bld-form-out', btn).then(function() { _bldIsDirty = false; buildRefresh(); });
+function @F@Reset(btn) {
+  @F@Post({action: 'form_reset'}, '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
 
-function buildWgCheck(btn) {
-  var box = document.getElementById('bld-wg');
-  buildPost({action: 'wg_check', config_text: box.value}, 'bld-wg-out', btn).then(function(res) { if (res && res.success) { box.value = ''; } });
+function @F@WgCheck(btn) {
+  var box = document.getElementById('@P@-wg');
+  @F@Post({action: 'wg_check', config_text: box.value}, '@P@-wg-out', btn).then(function(res) { if (res && res.success) { box.value = ''; } });
 }
 """
+
+_BLD_NOTE_TRAVEL = "<b>Travel Node runs on either build: the Pi Zero 2 W build or the full build.</b>"
+_BLD_NOTE_MAGIC = ("<b>Magic Box runs on either build: the Pi Zero 2 W build or the full build.</b> It is the Travel Node tab plus the SvxLink "
+                   "install, wiring and checks. On the full build, SysMon's SVX tab runs the same SvxLink checks and edits svxlink.conf.")
+_BLD_SVX_ROWS = (
+    '      <tr><td>SvxLink use</td><td><select id="@P@-svx_use" onchange="@F@Dirty()">'
+    '<option value="bridge">Bridge under ASL3 (no radio of its own)</option>'
+    '<option value="radio">With its own radio</option></select> <span class="cfg-hint" id="@P@-e-svx_use"></span></td></tr>\n'
+    '      <tr><td>Reflector host</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_host" maxlength="253" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-svx_host"></span></td></tr>\n'
+    '      <tr><td>Reflector port</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_port" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-svx_port"></span></td></tr>\n'
+    '      <tr><td>Default talkgroup (0 = none)</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_tg" maxlength="6" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-svx_tg"></span></td></tr>\n'
+    '      <tr><td>Monitored talkgroups</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_mon" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-svx_mon"></span></td></tr>\n')
+_BLD_SVX_CARD = """<div class="step-card"><div class="step-head"><div class="step-title">SvxLink</div></div>
+    <div class="step-body">SvxLink is the program that joins the node to an SvxReflector through the bridge node (1900, USRP 34000 and 32000).
+      The reflector password is not kept here: enter it on the SVXLink tab, step 11. These rows only read the node.</div>
+    <div id="@P@-svx">Loading...</div>
+  </div>
+  """
+
+def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list[str]) -> str:
+    return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
+            .replace("@P@", pfx).replace("@F@", fn))
+
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass"]
+_BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
+
+def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
+    tab = "magic" if magic else "build"
+    out = (_BLD_PANEL_TMPL.replace("@NOTE@", _BLD_NOTE_MAGIC if magic else _BLD_NOTE_TRAVEL)
+           .replace("@TITLE@", "Build a Magic Box" if magic else "Build a travel node")
+           .replace("@SVXROWS@", _BLD_SVX_ROWS if magic else "").replace("@SVXCARD@", _BLD_SVX_CARD if magic else ""))
+    return _bld_fill(out, pfx, fn, tab, "magic" if magic else "travel", [])
+
+def _render_magic_panel() -> str:
+    return _render_build_panel("mbx", "magic", True)
+
+_JS_BUILD = _bld_fill(_BLD_JS_TMPL, "bld", "build", "build", "travel", _BLD_FIELDS_TRAVEL)
+_JS_MAGIC = _bld_fill(_BLD_JS_TMPL, "mbx", "magic", "magic", "magic", _BLD_FIELDS_MAGIC)
 
 _JS = (
     _JS_AUTH
@@ -29060,6 +29129,7 @@ _JS = (
     + _JS_SERVICES_PORTS
     + _JS_BOOT
     + _JS_BUILD
+    + _JS_MAGIC
     + _JS_FIREWALL
     + _JS_HALF
     + _JS_FX
@@ -29785,6 +29855,7 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "config": _render_config_panel,
     "boot": _render_boot_panel,
     "build": _render_build_panel,
+    "magic": _render_magic_panel,
     "services": _render_services_panel,
     "ports": _render_ports_panel,
     "actions_log": _render_actions_log_panel,
@@ -30857,9 +30928,16 @@ _BLD_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
 _BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions"}
-_BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass")
+_BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
+               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon")
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
-                "usb": "", "bypass": ""}
+                "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": ""}
+_BLD_PROFILES = ("travel", "magic")
+_BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
+_BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
+_BLD_SVX_LOG = "/var/log/svxlink"
+_BLD_H44CONF = "/etc/44helper/44helper.conf"
+_BLD_SVX_BRIDGE_NODE = "1900"
 _BLD_FIELD_RES = {
     "callsign": (re.compile(r"[A-Za-z0-9]{3,10}"), "3 to 10 letters or digits"),
     "node": (re.compile(r"[0-9]{4,7}"), "4 to 7 digits"),
@@ -30901,6 +30979,8 @@ def _bld_form_clean(payload: dict) -> dict:
         form[k] = v.strip()[:400] if isinstance(v, str) else form[k]
     if form["mode"] not in _BLD_MODES:
         form["mode"] = _BLD_DEFAULT["mode"]
+    if form["svx_use"] not in ("bridge", "radio"):
+        form["svx_use"] = _BLD_DEFAULT["svx_use"]
     form["callsign"] = form["callsign"].upper()
     return form
 
@@ -30909,7 +30989,7 @@ def _bld_form_write(form: dict) -> None:
     tmp = _BLD_FILE + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({k: form[k] for k in _BLD_FIELDS}, f, indent=1)
+        json.dump({k: form.get(k, _BLD_DEFAULT[k]) for k in _BLD_FIELDS}, f, indent=1)
         f.write("\n")
     os.replace(tmp, _BLD_FILE)
 
@@ -30927,8 +31007,29 @@ def _bld_bypass_bad(token: str) -> bool:
         return False
     return _BLD_HOST_RE.fullmatch(token) is None
 
-def _bld_form_errors(form: dict, cards: list[dict]) -> dict:
+def _bld_svx_errors(form: dict) -> dict:
     errs: dict = {}
+    host, port = form.get("svx_host", ""), form.get("svx_port", "")
+    if host and (re.fullmatch(r"[0-9.]+", host) and _bld_bypass_bad(host) or _BLD_HOST_RE.fullmatch(host) is None):
+        errs["svx_host"] = "not a host name or IPv4 address"
+    if host and not port:
+        errs["svx_port"] = "required with a host"
+    elif port and not (port.isdigit() and 1 <= int(port) <= 65535):
+        errs["svx_port"] = "use a port from 1 to 65535"
+    if port and not host:
+        errs["svx_host"] = "required with a port"
+    tg = form.get("svx_tg", "")
+    if tg and not (tg.isdigit() and len(tg) <= 6):
+        errs["svx_tg"] = "use a number (0 = none)"
+    mon = form.get("svx_mon", "")
+    if mon and _BLD_SVX_MON_RE.fullmatch(mon.replace(" ", "")) is None:
+        errs["svx_mon"] = "numbers separated by commas, + in front for priority"
+    return errs
+
+def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> dict:
+    errs: dict = {}
+    if profile == "magic":
+        errs.update(_bld_svx_errors(form))
     for k in _BLD_REQUIRED:
         v = form.get(k, "")
         if not v:
@@ -31098,13 +31199,17 @@ def _bld_lan_addrs() -> dict:
     m = re.search(r"^\s*Address\s*=\s*(\d+\.\d+\.\d+\.\d+)", _bld_read(WG0_CONF_PATH), re.M | re.I)
     return {"wg0": m.group(1) if m else ""}
 
-def _bld_stage_defs(mode: str) -> list[tuple[str, str]]:
+def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
     systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"),
                ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
                ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
-    tail = [("boot", "Boot order"), ("wiring", "Wiring checks"), ("radio", "Radio and Node Talker"),
-            ("save", "Restore point"), ("reboot", "Reboot test")]
+    if profile == "magic":
+        systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
+    tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
+    if profile == "magic":
+        tail.append(("svx_checks", "SvxLink checks"))
+    tail += [("radio", "Radio and Node Talker"), ("save", "Restore point"), ("reboot", "Reboot test")]
     if mode == "full":
         return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions")] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
@@ -31125,10 +31230,175 @@ def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
     ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
     return ok, ("" if ok else "USRP2M17.ini does not have this callsign yet.")
 
-def build_build_status() -> dict:
+_BLD_EXT = "/etc/asterisk/extensions.conf"
+
+def _bld_svx_parse(text: str) -> dict:
+    sections: dict = {}
+    cur = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.fullmatch(r"\[([^\]]+)\]", line)
+        if m:
+            cur = m.group(1)
+            sections.setdefault(cur, {})
+            continue
+        if "=" in line and cur:
+            k, _, v = line.partition("=")
+            sections[cur][k.strip()] = v.strip().strip('"')
+    return sections
+
+def _bld_svx_radio_logics(sections: dict) -> list[str]:
+    out = []
+    for name in [x.strip() for x in sections.get("GLOBAL", {}).get("LOGICS", "").split(",") if x.strip()]:
+        sec = sections.get(name, {})
+        if sec.get("TYPE") in ("Simplex", "Repeater"):
+            rx = sections.get(sec.get("RX", ""), {})
+            if rx.get("TYPE") != "Dummy":
+                out.append(name)
+    return out
+
+def _bld_port_in(specs, port: int, proto: str) -> bool:
+    for sp in specs or []:
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?/(\w+)", str(sp))
+        if m and m.group(3) == proto and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)):
+            return True
+    return False
+
+def _bld_svx_log_state() -> str:
+    try:
+        with open(_BLD_SVX_LOG, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 262144))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    state = ""
+    for ln in lines:
+        if "ReflectorLogic: Authentication OK" in ln:
+            state = "connected"
+        elif "ReflectorLogic: Disconnected from " in ln:
+            state = "down"
+        elif "ReflectorLogic: Connecting to" in ln and not state:
+            state = "connecting"
+    return state
+
+def _bld_tcp_reachable(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=3):
+            return True
+    except OSError:
+        return False
+
+def _bld_svx_use() -> str:
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(_BLD_H44CONF)
+        return cp.get("svxlink", "use", fallback="")
+    except configparser.Error:
+        return ""
+
+def _bld_svx_gather(form: dict, installed: bool, zone_ports) -> dict:
+    text = _bld_read(_BLD_SVX_CONF)
+    sec = _bld_svx_parse(text) if text else {}
+    refl = sec.get("ReflectorLogic", {})
+    hosts = [h.strip() for h in refl.get("HOSTS", "").split(",") if h.strip()]
+    host, _, hp = (hosts[0] if hosts else "").partition(":")
+    port = hp if hp.isdigit() else (refl.get("HOST_PORT", "") if refl.get("HOST_PORT", "").isdigit() else "5300")
+    rc, _out = _ov_q(["systemctl", "is-active", "svxlink-usrp"])
+    glob = sec.get("GLOBAL", {})
+    missing = [n for key in ("LOGICS", "LINKS") for n in (x.strip() for x in glob.get(key, "").split(",")) if n and n not in sec]
+    inline = [ln.strip()[:60] for ln in text.splitlines()
+              if re.match(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=", ln) and re.search(r"\s#", ln)]
+    pair = None
+    try:
+        for p in _cfgr_usrp_scan()["pairs"]:
+            if p["bridge"] == "SvxLink":
+                pair = p
+    except Exception:
+        pair = None
+    ext = re.search(r"^\s*exten\s*=>\s*" + _BLD_SVX_BRIDGE_NODE + r"\s*,\s*1\s*,\s*Rpt\(\s*" + _BLD_SVX_BRIDGE_NODE,
+                    _bld_read(_BLD_EXT), re.M) is not None
+    rpt = _bld_read(_BLD_RPT)
+    nodes_line = re.search(r"^\s*" + _BLD_SVX_BRIDGE_NODE + r"\s*=\s*radio@", rpt, re.M) is not None
+    return {"installed": installed, "conf": bool(text), "active": rc == 0, "use": _bld_svx_use(),
+            "radio_logics": _bld_svx_radio_logics(sec), "missing_sections": missing, "inline_comments": inline,
+            "reflector": {"host": host, "port": port if host else "", "callsign": refl.get("CALLSIGN", ""),
+                          "key_set": bool(refl.get("AUTH_KEY", ""))},
+            "pair": pair, "exten": ext, "nodes_line": nodes_line,
+            "udp_open": _bld_port_in(zone_ports, 34000, "udp"), "log": _bld_svx_log_state()}
+
+def _bld_svx_stage(sid: str, g: dict, form: dict, radio: dict) -> tuple[str, str]:
+    if sid == "svx":
+        if not g["installed"]:
+            return "todo", "Not installed: SVXLink tab, USRP fork steps 1 to 9."
+        return "done", "Installed" + (", service running." if g["active"] else ", service not running.")
+    if not g["installed"] or not g["conf"]:
+        return "todo", "Needs SvxLink installed first."
+    if sid == "svx_wire":
+        issues = []
+        saved = g["use"]
+        want = form.get("svx_use", "bridge")
+        if saved and saved != want:
+            issues.append(f"step 8 was run for {saved}, the form says {want}")
+        if want == "bridge" and g["radio_logics"]:
+            issues.append("radio logic still in LOGICS: " + ", ".join(g["radio_logics"]) + " (SVXLink tab, step 8, bridge answer)")
+        if want == "radio" and radio.get("simpleusb_stanza"):
+            issues.append("Asterisk's SimpleUSB also uses a sound card: SvxLink with its own radio needs a different one")
+        p = g["pair"]
+        if p is None:
+            issues.append("no USRP pair found for SvxLink")
+        elif p["state"] != "ok":
+            issues.append(f"USRP pair with node {p['node']} does not match")
+        elif p["node"] != _BLD_SVX_BRIDGE_NODE:
+            issues.append(f"SvxLink is paired with node {p['node']}, the usual bridge node is {_BLD_SVX_BRIDGE_NODE}")
+        if not g["exten"]:
+            issues.append(f"extensions.conf has no exten => {_BLD_SVX_BRIDGE_NODE},1,Rpt({_BLD_SVX_BRIDGE_NODE})")
+        if not g["nodes_line"]:
+            issues.append(f"rpt.conf [nodes] has no line for {_BLD_SVX_BRIDGE_NODE}")
+        if issues:
+            return "todo", "; ".join(issues[:4])
+        return "done", f"Bridge node {_BLD_SVX_BRIDGE_NODE} wired for {want}."
+    if sid == "svx_reflector":
+        r = g["reflector"]
+        if not r["host"]:
+            return "todo", "No reflector set: SVXLink tab, step 11."
+        if form.get("svx_host") and (form["svx_host"] != r["host"] or (form.get("svx_port") and form["svx_port"] != r["port"])):
+            return "todo", f"svxlink.conf has {r['host']}:{r['port']}, the form says {form['svx_host']}:{form.get('svx_port') or '?'}."
+        if not r["key_set"]:
+            return "todo", f"{r['host']}:{r['port']} has no password yet: SVXLink tab, step 11."
+        if form.get("callsign") and r["callsign"] and r["callsign"].upper() != form["callsign"].upper():
+            return "warn", f"Reflector callsign {r['callsign']} differs from the form's {form['callsign']}."
+        return "done", f"{r['host']}:{r['port']} as {r['callsign'] or '?'}."
+    rows = []
+    if not g["active"]:
+        rows.append(("fail", "svxlink-usrp is not running"))
+    if g["inline_comments"]:
+        rows.append(("fail", "a comment after a value in svxlink.conf (SvxLink reads it as part of the value)"))
+    if g["missing_sections"]:
+        rows.append(("fail", "no section for " + ", ".join(g["missing_sections"][:3])))
+    if g["udp_open"]:
+        rows.append(("warn", "UDP 34000 is open in the 44Net firewall zone: close it"))
+    r = g["reflector"]
+    if r["host"]:
+        if g["log"] == "down":
+            rows.append(("warn", "the log says the reflector login is down"))
+        elif g["log"] != "connected":
+            rows.append(("warn", "no 'Authentication OK' in SvxLink's log yet"))
+        if g.get("reachable") is False:
+            rows.append(("warn", f"{r['host']}:{r['port']} does not answer"))
+    if any(k == "fail" for k, _ in rows):
+        return "todo", "; ".join(t for _, t in rows[:4])
+    if rows:
+        return "warn", "; ".join(t for _, t in rows[:4])
+    return "done", "Service running, config clean, reflector logged in."
+
+def build_build_status(profile: str = "travel") -> dict:
+    profile = profile if profile in _BLD_PROFILES else "travel"
     form = _bld_form_load()
     cards = _bld_usb_cards()
-    errs = _bld_form_errors(form, cards)
+    errs = _bld_form_errors(form, cards, profile)
     machine = _bld_machine()
     installed = {p["key"]: p["state"] for p in _detect_installed_products()}
     node = _bld_node_of(form)
@@ -31156,12 +31426,18 @@ def build_build_status() -> dict:
     preset = _cfgr_load_preset("travel_node") is not None
     radio = _bld_radio(form, cards)
     mode = form["mode"]
-    defs = _bld_stage_defs(mode)
+    defs = _bld_stage_defs(mode, profile)
     stages: list[dict] = []
     blockers = [r for r in machine if r["level"] == "fail"]
 
     def inst(key: str) -> bool:
         return installed.get(key) == "installed"
+
+    svx = None
+    if profile == "magic":
+        svx = _bld_svx_gather(form, inst("svx"), (zone or {}).get("ports", []))
+        if svx["reflector"]["host"] and svx["installed"]:
+            svx["reachable"] = _bld_tcp_reachable(svx["reflector"]["host"], int(svx["reflector"]["port"]))
 
     for sid, label in defs:
         state, detail = "todo", ""
@@ -31195,6 +31471,8 @@ def build_build_status() -> dict:
             else:
                 ok, why = _bld_applied(sid, form, node)
                 state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
+        elif sid.startswith("svx"):
+            state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "half":
             state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
         elif sid == "fullx":
@@ -31229,14 +31507,20 @@ def build_build_status() -> dict:
             s["detail"] = "Waits for the step before. " + s["detail"]
         if s["state"] not in ("done", "manual"):
             prev_ok = False
-    return {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages,
-            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "checked_at": _cfgr_now()}
+    out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
+           "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "checked_at": _cfgr_now()}
+    if svx is not None:
+        out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
+        out["svx"]["reachable"] = svx.get("reachable")
+        out["svx"]["pair"] = ({"node": svx["pair"]["node"], "state": svx["pair"]["state"]} if svx["pair"] else None)
+    return out
 
 def _bld_act_form_save(payload: dict) -> dict:
     form = _bld_form_clean(payload)
     with _BLD_LOCK:
         _bld_form_write(form)
-    errs = _bld_form_errors(form, _bld_usb_cards())
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    errs = _bld_form_errors(form, _bld_usb_cards(), profile)
     log("Build tab: saved the preflight form")
     return {"success": True, "message": "Saved." if not errs else "Saved. Still to fix: " + ", ".join(sorted(errs)),
             "errors": errs}
@@ -31286,7 +31570,7 @@ def _dispatch_build_action(payload: dict) -> dict:
 
 def _route_build_status(query: dict) -> tuple[int, str, bytes]:
     try:
-        body = build_build_status()
+        body = build_build_status((query.get("profile") or ["travel"])[0])
     except Exception as exc:
         log(f"FAIL: Build status: {type(exc).__name__}: {exc}")
         return 500, "application/json", json.dumps({"message": "Could not read the node: " + type(exc).__name__}).encode("utf-8")
