@@ -11,7 +11,6 @@ Node Recorder now records your own transmission. This is a release: Node Talker 
 - **Nothing changes for Asterisk.** The packet to the node is sent first and unchanged. If Node Recorder is not running, the copy is dropped and the transmission is not affected.
 - **Both directions at once.** Your audio and received audio share one stream, so they are laid end to end. If both are heard at the same moment they are interleaved, not mixed. Node Talker's busy lockout, which is on by default, stops you from transmitting while the channel is busy, so this is rare.
 - **Node Recorder is unchanged.** It already accepts these packets on that port.
-- The phone-patch tones Node Talker sends when it opens a phone path (the `*99` and `#` digits) are part of the transmit audio and are recorded with it.
 
 ## 0.10.50.1 (2026-11-16)
 
