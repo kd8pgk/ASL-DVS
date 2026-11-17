@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_59_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_60_20261117.py`. Newest entries first.
+
+## 0.1.60 (2026-11-17)
+
+The Build tabs stop using the standard config bundle and gain the steps the review found missing. This is a release: steps removed, steps added, a new order.
+
+- **No bundle in the Build tabs.** "Apply the ASL3 config", "Apply the DVSwitch config" and "Apply the M17 config" are gone, along with the bundle fetch they ran. The Config tab's Full config replacement card is unchanged.
+- **Set the callsign, node number and IDs.** New step after the installs. It uses the same setters as the Config tab's Identity card: the callsign everywhere, the node number (renames the one public node in `rpt.conf`), the DMR ID and the optional NXDN ID. Preview and Run; Run saves an automatic copy first. It changes identity values only, never whole files, and shows done when the files match the form.
+- **Order.** Set the IAX port now follows ASL3 directly. The identity step and then the preset come right after the installs (after the SvxLink steps on Magic Box), before Half tunnel, Ports, Boot order and the checks, so the checks see the final files.
+- **Restart the services.** New step after Radio and Node Talker. It restarts the services of every installed system (Asterisk, DVSwitch, SvxLink) and records the time. It is open until a restart newer than the last config change.
+- **AllStarLink registration.** New check: done when the node is registered with AllStarLink, a warning (never blocking) with what to do when it is not. A node that stays private needs none.
+- **Passwords to enter.** New check that lists which passwords are still empty (ASL node password, BrandMeister password, and on Magic Box the SvxLink reflector password). It shows names only, never values.
+- **Ready to reboot.** New gate before Restore point: no restart pending, IAX answers on its port (the IAX POKE test), and, with a tunnel, a fresh handshake.
+- **IAX port on a fresh node.** Before `iax.conf` exists, the port from the Preflight form is used wherever 44helper asks for the IAX port, so the tunnel's firewall step and the Ports step open the right port from the start.
+- **Tests.** `ci/test_h44_finish.py`; the build, run, magic, preset and IAX tests follow the new order.
 
 ## 0.1.59 (2026-11-17)
 

@@ -240,8 +240,8 @@ class Stages(unittest.TestCase):
         return [i for i, _ in h44._bld_stage_defs(mode)]
 
     def test_half_order(self):
-        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17",
-                                            "apply_m17", "half", "ports", "boot", "wiring", "radio", "preset", "save", "reboot"])
+        self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "iax_port", "dvs", "m17", "identity", "preset", "half", "ports",
+                                            "boot", "wiring", "radio", "restart", "registration", "passwords", "ready", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
         self.assertNotIn("half", self.ids("split"))
@@ -249,13 +249,13 @@ class Stages(unittest.TestCase):
 
     def test_full_puts_tunnel_after_the_systems(self):
         ids = self.ids("full")
-        self.assertEqual(ids[:8], ["preflight", "asl3", "apply_asl3", "iax_port", "dvs", "apply_dvs", "m17", "apply_m17"])
-        self.assertEqual(ids[8:10], ["tunnel", "fullx"])
+        self.assertEqual(ids[:7], ["preflight", "asl3", "iax_port", "dvs", "m17", "identity", "preset"])
+        self.assertEqual(ids[7:9], ["tunnel", "fullx"])
         self.assertNotIn("half", ids)
 
     def test_every_mode_ends_the_same(self):
         for m in ("half", "split", "full"):
-            self.assertEqual(self.ids(m)[-7:], ["ports", "boot", "wiring", "radio", "preset", "save", "reboot"])
+            self.assertEqual(self.ids(m)[-10:], ["ports", "boot", "wiring", "radio", "restart", "registration", "passwords", "ready", "save", "reboot"])
 
     def test_no_tunnel_mode_leaves_every_tunnel_step_out(self):
         for profile in ("travel", "magic"):
@@ -263,8 +263,8 @@ class Stages(unittest.TestCase):
             for gone in ("tunnel", "half", "fullx"):
                 self.assertNotIn(gone, ids)
             self.assertEqual(ids[0], "preflight")
-            self.assertEqual(ids[-6:] if profile == "travel" else [i for i in ids[-7:] if i != "svx_checks"],
-                             ["boot", "wiring", "radio", "preset", "save", "reboot"])
+            self.assertEqual(ids[-9:] if profile == "travel" else [i for i in ids[-10:] if i != "svx_checks"],
+                             ["boot", "wiring", "radio", "restart", "registration", "passwords", "ready", "save", "reboot"])
             self.assertIn("asl3", ids)
 
     def test_no_tunnel_is_a_valid_mode(self):
@@ -279,29 +279,7 @@ class Stages(unittest.TestCase):
         ids = self.ids("half")
         self.assertEqual(ids[ids.index("half") + 1], "ports")
         ids = self.ids("split")
-        self.assertGreater(ids.index("ports"), ids.index("apply_m17"))
-
-
-class Applied(Tmp):
-    def test_asl3_apply_needs_the_node_stanza(self):
-        self.write("rpt.conf", "[652701](node-main)\nrxchannel = SimpleUSB/652701\n")
-        with mock.patch.object(h44, "_BLD_RPT", self.p("rpt.conf")):
-            self.assertTrue(h44._bld_applied("apply_asl3", GOOD, "652701")[0])
-            self.assertFalse(h44._bld_applied("apply_asl3", GOOD, "111111")[0])
-            self.assertFalse(h44._bld_applied("apply_asl3", GOOD, "")[0])
-
-    def test_dvs_apply_needs_callsign_and_id(self):
-        self.write("m.ini", "[General]\nCallsign=KD8PGK\nId=3123456\n")
-        with mock.patch.object(h44, "_BLD_MMDVM", self.p("m.ini")):
-            self.assertTrue(h44._bld_applied("apply_dvs", GOOD, "652701")[0])
-            self.assertFalse(h44._bld_applied("apply_dvs", dict(GOOD, dmr_id="3999999"), "652701")[0])
-            self.assertFalse(h44._bld_applied("apply_dvs", dict(GOOD, callsign="W1AW"), "652701")[0])
-
-    def test_m17_apply_needs_callsign(self):
-        self.write("u.ini", "[General]\nCallsign=KD8PGK\n")
-        with mock.patch.object(h44, "_BLD_M17INI", self.p("u.ini")):
-            self.assertTrue(h44._bld_applied("apply_m17", GOOD, "652701")[0])
-            self.assertFalse(h44._bld_applied("apply_m17", dict(GOOD, callsign=""), "652701")[0])
+        self.assertGreater(ids.index("ports"), ids.index("preset"))
 
 
 class Status(Tmp):
@@ -325,7 +303,14 @@ class Status(Tmp):
                 mock.patch.object(h44, "_pn_status", lambda: {"available": True, "nodes_issues": [], "refs_issues": [], "old_ext": False}), \
                 mock.patch.object(h44, "_cfgr_snap_dir", lambda k, sid="": "x"), \
                 mock.patch.object(h44, "_cfgr_read_manifest", lambda d: {} if restore else None), \
-                mock.patch.object(h44, "_cfgr_load_preset", lambda p: None):
+                mock.patch.object(h44, "_cfgr_load_preset", lambda p: None), \
+                mock.patch.object(h44, "_bld_identity_state", lambda form: ("todo", "x")), \
+                mock.patch.object(h44, "_bld_iax_state", lambda form: ("done", "x")), \
+                mock.patch.object(h44, "_bld_preset_state", lambda profile, port="": ("warn", "x")), \
+                mock.patch.object(h44, "_bld_restart_state", lambda: ("todo", "x")), \
+                mock.patch.object(h44, "_bld_registration_state", lambda node: ("warn", "x")), \
+                mock.patch.object(h44, "_bld_passwords_state", lambda profile: ("warn", "x")), \
+                mock.patch.object(h44, "_bld_ready_state", lambda stages, mode, up, age, form: ("todo", "x")):
             return h44.build_build_status()
 
     def by_id(self, st):
@@ -363,13 +348,14 @@ class Status(Tmp):
         st = self.status(installed=("asl3",), wg=wg, up=True, age=5.0)
         s = self.by_id(st)
         self.assertEqual(s["asl3"]["state"], "done")
-        self.assertEqual(s["apply_asl3"]["state"], "todo")
-        self.assertEqual(s["dvs"]["state"], "locked")
+        self.assertEqual(s["iax_port"]["state"], "done")
+        self.assertEqual(s["dvs"]["state"], "todo")
+        self.assertEqual(s["identity"]["state"], "locked")
 
     def test_no_tunnel_status_has_no_tunnel_steps_and_the_systems_come_first(self):
         st = self.status(form=dict(GOOD, mode="none"))
         ids = [x["id"] for x in st["stages"]]
-        self.assertEqual(ids[:3], ["preflight", "asl3", "apply_asl3"])
+        self.assertEqual(ids[:3], ["preflight", "asl3", "iax_port"])
         self.assertNotIn("tunnel", ids)
         self.assertEqual(self.by_id(st)["asl3"]["state"], "todo")
 
@@ -390,7 +376,7 @@ class Status(Tmp):
     def test_payload_has_no_secret_keys(self):
         st = self.status()
         blob = json.dumps(st).lower()
-        for word in ("privatekey", "password", "secret"):
+        for word in ("privatekey", "authkey", "secret"):
             self.assertNotIn(word, blob)
 
 

@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.59"
+APP_VERSION = "0.1.60"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -17855,7 +17855,8 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
 def _cfgr_bindport() -> str:
     b = _cfgr_read(_CFGR_IAX)
     if b is None:
-        return "4569"
+        want = _bld_form_load().get("iax_port", "")
+        return want if _cfgr_port_ok(want) else "4569"
     sec = ""
     for line in _cfgr_lines(b.decode("utf-8", "replace")):
         m = _CFGR_HDR_RE.match(line)
@@ -29106,9 +29107,7 @@ function piPasteCancel(boxId) {
 _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
   <div class="step-card"><div class="step-head"><div class="step-title">@TITLE@</div>
       <span class="cfg-hint" id="@P@-checked"></span></div>
-    <div class="step-body">@NOTE@ The standard config
-      bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
-      turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
+    <div class="step-body">@NOTE@ The whole build in order, from a bare Pi to a working node, with where each step stands read from this
       node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
       (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
       installs and the tunnel steps run in the background and keep going if you close the page; they stop at the first failing step. The
@@ -29181,14 +29180,14 @@ var _@P@Data = null;
 var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
-  apply_asl3: 'config', iax_port: 'config', apply_dvs: 'config', apply_m17: 'config',
+  iax_port: 'config', identity: 'config', restart: 'config', registration: 'asl3', passwords: 'config', ready: '@TAB@',
   half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
-  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab', iax_port: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
+  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', iax_port: 'Config tab', identity: 'Config tab',
+  restart: 'Config tab', registration: 'ASL3 tab', passwords: 'Config tab, Identity card', ready: 'this tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -31671,17 +31670,16 @@ def _bld_lan_addrs() -> dict:
 
 def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
-    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"), ("iax_port", "Set the IAX port"),
-               ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
-               ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
+    systems = [("asl3", "ASL3"), ("iax_port", "Set the IAX port"), ("dvs", "DVSwitch"), ("m17", "USRP2M17")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
+    systems = systems + [("identity", "Set the callsign, node number and IDs"),
+                         ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
-    tail += [("radio", "Radio and Node Talker"),
-             ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset"),
-             ("save", "Restore point"), ("reboot", "Reboot test")]
+    tail += [("radio", "Radio and Node Talker"), ("restart", "Restart the services"), ("registration", "AllStarLink registration"),
+             ("passwords", "Passwords to enter"), ("ready", "Ready to reboot"), ("save", "Restore point"), ("reboot", "Reboot test")]
     ports = ("ports", "Open the ports")
     if mode == "none":
         return [("preflight", "Preflight")] + systems + [ports] + tail
@@ -31689,21 +31687,6 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
         return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
     return [("preflight", "Preflight"), tunnel] + systems + mid + [ports] + tail
-
-def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
-    call = form.get("callsign", "")
-    if stage == "apply_asl3":
-        rpt = _bld_read(_BLD_RPT)
-        ok = bool(node) and re.search(r"^\s*\[" + re.escape(node) + r"\]\s*\(node-main", rpt, re.M) is not None
-        return ok, ("" if ok else "No [" + (node or "node") + "](node-main) in rpt.conf yet.")
-    if stage == "apply_dvs":
-        text = _bld_read(_BLD_MMDVM)
-        ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-        ok = ok and bool(form.get("dmr_id")) and re.search(r"^Id=" + re.escape(form["dmr_id"]) + r"\s*$", text, re.M) is not None
-        return ok, ("" if ok else "MMDVM_Bridge.ini does not have this callsign and DMR ID yet.")
-    text = _bld_read(_BLD_M17INI)
-    ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-    return ok, ("" if ok else "USRP2M17.ini does not have this callsign yet.")
 
 _BLD_EXT = "/etc/asterisk/extensions.conf"
 
@@ -31910,7 +31893,6 @@ def build_build_status(profile: str = "travel") -> dict:
     except Exception:
         pn = {"available": False}
     restore = _cfgr_read_manifest(_cfgr_snap_dir("restore")) is not None
-    preset = _cfgr_load_preset("travel_node") is not None
     radio = _bld_radio(form, cards)
     mode = form["mode"]
     defs = _bld_stage_defs(mode, profile)
@@ -31952,12 +31934,16 @@ def build_build_status(profile: str = "travel") -> dict:
             have = inst(_BLD_PRODUCT[sid])
             state = "done" if have else "todo"
             detail = "installed" if have else ("not installed" if installed.get(_BLD_PRODUCT[sid], "absent") == "absent" else installed[_BLD_PRODUCT[sid]])
-        elif sid.startswith("apply_"):
-            if not inst(_BLD_PRODUCT[sid.split("_", 1)[1]]):
-                state, detail = "todo", "Needs the system installed first."
-            else:
-                ok, why = _bld_applied(sid, form, node)
-                state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
+        elif sid == "identity":
+            state, detail = _bld_identity_state(form)
+        elif sid == "restart":
+            state, detail = _bld_restart_state()
+        elif sid == "registration":
+            state, detail = _bld_registration_state(node)
+        elif sid == "passwords":
+            state, detail = _bld_passwords_state(profile)
+        elif sid == "ready":
+            state, detail = _bld_ready_state(stages, mode, up, age, form)
         elif sid.startswith("svx"):
             state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "ports":
@@ -31989,7 +31975,7 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_radio_state(radio)
         elif sid == "save":
             state = "done" if restore else "todo"
-            detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
+            detail = "Restore point saved." if restore else "No Restore point yet."
         elif sid == "reboot":
             state, detail = "manual", ""
         stages.append({"id": sid, "label": label, "state": state, "detail": detail})
@@ -32241,6 +32227,146 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
 
 _BLD_PRESET_ID = {"travel": "travel_node", "magic": "magic_box"}
 
+def _bld_scan_values(group: str, fids: tuple[str, ...] = ()) -> list[str]:
+    scan = _cfgr_identity_scan()
+    return [str(r["value"]).strip() for r in scan["rows"]
+            if (group in r["groups"] if not fids else r["fid"] in fids) and str(r["value"]).strip()]
+
+def _bld_identity_wants(form: dict) -> list[tuple[str, str, tuple[str, ...]]]:
+    wants = [("callsign", form.get("callsign", "").upper(), ()), ("dmr", form.get("dmr_id", ""), ())]
+    if form.get("nxdn_id"):
+        wants.append(("nxdn", form["nxdn_id"], ("mb_nxdn_id", "var_nxdn_id")))
+    return wants
+
+def _bld_identity_state(form: dict) -> tuple[str, str]:
+    if not form.get("callsign") or not form.get("node") or not form.get("dmr_id"):
+        return "todo", "Fill in the callsign, node number and DMR ID in the Preflight first."
+    rpt = _cfgr_text(_CFGR_RPT)
+    if rpt is None:
+        return "todo", "rpt.conf is not on this node yet (the ASL3 install creates it)."
+    off: list[str] = []
+    if form["node"] not in _cfgr_node_public(rpt):
+        off.append("node number")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if not vals:
+            if group != "nxdn":
+                off.append(group)
+        elif any(v.upper() != want.upper() for v in vals):
+            off.append({"dmr": "DMR ID", "nxdn": "NXDN ID"}.get(group, group))
+    if off:
+        return "todo", "Does not match the form yet: " + ", ".join(off) + "."
+    return "done", "The callsign, node number and IDs in the files match the form."
+
+def _bld_run_identity(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    rpt = _cfgr_text(_CFGR_RPT)
+    public = _cfgr_node_public(rpt) if rpt is not None else []
+    steps: list[tuple[str, dict]] = []
+    if form["node"] not in public:
+        if len(public) == 1:
+            steps.append(("node " + public[0] + " -> " + form["node"], {"group": "node", "node": public[0], "value": form["node"]}))
+        elif not public:
+            lines.append("No node stanza in rpt.conf yet, so the node number is left alone.")
+        else:
+            lines.append("rpt.conf has more than one public node: change the node number on the Config tab, Identity card.")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if vals and all(v.upper() == want.upper() for v in vals):
+            continue
+        if group == "nxdn":
+            for r in _cfgr_identity_scan()["rows"]:
+                if r["fid"] in fids and str(r["value"]).strip() != want:
+                    steps.append((f"{r['label']} ({r['file']})", {"group": "alone", "rid": r["rid"], "value": want}))
+        else:
+            steps.append((group, {"group": group, "value": want, "callsign": want}))
+    if not steps:
+        lines.append("Nothing to change.")
+    for name, payload in steps:
+        res = _cfgr_act_id_set(payload, not preview)
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {name} =="] + _bld_out(res)
+    if not preview and steps:
+        lines.append("Restart the services afterwards (the Restart the services step).")
+    return ok, lines
+
+def _bld_restart_groups() -> list[str]:
+    inst = _cfgr_installed()
+    return [g for g in _CFGR_GROUPS if inst.get(g)]
+
+def _bld_restart_state() -> tuple[str, str]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return "done", "No system installed yet, so nothing to restart."
+    newest = 0.0
+    for g in groups:
+        for path in _CFGR_GROUPS[g]["files"]:
+            try:
+                newest = max(newest, os.stat(path).st_mtime)
+            except OSError:
+                continue
+    at = _bld_marks_load().get("restarted_at")
+    if not isinstance(at, int) or at < int(newest):
+        return "todo", "Config files changed since the last restart, or the services were never restarted from here."
+    return "done", "Restarted after the last config change."
+
+def _bld_run_restart() -> tuple[bool, list[str]]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return True, ["Nothing installed to restart."]
+    res = _cfgr_act_restart({"groups": groups})
+    ok = bool(res.get("success"))
+    if ok:
+        _bld_mark_set("restarted_at")
+    return ok, ["Restarting: " + ", ".join(_CFGR_GROUPS[g].get("label", g) for g in groups)] + _bld_out(res)
+
+def _bld_registration_state(node: str) -> tuple[str, str]:
+    if not shutil.which("asterisk"):
+        return "warn", "Asterisk is not installed yet."
+    try:
+        entries = asl_registration_info().get("entries", [])
+    except Exception:
+        entries = []
+    mine = [e for e in entries if not node or str(e.get("node")) == node] or entries
+    if any(e.get("registered") for e in mine):
+        e = next(e for e in mine if e.get("registered"))
+        return "done", f"Node {e['node']} is registered" + (f" as {e['ip']}:{e['port']}." if e.get("ip") else ".")
+    return "warn", ("Not registered with AllStarLink. Enter the node password (Config tab, Identity card: ASL node password), "
+                    "restart, then check again. A node that stays private needs no registration.")
+
+def _bld_passwords_state(profile: str) -> tuple[str, str]:
+    missing: list[str] = []
+    scan = _cfgr_identity_scan()
+    for gid, name in (("node_pw", "ASL node password"), ("bm_pw", "BrandMeister password")):
+        g = scan["groups"].get(gid)
+        if g is not None and g["state"] == "not set":
+            missing.append(name)
+    if profile == "magic":
+        key = (_bld_svx_parse(_bld_read(_BLD_SVX_CONF)).get("ReflectorLogic", {}) or {}).get("AUTH_KEY", "")
+        if not key.strip():
+            missing.append("SvxLink reflector password (SVXLink tab, step 11)")
+    if missing:
+        return "warn", "Still to enter: " + ", ".join(missing) + ". Passwords are never kept in this form."
+    return "done", "Every password this build needs is set."
+
+def _bld_ready_state(stages: list[dict], mode: str, up: bool, age: float | None, form: dict) -> tuple[str, str]:
+    bad: list[str] = []
+    rs = next((x for x in stages if x["id"] == "restart"), None)
+    if rs is not None and rs["state"] != "done":
+        bad.append("restart the services first")
+    port = _cfgr_bindport()
+    bind = _iax_bindaddr()
+    host = "127.0.0.1" if bind in ("0.0.0.0", "", "::") else bind
+    ok, _msg = _iax_poke(host, int(port), 1.5)
+    if not ok:
+        bad.append(f"IAX does not answer on {port}/udp")
+    if mode != "none" and (not up or age is None or age > _BLD_HS_FRESH):
+        bad.append("the tunnel has no fresh handshake")
+    if bad:
+        return "todo", "Not ready: " + "; ".join(bad) + "."
+    return "done", f"IAX answers on {port}/udp" + ("" if mode == "none" else ", the tunnel handshake is fresh") + ", no restart pending."
+
 def _bld_iax_state(form: dict) -> tuple[str, str]:
     want = form.get("iax_port", "")
     cur = _cfgr_bindport()
@@ -32303,10 +32429,9 @@ def _bld_run_preset(profile: str, preview: bool, iax_port: str = "") -> tuple[bo
              for ln in _bld_out(res)]
     return bool(res.get("success")), lines
 
-_BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
-_BLD_RUNNABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
+_BLD_RUNNABLE = frozenset({"iax_port", "identity", "restart", "boot", "wiring", "svx_wire", "radio", "save",
                            "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"iax_port", "identity", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32317,25 +32442,6 @@ def _bld_cfg(action: str, payload: dict | None = None) -> dict:
     body = {"action": action}
     body.update(payload or {})
     return _dispatch_config_action(body)
-
-def _bld_run_apply(sid: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
-    group = _BLD_RUN_GROUP[sid]
-    lines: list[str] = []
-    m, _meta = _fcr_load()
-    if m is None:
-        res = _bld_cfg("bundle_fetch", {"ref": "main"})
-        lines += _bld_out(res)
-        if not res.get("success"):
-            return False, lines + ["The bundle could not be fetched, so nothing was written."]
-    body: dict = {"values": {k: form.get(k, "") for k in ("callsign", "node", "dmr_id", "nxdn_id")}, "groups": [group]}
-    if preview:
-        res = _bld_cfg("bundle_preview", body)
-    else:
-        body["confirm"] = True
-        res = _bld_cfg("bundle_apply", body)
-    out = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
-           for ln in _bld_out(res)]
-    return bool(res.get("success")), lines + out
 
 def _bld_run_wiring(preview: bool, which: tuple[str, ...]) -> tuple[bool, list[str]]:
     lines: list[str] = []
@@ -32434,14 +32540,16 @@ def _bld_act_run_stage(payload: dict) -> dict:
     if stage["state"] not in ("todo", "warn"):
         return {"success": False, "message": "Nothing to do: " + stage["detail"]}
     form = st["form"]
-    if (sid in _BLD_RUN_GROUP or sid in _BLD_LONG) and st["errors"]:
+    if (sid in _BLD_LONG or sid in ("identity", "iax_port")) and st["errors"]:
         return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
     if sid in _BLD_LONG:
         return _bld_start_long(sid, profile, form, payload)
     try:
         with _BLD_LOCK:
-            if sid in _BLD_RUN_GROUP:
-                ok, lines = _bld_run_apply(sid, form, preview)
+            if sid == "identity":
+                ok, lines = _bld_run_identity(form, preview)
+            elif sid == "restart":
+                ok, lines = _bld_run_restart()
             elif sid == "boot":
                 res = action_boot_order_apply()
                 ok, lines = bool(res.get("success")), _bld_out(res)
@@ -32688,7 +32796,15 @@ def _bld_mark_ready() -> None:
     tmp = _BLD_MARKS + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"ready_at": int(time.time())}, f)
+        json.dump(dict(_bld_marks_load(), ready_at=int(time.time())), f)
+    os.replace(tmp, _BLD_MARKS)
+
+def _bld_mark_set(key: str) -> None:
+    os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
+    tmp = _BLD_MARKS + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(dict(_bld_marks_load(), **{key: int(time.time())}), f)
     os.replace(tmp, _BLD_MARKS)
 
 def _bld_boot_ready_line() -> str:
