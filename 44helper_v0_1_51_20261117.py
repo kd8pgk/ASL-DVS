@@ -28855,7 +28855,8 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       <tr><td>Tunnel mode</td><td><select id="@P@-mode" onchange="@F@Dirty();@F@ShowBypass()">
         <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
         <option value="split">Split tunnel (44Net only)</option>
-        <option value="full">Full tunnel with exceptions (everything through the tunnel)</option></select>
+        <option value="full">Full tunnel with exceptions (everything through the tunnel)</option>
+        <option value="none">No tunnel (the router forwards the ports, or LAN only)</option></select>
         <span class="cfg-hint">Save the form to reorder the steps above.</span></td></tr>
       <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-callsign" maxlength="10" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-callsign"></span></td></tr>
       <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-node"></span></td></tr>
@@ -31024,7 +31025,7 @@ _BLD_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
 _BLD_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
-_BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions"}
+_BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
 _BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
                "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon")
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
@@ -31315,6 +31316,8 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
         tail.append(("svx_checks", "SvxLink checks"))
     tail += [("radio", "Radio and Node Talker"), ("save", "Restore point"), ("reboot", "Reboot test")]
     ports = ("ports", "Open the ports")
+    if mode == "none":
+        return [("preflight", "Preflight")] + systems + [ports] + tail
     if mode == "full":
         return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
@@ -31667,6 +31670,8 @@ def _bld_act_wg_check(payload: dict) -> dict:
     if not isinstance(text, str) or not text.strip():
         return {"success": False, "message": "Paste the WireGuard config first."}
     mode = _bld_form_load()["mode"]
+    if mode == "none":
+        return {"success": False, "message": "No tunnel is chosen, so there is no config to check. Pick a tunnel mode first."}
     res = action_paste_preview(text, "full" if mode == "full" else "split", None)
     if not res.get("valid"):
         return {"success": False, "message": res.get("output", "Rejected.")}
@@ -31748,11 +31753,12 @@ def _bld_ports_plan(mode: str, installed: dict, cockpit: bool) -> tuple[list[dic
     notes: list[str] = []
     asl3 = installed.get("asl3") == "installed"
     svx = installed.get("svx") == "installed"
+    peers = "lan" if mode == "none" else "tunnel"
     if asl3:
-        rows.append({"zone": "tunnel", "spec": "4569/udp", "why": "AllStarLink IAX2"})
+        rows.append({"zone": peers, "spec": "4569/udp", "why": "AllStarLink IAX2"})
     if mode != "split" and (asl3 or svx):
-        rows.append({"zone": "tunnel", "spec": "5198-5199/udp", "why": "EchoLink"})
-        rows.append({"zone": "tunnel", "spec": "5200/tcp", "why": "EchoLink (direct)"})
+        rows.append({"zone": peers, "spec": "5198-5199/udp", "why": "EchoLink"})
+        rows.append({"zone": peers, "spec": "5200/tcp", "why": "EchoLink (direct)"})
     if installed.get("dvs") == "installed":
         notes.append("DVSwitch: nothing inbound. Its ports (31100, 31103, 6073 to 6075) are loopback only.")
     if installed.get("usrp2m17") == "installed":

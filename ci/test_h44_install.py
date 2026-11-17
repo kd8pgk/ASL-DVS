@@ -221,6 +221,14 @@ class Tunnel(unittest.TestCase):
             self.assertFalse(h44._bld_client_ok(ip), ip)
 
 
+class NoTunnel(unittest.TestCase):
+    def test_the_config_check_refuses_when_there_is_no_tunnel(self):
+        with mock.patch.object(h44, "_bld_form_load", lambda: dict(FORM, mode="none")):
+            res = h44._bld_act_wg_check({"config_text": WG})
+        self.assertFalse(res["success"])
+        self.assertIn("No tunnel", res["message"])
+
+
 class Start(unittest.TestCase):
     def start(self, sid, payload=None, running="", **kw):
         started = []

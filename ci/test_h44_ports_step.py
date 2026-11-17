@@ -68,6 +68,14 @@ class Plan(Tmp):
         self.assertEqual(self.specs("tunnel", installed={"svx": "installed"}), ["5198-5199/udp", "5200/tcp"])
         self.assertEqual(self.specs("tunnel", installed={"dvs": "installed", "usrp2m17": "installed"}), [])
 
+    def test_with_no_tunnel_the_peer_ports_go_in_the_lan_zone(self):
+        self.assertEqual(self.specs("tunnel", mode="none"), [])
+        lan = self.specs("lan", mode="none")
+        for spec in ("4569/udp", "5198-5199/udp", "5200/tcp"):
+            self.assertIn(spec, lan)
+        self.assertNotIn("4569/udp", self.specs("lan", mode="half"))
+        self.assertEqual(self.specs("lan", mode="none", installed={}), ["22/tcp", "9090/tcp", "9997/tcp"])
+
     def test_no_loopback_or_management_only_port_is_ever_planned_for_the_tunnel(self):
         tun = self.specs("tunnel")
         loop = [k for k, (_n, role) in h44._PORT_ROLES.items() if role == "loopback-only"]
@@ -149,6 +157,18 @@ class Gather(Tmp):
         self.assertIn("run the tunnel steps first", why)
         g = self.gather(zone(self.GOOD_LAN), None, installed={})
         self.assertEqual(h44._bld_ports_stage(g)[0], "done")
+
+    def test_with_no_tunnel_nothing_needs_the_tunnel_zone(self):
+        self.unit("cockpit.socket")
+        lan = zone(self.GOOD_LAN + ["4569/udp", "5198-5199/udp", "5200/tcp"])
+        g = self.gather(lan, None, mode="none")
+        self.assertEqual(g["missing"], [])
+        self.assertEqual(h44._bld_ports_stage(g)[0], "done")
+        g = self.gather(zone(self.GOOD_LAN), None, mode="none")
+        st, why = h44._bld_ports_stage(g)
+        self.assertEqual(st, "todo")
+        self.assertNotIn("run the tunnel steps", why)
+        self.assertEqual({r["zone"] for r in g["missing"]}, {"lan"})
 
     def test_no_firewall_running(self):
         g = self.gather(zone(), zone(), running=False)
