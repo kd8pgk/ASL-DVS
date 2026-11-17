@@ -31678,7 +31678,7 @@ def build_build_status(profile: str = "travel") -> dict:
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
     out["job"] = _bld_job_info(profile)
-    out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form["suite_channel"]}
+    out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form.get("suite_channel", "stable")}
     if svx is not None:
         out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
         out["svx"]["reachable"] = svx.get("reachable")
