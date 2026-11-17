@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.63"
+APP_VERSION = "0.1.64"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2849,7 +2849,7 @@ def _config_save_step(step_id: str, num: int) -> dict:
             "note": "Do not run this until ASL3, DVSwitch and USRP2M17 (whichever of them you will use) are all "
                     "installed and set up. It saves the config files of every installed system to the library as "
                     "the Restore point, once. Running it again only adds systems installed since; saved files are "
-                    "never overwritten. The Restore point, save points and presets are on the Config tab."}
+                    "never overwritten. The Restore point, Config Saves and presets are on the Config tab."}
 
 _SYSTEM_CACHE: dict = {"data": None}
 
@@ -15657,7 +15657,7 @@ def _cfgr_auto_point(reason: str, groups: list[str]) -> tuple[str, list[str]]:
     label = f"auto before {reason}"
     sid = _cfgr_new_id(label)
     _cfgr_take(os.path.join(_CFGR_DIR, "auto", sid), groups, label, "auto")
-    log(f"OK: CONFIG automatic save point {sid}")
+    log(f"OK: CONFIG automatic Config Save {sid}")
     return sid, _cfgr_prune(keep_id=sid)
 
 def _cfgr_read(path: str) -> bytes | None:
@@ -16800,7 +16800,7 @@ def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
     if missing:
         tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
     tail += ["", "The registration on allstarlink.org must already exist for node " + new + " with the same password, "
-             "or the node stops registering. The Asterisk and Allmon3 files are in the automatic save point; the "
+             "or the node stops registering. The Asterisk and Allmon3 files are in the automatic Config Save; the "
              "Node Controller, Node Talker, Node Listen and SysMon settings files are not."]
     if services:
         tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
@@ -16813,7 +16813,7 @@ def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
     lines_out = [f"Node {old} renamed to {new}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"node {old} to {new}", groups)
-        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append(f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = _cfgr_write_plan(plan, changed, lines_out)
     if ok and helper_change and c is not None:
@@ -16957,7 +16957,7 @@ def _cfgr_act_svx_nodeinfo(payload: dict, apply: bool, row: dict) -> dict:
     lines_out = [f"{row['label']} set to {shown(new_val)}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"{row['label']} {shown(new_val)}", groups)
-        lines_out += [f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""), ""]
+        lines_out += [f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""), ""]
     ok = _cfgr_write_plan(plan, changed, lines_out)
     log(f"{'OK' if ok else 'FAIL'}: CONFIG {row['label']} set")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
@@ -17030,7 +17030,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     lines_out = [f"{noun[:1].upper()}{noun[1:]} set to {shown}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"{noun} {shown}", groups)
-        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append(f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = _cfgr_write_plan(plan, changed, lines_out)
     if ok and extra_commit is not None:
@@ -17138,11 +17138,11 @@ def _cfgr_act_retake_restore(payload: dict) -> dict:
         old["label"] = label
         old["kind"] = "user"
         _cfgr_write_manifest(dest, old)
-        lines.append(f"Old Restore point kept as save point '{label}'.")
+        lines.append(f"Old Restore point kept as Config Save '{label}'.")
         users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
         if len(users) > _CFGR_MAX_POINTS:
-            lines.append(f"There are now {len(users)} save points, more than the {_CFGR_MAX_POINTS} allowed: delete one "
-                         "before creating a new save point.")
+            lines.append(f"There are now {len(users)} Config Saves, more than the {_CFGR_MAX_POINTS} allowed: delete one "
+                         "before creating a new Config Save.")
     elif os.path.isdir(snap):
         shutil.rmtree(snap, ignore_errors=True)
     m = _cfgr_take(snap, groups, "Restore", "restore")
@@ -17165,28 +17165,28 @@ def _cfgr_act_create_point(payload: dict) -> dict:
         return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17, SvxLink USRP or Phone) is installed on this node."}
     users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
     if len(users) >= _CFGR_MAX_POINTS:
-        return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} save points. Delete one first."}
+        return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} Config Saves. Delete one first."}
     sid = _cfgr_new_id(name)
     m = _cfgr_take(os.path.join(_CFGR_DIR, "user", sid), groups, name, "user")
-    lines = [f"Save point '{name}' created."]
+    lines = [f"Config Save '{name}' created."]
     for g in groups:
         lines.append(f"  {_CFGR_GROUPS[g]['label']}: {_cfgr_files_line(m['groups'][g])}")
     removed = _cfgr_prune(keep_id=sid)
     if removed:
         lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
-    log(f"OK: CONFIG save point created: {sid}")
+    log(f"OK: CONFIG Config Save created: {sid}")
     return {"success": True, "output": "\n".join(lines)}
 
 def _cfgr_act_delete_point(payload: dict) -> dict:
     kind = str(payload.get("kind", ""))
     sid = str(payload.get("id", ""))
     if kind not in ("user", "auto"):
-        return {"success": False, "output": "Only save points and automatic copies can be deleted."}
+        return {"success": False, "output": "Only Config Saves and automatic copies can be deleted."}
     snap = _cfgr_snap_dir(kind, sid)
     if snap is None or _cfgr_read_manifest(snap) is None:
-        return {"success": False, "output": "That save point was not found."}
+        return {"success": False, "output": "That Config Save was not found."}
     shutil.rmtree(snap)
-    log(f"OK: CONFIG save point deleted: {kind}/{sid}")
+    log(f"OK: CONFIG Config Save deleted: {kind}/{sid}")
     return {"success": True, "output": f"Deleted {sid}."}
 
 def _cfgr_act_restore(payload: dict) -> dict:
@@ -20345,56 +20345,7 @@ def _pn_status() -> dict:
             "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
                                                                                     key=lambda x: int(x["node"]))]}
 
-_FULL_NOTE = ("A save point is a full copy of this node's config files, passwords included. It stays on this node, and Restore puts it "
-              "back here. A snapshot is the same files as one text file with the passwords left out: use it to build another node "
-              "(confputter) or to read. They are not the same thing.")
-_FULL_SNAP_DIR = "/etc/asl_dvs/instmon_library/snapshots"
-_FULL_CONFGETTER = "/usr/local/bin/confgetter.sh"
-_FULL_SNAP_RE = re.compile(r"^confgetter_[A-Za-z0-9_.-]+_\d{8}-\d{6}\.md$")
-
-def _full_point_name(callsign: str) -> str:
-    call = re.sub(r"[^A-Za-z0-9]", "", callsign.upper())[:10] or "node"
-    return f"Finished {call} {time.strftime('%Y-%m-%d')}"
-
-def _full_save_point(callsign: str) -> dict:
-    name = _full_point_name(callsign)
-    for p in _cfgr_list_points():
-        if p["kind"] == "user" and p["label"] == name:
-            return {"success": True, "name": name, "output": f"Save point '{name}' already exists. Nothing new was saved.", "existing": True}
-    res = _cfgr_act_create_point({"name": name})
-    res["name"] = name
-    return res
-
-def _full_snapshot() -> dict:
-    if not os.path.isfile(_FULL_CONFGETTER):
-        return {"success": False, "output": "confgetter is not installed on this node. Install it from the Config getter list on instmon, then try again."}
-    before = set(_full_snap_names())
-    r = _run_argv(["bash", _FULL_CONFGETTER], timeout=180)
-    after = [n for n in _full_snap_names() if n not in before] or _full_snap_names()[:1]
-    if not r["success"] or not after:
-        return {"success": False, "output": "confgetter did not finish: " + str(r.get("output", ""))[-300:]}
-    path = os.path.join(_FULL_SNAP_DIR, after[0])
-    return {"success": True, "path": path, "name": after[0],
-            "output": f"Snapshot written: {path}\nPasswords are left out. Download it from the Config getter list on instmon; apply it on another node with confputter."}
-
-def _full_snap_names() -> list[str]:
-    try:
-        names = [n for n in os.listdir(_FULL_SNAP_DIR) if _FULL_SNAP_RE.match(n)]
-    except OSError:
-        return []
-    return sorted(names, reverse=True)
-
-def _cfgr_act_full_save(payload: dict) -> dict:
-    res = _full_save_point(_bld_form_load().get("callsign", ""))
-    res["output"] = res.get("output", "") + "\n\n" + _FULL_NOTE
-    return res
-
-def _cfgr_act_full_snapshot(payload: dict) -> dict:
-    return _full_snapshot()
-
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
-    "full_save": _cfgr_act_full_save,
-    "full_snapshot": _cfgr_act_full_snapshot,
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
     "create_point": _cfgr_act_create_point,
@@ -20535,7 +20486,7 @@ function cfgRetake(btn) {
   });
   lines.push('');
   lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 / SvxLink USRP on this node? If yes, cancel and wait until after the last install. A phone set up later is added with Save Restore point.');
-  lines.push('The old Restore point is kept as a save point named restore_replaced_<date>.');
+  lines.push('The old Restore point is kept as a Config Save named restore_replaced_<date>.');
   lines.push('');
   lines.push('Type RETAKE to confirm:');
   var typed = prompt(lines.join('\n'), '');
@@ -20687,18 +20638,6 @@ function cfgGateways(btn, action) {
     : 'Disable and stop the gateways this tab enabled?';
   if (!confirm(msg)) return;
   cfgPost({action: action}, 'cfg-gw-out', btn);
-}
-
-function cfgFullSave(btn) {
-  if (!confirm('Save a full copy of this node\'s config files now, passwords included? It stays on this node as a save point.')) return;
-  cfgPost({action: 'full_save'}, 'cfg-full-out', btn).then(function(res) {
-    if (res && res.success) { cfgFullSnapshot(btn, true); }
-  });
-}
-
-function cfgFullSnapshot(btn, ask) {
-  if (ask && !confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) return;
-  cfgPost({action: 'full_snapshot'}, 'cfg-full-out', btn);
 }
 
 function cfgPnKind() {
@@ -20866,7 +20805,7 @@ function cfgRender(d) {
     var opt = '<option value="' + p.kind + ':' + cfgEsc(p.id) + '">' + cfgEsc(p.label) + ' (' + cfgEsc(p.created_at) + ')</option>';
     if (p.kind === 'user') us += opt; else au += opt;
   });
-  if (us) o += '<optgroup label="Save points">' + us + '</optgroup>';
+  if (us) o += '<optgroup label="Config Saves">' + us + '</optgroup>';
   if (au) o += '<optgroup label="Automatic copies">' + au + '</optgroup>';
   sel.innerHTML = o || '<option value="">(nothing saved yet)</option>';
   if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
@@ -21083,7 +21022,7 @@ function cfgIdRowSet(btn) {
   if (!val.trim()) { cfgOut('cfg-id-call-out', 'Type the new value first.', false); return; }
   cfgPost({action: 'id_set_preview', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write this change?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write this change?')) return;
     cfgPost({action: 'id_set', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(r) {
       if (r.success && el) el.value = '';
     });
@@ -21107,7 +21046,7 @@ function cfgIdSetGroup(gid, btn, clear) {
   var extra = ne && ne.value ? {node: ne.value} : {};
   cfgPost(Object.assign({action: 'id_set_preview', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write these changes?')) return;
     cfgPost(Object.assign({action: 'id_set', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(r) {
       if (r.success) { CFG_ID_VALS[gid] = ''; var e = document.getElementById('cfg-id-set-' + gid); if (e) e.value = ''; }
     });
@@ -21130,7 +21069,7 @@ function cfgIdSetCall(btn) {
   }
   cfgPost({action: 'id_set_callsign_preview', callsign: call}, 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write these changes?')) return;
     cfgPost({action: 'id_set_callsign', callsign: call}, 'cfg-id-call-out', btn).then(function(r) {
       if (r.success) { CFG_ID_CALL = ''; var e = document.getElementById('cfg-id-call'); if (e) e.value = ''; }
     });
@@ -21293,25 +21232,11 @@ def _render_config_panel() -> str:
   </div>
 
   <div class="step-card">
-    <div class="step-head"><div class="step-title">Create save point</div></div>
+    <div class="step-head"><div class="step-title">Create Config Save</div></div>
     <div class="step-body">Saves the current config files of every installed system under a name of your choice.</div>
     <input type="text" class="asl3-cmd-input" id="cfg-point-name" maxlength="40" placeholder="Name, e.g. before reflector change">
-    <div class="step-actions"><button class="btn-run" onclick="cfgCreatePoint(this)">Create save point</button></div>
+    <div class="step-actions"><button class="btn-run" onclick="cfgCreatePoint(this)">Create Config Save</button></div>
     <div class="asl3-console shown placeholder" id="cfg-create-out">(nothing run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Save the full config</div>
-      <span class="cfg-hint" id="cfg-full-state"></span></div>
-    <div class="step-body"><b>Save point</b>: a full copy of this node's config files, passwords included, kept on this node. Restore puts it back
-      here. <b>Snapshot</b>: the same files as one text file with the passwords left out. Use it to build another node (confputter) or to read.
-      They are not the same thing, so this card can make both. The wiring presets are no longer saved here: the built-in Travel Node and
-      Magic Box presets feed the Build tabs, and a preset saved earlier is still read and can be applied from the Restore list above.</div>
-    <div class="step-actions">
-      <button class="btn-run" onclick="cfgFullSave(this)">Save the full config</button>
-      <button class="btn-copy" onclick="cfgFullSnapshot(this)">Copy the configs for another node (snapshot)</button>
-    </div>
-    <div class="asl3-console shown placeholder" id="cfg-full-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-pn-card">
@@ -21372,7 +21297,7 @@ def _render_config_panel() -> str:
     <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
       same value. Every value is shown in the clear, passwords included: this page needs the root login, and anyone looking
       at the screen can read them. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
-      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic save point. It
+      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic Config Save. It
       restarts nothing. Change other values in their file, or for phone accounts on the dashboard's Phone tab.
       The Travel Node preset never carries any of these.</div>
     <div id="cfg-id"></div>
@@ -21441,7 +21366,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
-    ("config", "Config", "t-config", "Restore point, save points, snapshot"),
+    ("config", "Config", "t-config", "Restore point, Config Saves, presets"),
     ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -29227,12 +29152,14 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
-  <div class="step-card" id="@P@-finish" style="display:none"><div class="step-head"><div class="step-title">Build finished: save the full config</div></div>
-    <div class="step-body" id="@P@-finish-note"></div>
+  <div class="step-card" id="@P@-saves"><div class="step-head"><div class="step-title">Build Save and Build Snapshot</div></div>
+    <div class="step-body" id="@P@-saves-note"></div>
+    <div id="@P@-saves-list" class="step-body"></div>
     <div class="step-actions">
-      <button class="btn-run" onclick="@F@FinishSave(this)">Save the full config</button>
+      <button class="btn-run" onclick="@F@SaveNow(this)">Save now</button>
+      <label class="btn-copy" style="cursor:pointer">Load a file from your computer <input type="file" accept="application/json,.json" style="display:none" onchange="@F@SaveFile(this)"></label>
     </div>
-    <div class="asl3-console shown" id="@P@-finish-out" style="display:none"></div>
+    <div class="asl3-console shown" id="@P@-saves-out" style="display:none"></div>
   </div>
   @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
@@ -29588,26 +29515,66 @@ function @F@InstallStfu(btn) {
   });
 }
 
-function @F@FinishSave(btn) {
-  @F@Post({action: 'finish_save', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function(res) {
-    if (!res || !res.success) { return; }
-    if (confirm('The save point is made. Also copy the configs for another node (a snapshot, passwords left out)?')) {
-      @F@Post({action: 'finish_snapshot', profile: '@PROFILE@'}, '@P@-finish-out', btn).then(function() { @F@Refresh(); });
-    } else { @F@Refresh(); }
+function @F@SaveNow(btn) {
+  @F@Post({action: 'save_write', profile: '@PROFILE@'}, '@P@-saves-out', btn).then(function() { @F@Refresh(); });
+}
+
+function @F@ApplyLoaded(res) {
+  if (!res || !res.success) { return; }
+  Object.keys(res.values || {}).forEach(function(k) {
+    var el = document.getElementById('@P@-' + k);
+    if (el) { el.value = res.values[k]; }
+  });
+  @F@ShowBypass();
+  @F@Dirty();
+}
+
+function @F@SaveLoad(name) {
+  @F@Post({action: 'save_load', profile: '@PROFILE@', name: name}, '@P@-saves-out', null).then(@F@ApplyLoaded);
+}
+
+function @F@SaveFile(input) {
+  var f = input.files && input.files[0];
+  if (!f) { return; }
+  var reader = new FileReader();
+  reader.onload = function() {
+    @F@Post({action: 'save_load', profile: '@PROFILE@', text: String(reader.result)}, '@P@-saves-out', null).then(@F@ApplyLoaded);
+  };
+  reader.readAsText(f);
+  input.value = '';
+}
+
+function @F@SaveDownload(name, kind) {
+  if (kind === 'save' && !confirm('This file contains your passwords in plain text. Download it anyway?')) { return; }
+  fetch('/api/build/save?name=' + encodeURIComponent(name)).then(function(r) { return r.blob(); }).then(function(b) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   });
 }
 
+function @F@RenderSaves(d) {
+  var sv = d.saves || {};
+  var note = document.getElementById('@P@-saves-note');
+  if (note) { note.textContent = sv.note || ''; }
+  var box = document.getElementById('@P@-saves-list');
+  if (!box) { return; }
+  var files = sv.files || [];
+  if (!files.length) { box.textContent = 'No Build Save yet. Both files are written automatically when the Reboot test is done, or press Save now.'; return; }
+  var h = '<table class="cfg-table"><tr><th>File</th><th>When</th><th></th></tr>';
+  files.forEach(function(f) {
+    h += '<tr><td>' + cfgEsc(f.name) + '</td><td>' + cfgEsc(f.saved_at) + '</td><td>' +
+      '<button class="btn-copy" onclick="@F@SaveLoad(\'' + cfgEsc(f.name) + '\')">Load</button> ' +
+      '<button class="btn-copy" onclick="@F@SaveDownload(\'' + cfgEsc(f.name) + '\',\'' + f.kind + '\')">Download</button></td></tr>';
+  });
+  box.innerHTML = h + '</table>';
+}
+
 function @F@RenderExtras(d) {
-  var fin = d.finish || {};
-  var box = document.getElementById('@P@-finish');
-  if (box) {
-    box.style.display = fin.done ? '' : 'none';
-    var note = document.getElementById('@P@-finish-note');
-    if (note) {
-      note.textContent = (fin.note || '') + (fin.save_name ? ' Save point made: ' + fin.save_name + '.' : '') +
-        (fin.snapshot_name ? ' Snapshot: ' + fin.snapshot_name + '.' : '') + (fin.confgetter ? '' : ' confgetter is not installed, so only the save point can be made.');
-    }
-  }
+  @F@RenderSaves(d);
   var x = d.extras || {};
   var a = document.getElementById('@P@-stfu-state');
   if (a) { a.textContent = x.stfu_installed ? 'installed' : 'not installed'; }
@@ -32185,8 +32152,12 @@ def build_build_status(profile: str = "travel") -> dict:
         if s["id"] == "reboot":
             others = [x for x in stages if x["id"] != "reboot"]
             s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
-            if s["state"] == "done" and _bld_wipe_secrets():
-                form = dict(form, **{k: "" for k in _BLD_SECRET_FIELDS})
+            if s["state"] == "done":
+                has_secrets = any(form.get(k) for k in _BLD_SECRET_FIELDS)
+                if has_secrets or not _bs_list():
+                    _bs_write(profile)
+                if has_secrets and _bld_wipe_secrets():
+                    form = dict(form, **{k: "" for k in _BLD_SECRET_FIELDS})
     prev_ok = True
     for s in stages:
         if s["state"] in ("todo",) and not prev_ok:
@@ -32200,7 +32171,7 @@ def build_build_status(profile: str = "travel") -> dict:
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
-    out["finish"] = _bld_finish_info(next((x for x in stages if x["id"] == "reboot"), {}).get("state") == "done")
+    out["saves"] = {"files": _bs_list(), "note": _BS_NOTE}
     out["extras"] = {"stfu_installed": _bld_stfu_installed(),
                      "el_owner_text": {"": "EchoLink stays off.", "asl3": "EchoLink will run in ASL3.", "svx": "EchoLink will run in SvxLink."}[_bld_el_owner(form, profile)]}
     out["job"] = _bld_job_info(profile)
@@ -32896,6 +32867,169 @@ def _bld_run_echolink(form: dict, profile: str, preview: bool) -> tuple[bool, li
     notes.insert(0, "EchoLink runs in " + ("ASL3 (chan_echolink); SvxLink's EchoLink module is switched off." if owner == "asl3"
                                             else "SvxLink (ModuleEchoLink); Asterisk's chan_echolink is switched off."))
     return _bld_write_changes("EchoLink", changes, notes, preview)
+
+_BS_DIR = "/etc/44helper/saves"
+_BS_KEEP = 5
+_BS_MAX = 30000
+_BS_NAME_RE = re.compile(r"^build-(save|snapshot)-[A-Za-z0-9]{1,10}-[0-9]{8}-[0-9]{6}\.json$")
+_BS_NEVER = ("usb", "pw_allmon")
+_BS_NOTE = ("A Build Save holds everything you entered in the Preflight, passwords included. It stays on this node, and downloading it asks you to "
+            "confirm. A Build Snapshot is the same without the passwords: share it, or load it on another node. Loading either one fills in the "
+            "Preflight; nothing changes on the node until you Save the form and run the steps.")
+
+def _bs_values(kind: str, form: dict) -> dict:
+    return {k: form.get(k, "") for k in _BLD_FIELDS if form.get(k, "") and k not in _BS_NEVER and (kind == "save" or k not in _BLD_SECRET_FIELDS)}
+
+def _bs_doc(kind: str, form: dict, profile: str) -> dict:
+    return {"format": "44helper-build", "version": 1, "kind": kind, "profile": profile, "saved_at": _cfgr_now(), "app_version": APP_VERSION,
+            "values": _bs_values(kind, form)}
+
+def _bs_list() -> list[dict]:
+    out: list[dict] = []
+    try:
+        names = os.listdir(_BS_DIR)
+    except OSError:
+        return out
+    for n in sorted(names, reverse=True):
+        m = _BS_NAME_RE.match(n)
+        path = os.path.join(_BS_DIR, n)
+        if not m or os.path.islink(path):
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        out.append({"name": n, "kind": m.group(1), "size": st.st_size,
+                    "saved_at": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
+    return out
+
+def _bs_path(name: str) -> str | None:
+    if not isinstance(name, str) or _BS_NAME_RE.match(name) is None:
+        return None
+    path = os.path.join(_BS_DIR, name)
+    if os.path.islink(path) or not os.path.isfile(path):
+        return None
+    return path
+
+def _bs_read_values(path: str) -> dict | None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return doc.get("values") if isinstance(doc, dict) and isinstance(doc.get("values"), dict) else None
+
+def _bs_write(profile: str) -> tuple[list[str], str]:
+    form = _bld_form_load()
+    call = re.sub(r"[^A-Za-z0-9]", "", form.get("callsign", "").upper())[:10] or "node"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    names: list[str] = []
+    try:
+        os.makedirs(_BS_DIR, mode=0o700, exist_ok=True)
+        os.chmod(_BS_DIR, 0o700)
+        for kind in ("save", "snapshot"):
+            same = next((x for x in _bs_list() if x["kind"] == kind), None)
+            if same is not None and _bs_read_values(os.path.join(_BS_DIR, same["name"])) == _bs_values(kind, form):
+                continue
+            name = f"build-{kind}-{call}-{stamp}.json"
+            tmp = os.path.join(_BS_DIR, name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(_bs_doc(kind, form, profile), f, indent=1, sort_keys=True)
+                f.write("\n")
+            os.replace(tmp, os.path.join(_BS_DIR, name))
+            names.append(name)
+        for kind in ("save", "snapshot"):
+            for old in [x for x in _bs_list() if x["kind"] == kind][_BS_KEEP:]:
+                os.unlink(os.path.join(_BS_DIR, old["name"]))
+    except OSError as exc:
+        return names, f"Could not write the files: {exc}"
+    return names, ""
+
+def _bs_parse(text: str, profile: str) -> tuple[dict | None, list[str], str]:
+    if not isinstance(text, str) or len(text.encode("utf-8")) > _BS_MAX:
+        return None, [], "That file is too large to be a Build Save."
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None, [], "That is not a JSON file."
+    if not isinstance(doc, dict) or doc.get("format") != "44helper-build" or doc.get("version") != 1:
+        return None, [], "That is not a Build Save or Build Snapshot from this tool."
+    kind = doc.get("kind")
+    values = doc.get("values")
+    if kind not in ("save", "snapshot") or not isinstance(values, dict):
+        return None, [], "That file has no readable values."
+    notes: list[str] = []
+    allowed = (set(_BLD_FIELDS_MAGIC if profile == "magic" else _BLD_FIELDS_TRAVEL) | {"mode"}) - set(_BS_NEVER)
+    clean: dict[str, str] = {}
+    unknown, other_tab = [], []
+    for k, v in values.items():
+        if k in _BS_NEVER or not isinstance(v, str) or len(v) > 400:
+            if k not in _BS_NEVER:
+                return None, [], f"The value for {str(k)[:30]} is not valid."
+            continue
+        if k not in _BLD_FIELDS:
+            unknown.append(k)
+        elif k not in allowed:
+            other_tab.append(k)
+        else:
+            clean[k] = v
+    if unknown:
+        notes.append("Ignored, not known to this version: " + ", ".join(sorted(unknown)[:8]))
+    if other_tab:
+        notes.append("Left out, this tab does not have them: " + ", ".join(sorted(other_tab)[:8]))
+    if kind == "snapshot":
+        clean = {k: v for k, v in clean.items() if k not in _BLD_SECRET_FIELDS}
+        notes.append("A Build Snapshot has no passwords: the password fields were left as they are.")
+    cleaned = _bld_form_clean(clean)
+    bad = sorted(k for k in _bld_form_errors(cleaned, [], profile) if k in clean and clean[k])
+    if bad:
+        return None, [], "These values are not valid: " + ", ".join(bad[:8])
+    out = {k: cleaned[k] for k in allowed if k in cleaned and (k in clean or kind == "save" or k not in _BLD_SECRET_FIELDS)}
+    if kind == "snapshot":
+        out = {k: v for k, v in out.items() if k not in _BLD_SECRET_FIELDS}
+    out["kind"] = kind
+    return out, notes, ""
+
+def _bld_act_save_write(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    names, err = _bs_write(profile)
+    if err:
+        return {"success": False, "message": err}
+    if not names:
+        return {"success": True, "message": "Nothing new to save: the newest Build Save and Build Snapshot already match the Preflight."}
+    return {"success": True, "message": "Written: " + ", ".join(names), "files": _bs_list()}
+
+def _bld_act_save_load(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if payload.get("text") is not None:
+        text = str(payload.get("text"))
+    else:
+        path = _bs_path(str(payload.get("name", "")))
+        if path is None:
+            return {"success": False, "message": "That file is not on this node."}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read(_BS_MAX + 1)
+        except OSError as exc:
+            return {"success": False, "message": f"Could not read it: {exc}"}
+    values, notes, err = _bs_parse(text, profile)
+    if values is None:
+        return {"success": False, "message": err}
+    kind = values.pop("kind")
+    return {"success": True, "message": ("Loaded a Build " + ("Save" if kind == "save" else "Snapshot") + f" with {len(values)} value(s). Review the form, change what you want, then Save the form."),
+            "notes": notes, "values": values, "kind": kind}
+
+def _route_build_save(query: dict) -> tuple[int, str, bytes]:
+    path = _bs_path((query.get("name") or [""])[0])
+    if path is None:
+        return 404, "application/json", json.dumps({"message": "That file is not on this node."}).encode("utf-8")
+    try:
+        with open(path, "rb") as f:
+            data = f.read(_BS_MAX + 1)
+    except OSError:
+        return 404, "application/json", json.dumps({"message": "That file is not on this node."}).encode("utf-8")
+    return 200, "application/json", data
 
 def _bld_wipe_secrets() -> bool:
     form = _bld_form_load()
@@ -33659,44 +33793,15 @@ def _bld_act_install_apt(payload: dict) -> dict:
     log(f"OK: Build tab started the apt install ({', '.join(pkgs)})")
     return {"success": True, "message": "Started: apt install " + " ".join(pkgs) + ".", "job_key": key}
 
-def _bld_finish_done(profile: str) -> bool:
-    st = build_build_status(profile)
-    return next((x for x in st["stages"] if x["id"] == "reboot"), {}).get("state") == "done"
-
-def _bld_act_finish_save(payload: dict) -> dict:
-    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
-    if not _bld_finish_done(profile):
-        return {"success": False, "message": "This is available once the Reboot test shows done."}
-    res = _full_save_point(_bld_form_load().get("callsign", ""))
-    if res.get("success"):
-        _bld_mark_set("finish_save_at")
-        _bld_mark_set("finish_save_name", res["name"])
-    return {"success": bool(res.get("success")), "message": res.get("output", ""), "name": res.get("name", "")}
-
-def _bld_act_finish_snapshot(payload: dict) -> dict:
-    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
-    if not _bld_finish_done(profile):
-        return {"success": False, "message": "This is available once the Reboot test shows done."}
-    res = _full_snapshot()
-    if res.get("success"):
-        _bld_mark_set("finish_snapshot_at")
-        _bld_mark_set("finish_snapshot_name", res["name"])
-    return {"success": bool(res.get("success")), "message": res.get("output", ""), "path": res.get("path", "")}
-
-def _bld_finish_info(done: bool) -> dict:
-    marks = _bld_marks_load()
-    return {"done": done, "note": _FULL_NOTE, "save_name": str(marks.get("finish_save_name", "")),
-            "snapshot_name": str(marks.get("finish_snapshot_name", "")), "confgetter": os.path.isfile(_FULL_CONFGETTER)}
-
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
-    "finish_save": _bld_act_finish_save,
-    "finish_snapshot": _bld_act_finish_snapshot,
     "install_apt": _bld_act_install_apt,
     "install_suite": _bld_act_install_suite,
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
     "clear_saved": _bld_act_clear_saved,
+    "save_write": _bld_act_save_write,
+    "save_load": _bld_act_save_load,
     "install_stfu": _bld_act_install_stfu,
     "wg_check": _bld_act_wg_check,
     "run_stage": _bld_act_run_stage,
@@ -33745,6 +33850,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/services/status": _route_services_status,
     "/api/ports/status": _route_ports_status,
     "/api/ports/iax": _route_ports_iax,
+    "/api/build/save": _route_build_save,
     "/api/firewall/status": _route_firewall_status,
     "/api/firewall/half_status": _route_half_status,
     "/api/fullx/status": _route_fx_status,

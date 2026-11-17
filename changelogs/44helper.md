@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_63_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_64_20261117.py`. Newest entries first.
+
+## 0.1.64 (2026-11-17)
+
+Build Save and Build Snapshot replace the whole-file save of 0.1.63. This is a release: new files, new actions and one new route, with the 0.1.63 card removed.
+
+- **Two small JSON files, not copies of config files.** A Build Save holds everything entered in the Preflight, passwords included. A Build Snapshot holds the same without the passwords. The Allmon3 admin password (set once, then forgotten) and the USB card pick are in neither. They are written to `/etc/44helper/saves/` (folder root-only, files mode 0600), the newest 5 of each kept.
+- **When they are written.** At the end of the build: when the Reboot test shows done, both files are written once, and before the saved passwords are wiped from the Preflight, so the passwords are never lost. "Save now" on the new "Build Save and Build Snapshot" card writes them any time. If the values have not changed since the newest file, nothing new is written.
+- **Loading.** The card lists the files on the node (Load, Download), and a button loads a JSON file from your computer. Loading fills in the Preflight fields, whole, for either file, so you can change anything; nothing changes on the node until you Save the form and run the steps. A Build Snapshot leaves the password fields as they are. Fields the tab does not have (a Magic Box file on the Travel Node tab) are left out with a note, keys this version does not know are ignored with a note, and a wrong file, an over-size file or an invalid value is refused with the names of the fields.
+- **Download.** `GET /api/build/save?name=` serves only files in that folder whose names match the fixed pattern, and never a symbolic link. Downloading a Build Save asks you to confirm that it holds passwords in plain text.
+- **Config tab names.** The whole-file copies are now called Config Saves (menu "Config Saves", "Create Config Save", "automatic Config Save") so they are not confused with the Build files. They work as before, as do the Restore point and automatic copies. The "Save the full config" card, the confgetter call and the whole-file save at the end of the build from 0.1.63 are gone; `confgetter` and `confputter` stay as diagnostic tools.
+- **Tests.** `ci/test_h44_buildsave.py`; the identity test follows the new Config Save wording.
 
 ## 0.1.63 (2026-11-17)
 

@@ -241,7 +241,7 @@ class Wipe(unittest.TestCase):
 
     def test_the_status_wipes_when_the_reboot_test_is_done(self):
         h44._bld_form_write(h44._bld_form_clean(dict(BASE, pw_node="a")))
-        with mock.patch.object(h44, "_bld_reboot_state", lambda *a: ("done", "ok")), mock.patch.object(h44, "_bld_machine", lambda: []), \
+        with mock.patch.object(h44, "_BS_DIR", os.path.join(self.d.name, "saves")), mock.patch.object(h44, "_bld_reboot_state", lambda *a: ("done", "ok")), mock.patch.object(h44, "_bld_machine", lambda: []), \
                 mock.patch.object(h44, "_detect_installed_products", lambda force=False: []), mock.patch.object(h44, "_bld_usb_cards", lambda: []), \
                 mock.patch.object(h44, "_wg0_interface_present", lambda: False), mock.patch.object(h44, "_firewalld_zone_info_cached", lambda: None), \
                 mock.patch.object(h44, "status_boot_order", lambda: {"done": True, "missing": []}), \
@@ -251,6 +251,46 @@ class Wipe(unittest.TestCase):
             st = h44.build_build_status()
         self.assertEqual(st["form"]["pw_node"], "")
         self.assertEqual(h44._bld_form_load()["pw_node"], "")
+        saves = os.path.join(self.d.name, "saves")
+        kept = [n for n in os.listdir(saves) if n.startswith("build-save-")]
+        self.assertEqual(len(kept), 1)
+        with open(os.path.join(saves, kept[0])) as f:
+            self.assertEqual(json.load(f)["values"]["pw_node"], "a")
+
+
+class DoneWrites(unittest.TestCase):
+    def status_at_done(self):
+        with mock.patch.object(h44, "_BS_DIR", os.path.join(self.d.name, "saves")), mock.patch.object(h44, "_bld_reboot_state", lambda *a: ("done", "ok")), \
+                mock.patch.object(h44, "_bld_machine", lambda: []), mock.patch.object(h44, "_detect_installed_products", lambda force=False: []), \
+                mock.patch.object(h44, "_bld_usb_cards", lambda: []), mock.patch.object(h44, "_wg0_interface_present", lambda: False), \
+                mock.patch.object(h44, "_firewalld_zone_info_cached", lambda: None), \
+                mock.patch.object(h44, "status_boot_order", lambda: {"done": True, "missing": []}), \
+                mock.patch.object(h44, "_cfgr_usrp_pairs", lambda override=None: ([], [])), mock.patch.object(h44, "_pn_status", lambda: {"available": False}), \
+                mock.patch.object(h44, "_cfgr_snap_dir", lambda k, sid="": "x"), mock.patch.object(h44, "_cfgr_read_manifest", lambda d: None), \
+                mock.patch.object(h44, "_cfgr_identity_scan", lambda: {"rows": [], "groups": {}}), mock.patch.object(h44, "_cfgr_text", lambda p: None):
+            h44.build_build_status()
+        return os.path.join(self.d.name, "saves")
+
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.addCleanup(self.d.cleanup)
+        p = mock.patch.object(h44, "_BLD_FILE", os.path.join(self.d.name, "build.json"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_no_passwords_and_no_files_writes_both_once(self):
+        h44._bld_form_write(h44._bld_form_clean(dict(BASE, sysop="Mike")))
+        saves = self.status_at_done()
+        self.assertEqual(len(os.listdir(saves)), 2)
+        self.status_at_done()
+        self.assertEqual(len(os.listdir(saves)), 2)
+
+    def test_after_the_wipe_nothing_new_is_written(self):
+        h44._bld_form_write(h44._bld_form_clean(dict(BASE, pw_node="a")))
+        saves = self.status_at_done()
+        before = sorted(os.listdir(saves))
+        self.status_at_done()
+        self.assertEqual(sorted(os.listdir(saves)), before)
 
 
 class Prefill(unittest.TestCase):
