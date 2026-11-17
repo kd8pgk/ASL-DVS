@@ -88,6 +88,8 @@ jobs:
         run: python3 ci/test_h44_stfu_el.py
       - name: Build Save and Build Snapshot (44helper)
         run: python3 ci/test_h44_buildsave.py
+      - name: Page compression and caching (44helper)
+        run: python3 ci/test_h44_pagegz.py
       - name: SVX tab tests (Node Controller full build)
         run: python3 ci/test_nodecontrol_svx.py
       - name: Link, tune and disconnect tests (Node Controller)

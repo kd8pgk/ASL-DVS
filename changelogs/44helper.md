@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_64_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_65_20261117.py`. Newest entries first.
+
+## 0.1.65 (2026-11-17)
+
+The page is compressed and can be answered with 304. This is a release: the page's response headers and body encoding change. It is stage 1 of a tidy of the file; nothing else changes.
+
+- **Gzip.** The page (about 608 KB of HTML, script and styles) is sent gzipped to browsers that accept it, about 137 KB. The compressed copy is built once per page and kept. A browser that does not send `Accept-Encoding: gzip` (or sends `gzip;q=0`) still gets the plain page.
+- **Reload without a download.** The page carries an `ETag` and `Cache-Control: no-cache`, so a reload with an unchanged page is a 304 with no body. The ETag changes whenever the page does, for example when the callsign or node changes.
+- **Not changed.** The page content, the login, every other route, and the security headers (frame, content type, referrer, CSP) are as before. Other routes are not compressed.
+- **Tests.** `ci/test_h44_pagegz.py`.
 
 ## 0.1.64 (2026-11-17)
 
