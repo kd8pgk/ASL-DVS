@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.47"
+APP_VERSION = "0.1.53"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -19139,6 +19139,7 @@ _FCR_MAX_FILE = 400000
 _FCR_MAX_FILES = 60
 _FCR_DEADLINE = 120
 _FCR_GROUP_PRODUCT = {"asl3": "asl3", "dvs": "dvs", "m17": "usrp2m17"}
+_FCR_OPTIONAL_FIELDS = frozenset({"nxdn_id"})
 _FCR_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}(/[A-Za-z0-9][A-Za-z0-9._-]{0,59}){0,3}$")
 _FCR_REL_RE = re.compile(r"^files/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 _FCR_TOKEN_RE = re.compile(r"^@@[A-Z0-9_]{1,24}@@$")
@@ -19264,6 +19265,9 @@ def _fcr_tokens(m: dict, payload: dict) -> tuple[dict | None, str]:
         v = str(given.get(fl["id"], "")).strip()
         if fl.get("upper"):
             v = v.upper()
+        if v == "" and fl["id"] in _FCR_OPTIONAL_FIELDS:
+            values[fl["id"]] = ""
+            continue
         if not re.fullmatch(fl["pattern"], v):
             return None, f"{fl['label']} is missing or not valid."
         values[fl["id"]] = v
@@ -19354,6 +19358,11 @@ def _fcr_ready(payload: dict):
         return None, None, None, None, err
     state = _fcr_group_state()
     rows, errors = _fcr_plan(m, tokens, state)
+    want = payload.get("groups")
+    if isinstance(want, list):
+        rows = [r for r in rows if r["group"] in want]
+        mine = [e["path"] for e in m["files"] if e["group"] in want]
+        errors = [e for e in errors if any(path in e for path in mine)]
     if errors:
         return None, None, None, None, "Nothing can be written:\n" + "\n".join(errors)
     return m, meta, state, rows, ""
@@ -19411,7 +19420,8 @@ def _fcr_status() -> dict:
     out.update({
         "name": m.get("name", ""), "version": m.get("version", ""), "note": m.get("note", ""),
         "ref": meta.get("ref", "main"), "fetched_at": meta.get("fetched_at", ""),
-        "fields": [{"id": fl["id"], "label": fl["label"], "upper": bool(fl.get("upper"))} for fl in m["fields"]],
+        "fields": [{"id": fl["id"], "label": fl["label"] + (" (optional)" if fl["id"] in _FCR_OPTIONAL_FIELDS else ""),
+                    "upper": bool(fl.get("upper"))} for fl in m["fields"]],
         "groups": [{"group": g, "label": _CFGR_GROUPS[g]["label"], "installed": state[g][0], "state": state[g][1],
                     "files": sum(1 for e in m["files"] if e["group"] == g)} for g in _FCR_GROUP_PRODUCT],
     })
@@ -28823,10 +28833,19 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-body">@NOTE@ The standard config
       bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
       turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
-      node, not from memory. This first version only reads and checks: it saves the form below and nothing else. Each row links
-      to the tab that does the step. Pick the tunnel mode first; the order changes with it.</div>
+      node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
+      (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
+      installs and the tunnel steps run in the background and keep going if you close the page; they stop at the first failing step. The
+      tunnel step uses the WireGuard config pasted in the box under the form, once, and does not keep it. The other rows link to the tab that does the step.
+      Nothing runs by itself.</div>
     <div id="@P@-where"></div>
     <div id="@P@-stages">Loading...</div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="@F@RunRest(this)">Run the rest</button>
+      <button class="btn-copy" onclick="@F@Report(this)">Build report</button>
+    </div>
+    <div class="asl3-console shown" id="@P@-run-out" style="display:none"></div>
+    <textarea class="asl3-cmd-input" id="@P@-report" rows="14" spellcheck="false" readonly style="display:none;width:100%"></textarea>
   </div>
   <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
       <span class="cfg-hint" id="@P@-form-state"></span></div>
@@ -28836,13 +28855,18 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       <tr><td>Tunnel mode</td><td><select id="@P@-mode" onchange="@F@Dirty();@F@ShowBypass()">
         <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
         <option value="split">Split tunnel (44Net only)</option>
-        <option value="full">Full tunnel with exceptions (everything through the tunnel)</option></select>
+        <option value="full">Full tunnel with exceptions (everything through the tunnel)</option>
+        <option value="none">No tunnel (the router forwards the ports, or LAN only)</option></select>
         <span class="cfg-hint">Save the form to reorder the steps above.</span></td></tr>
       <tr><td>Callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-callsign" maxlength="10" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-callsign"></span></td></tr>
       <tr><td>ASL node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-node"></span></td></tr>
       <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
-      <tr><td>NXDN ID</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
+      <tr><td>NXDN ID (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
       <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
+      <tr><td>Suite build</td><td><select id="@P@-suite_build" onchange="@F@Dirty()"><option value="auto">Automatic (by the board)</option>
+        <option value="pi02w">Pi Zero 2 W build</option><option value="full">Full build</option></select></td></tr>
+      <tr><td>Suite channel</td><td><select id="@P@-suite_channel" onchange="@F@Dirty()"><option value="stable">Stable</option>
+        <option value="testing">Testing (main)</option></select></td></tr>
       <tr><td>USB sound card</td><td><select id="@P@-usb" onchange="@F@Dirty()"></select> <span class="cfg-hint" id="@P@-e-usb"></span></td></tr>
 @SVXROWS@      <tr id="@P@-bypass-row" style="display:none"><td>Bypass list (full tunnel only)</td><td><textarea class="asl3-cmd-input" id="@P@-bypass" rows="2" spellcheck="false" placeholder="host names, IPv4 addresses or UDP ports, separated by spaces or commas" oninput="@F@Dirty()"></textarea> <span class="cfg-hint" id="@P@-e-bypass"></span></td></tr>
     </table>
@@ -28856,6 +28880,15 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-actions"><button class="btn-copy" onclick="@F@WgCheck(this)">Check this config</button></div>
     <div class="asl3-console shown" id="@P@-wg-out" style="display:none"></div>
     <div id="@P@-machine" style="margin-top:.8rem"></div>
+    <div id="@P@-apt" style="margin-top:.8rem"></div>
+    <div class="step-actions">
+      <select id="@P@-apt-scope"><option value="required">Required packages</option><option value="recommended">Required and recommended</option>
+        <option value="all">Everything on the list</option></select>
+      <button class="btn-run" id="@P@-apt-btn" onclick="@F@InstallApt(this)">Install the missing packages (apt)</button>
+    </div>
+    <div class="cfg-hint">Both installs here are optional: nothing runs until you press its button, and the build does not wait for them.</div>
+    <div id="@P@-suite" style="margin-top:.8rem"></div>
+    <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
   @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
     <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
@@ -28872,13 +28905,13 @@ var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
   apply_asl3: 'config', apply_dvs: 'config', apply_m17: 'config',
-  half: 'split_tunnel', fullx: 'full_tunnel', boot: 'split_tunnel', wiring: 'config',
+  half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
   tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab',
+  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -28933,16 +28966,86 @@ function @F@ShowErrors(d) {
 }
 
 function @F@RenderStages(d) {
-  var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th></tr>';
+  var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th><th></th></tr>';
   (d.stages || []).forEach(function(s, i) {
     var tab = _@P@Tabs[s.id];
     var where = tab && tab !== '@TAB@'
       ? '<a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' + cfgEsc(_@P@StageNames[s.id] || tab) + '</a>'
       : cfgEsc(_@P@StageNames[s.id] || '');
     h += '<tr><td>' + (i + 1) + '</td><td>' + cfgEsc(s.label) + '</td><td style="' + @F@Tone(s.state) + '">' +
-         cfgEsc(@F@StateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td></tr>';
+         cfgEsc(@F@StateLabel(s.state)) + '</td><td>' + where + '</td><td>' + cfgEsc(s.detail) + '</td><td>' + @F@RunButtons(s) + '</td></tr>';
   });
   document.getElementById('@P@-stages').innerHTML = h + '</table>';
+}
+
+function @F@RunButtons(s) {
+  if (!s.run) { return ''; }
+  var id = cfgEsc(s.id);
+  var h = '';
+  if (s.run.preview) { h += '<button class="btn-copy" onclick="@F@Run(\'' + id + '\', true, this)">Preview</button> '; }
+  return h + '<button class="btn-run" onclick="@F@Run(\'' + id + '\', false, this, ' + (s.run.long ? 'true' : 'false') + ')">Run</button>';
+}
+
+function @F@Run(stage, preview, btn, isLong) {
+  if (_@P@IsDirty) { alert('Save the form first: the step uses the saved form.'); return; }
+  var label = stage.replace(/_/g, ' ');
+  var ask = isLong
+    ? 'Start this step (' + label + ')? It installs software or changes the tunnel and can take a long time, up to an hour for a build. It keeps running if you close this page. It stops at the first failing step.'
+    : 'Run this step (' + label + ')? It changes this node. An automatic copy of the config is saved first where the step writes config.';
+  if (!preview && !confirm(ask)) { return; }
+  var body = {action: 'run_stage', profile: '@PROFILE@', stage: stage, preview: preview};
+  var wg = document.getElementById('@P@-wg');
+  if (stage === 'tunnel' && wg) { body.config_text = wg.value; }
+  @F@Post(body, '@P@-run-out', btn).then(function(res) {
+    if (stage === 'tunnel' && res && res.success && wg) { wg.value = ''; }
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@RunRest(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the steps use the saved form.'); return; }
+  if (!confirm('Run the rest? It runs every open step in order: installs, the tunnel steps, config applies and fixes. It stops at the first step that fails or that has to be done on its own tab. It keeps going if you close this page.')) { return; }
+  var body = {action: 'run_rest', profile: '@PROFILE@'};
+  var wg = document.getElementById('@P@-wg');
+  if (wg && wg.value.trim()) { body.config_text = wg.value; }
+  @F@Post(body, '@P@-run-out', btn).then(function(res) {
+    if (res && res.success && wg) { wg.value = ''; }
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@Report(btn) {
+  var box = document.getElementById('@P@-report');
+  fetch('/api/build/report?profile=@PROFILE@').then(function(r) { return r.text(); }).then(function(t) {
+    box.value = t;
+    box.style.display = '';
+    box.focus();
+    box.select();
+    if (typeof copyTextToClipboard === 'function') { copyTextToClipboard(t, btn); }
+  });
+}
+
+var _@P@PollKey = '';
+
+function @F@Poll(key) {
+  if (_@P@PollKey === key) { return; }
+  _@P@PollKey = key;
+  var out = document.getElementById('@P@-run-out');
+  function tick() {
+    fetch('/api/action_status?job_key=' + encodeURIComponent(key)).then(function(r) { return r.json(); }).then(function(j) {
+      if (out) {
+        out.style.display = '';
+        out.className = 'asl3-console shown' + (j.status === 'done' ? (j.success ? ' ok' : ' fail') : '');
+        var lines = String(j.output || '').split(String.fromCharCode(10));
+        out.textContent = lines.slice(-60).join(String.fromCharCode(10));
+        out.scrollTop = out.scrollHeight;
+      }
+      if (j.status === 'running') { setTimeout(tick, 2500); } else { _@P@PollKey = ''; @F@Refresh(); }
+    }).catch(function() { setTimeout(tick, 5000); });
+  }
+  tick();
 }
 
 function @F@RenderMachine(d) {
@@ -28992,6 +29095,59 @@ function @F@RenderRadio(d) {
   document.getElementById('@P@-radio').innerHTML = h + '</table>';
 }
 
+function @F@RenderApt(d) {
+  var box = document.getElementById('@P@-apt');
+  var ap = d.apt;
+  if (!box || !ap) { return; }
+  var missing = 0;
+  var h = '<table class="cfg-table"><tr><th>System package</th><th>Group</th><th>Needed by</th><th>For</th><th>State</th></tr>';
+  (ap.rows || []).forEach(function(r) {
+    if (!r.installed && r.auto) { missing += 1; }
+    var state = r.installed ? 'installed' : (r.auto ? 'not installed' : 'not installed: ' + r.how);
+    h += '<tr><td>' + cfgEsc(r.pkg) + '</td><td>' + cfgEsc(r.group) + '</td><td>' + cfgEsc(r.by) + '</td><td>' + cfgEsc(r.why) +
+         '</td><td style="' + @F@Tone(r.installed ? 'ok' : (r.group === 'required' ? 'fail' : 'warn')) + '">' + cfgEsc(state) + '</td></tr>';
+  });
+  box.innerHTML = h + '</table>';
+  var btn = document.getElementById('@P@-apt-btn');
+  if (btn) { btn.disabled = missing === 0; }
+}
+
+function @F@InstallApt(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the list depends on the tunnel mode.'); return; }
+  var scope = document.getElementById('@P@-apt-scope').value;
+  if (!confirm('Install the missing system packages now (' + scope + ')? It runs apt as root in the background and keeps going if you close this page. It never installs a network manager, the firewall or systemd-resolved.')) { return; }
+  @F@Post({action: 'install_apt', profile: '@PROFILE@', scope: scope}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@RenderSuite(d) {
+  var box = document.getElementById('@P@-suite');
+  var su = d.suite;
+  if (!box || !su) { return; }
+  var missing = 0;
+  var h = '<table class="cfg-table"><tr><th>Node Controller suite</th><th>State</th></tr>';
+  (su.tools || []).forEach(function(t) {
+    if (!t.installed) { missing += 1; }
+    h += '<tr><td>' + cfgEsc(t.name) + '</td><td style="' + @F@Tone(t.installed ? 'ok' : 'warn') + '">' + (t.installed ? 'installed' : 'not installed') + '</td></tr>';
+  });
+  h += '</table><div class="cfg-hint">44helper is already running. The build is ' + cfgEsc(su.build) + ', the channel ' + cfgEsc(su.channel) +
+       '. Terminal Monitor is never part of this.</div>';
+  box.innerHTML = h;
+  var btn = document.getElementById('@P@-suite-btn');
+  if (btn) { btn.disabled = missing === 0; }
+}
+
+function @F@InstallSuite(btn) {
+  if (_@P@IsDirty) { alert('Save the form first: the install uses the saved form.'); return; }
+  if (!confirm('Install the missing Node Controller tools now? It runs the installer in the background as root, only for the tools that are not installed, and keeps going if you close this page. It does not touch 44helper.')) { return; }
+  @F@Post({action: 'install_suite', profile: '@PROFILE@'}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
 function @F@RenderSvx(d) {
   var box = document.getElementById('@P@-svx');
   var v = d.svx;
@@ -29029,6 +29185,9 @@ function @F@Refresh() {
     @F@RenderWhere(d);
     @F@RenderRadio(d);
     @F@RenderSvx(d);
+    @F@RenderApt(d);
+    @F@RenderSuite(d);
+    if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
     document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
   });
@@ -29107,7 +29266,7 @@ def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
             .replace("@P@", pfx).replace("@F@", fn))
 
-_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass"]
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
 _BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
 
 def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
@@ -30934,11 +31093,12 @@ _BLD_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
 _BLD_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
-_BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions"}
+_BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
 _BLD_FIELDS = ("mode", "callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
-               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon")
+               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel")
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
-                "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": ""}
+                "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
+                "suite_build": "auto", "suite_channel": "stable"}
 _BLD_PROFILES = ("travel", "magic")
 _BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
 _BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
@@ -30952,7 +31112,7 @@ _BLD_FIELD_RES = {
     "nxdn_id": (re.compile(r"[0-9]{1,5}"), "1 to 5 digits"),
     "m17_node": (re.compile(r"1[0-9]{3}"), "a node number from 1000 to 1999"),
 }
-_BLD_REQUIRED = ("callsign", "node", "dmr_id", "nxdn_id")
+_BLD_REQUIRED = ("callsign", "node", "dmr_id")
 _BLD_HOST_RE = re.compile(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _BLD_MAX_BYPASS = 20
 _BLD_HS_FRESH = 180
@@ -30988,6 +31148,10 @@ def _bld_form_clean(payload: dict) -> dict:
         form["mode"] = _BLD_DEFAULT["mode"]
     if form["svx_use"] not in ("bridge", "radio"):
         form["svx_use"] = _BLD_DEFAULT["svx_use"]
+    if form["suite_build"] not in _BLD_SUITE_BUILDS:
+        form["suite_build"] = _BLD_DEFAULT["suite_build"]
+    if form["suite_channel"] not in _BLD_SUITE_CHANNELS:
+        form["suite_channel"] = _BLD_DEFAULT["suite_channel"]
     form["callsign"] = form["callsign"].upper()
     return form
 
@@ -31037,10 +31201,11 @@ def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> 
     errs: dict = {}
     if profile == "magic":
         errs.update(_bld_svx_errors(form))
-    for k in _BLD_REQUIRED:
+    for k in _BLD_REQUIRED + ("nxdn_id",):
         v = form.get(k, "")
         if not v:
-            errs[k] = "required"
+            if k in _BLD_REQUIRED:
+                errs[k] = "required"
         elif _BLD_FIELD_RES[k][0].fullmatch(v) is None:
             errs[k] = "use " + _BLD_FIELD_RES[k][1]
     m17 = form.get("m17_node", "")
@@ -31223,10 +31388,13 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
     tail += [("radio", "Radio and Node Talker"), ("save", "Restore point"), ("reboot", "Reboot test")]
+    ports = ("ports", "Open the ports")
+    if mode == "none":
+        return [("preflight", "Preflight")] + systems + [ports] + tail
     if mode == "full":
-        return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions")] + tail
+        return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
-    return [("preflight", "Preflight"), tunnel] + systems + mid + tail
+    return [("preflight", "Preflight"), tunnel] + systems + mid + [ports] + tail
 
 def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
     call = form.get("callsign", "")
@@ -31376,7 +31544,9 @@ def _bld_svx_stage(sid: str, g: dict, form: dict, radio: dict) -> tuple[str, str
     if sid == "svx_reflector":
         r = g["reflector"]
         if not r["host"]:
-            return "todo", "No reflector set: SVXLink tab, step 11."
+            if form.get("svx_host"):
+                return "todo", "No reflector set: SVXLink tab, step 11."
+            return "warn", "No reflector set (optional): SVXLink tab, step 11, when you want one."
         if form.get("svx_host") and (form["svx_host"] != r["host"] or (form.get("svx_port") and form["svx_port"] != r["port"])):
             return "todo", f"svxlink.conf has {r['host']}:{r['port']}, the form says {form['svx_host']}:{form.get('svx_port') or '?'}."
         if not r["key_set"]:
@@ -31406,6 +31576,16 @@ def _bld_svx_stage(sid: str, g: dict, form: dict, radio: dict) -> tuple[str, str
     if rows:
         return "warn", "; ".join(t for _, t in rows[:4])
     return "done", "Service running, config clean, reflector logged in."
+
+def _bld_job_info(profile: str) -> dict | None:
+    with _JOBS_LOCK:
+        mine = [(v.get("started_at", 0), k) for k, v in _JOBS.items() if k.startswith(f"{_BLD_JOB_PREFIX}{profile}_")]
+    if not mine:
+        return None
+    key = max(mine)[1]
+    st = _job_status(key)
+    return {"key": key, "stage": key.split("_", 2)[2], "status": st.get("status"), "success": st.get("success"),
+            "output": st.get("output", "")[-6000:]}
 
 def build_build_status(profile: str = "travel") -> dict:
     profile = profile if profile in _BLD_PROFILES else "travel"
@@ -31486,6 +31666,8 @@ def build_build_status(profile: str = "travel") -> dict:
                 state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
         elif sid.startswith("svx"):
             state, detail = _bld_svx_stage(sid, svx, form, radio)
+        elif sid == "ports":
+            state, detail = _bld_ports_stage(_bld_ports_gather(mode, installed))
         elif sid == "half":
             state, detail = ("done", "Permanent.") if half_on else ("todo", "Not permanent yet.")
         elif sid == "fullx":
@@ -31511,18 +31693,28 @@ def build_build_status(profile: str = "travel") -> dict:
             state = "done" if restore else "todo"
             detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
         elif sid == "reboot":
-            state, detail = "manual", "Reboot at home, then read the Boot tab."
+            state, detail = "manual", ""
         stages.append({"id": sid, "label": label, "state": state, "detail": detail})
+    for s in stages:
+        if s["id"] == "reboot":
+            others = [x for x in stages if x["id"] != "reboot"]
+            s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
     prev_ok = True
     for s in stages:
         if s["state"] in ("todo",) and not prev_ok:
             s["state"] = "locked"
             s["detail"] = "Waits for the step before. " + s["detail"]
-        if s["state"] not in ("done", "manual"):
+        if s["state"] not in ("done", "manual", "warn"):
             prev_ok = False
+    for s in stages:
+        if s["id"] in _BLD_RUNNABLE and s["state"] in ("todo", "warn"):
+            s["run"] = {"preview": s["id"] in _BLD_PREVIEWABLE, "long": s["id"] in _BLD_LONG}
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
+    out["job"] = _bld_job_info(profile)
+    out["apt"] = _bld_apt_state(form.get("mode", "half"))
+    out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form.get("suite_channel", "stable")}
     if svx is not None:
         out["svx"] = {k: svx[k] for k in ("installed", "conf", "active", "use", "radio_logics", "reflector", "exten", "nodes_line", "udp_open", "log")}
         out["svx"]["reachable"] = svx.get("reachable")
@@ -31553,6 +31745,8 @@ def _bld_act_wg_check(payload: dict) -> dict:
     if not isinstance(text, str) or not text.strip():
         return {"success": False, "message": "Paste the WireGuard config first."}
     mode = _bld_form_load()["mode"]
+    if mode == "none":
+        return {"success": False, "message": "No tunnel is chosen, so there is no config to check. Pick a tunnel mode first."}
     res = action_paste_preview(text, "full" if mode == "full" else "split", None)
     if not res.get("valid"):
         return {"success": False, "message": res.get("output", "Rejected.")}
@@ -31562,10 +31756,864 @@ def _bld_act_wg_check(payload: dict) -> dict:
     return {"success": True, "message": "The config is usable." + (" The tunnel step will change it as listed." if notes else ""),
             "notes": notes}
 
+_BLD_UNIT_DIRS = ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system")
+_BLD_SUITE_PORTS = (("nodecontrol", 8989, "Dashboard"), ("sysmon", 9999, "SysMon"), ("instmon", 8990, "instmon"),
+                    ("wifimon", 8991, "wifimon"), ("44helper", 9997, "44helper"), ("nodetalker", 8993, "Node Talker"),
+                    ("noderecorder", 8995, "Node Recorder"), ("pibrary", 9000, "Pibrary"),
+                    ("termon", 7878, "Terminal Monitor"), ("nodemon", 7777, "Node Monitor"))
+_BLD_SERVICE_PORT = {"ssh": (22, "tcp"), "cockpit": (9090, "tcp"), "iax2": (4569, "udp")}
+_BLD_MGMT_EXPOSED = frozenset({22, 5038, 8080, 9090} | {p for _u, p, _n in _BLD_SUITE_PORTS})
+
+_BLD_COMPONENT_PORTS = {
+    "asl3": ("AllStarLink", ("4569/udp",)),
+    "dvs": ("DVSwitch", ("31100/udp", "31103/udp", "6073/udp", "6074/udp", "6075/udp", "54321/udp")),
+    "usrp2m17": ("USRP2M17", ("34008/udp", "32008/udp")),
+    "svx": ("SvxLink", ("34000/udp", "32000/udp", "5300/tcp", "5300/udp")),
+}
+_BLD_ECHOLINK_PORTS = ("5198-5199/udp", "5200/tcp")
+
+def _bld_skipped_ports(installed: dict) -> list[tuple[str, str]]:
+    have = {k: installed.get(k) == "installed" for k in ("asl3", "dvs", "usrp2m17", "svx")}
+    out: list[tuple[str, str]] = []
+    for key, (name, specs) in _BLD_COMPONENT_PORTS.items():
+        if not have[key]:
+            out += [(spec, name) for spec in specs]
+    if not have["asl3"] and not have["svx"]:
+        out += [(spec, "EchoLink") for spec in _BLD_ECHOLINK_PORTS]
+    return out
+
+def _bld_close_args(zs: dict, spec: str) -> tuple[list[str], str]:
+    lo, hi, proto = _bld_port_spec(spec)
+    if spec in zs["ports"]:
+        return [f"--remove-port={spec}"], ""
+    svc = next((n for n, pr in _BLD_SERVICE_PORT.items() if n in zs["services"] and pr == (lo, proto) and lo == hi), "")
+    if svc:
+        return [f"--remove-service={svc}"], ""
+    return [], f"{spec} is inside a wider range in this zone: close it by hand on the Firewall card"
+
+def _bld_unit_exists(unit: str) -> bool:
+    return any(os.path.exists(f"{d}/{unit}") for d in _BLD_UNIT_DIRS)
+
+def _bld_port_spec(spec: str) -> tuple[int, int, str]:
+    num, _, proto = spec.partition("/")
+    lo, _, hi = num.partition("-")
+    return int(lo), int(hi or lo), proto
+
+def _bld_zone_state(zone: str) -> dict | None:
+    info = _firewalld_zone_info(zone)
+    if info is None:
+        return None
+    rc, out = _ov_q(["firewall-cmd", f"--zone={zone}", "--get-target"])
+    return {"ports": info["ports"], "services": info["services"], "accept": out.strip() == "ACCEPT"}
+
+def _bld_zone_open(zs: dict, spec: str) -> bool:
+    if zs["accept"]:
+        return True
+    lo, hi, proto = _bld_port_spec(spec)
+    for p in range(lo, hi + 1):
+        if _bld_port_in(zs["ports"], p, proto):
+            continue
+        if any(_BLD_SERVICE_PORT.get(s) == (p, proto) for s in zs["services"]):
+            continue
+        return False
+    return True
+
+def _bld_ports_plan(mode: str, installed: dict, cockpit: bool) -> tuple[list[dict], list[str]]:
+    rows: list[dict] = [{"zone": "lan", "spec": "22/tcp", "why": "ssh"}]
+    if cockpit:
+        rows.append({"zone": "lan", "spec": "9090/tcp", "why": "Cockpit"})
+    for unit, port, name in _BLD_SUITE_PORTS:
+        if unit == "44helper" or _bld_unit_exists(unit + ".service"):
+            rows.append({"zone": "lan", "spec": f"{port}/tcp", "why": name})
+    notes: list[str] = []
+    asl3 = installed.get("asl3") == "installed"
+    svx = installed.get("svx") == "installed"
+    peers = "lan" if mode == "none" else "tunnel"
+    if asl3:
+        rows.append({"zone": peers, "spec": "4569/udp", "why": "AllStarLink IAX2"})
+    if mode != "split" and (asl3 or svx):
+        rows.append({"zone": peers, "spec": "5198-5199/udp", "why": "EchoLink"})
+        rows.append({"zone": peers, "spec": "5200/tcp", "why": "EchoLink (direct)"})
+    if installed.get("dvs") == "installed":
+        notes.append("DVSwitch: nothing inbound. Its ports (31100, 31103, 6073 to 6075) are loopback only.")
+    if installed.get("usrp2m17") == "installed":
+        notes.append("USRP2M17: nothing inbound. Its USRP ports (34008, 32008) are loopback only.")
+    if svx:
+        notes.append("SvxLink: nothing inbound. The reflector connection is outbound; UDP 34000 and 32000 stay closed.")
+    return rows, notes
+
+def _bld_ports_gather(mode: str, installed: dict) -> dict:
+    rc, _ = _ov_q(["firewall-cmd", "--state"])
+    cockpit = any(os.path.exists(f"{d}/cockpit.socket") for d in _BLD_UNIT_DIRS)
+    rows, notes = _bld_ports_plan(mode, installed, cockpit)
+    out = {"running": rc == 0, "rows": rows, "notes": notes, "default_zone": "", "exposed": [], "missing": [],
+           "tunnel_zone": True, "to_close": [], "close_notes": []}
+    if rc != 0:
+        return out
+    _rc, dz = _ov_q(["firewall-cmd", "--get-default-zone"])
+    out["default_zone"] = dz.strip() or "public"
+    zones = {"lan": _bld_zone_state(out["default_zone"]), "tunnel": _bld_zone_state(FIREWALLD_ZONE)}
+    out["tunnel_zone"] = zones["tunnel"] is not None
+    for r in rows:
+        zs = zones[r["zone"]]
+        r["open"] = bool(zs and _bld_zone_open(zs, r["spec"]))
+        if not r["open"]:
+            out["missing"].append(r)
+    for spec, name in _bld_skipped_ports(installed):
+        for z in ("lan", "tunnel"):
+            zs = zones[z]
+            if zs and not zs["accept"] and _bld_zone_open(zs, spec):
+                args, why = _bld_close_args(zs, spec)
+                zname = out["default_zone"] if z == "lan" else FIREWALLD_ZONE
+                if args:
+                    out["to_close"].append({"zone": zname, "spec": spec, "why": name, "args": args})
+                else:
+                    out["close_notes"].append(f"{name}: {why}")
+    closing = {c["spec"] for c in out["to_close"]}
+    tun = zones["tunnel"]
+    if tun and not tun["accept"]:
+        for p in sorted(_BLD_MGMT_EXPOSED):
+            if _bld_zone_open(tun, f"{p}/tcp"):
+                out["exposed"].append(f"{p}/tcp is open to the tunnel side")
+    loop = [k for k, (_n, role) in _PORT_ROLES.items() if role == "loopback-only"]
+    for z in ("lan", "tunnel"):
+        zs = zones[z]
+        if zs and not zs["accept"]:
+            for spec in loop:
+                if spec not in closing and _bld_zone_open(zs, spec):
+                    out["exposed"].append(f"{spec} (loopback only) is open")
+    return out
+
+def _bld_ports_stage(g: dict) -> tuple[str, str]:
+    if not g["running"]:
+        return "warn", "firewalld is not running, so no port is blocked and there is nothing to open."
+    if g["missing"] and not g["tunnel_zone"] and any(r["zone"] == "tunnel" for r in g["missing"]):
+        return "todo", f"The {FIREWALLD_ZONE} zone does not exist yet: run the tunnel steps first."
+    bits = []
+    if g["missing"]:
+        bits.append(f"{len(g['missing'])} port(s) to open: " + ", ".join(f"{r['spec']} {r['why']}" for r in g["missing"][:4]))
+    if g["to_close"]:
+        bits.append(f"{len(g['to_close'])} port(s) to close for components that are not installed: "
+                    + ", ".join(f"{c['spec']} {c['why']}" for c in g["to_close"][:4]))
+    if bits:
+        return "todo", "; ".join(bits)
+    if g["exposed"]:
+        return "warn", "Open that should not be: " + "; ".join(g["exposed"][:4])
+    return "done", f"{len(g['rows'])} port(s) open. " + " ".join(g["notes"])
+
+def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, list[str]]:
+    g = _bld_ports_gather(mode, installed)
+    if not g["running"]:
+        return True, ["firewalld is not running, so nothing is blocked and nothing needs opening."]
+    lines: list[str] = []
+    ok = True
+    for r in g["missing"]:
+        zone = g["default_zone"] if r["zone"] == "lan" else FIREWALLD_ZONE
+        if r["zone"] == "tunnel" and not g["tunnel_zone"]:
+            ok = False
+            lines.append(f"skipped {r['spec']} ({r['why']}): the {FIREWALLD_ZONE} zone does not exist yet. Run the tunnel steps first.")
+            continue
+        if preview:
+            lines.append(f"would open {r['spec']} ({r['why']}) in zone {zone}")
+            continue
+        a = _run_argv(["firewall-cmd", f"--zone={zone}", f"--add-port={r['spec']}"])
+        b = _run_argv(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={r['spec']}"])
+        good = a["success"] and b["success"]
+        ok = ok and good
+        lines.append(("opened " if good else "FAILED to open ") + f"{r['spec']} ({r['why']}) in zone {zone}" + ("" if good else ": " + (a["output"] or b["output"])))
+    for c in g["to_close"]:
+        if preview:
+            lines.append(f"would close {c['spec']} ({c['why']} is not installed) in zone {c['zone']}")
+            continue
+        a = _run_argv(["firewall-cmd", f"--zone={c['zone']}"] + c["args"])
+        b = _run_argv(["firewall-cmd", "--permanent", f"--zone={c['zone']}"] + c["args"])
+        good = a["success"] and b["success"]
+        ok = ok and good
+        lines.append(("closed " if good else "FAILED to close ") + f"{c['spec']} ({c['why']} is not installed) in zone {c['zone']}"
+                     + ("" if good else ": " + (a["output"] or b["output"])))
+    if not g["missing"]:
+        lines.append("Every needed port is already open.")
+    if not g["to_close"]:
+        lines.append("No port is open for a component that is not installed.")
+    lines += ["Not changed: " + x for x in g["close_notes"]]
+    lines += g["notes"]
+    if g["exposed"]:
+        lines += ["Not changed, check the Firewall card: " + x for x in g["exposed"]]
+    return ok, lines
+
+_BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
+_BLD_RUNNABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
+                           "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports"})
+_BLD_PREVIEWABLE = frozenset({"apply_asl3", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports"})
+_BLD_RUN_MAX_LINES = 120
+
+def _bld_out(res: dict) -> list[str]:
+    text = res.get("output") or res.get("message") or ""
+    return [ln for ln in str(text).splitlines()]
+
+def _bld_cfg(action: str, payload: dict | None = None) -> dict:
+    body = {"action": action}
+    body.update(payload or {})
+    return _dispatch_config_action(body)
+
+def _bld_run_apply(sid: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
+    group = _BLD_RUN_GROUP[sid]
+    lines: list[str] = []
+    m, _meta = _fcr_load()
+    if m is None:
+        res = _bld_cfg("bundle_fetch", {"ref": "main"})
+        lines += _bld_out(res)
+        if not res.get("success"):
+            return False, lines + ["The bundle could not be fetched, so nothing was written."]
+    body: dict = {"values": {k: form.get(k, "") for k in ("callsign", "node", "dmr_id", "nxdn_id")}, "groups": [group]}
+    if preview:
+        res = _bld_cfg("bundle_preview", body)
+    else:
+        body["confirm"] = True
+        res = _bld_cfg("bundle_apply", body)
+    out = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
+           for ln in _bld_out(res)]
+    return bool(res.get("success")), lines + out
+
+def _bld_run_wiring(preview: bool, which: tuple[str, ...]) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    try:
+        pn = _pn_status()
+    except Exception:
+        pn = {"available": False}
+    want = []
+    if pn.get("old_ext") and "ext" in which:
+        want.append("pn_fix_ext")
+    if pn.get("nodes_fixable") and "nodes" in which:
+        want.append("pn_fix_nodes")
+    if pn.get("refs_fixable") and "refs" in which:
+        want.append("pn_fix_refs")
+    for a in want:
+        res = _bld_cfg(a + ("_preview" if preview else ""))
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {a} =="] + _bld_out(res)
+    if not want:
+        lines.append("Nothing here can be fixed automatically. The rows above name what is left.")
+    return ok, lines
+
+def _bld_run_svx_wire(preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    res = _bld_cfg("svx_bridge_preview" if preview else "svx_bridge", {})
+    lines += ["== svx_bridge =="] + _bld_out(res)
+    ok = bool(res.get("success"))
+    ok2, more = _bld_run_wiring(preview, ("ext", "nodes"))
+    lines += more
+    lines.append("Step 8 (bridge or radio answer) is run on the SVXLink tab; this row does not run it.")
+    return ok and ok2, lines
+
+def _bld_devstr_edit(text: str, node: str, devstr: str) -> str | None:
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"^\s*\[([^\]]+)\]", ln)
+        if m and m.group(1).strip() == node:
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    for k in range(start + 1, end):
+        if re.match(r"^\s*devstr\s*=", lines[k]):
+            lines[k] = "devstr = " + devstr
+            break
+    else:
+        lines.insert(start + 1, "devstr = " + devstr)
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+def _bld_run_radio(form: dict, cards: list[dict], preview: bool) -> tuple[bool, list[str]]:
+    node = _bld_node_of(form)
+    pick = form.get("usb", "")
+    if not node:
+        return False, ["No node number yet."]
+    if not pick:
+        return False, ["Pick the USB card in the form and save it first."]
+    if pick not in {c["devstr"] for c in cards}:
+        return False, [f"{pick} is not attached any more."]
+    old = _bld_read(_BLD_SIMPLEUSB)
+    new = _bld_devstr_edit(old, node, pick) if old else None
+    if new is None:
+        return False, [f"No [{node}] stanza in {_BLD_SIMPLEUSB}: apply the ASL3 config first."]
+    if new == old:
+        return True, ["devstr already says " + pick + ". Nothing to change."]
+    diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), "now: " + _BLD_SIMPLEUSB, "after: " + _BLD_SIMPLEUSB, lineterm=""))
+    if preview:
+        return True, diff
+    sid, _removed = _cfgr_auto_point("Build tab radio devstr", ["asl3"])
+    uid, gid, mode = _cfgr_meta_of(_BLD_SIMPLEUSB)
+    res = _cfgr_write_file(_BLD_SIMPLEUSB, new.encode("utf-8"), uid, gid, mode)
+    log(f"OK: Build tab wrote devstr {pick} for node {node}")
+    return not res.startswith("NOT"), [f"Current files saved first as automatic copy {sid}.", f"{_BLD_SIMPLEUSB}: {res}",
+                                       "Asterisk reads simpleusb.conf again when it is restarted (Config tab, Restart services)."] + diff
+
+def _bld_act_run_stage(payload: dict) -> dict:
+    sid = str(payload.get("stage", ""))
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    preview = payload.get("preview") is True
+    if sid not in _BLD_RUNNABLE:
+        return {"success": False, "message": "This step is not run from this tab."}
+    if preview and sid not in _BLD_PREVIEWABLE:
+        return {"success": False, "message": "This step has no preview."}
+    st = build_build_status(profile)
+    stage = next((s for s in st["stages"] if s["id"] == sid), None)
+    if stage is None:
+        return {"success": False, "message": "This step is not part of the checklist."}
+    if stage["state"] == "locked":
+        return {"success": False, "message": "This step waits for the one before it: " + stage["detail"]}
+    if stage["state"] not in ("todo", "warn"):
+        return {"success": False, "message": "Nothing to do: " + stage["detail"]}
+    form = st["form"]
+    if (sid in _BLD_RUN_GROUP or sid in _BLD_LONG) and st["errors"]:
+        return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
+    if sid in _BLD_LONG:
+        return _bld_start_long(sid, profile, form, payload)
+    try:
+        with _BLD_LOCK:
+            if sid in _BLD_RUN_GROUP:
+                ok, lines = _bld_run_apply(sid, form, preview)
+            elif sid == "boot":
+                res = action_boot_order_apply()
+                ok, lines = bool(res.get("success")), _bld_out(res)
+            elif sid == "wiring":
+                ok, lines = _bld_run_wiring(preview, ("ext", "nodes", "refs"))
+            elif sid == "svx_wire":
+                ok, lines = _bld_run_svx_wire(preview)
+            elif sid == "radio":
+                ok, lines = _bld_run_radio(form, st["radio"]["cards"], preview)
+            elif sid == "ports":
+                ok, lines = _bld_run_ports(preview, st["form"]["mode"], {p["key"]: p["state"] for p in _detect_installed_products()})
+            elif sid == "reboot":
+                _bld_mark_ready()
+                ok, lines = True, ["Marked ready. Reboot the node at home now, then open this tab again to see the result."]
+            else:
+                res = _bld_cfg("save_restore")
+                ok, lines = bool(res.get("success")), _bld_out(res)
+    except Exception as exc:
+        log(f"FAIL: Build run {sid}: {type(exc).__name__}: {exc}")
+        return {"success": False, "message": f"Failed: {type(exc).__name__}"}
+    cut = lines[:_BLD_RUN_MAX_LINES]
+    if len(lines) > len(cut):
+        cut.append(f"... {len(lines) - len(cut)} more line(s) not shown")
+    if preview:
+        head = "Preview of " + stage["label"] + (": nothing was changed." if ok else ": failed, nothing was changed.")
+    else:
+        head = stage["label"] + (": done." if ok else ": failed.")
+    log(f"{'OK' if ok else 'FAIL'}: Build run {sid}{' (preview)' if preview else ''}")
+    return {"success": ok, "message": head, "notes": cut}
+
+_BLD_POLL = 2.0
+_BLD_JOB_PREFIX = "build_"
+_BLD_LONG = frozenset({"asl3", "dvs", "m17", "svx", "tunnel"})
+_BLD_SOFT = frozenset({"allmon3_delete_default"})
+_BLD_INSTALL_STEPS = {
+    "asl3": ["prereqs", "fetch_repo", "install_repo", "apt_update", "install_asl3_core", "install_allmon3",
+             "install_node_utils", "allmon3_delete_default", "enable_astdb_timer"],
+    "dvs": ["bw_fetch_repo_script", "bw_run_repo_script", "bw_apt_update", "bw_install_core", "bw_enable_services",
+            "bw_enable_gateways", "bw_netcheck_safe"],
+    "m17": ["m17_install_git", "m17_install_php", "m17_clone", "m17_run_install", "m17_asterisk_conf",
+            "m17_restart_asterisk", "m17_sudoers"],
+    "svx": ["usrp_preflight", "usrp_deps", "usrp_clone", "usrp_user", "usrp_build", "usrp_check_built", "usrp_locate",
+            "usrp_logic_conf", "usrp_service_unit"],
+}
+_BLD_INSTALL_TAB = {
+    "asl3": ("asl3", _asl3_lookup_step, ("bookworm", "trixie")),
+    "dvs": ("dv", _dv_lookup_step, ("bookworm", "trixie")),
+    "m17": ("m17", _m17_lookup_step, ("standard",)),
+    "svx": ("svx", _svx_lookup_step, ("bookworm", "trixie", "usrp")),
+}
+_BLD_INSTALL_NAME = {"asl3": "ASL3", "dvs": "DVSwitch", "m17": "USRP2M17", "svx": "SvxLink"}
+
+def _bld_codename() -> str:
+    m = re.search(r"^VERSION_CODENAME=(\S+)", _bld_read("/etc/os-release"), re.M)
+    return m.group(1).strip('"') if m else ""
+
+def _bld_step_fields(sid: str, step_id: str, form: dict) -> dict:
+    if step_id in ("m17_run_install",):
+        return {"callsign": form.get("callsign", "")}
+    if step_id == "m17_asterisk_conf":
+        return {"node": form.get("m17_node", "1917")}
+    if step_id == "usrp_clone":
+        return {"branch": "svxlink-usrp"}
+    if step_id == "usrp_logic_conf":
+        return {"callsign": form.get("callsign", ""), "port": "32000", "rx_port": "34000",
+                "svx_use": form.get("svx_use", "bridge"), "svx_rtype": "cm108", "svx_audio": "auto", "svx_rdev": "auto",
+                "svx_sqlpin": "auto", "svx_pttpin": "auto", "svx_rrefl": "no"}
+    return {}
+
+def _bld_install_plan(sid: str, form: dict) -> tuple[dict, list[dict]] | str:
+    prefix, lookup, valid = _BLD_INSTALL_TAB[sid]
+    if sid == "asl3":
+        distro = _default_distro()
+    elif sid == "dvs":
+        if _bld_codename() != "bookworm":
+            return "DVSwitch has packages for Bookworm only (Debian 12). Nothing was started."
+        distro = "bookworm"
+    elif sid == "m17":
+        distro = "standard"
+    else:
+        distro = "usrp"
+    if distro not in valid:
+        return f"No install steps for {distro}."
+    rpt = _bld_read(_BLD_RPT)
+    plan: list[dict] = []
+    for step_id in _BLD_INSTALL_STEPS[sid]:
+        if sid == "m17" and step_id == "m17_asterisk_conf" and re.search(
+                r"^\s*\[" + re.escape(form.get("m17_node", "1917")) + r"\]", rpt, re.M):
+            continue
+        step = lookup("install", distro, step_id)
+        if step is None:
+            return f"The install step {step_id} is not in this version. Nothing was started."
+        fields = _bld_step_fields(sid, step_id, form)
+        cmd, why = _step_command(step, fields)
+        if why:
+            return f"{step.get('title', step_id)}: {why} Nothing was started."
+        plan.append({"id": step_id, "num": step.get("num"), "title": step.get("title", step_id), "cmd": cmd,
+                     "fields": fields, "soft": step_id in _BLD_SOFT})
+    spec = {"prefix": prefix, "lookup": lookup, "valid": valid, "distro": distro, "name": _BLD_INSTALL_NAME[sid]}
+    return spec, plan
+
+def _bld_running_job() -> str:
+    with _JOBS_LOCK:
+        for k, v in _JOBS.items():
+            if k.startswith(_BLD_JOB_PREFIX) and v.get("status") == "running":
+                return k
+    return ""
+
+def _bld_wait_job(job_key: str, build_key: str, limit: float) -> dict:
+    seen = 0
+    t0 = time.time()
+    while True:
+        st = _job_status(job_key)
+        out = st.get("output", "")
+        if len(out) > seen:
+            _job_append_output(build_key, out[seen:])
+            seen = len(out)
+        if st.get("status") == "done":
+            return st
+        if time.time() - t0 > limit:
+            return {"status": "done", "success": False, "output": out, "timeout": True}
+        time.sleep(_BLD_POLL)
+
+def _bld_install_worker(build_key: str, spec: dict, plan: list[dict]) -> dict:
+    ok = True
+    for st in plan:
+        head = f"== {spec['name']} step {st['num']}: {st['title']} =="
+        _job_append_output(build_key, head + "\n")
+        res = _dispatch_tab_action({"mode": "install", "distro": spec["distro"], "step_id": st["id"],
+                                    "command_text": st["cmd"], "fields": st["fields"]},
+                                   spec["lookup"], spec["prefix"], spec["valid"])
+        jk = res.get("job_key")
+        if not jk:
+            text = str(res.get("output", "the step did not start"))
+            _job_append_output(build_key, text + "\n")
+            if st["soft"]:
+                continue
+            ok = False
+            break
+        done = _bld_wait_job(jk, build_key, 7200)
+        if not done.get("success"):
+            msg = "timed out waiting for the step" if done.get("timeout") else "the step failed"
+            _job_append_output(build_key, f"{msg} ({st['id']})\n")
+            if st["soft"]:
+                continue
+            ok = False
+            break
+    tail = "Done." if ok else "Stopped at the first failing step. Fix it, then press Run again: the steps are safe to repeat."
+    return {"success": ok, "output": _job_status(build_key).get("output", "") + tail}
+
+def _bld_tunnel_plan(form: dict, config_text: str) -> list[tuple[str, Callable[[], dict]]]:
+    mode = form.get("mode", "half")
+    kind = "full" if mode == "full" else "split"
+    services = [k for k, v in PI_INSTALL_SERVICES.items() if v["default_on"] and kind in v["tabs"]]
+    steps: list[tuple[str, Callable[[], dict]]] = [
+        ("Firewall prereq", lambda: _PI_INSTALL_SIMPLE_ACTIONS["firewalld_prereq"]({})),
+        ("systemd-resolved prereq", lambda: _PI_INSTALL_SIMPLE_ACTIONS["resolved_prereq"]({})),
+        ("44NetConnect zone", lambda: _PI_INSTALL_SIMPLE_ACTIONS["create_zone"]({}))]
+    for svc in services:
+        steps.append((f"Inbound service {svc}", lambda s=svc: _PI_INSTALL_SERVICE_PORTS_ACTIONS["add_service"]({"service": s})))
+    steps += [
+        ("Write wg0.conf", lambda: _PI_INSTALL_SIMPLE_ACTIONS["paste_config"](
+            {"config_text": config_text, "backup_to_library": True, "kind": kind, "opts": {"allowed": "rewrite"}})),
+        ("Attach wg0 to the zone", lambda: _PI_INSTALL_SIMPLE_ACTIONS["attach_interface"]({})),
+        ("Enable and start the tunnel", lambda: _PI_INSTALL_SIMPLE_ACTIONS["enable_tunnel"]({}))]
+    return steps
+
+def _bld_tunnel_worker(build_key: str, steps: list[tuple[str, Callable[[], dict]]]) -> dict:
+    ok = True
+    for i, (title, fn) in enumerate(steps, 1):
+        _job_append_output(build_key, f"== Tunnel step {i}: {title} ==\n")
+        try:
+            res = fn()
+        except Exception as exc:
+            _job_append_output(build_key, f"failed: {type(exc).__name__}\n")
+            ok = False
+            break
+        text = str(res.get("output", "")).strip()
+        if text:
+            _job_append_output(build_key, text + "\n")
+        if not res.get("success"):
+            ok = False
+            break
+    tail = "Done. Check the handshake on the Split or Full Tunnel tab." if ok else "Stopped at the first failing step. Nothing after it was run."
+    return {"success": ok, "output": _job_status(build_key).get("output", "") + tail}
+
+def _bld_client_ok(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.is_loopback or a.is_private or a.is_link_local
+
+def _bld_long_prepare(sid: str, form: dict, payload: dict) -> tuple[str, Callable[[str], dict] | None, str, list[str]]:
+    if sid == "tunnel":
+        if not _bld_client_ok(str(payload.get("_client_ip", ""))):
+            return "Run the tunnel steps from the LAN address, not through the tunnel or from outside.", None, "", []
+        text = payload.get("config_text", "")
+        if not isinstance(text, str) or not text.strip():
+            return "Paste the WireGuard config in the box under the form first. It is used once and not saved.", None, "", []
+        valid, msg = _validate_wg_config_text(text)
+        if not valid:
+            return "The config is not usable: " + msg, None, "", []
+        steps = _bld_tunnel_plan(form, text)
+        return "", (lambda key: _bld_tunnel_worker(key, steps)), f"tunnel steps 1 to 6 ({len(steps)} actions)", []
+    plan = _bld_install_plan(sid, form)
+    if isinstance(plan, str):
+        return plan, None, "", []
+    spec, steps = plan
+    return ("", (lambda key: _bld_install_worker(key, spec, steps)), f"{spec['name']} install, {len(steps)} steps",
+            [f"{x['num']}. {x['title']}" for x in steps])
+
+def _bld_start_long(sid: str, profile: str, form: dict, payload: dict) -> dict:
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    key = f"{_BLD_JOB_PREFIX}{profile}_{sid}"
+    err, runner, what, notes = _bld_long_prepare(sid, form, payload)
+    if runner is None:
+        return {"success": False, "message": err}
+    _start_python_job(key, lambda: runner(key))
+    log(f"OK: Build tab started the {what}")
+    res = {"success": True, "message": "Started: " + what + ".", "job_key": key}
+    if notes:
+        res["notes"] = notes
+    return res
+
+_BLD_MARKS = "/etc/44helper/build_marks.json"
+_BLD_REST_MAX = 40
+
+def _bld_marks_load() -> dict:
+    try:
+        with open(_BLD_MARKS, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+def _bld_mark_ready() -> None:
+    os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
+    tmp = _BLD_MARKS + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"ready_at": int(time.time())}, f)
+    os.replace(tmp, _BLD_MARKS)
+
+def _bld_boot_ready_line() -> str:
+    bid = _bt_boot_id()
+    _all, now = _bt_boot_log_lines(bid)
+    for ln in reversed(now):
+        if re.search(r"\bnot ready\b", ln):
+            return ""
+        if re.search(r": ready ", ln):
+            return ln
+    return ""
+
+def _bld_reboot_state(others_done: bool, up: bool, age: float | None) -> tuple[str, str]:
+    ready_at = _bld_marks_load().get("ready_at")
+    if not isinstance(ready_at, int):
+        if others_done:
+            return "todo", "Press Run to mark the build ready, then reboot at home."
+        return "manual", "Reboot at home when the steps above are done."
+    if _bt_btime() <= ready_at:
+        return "manual", "Marked ready at " + _bt_fmt_time(ready_at) + ". Reboot now, then open this tab again."
+    line = _bld_boot_ready_line()
+    if not line:
+        return "warn", "Rebooted, but this boot's line in the boot log does not say ready yet. Read the Boot tab."
+    if os.path.exists(WG0_CONF_PATH) and (not up or age is None or age > _BLD_HS_FRESH):
+        return "warn", "Rebooted and ready, but the tunnel has no fresh handshake yet."
+    return "done", "Rebooted since the build: " + line.split(" boot ", 1)[-1][:120]
+
+def _bld_inline(sid: str, profile: str, st: dict, payload: dict, key: str) -> dict:
+    if sid in _BLD_LONG:
+        err, runner, _what, _notes = _bld_long_prepare(sid, st["form"], payload)
+        if runner is None:
+            return {"success": False, "message": err}
+        res = runner(key)
+        return {"success": bool(res.get("success")), "message": "done" if res.get("success") else "failed"}
+    return _bld_act_run_stage({"stage": sid, "profile": profile})
+
+def _bld_rest_worker(key: str, profile: str, payload: dict) -> dict:
+    last = ""
+    for _ in range(_BLD_REST_MAX):
+        st = build_build_status(profile)
+        nxt = next((s for s in st["stages"] if s["state"] in ("todo", "locked")), None)
+        if nxt is None:
+            rb = next((x for x in st["stages"] if x["id"] == "reboot"), {})
+            tail = "Every step is done." + (" Reboot now, then open this tab again." if str(rb.get("detail", "")).startswith("Marked ready") else "")
+            break
+        if nxt["state"] == "locked":
+            tail = f"Stopped: {nxt['label']} waits for a step that is not done. {nxt['detail']}"
+            break
+        if nxt["id"] not in _BLD_RUNNABLE:
+            tail = f"Stopped at {nxt['label']}: do it on its own tab. {nxt['detail']}"
+            break
+        if nxt["id"] == last:
+            tail = f"Stopped: {nxt['label']} is still open after it ran. {nxt['detail']}"
+            break
+        last = nxt["id"]
+        _job_append_output(key, f"== {nxt['label']} ==\n")
+        res = _bld_inline(nxt["id"], profile, st, payload, key)
+        for ln in res.get("notes") or []:
+            _job_append_output(key, str(ln) + "\n")
+        _job_append_output(key, str(res.get("message", "")) + "\n")
+        if not res.get("success"):
+            tail = f"Stopped: {nxt['label']} did not finish."
+            break
+    else:
+        tail = "Stopped: too many steps in one run."
+    return {"success": tail.startswith("Every step is done") or (tail.startswith("Stopped at") and "own tab" in tail),
+            "output": _job_status(key).get("output", "") + tail}
+
+def _bld_act_run_rest(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    st = build_build_status(profile)
+    pre = next((s for s in st["stages"] if s["id"] == "preflight"), None)
+    if pre is None or pre["state"] != "done":
+        return {"success": False, "message": "Finish the preflight first: " + (pre["detail"] if pre else "")}
+    key = f"{_BLD_JOB_PREFIX}{profile}_rest"
+    keep = {k: payload.get(k) for k in ("config_text", "_client_ip")}
+    _start_python_job(key, lambda: _bld_rest_worker(key, profile, keep))
+    log("OK: Build tab started Run the rest")
+    return {"success": True, "message": "Started: run the open steps in order.", "job_key": key}
+
+def build_build_report(profile: str = "travel") -> str:
+    profile = profile if profile in _BLD_PROFILES else "travel"
+    st = build_build_status(profile)
+    form = st["form"]
+    out = [f"Node Controller build report: {'Magic Box' if profile == 'magic' else 'Travel Node'}",
+           f"Generated {_cfgr_now()} by 44helper {APP_VERSION}", ""]
+    board = st.get("board", {})
+    out.append("Board: " + (board.get("model") or "unknown"))
+    out.append(f"Tunnel mode: {_BLD_MODES.get(form['mode'], form['mode'])}; wg0.conf is a {st.get('tunnel_kind') or 'none'} tunnel")
+    out += ["", "Steps"]
+    for i, s in enumerate(st["stages"], 1):
+        out.append(f"{i:>2}. {s['label']}: {s['state']}" + (f" - {s['detail']}" if s["detail"] else ""))
+    open_ = [s["label"] for s in st["stages"] if s["state"] in ("todo", "locked")]
+    warn = [s["label"] for s in st["stages"] if s["state"] == "warn"]
+    out += ["", "Still to do: " + (", ".join(open_) if open_ else "nothing")]
+    if warn:
+        out.append("Warnings: " + ", ".join(warn))
+    out += ["", "Form (no secrets are kept)"]
+    for k in ("callsign", "node", "dmr_id", "nxdn_id", "m17_node", "usb"):
+        out.append(f"  {k}: {form.get(k) or '(blank)'}")
+    if profile == "magic":
+        for k in ("svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"):
+            out.append(f"  {k}: {form.get(k) or '(blank)'}")
+    r = st["radio"]
+    out += ["", "Radio", f"  main node: {r.get('node') or '(none)'}, rxchannel {r.get('rxchannel') or '(none)'}, "
+            f"devstr {r['devstr'] if r.get('simpleusb_stanza') else '(no stanza)'}",
+            f"  Node Talker: {'installed' if r.get('nodetalker') else 'not installed'}; node 1921: "
+            f"{'present' if r.get('stanza_1921') else 'not there'}"]
+    for c in r.get("cards", []):
+        out.append(f"  USB card: {c['name']} {c['usbid']} devstr {c['devstr'] or '?'}")
+    out.append("  Phone nodes: " + (", ".join(r.get("phone_nodes") or []) or "none") + " (Node Controller adds them when Phone is on)")
+    try:
+        ok_pairs, warn_pairs = _cfgr_usrp_pairs()
+    except Exception:
+        ok_pairs, warn_pairs = [], ["could not read the USRP pairs"]
+    out += ["", "USRP pairs"] + ["  ok: " + x for x in ok_pairs] + ["  WARN: " + x for x in warn_pairs]
+    if "svx" in st:
+        v = st["svx"]
+        rf = v["reflector"]
+        out += ["", "SvxLink", f"  installed: {v['installed']}; service running: {v['active']}; used as: {v['use'] or 'no answer saved'}",
+                f"  reflector: {rf['host'] + ':' + rf['port'] if rf['host'] else 'not set'}; callsign {rf['callsign'] or '?'}; password {'set' if rf['key_set'] else 'not set'}",
+                f"  log: {v['log'] or 'nothing'}; reflector answers: {v['reachable']}; UDP 34000 open: {v['udp_open']}"]
+    out += ["", "Tool versions"]
+    try:
+        out += [f"  {k}: {v}" for k, v in _bt_versions().items()]
+    except Exception:
+        out.append("  (could not read)")
+    _all, now = _bt_boot_log_lines(_bt_boot_id())
+    out += ["", "This boot", "  " + ("\n  ".join(now) if now else "no line in the boot log yet")]
+    return "\n".join(out) + "\n"
+
+def _route_build_report(query: dict) -> tuple[int, str, bytes]:
+    try:
+        text = build_build_report((query.get("profile") or ["travel"])[0])
+    except Exception as exc:
+        log(f"FAIL: Build report: {type(exc).__name__}: {exc}")
+        return 500, "application/json", json.dumps({"message": "Could not make the report: " + type(exc).__name__}).encode("utf-8")
+    return 200, "text/plain; charset=utf-8", text.encode("utf-8")
+
+_BLD_MANUALS_DIR = "/etc/asl_dvs/instmon_library/docs"
+_BLD_ASLDVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
+_BLD_BOOTSTRAP_URL = "https://raw.githubusercontent.com/" + _FCR_REPO + "/main/bootstrap.sh"
+_BLD_SUITE_TOOLS = (("instmon", "instmon", "instmon"), ("dashboard", "nodecontrol", "Dashboard"), ("sysmon", "sysmon", "SysMon"),
+                    ("wifimon", "wifimon", "wifimon"), ("nodetalker", "nodetalker", "Node Talker"),
+                    ("noderecorder", "noderecorder", "Node Recorder"), ("pibrary", "pibrary", "Pibrary"),
+                    ("nodemon", "nodemon", "Node Monitor"), ("manuals", "", "Manuals"))
+_BLD_SUITE_BUILDS = ("auto", "pi02w", "full")
+_BLD_SUITE_CHANNELS = ("stable", "testing")
+
+def _bld_suite_state() -> list[dict]:
+    out = []
+    for key, unit, name in _BLD_SUITE_TOOLS:
+        if key == "manuals":
+            try:
+                have = bool(os.listdir(_BLD_MANUALS_DIR))
+            except OSError:
+                have = False
+        else:
+            have = _bld_unit_exists(unit + ".service")
+        out.append({"key": key, "name": name, "installed": have})
+    return out
+
+def _bld_suite_build(form: dict) -> str:
+    pick = form.get("suite_build", "auto")
+    if pick in ("pi02w", "full"):
+        return pick
+    return "pi02w" if _bld_board()["zero2"] else "full"
+
+def _bld_suite_cmd(form: dict, tools: list[str]) -> str:
+    channel = form.get("suite_channel", "stable")
+    env = [f"ASL_DVS_CHANNEL={channel if channel in _BLD_SUITE_CHANNELS else 'stable'}"]
+    if all(_BLD_FIELD_RES[k][0].fullmatch(form.get(k, "")) for k in ("callsign", "node")):
+        env += [f"AUTO_CALLSIGN={form['callsign']}", f"AUTO_NODE={form['node']}"]
+    args = f"--non-interactive --action=components --tools={','.join(tools)} --build={_bld_suite_build(form)}"
+    u = _BLD_BOOTSTRAP_URL
+    script = (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
+              f" | env {' '.join(env)} bash -s -- {args}")
+    return "bash -c " + shlex.quote(script)
+
+def _bld_act_install_suite(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    form = _bld_form_load()
+    missing = [t["key"] for t in _bld_suite_state() if not t["installed"]]
+    if not missing:
+        return {"success": True, "message": "Every suite tool is already installed. Nothing to do."}
+    ident_ok = all(_BLD_FIELD_RES[k][0].fullmatch(form.get(k, "")) for k in ("callsign", "node"))
+    if not ident_ok and not os.path.exists(_BLD_ASLDVS_CONF):
+        return {"success": False, "message": "Fill in and save the callsign and node number first: the installer sets them up on a new node."}
+    key = f"{_BLD_JOB_PREFIX}{profile}_suite"
+    cmd = _bld_suite_cmd(form if ident_ok else dict(form, callsign="", node=""), missing)
+    _start_unit_job(key, cmd)
+    log(f"OK: Build tab started the suite install ({', '.join(missing)})")
+    names = {k: n for k, _u, n in _BLD_SUITE_TOOLS}
+    return {"success": True, "message": "Started: installing " + ", ".join(names[k] for k in missing)
+            + f" in the background (build {_bld_suite_build(form)}, {form.get('suite_channel', 'stable')} channel).",
+            "job_key": key}
+
+_BLD_APT_GROUPS = {"required": ("required",), "recommended": ("required", "recommended"), "all": ("required", "recommended", "optional")}
+_BLD_APT = (
+    {"pkg": "iproute2", "group": "required", "by": "SysMon, wifimon, 44helper", "why": "addresses, routes and sockets (ip, ss)"},
+    {"pkg": "iputils-ping", "group": "required", "by": "SysMon, wifimon, 44helper", "why": "the internet check (ping)"},
+    {"pkg": "iw", "group": "required", "by": "SysMon, wifimon", "why": "WiFi signal, scan, power save and country code"},
+    {"pkg": "openssl", "group": "required", "by": "SysMon, wifimon, instmon, 44helper, Node Talker, Node Recorder, Terminal Monitor",
+     "why": "the certificate for the HTTPS pages"},
+    {"pkg": "curl", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "downloads (it falls back to wget)"},
+    {"pkg": "ca-certificates", "group": "required", "by": "the suite installer (bootstrap.sh)", "why": "trusting HTTPS downloads"},
+    {"pkg": "wireguard-tools", "group": "required", "by": "44helper, wifimon", "why": "the tunnel (wg, wg-quick) and its watchdog",
+     "tunnel": True},
+    {"pkg": "firewalld", "group": "required", "by": "44helper, SysMon, every tool that opens its own port",
+     "why": "the firewall", "auto": False, "how": "installed by the tunnel step 1, which keeps this page's port open"},
+    {"pkg": "systemd-resolved", "group": "required", "by": "44helper", "why": "name lookups through the tunnel", "tunnel": True,
+     "auto": False, "how": "installed by the tunnel step 1a, which hands it the DNS servers"},
+    {"pkg": "network-manager", "group": "manager", "by": "wifimon, 44helper", "why": "nmcli: Keep on and Keep off, networks, the boot-time route hook",
+     "auto": False, "how": "pick the network manager yourself: swapping it can cut the node off"},
+    {"pkg": "wpasupplicant", "group": "manager", "by": "wifimon", "why": "wpa_cli: WiFi without NetworkManager", "auto": False,
+     "how": "pick the network manager yourself: swapping it can cut the node off"},
+    {"pkg": "rfkill", "group": "recommended", "by": "wifimon", "why": "radio on and off"},
+    {"pkg": "wireless-tools", "group": "recommended", "by": "SysMon, wifimon", "why": "the network name (iwgetid) without NetworkManager"},
+    {"pkg": "libraspberrypi-bin", "group": "recommended", "by": "SysMon, wifimon, 44helper", "why": "supply voltage and throttle readings (vcgencmd)",
+     "pi": True},
+    {"pkg": "usbutils", "group": "recommended", "by": "SysMon", "why": "listing USB devices (lsusb)"},
+    {"pkg": "alsa-utils", "group": "recommended", "by": "SysMon", "why": "sound card tests (aplay, arecord)"},
+    {"pkg": "psmisc", "group": "recommended", "by": "SysMon", "why": "finding what holds a port or device (fuser)"},
+    {"pkg": "avahi-daemon", "group": "recommended", "by": "SysMon", "why": "reaching the node as name.local"},
+    {"pkg": "libnss-mdns", "group": "recommended", "by": "SysMon", "why": "resolving name.local on the node"},
+    {"pkg": "openssh-server", "group": "recommended", "by": "this build", "why": "ssh, whose port the ports step opens"},
+    {"pkg": "dnsmasq-base", "group": "optional", "by": "wifimon", "why": "the emergency hotspot"},
+    {"pkg": "traceroute", "group": "optional", "by": "44helper", "why": "the router checks"},
+    {"pkg": "openssh-client", "group": "optional", "by": "44helper", "why": "Router Install over ssh"},
+    {"pkg": "mtr-tiny", "group": "optional", "by": "SysMon (full build)", "why": "the Net tab's path tests"},
+    {"pkg": "fail2ban", "group": "optional", "by": "SysMon", "why": "the Security tab's recommendation"},
+    {"pkg": "raspi-config", "group": "optional", "by": "wifimon", "why": "the WiFi country code on a Pi", "pi": True},
+)
+
+def _bld_is_pi() -> bool:
+    return _bld_board()["model"].startswith("Raspberry Pi")
+
+def _bld_apt_rows(mode: str, pi: bool, dpkg: dict | None) -> list[dict]:
+    rows = []
+    for e in _BLD_APT:
+        if e.get("pi") and not pi:
+            continue
+        if e.get("tunnel") and mode == "none":
+            continue
+        have = bool(dpkg and e["pkg"] in dpkg and dpkg[e["pkg"]][0][1:2] == "i")
+        rows.append({"pkg": e["pkg"], "group": e["group"], "by": e["by"], "why": e["why"], "installed": have,
+                     "auto": e.get("auto", True), "how": e.get("how", "")})
+    return rows
+
+def _bld_apt_state(mode: str) -> dict:
+    return {"rows": _bld_apt_rows(mode, _bld_is_pi(), _installed_dpkg_all()), "mode": mode}
+
+def _bld_apt_pick(rows: list[dict], scope: str) -> list[str]:
+    groups = _BLD_APT_GROUPS.get(scope, _BLD_APT_GROUPS["required"])
+    return [r["pkg"] for r in rows if r["auto"] and not r["installed"] and r["group"] in groups]
+
+def _bld_apt_cmd(pkgs: list[str]) -> str:
+    return ("DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold " + " ".join(pkgs))
+
+def _bld_act_install_apt(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    scope = payload.get("scope") if payload.get("scope") in _BLD_APT_GROUPS else "required"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    st = _bld_apt_state(_bld_form_load()["mode"])
+    pkgs = _bld_apt_pick(st["rows"], scope)
+    if not pkgs:
+        return {"success": True, "message": "Nothing to install for this choice: every package in it is already installed or is installed by a tunnel step."}
+    cmd = _bld_apt_cmd(pkgs)
+    gate = _pkg_health_gate(cmd)
+    if gate:
+        return {"success": False, "message": "The package system has unfinished installs. Fix it on the Update tab first, then try again.",
+                "notes": str(gate.get("output", "")).splitlines()[-12:]}
+    key = f"{_BLD_JOB_PREFIX}{profile}_apt"
+    _start_unit_job(key, cmd)
+    log(f"OK: Build tab started the apt install ({', '.join(pkgs)})")
+    return {"success": True, "message": "Started: apt install " + " ".join(pkgs) + ".", "job_key": key}
+
 _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "install_apt": _bld_act_install_apt,
+    "install_suite": _bld_act_install_suite,
+    "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
     "wg_check": _bld_act_wg_check,
+    "run_stage": _bld_act_run_stage,
 }
 
 def _dispatch_build_action(payload: dict) -> dict:
@@ -31635,6 +32683,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/action_status": _route_action_status,
     "/api/boot/status": _route_boot_status,
     "/api/build/status": _route_build_status,
+    "/api/build/report": _route_build_report,
     "/api/boot/section": _route_boot_section,
     "/api/boot/report": _route_boot_report,
     "/api/boot/snapshot": _route_boot_snapshot,
@@ -32230,6 +33279,7 @@ class Handler(BaseHTTPRequestHandler):
             if err is not None:
                 self._send(400, "application/json", err)
                 return
+            payload["_client_ip"] = self._client_ip()
             result = _dispatch_build_action(payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return

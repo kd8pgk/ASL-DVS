@@ -51,7 +51,11 @@ class FormRules(unittest.TestCase):
 
     def test_required_fields(self):
         e = self.errs(callsign="", node="", dmr_id="", nxdn_id="")
-        self.assertEqual(sorted(e), ["callsign", "dmr_id", "node", "nxdn_id"])
+        self.assertEqual(sorted(e), ["callsign", "dmr_id", "node"])
+
+    def test_nxdn_is_optional_but_checked_when_given(self):
+        self.assertEqual(self.errs(nxdn_id=""), {})
+        self.assertIn("nxdn_id", self.errs(nxdn_id="123456"))
 
     def test_patterns(self):
         self.assertIn("callsign", self.errs(callsign="K8"))
@@ -237,7 +241,7 @@ class Stages(unittest.TestCase):
 
     def test_half_order(self):
         self.assertEqual(self.ids("half"), ["preflight", "tunnel", "asl3", "apply_asl3", "dvs", "apply_dvs", "m17",
-                                            "apply_m17", "half", "boot", "wiring", "radio", "save", "reboot"])
+                                            "apply_m17", "half", "ports", "boot", "wiring", "radio", "save", "reboot"])
 
     def test_split_has_no_half_stage(self):
         self.assertNotIn("half", self.ids("split"))
@@ -251,7 +255,32 @@ class Stages(unittest.TestCase):
 
     def test_every_mode_ends_the_same(self):
         for m in ("half", "split", "full"):
-            self.assertEqual(self.ids(m)[-5:], ["boot", "wiring", "radio", "save", "reboot"])
+            self.assertEqual(self.ids(m)[-6:], ["ports", "boot", "wiring", "radio", "save", "reboot"])
+
+    def test_no_tunnel_mode_leaves_every_tunnel_step_out(self):
+        for profile in ("travel", "magic"):
+            ids = [i for i, _ in h44._bld_stage_defs("none", profile)]
+            for gone in ("tunnel", "half", "fullx"):
+                self.assertNotIn(gone, ids)
+            self.assertEqual(ids[0], "preflight")
+            self.assertEqual(ids[ids.index("ports") - 1], "svx_reflector" if profile == "magic" else "apply_m17")
+            self.assertEqual(ids[-5:] if profile == "travel" else [i for i in ids[-6:] if i != "svx_checks"],
+                             ["boot", "wiring", "radio", "save", "reboot"])
+            self.assertIn("asl3", ids)
+
+    def test_no_tunnel_is_a_valid_mode(self):
+        self.assertEqual(h44._bld_form_clean({"mode": "none"})["mode"], "none")
+        self.assertIn("none", h44._BLD_MODES)
+        self.assertEqual(h44._bld_form_errors(dict(GOOD, mode="none"), []), {})
+        self.assertIn("bypass", h44._bld_form_errors(dict(GOOD, mode="none", bypass="1.2.3.4"), []))
+
+    def test_ports_come_after_the_tunnels(self):
+        ids = self.ids("full")
+        self.assertEqual(ids[ids.index("fullx") + 1], "ports")
+        ids = self.ids("half")
+        self.assertEqual(ids[ids.index("half") + 1], "ports")
+        ids = self.ids("split")
+        self.assertGreater(ids.index("ports"), ids.index("apply_m17"))
 
 
 class Applied(Tmp):
@@ -337,6 +366,13 @@ class Status(Tmp):
         self.assertEqual(s["asl3"]["state"], "done")
         self.assertEqual(s["apply_asl3"]["state"], "todo")
         self.assertEqual(s["dvs"]["state"], "locked")
+
+    def test_no_tunnel_status_has_no_tunnel_steps_and_the_systems_come_first(self):
+        st = self.status(form=dict(GOOD, mode="none"))
+        ids = [x["id"] for x in st["stages"]]
+        self.assertEqual(ids[:3], ["preflight", "asl3", "apply_asl3"])
+        self.assertNotIn("tunnel", ids)
+        self.assertEqual(self.by_id(st)["asl3"]["state"], "todo")
 
     def test_full_mode_does_not_need_the_tunnel_first(self):
         st = self.status(form=dict(GOOD, mode="full"))

@@ -58,6 +58,18 @@ jobs:
         run: python3 ci/test_h44_build.py
       - name: Magic Box tab tests (44helper)
         run: python3 ci/test_h44_magic.py
+      - name: Build tab run buttons (44helper)
+        run: python3 ci/test_h44_run.py
+      - name: Build tab installs and tunnel steps (44helper)
+        run: python3 ci/test_h44_install.py
+      - name: Build tab run the rest, report and reboot test (44helper)
+        run: python3 ci/test_h44_rest.py
+      - name: Build tab open the ports step (44helper)
+        run: python3 ci/test_h44_ports_step.py
+      - name: Build tab suite install (44helper)
+        run: python3 ci/test_h44_suite.py
+      - name: Build tab apt packages (44helper)
+        run: python3 ci/test_h44_apt.py
       - name: SVX tab tests (Node Controller full build)
         run: python3 ci/test_nodecontrol_svx.py
       - name: Link, tune and disconnect tests (Node Controller)
