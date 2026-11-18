@@ -120,12 +120,12 @@
   "length": 10391
  },
  "cr:install:claude": {
-  "sha256": "adac26f168fae805981e81c599df4246d1d38501bedaaad5fc6f598f2d8bee95",
-  "length": 11552
+  "sha256": "15d6a54bc51b99acfab48157bd23b809b1a17362aee28050c76d978f8a34de98",
+  "length": 11536
  },
  "cr:install:claude (fresh)": {
-  "sha256": "5b171f56f19b40eae8c223f5c0579400eb19d5bee3b4912c60254896437f9fdc",
-  "length": 11534
+  "sha256": "bac85db34d84e16296844f4c3d6b2b2f663d283030b1d4cf2400a1302a916997",
+  "length": 11518
  },
  "cr:install:empty": {
   "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",

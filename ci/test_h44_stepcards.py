@@ -100,7 +100,7 @@ def render_tab(tab):
         parts.append(h44._JS_AMP)
     else:
         parts.append(getattr(h44, block))
-    cat_json = json.dumps(getattr(h44, cat))
+    cat_json = json.dumps(getattr(h44, cat)).replace(h44._CR_DEFAULT_USER, "pi")
     parts.append(f"var CAT = {cat_json}; var PFX = '{pfx}'; var FN = {fn};\n" + DRIVER)
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "t.js")
