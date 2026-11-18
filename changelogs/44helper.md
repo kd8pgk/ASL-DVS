@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_72_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_73_20261117.py`. Newest entries first.
+
+## 0.1.73 (2026-11-18)
+
+Run the rest writes into the step cards. This is a release: the page's JavaScript and one result message change. It is stage 5, the last, of putting the whole build on one tab.
+
+- **Run the rest across the cards.** While it runs, each step's part of the output ("== Step name ==" and its lines) is written into that step's own card, and kept there like any step's output. A step's own sub-headings (an install's "== ASL3 step 1: ... ==", the tunnel steps, the wiring parts) stay in that step's card with the rest of its output. The top console keeps only the summary line (which step it stopped at, or "Every step is done").
+- **The stop message.** "Stopped at X: do it on its own tab" now reads "do it in its card or on its own tab", because the install and tunnel steps can be done in their cards.
+- **Mode switching.** Changing the tunnel mode and saving the form reorders the cards; open step sections stay open and every list goes back to its tab before the cards are redrawn. A headless check across all four modes on both tabs found no duplicate ids and no script errors.
+- **Tests.** `ci/test_h44_cards.py` now checks the card order and the sections for every mode on both tabs, the splitting of the output, and the poll that fills the cards.
 
 ## 0.1.72 (2026-11-18)
 
