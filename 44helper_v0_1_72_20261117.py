@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.71"
+APP_VERSION = "0.1.72"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -22219,30 +22219,36 @@ function tabFirstOpen(id) {
 }
 
 var _STEP_DOCKS = {
-  asl3: {pfx: 'asl3', tab: 'asl3'},
-  dvs: {pfx: 'dv', tab: 'dvswitch'},
-  m17: {pfx: 'm17', tab: 'm17'},
-  svx: {pfx: 'svx', tab: 'svxlink'}
+  asl3: function() { return {el: 'asl3-steps', tab: 'asl3'}; },
+  dvs: function() { return {el: 'dv-steps', tab: 'dvswitch'}; },
+  m17: function() { return {el: 'm17-steps', tab: 'm17'}; },
+  svx: function() { return {el: 'svx-steps', tab: 'svxlink'}; },
+  tunnel: function(base) {
+    var k = document.getElementById(base + '-det-fullx') ? 'full' : 'split';
+    return {el: 'pi-steps-' + k, tab: k + '_tunnel'};
+  },
+  half: function() { return {el: 'ht-card', tab: '', after: function() { if (typeof refreshHalfTunnel === 'function') { refreshHalfTunnel(); } }}; },
+  fullx: function() { return {el: 'fx-card', tab: 'full_tunnel'}; }
 };
 
 function stepsDock(mode) {
+  var base = mode === 'magic' ? 'mbx' : 'bld';
   Object.keys(_STEP_DOCKS).forEach(function(stage) {
-    var d = _STEP_DOCKS[stage];
-    var el = document.getElementById(d.pfx + '-steps');
+    var d = _STEP_DOCKS[stage](base);
+    var el = document.getElementById(d.el);
     if (!el) { return; }
-    var ph = document.getElementById(d.pfx + '-steps-home');
+    var ph = document.getElementById(d.el + '-home');
     if (!ph) {
       ph = document.createElement('span');
-      ph.id = d.pfx + '-steps-home';
+      ph.id = d.el + '-home';
       ph.style.display = 'none';
       el.parentNode.insertBefore(ph, el);
     }
-    var base = mode === 'magic' ? 'mbx' : 'bld';
     var det = mode ? document.getElementById(base + '-det-' + stage) : null;
     var slot = det && det.open ? document.getElementById(base + '-steps-' + stage) : null;
     if (slot) {
-      tabFirstOpen(d.tab);
-      if (el.parentNode !== slot) { slot.appendChild(el); }
+      if (d.tab) { tabFirstOpen(d.tab); }
+      if (el.parentNode !== slot) { slot.appendChild(el); if (d.after) { d.after(); } }
     } else if (ph.nextSibling !== el) {
       ph.parentNode.insertBefore(el, ph.nextSibling);
     }
@@ -22257,12 +22263,12 @@ function clickTab(id) {
     el.classList.toggle('hidden', el.id !== 'panel-' + id);
   });
   tabFirstOpen(id);
+  stepsDock(id === 'build' || id === 'magic' ? id : '');
   if (typeof guardOnTab === 'function') guardOnTab(id);
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
   if (id === 'build' && typeof buildRefresh === 'function') { buildRefresh(); }
   if (id === 'magic' && typeof magicRefresh === 'function') { magicRefresh(); }
-  stepsDock(id === 'build' || id === 'magic' ? id : '');
 }
 
 function fwToolsDock(id) {
@@ -29088,8 +29094,8 @@ function @F@CardExtra(id) {
   if (id === 'svx') { h += '<div id="@P@-svx" style="margin-top:.4rem"></div>'; }
   if (_STEP_DOCKS[id]) {
     h += '<details class="step-dock" id="@P@-det-' + id + '" style="margin-top:.4rem" ontoggle="@F@StepsToggle(\'' + id + '\')">' +
-         '<summary style="cursor:pointer;color:var(--teal)">Show the steps</summary>' +
-         '<div class="cfg-hint">The same steps as on the tab, with the distro chosen there.</div>' +
+         '<summary style="cursor:pointer;color:var(--teal)">' + (id === 'half' || id === 'fullx' ? 'Show the card' : 'Show the steps') + '</summary>' +
+         '<div class="cfg-hint">' + (id === 'tunnel' || id === 'half' || id === 'fullx' ? 'The same as on the tunnel tab.' : 'The same steps as on the tab, with the distro chosen there.') + '</div>' +
          '<div id="@P@-steps-' + id + '" style="margin-top:.4rem"></div></details>';
   }
   return h;

@@ -68,17 +68,20 @@ def run_js(body):
 
 
 SETUP = r"""
-var homes = {}, slots = {}, dets = {};
-['asl3', 'dv', 'm17', 'svx'].forEach(function(p) {
-  homes[p] = new Node(p + '-panel'); var el = new Node(p + '-steps'); homes[p].appendChild(new Node(p + '-before')); homes[p].appendChild(el); homes[p].appendChild(new Node(p + '-after'));
+var homes = {}, slots = {}, dets = {}, __half = 0;
+function refreshHalfTunnel() { __half += 1; }
+var ELS = {asl3: 'asl3-steps', dv: 'dv-steps', m17: 'm17-steps', svx: 'svx-steps', pisplit: 'pi-steps-split', pifull: 'pi-steps-full', ht: 'ht-card', fx: 'fx-card'};
+Object.keys(ELS).forEach(function(p) {
+  homes[p] = new Node(p + '-panel'); var el = new Node(ELS[p]); homes[p].appendChild(new Node(p + '-before')); homes[p].appendChild(el); homes[p].appendChild(new Node(p + '-after'));
 });
-['asl3', 'dvs', 'm17', 'svx'].forEach(function(st) {
+['asl3', 'dvs', 'm17', 'svx', 'tunnel', 'half', 'fullx'].forEach(function(st) {
   ['bld', 'mbx'].forEach(function(b) {
     dets[b + st] = new Node(b + '-det-' + st); slots[b + st] = new Node(b + '-steps-' + st);
   });
 });
-function where(p) { var el = __byId[p + '-steps']; return el.parentNode ? el.parentNode.id : null; }
+function where(p) { var el = __byId[ELS[p]]; return el.parentNode ? el.parentNode.id : null; }
 function order(p) { return homes[p].children.map(function(c) { return c.id; }); }
+function open(b, st) { dets[b + st].open = true; }
 """
 
 
@@ -131,6 +134,7 @@ console.log(JSON.stringify({w: where('svx'), order: order('svx'), loaded: __load
 """)
         self.assertEqual(out["w"], "bld-steps-svx")
         self.assertEqual(out["order"], ["svx-before", "svx-steps-home", "svx-after"])
+        self.assertEqual(out["loaded"], ["svxlink", "svxlink", "svxlink"])
 
     def test_the_other_tab_never_gets_another_build_tabs_list(self):
         out = run_js(SETUP + """
@@ -139,6 +143,38 @@ stepsDock('magic');
 console.log(JSON.stringify({w: where('asl3')}));
 """)
         self.assertEqual(out["w"], "asl3-panel")
+
+    def test_the_tunnel_card_takes_the_split_list_or_the_full_list_by_mode(self):
+        out = run_js(SETUP + """
+__byId['bld-det-fullx'] = null;
+open('bld', 'tunnel'); stepsDock('build');
+var split = where('pisplit'), full = where('pifull'), l1 = __loaded.slice();
+stepsDock('');
+__byId['bld-det-fullx'] = dets['bldfullx'];
+open('bld', 'fullx'); stepsDock('build');
+console.log(JSON.stringify({split: split, full: full, l1: l1, full2: where('pifull'), fx: where('fx'), l2: __loaded}));
+""")
+        self.assertEqual((out["split"], out["full"]), ("bld-steps-tunnel", "pifull-panel"))
+        self.assertEqual(out["l1"], ["split_tunnel"])
+        self.assertEqual(out["full2"], "bld-steps-tunnel")
+        self.assertEqual(out["fx"], "bld-steps-fullx")
+        self.assertEqual(out["l2"], ["split_tunnel", "full_tunnel", "full_tunnel"])
+
+    def test_the_half_tunnel_card_moves_in_and_refreshes_once_per_move(self):
+        out = run_js(SETUP + """
+open('mbx', 'half'); stepsDock('magic'); stepsDock('magic');
+var a = __half, w = where('ht'), l = __loaded.slice();
+stepsDock('');
+console.log(JSON.stringify({a: a, w: w, back: where('ht'), l: l}));
+""")
+        self.assertEqual((out["a"], out["w"], out["back"]), (1, "mbx-steps-half", "ht-panel"))
+        self.assertEqual(out["l"], [])
+
+    def test_clickTab_docks_before_the_tunnel_tab_takes_its_cards_back(self):
+        src = h44._JS_TABS
+        i = src.index("function clickTab(id)")
+        body = src[i:src.index("\nfunction ", i + 10)]
+        self.assertLess(body.index("stepsDock("), body.index("fwToolsDock(id)"))
 
     def test_clickTab_docks_for_the_build_tabs_and_undocks_for_the_others(self):
         src = h44._JS_TABS
