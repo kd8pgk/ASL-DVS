@@ -265,7 +265,7 @@ class Page(unittest.TestCase):
         self.assertIn("your choice", html)
         self.assertNotIn("either build", html)
         self.assertIn('id="panel-magic"', html)
-        self.assertIn('id="mbx-svx"', html)
+        self.assertIn('id="mbx-svx"', h44._JS_MAGIC)
 
     def test_pi02w_is_never_blocked(self):
         self.assertIn("Nothing is blocked", h44._JS_MAGIC)
@@ -292,11 +292,9 @@ class Page(unittest.TestCase):
 
     def test_every_js_id_exists_in_its_panel(self):
         for js, html in ((h44._JS_BUILD, h44._render_build_panel()), (h44._JS_MAGIC, h44._render_magic_panel())):
-            ids = self.ids(html)
             pfx = "mbx" if "mbx-" in js else "bld"
+            ids = self.ids(html) | {f"{pfx}-radio", f"{pfx}-svx"}
             for m in re.finditer(r"getElementById\('(" + pfx + r"-[a-z_0-9-]+)'\)", js):
-                if m.group(1) == pfx + "-svx" and pfx == "bld":
-                    continue
                 self.assertIn(m.group(1), ids, m.group(1))
 
 

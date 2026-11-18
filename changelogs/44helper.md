@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_68_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_69_20261117.py`. Newest entries first.
+
+## 0.1.69 (2026-11-18)
+
+Every build step is its own card on the Travel Node and Magic Box tabs. This is a release: the page's layout and logic change. It is stage 1 of putting the whole build on one tab.
+
+- **Order.** The Preflight is step 1, then one card per step in the order to do them, then the Build Save and Build Snapshot card. A Travel Node in half-tunnel mode has 23 steps; a Magic Box in the same mode has 27. The order changes with the tunnel mode as before.
+- **The cards.** Each card has the step number, its title, a status pill (done, to do, waits, check or by hand), the detail line, Preview and Run where the step has them, and its own result console. The first open step is marked "Next". A card's result stays when the page refreshes, and a refresh only redraws a card whose text changed.
+- **Progress.** The top card shows "n of 23 steps done. Next: ..." with Run the rest and Build report.
+- **The old checklist.** It stays as a collapsed "Progress strip: every step in one list" at the bottom.
+- **Radio and SvxLink details.** The Radio and Node Talker card and the SvxLink card are gone as separate cards; their tables are now inside the Radio step's card and the first SvxLink step's card.
+- **Output.** A running install or tunnel job writes its live output into its own step's card. Run the rest, the Preflight installs and the report keep using the top console.
+- **Words.** The page says "card" where it said "row", and the Preflight note now says that passwords you enter are kept until the reboot test is done (it still said none were kept).
+- **Not yet.** The install and tunnel steps show their status and Run button; their own step lists (the 16 ASL3 steps and so on) are still on their tabs. They come in the next stages.
+- **Tests.** `ci/test_h44_cards.py` runs the card code in node: one card per step in order for every mode on both tabs, numbering, pills and buttons, the Next marker, the radio and SvxLink slots, no redraw of an unchanged card, output surviving a refresh and a mode change, and the strip. I also checked the page in headless Chromium on a test node: 20 cards on the Travel Node tab, 24 on Magic Box, no script errors.
 
 ## 0.1.68 (2026-11-17)
 

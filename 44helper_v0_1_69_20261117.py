@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.68"
+APP_VERSION = "0.1.69"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -29068,13 +29068,13 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
   <div class="step-card"><div class="step-head"><div class="step-title">@TITLE@</div>
       <span class="cfg-hint" id="@P@-checked"></span></div>
     <div class="step-body">@NOTE@ The whole build in order, from a bare Pi to a working node, with where each step stands read from this
-      node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
+      node, not from memory. Pick the tunnel mode first; the order changes with it. A card with a Run button does its step from here
       (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
       installs and the tunnel steps run in the background and keep going if you close the page; they stop at the first failing step. The
-      tunnel step uses the WireGuard config pasted in the box under the form, once, and does not keep it. The other rows link to the tab that does the step.
-      Nothing runs by itself.</div>
+      tunnel step uses the WireGuard config pasted in the box under the form, once, and does not keep it. Every step is its own card below,
+      after the Preflight, in the order to do them. Nothing runs by itself.</div>
     <div id="@P@-where"></div>
-    <div id="@P@-stages">Loading...</div>
+    <div id="@P@-progress" class="step-body">Loading...</div>
     <div class="step-actions">
       <button class="btn-run" onclick="@F@RunRest(this)">Run the rest</button>
       <button class="btn-copy" onclick="@F@Report(this)">Build report</button>
@@ -29082,10 +29082,10 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="asl3-console shown" id="@P@-run-out" style="display:none"></div>
     <textarea class="asl3-cmd-input" id="@P@-report" rows="14" spellcheck="false" readonly style="display:none;width:100%"></textarea>
   </div>
-  <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
+  <div class="step-card"><div class="step-head"><div class="step-title"><span class="step-num">1.</span>Preflight</div>
       <span class="cfg-hint" id="@P@-form-state"></span></div>
-    <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). It holds no
-      passwords and no keys: the WireGuard config below is checked and then forgotten.</div>
+    <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). Passwords you
+      enter are kept there until the reboot test is done and are then removed; the WireGuard config below is checked and then forgotten.</div>
     <table class="cfg-table">
       <tr><td>Tunnel mode</td><td><select id="@P@-mode" onchange="@F@Dirty();@F@ShowBypass()">
         <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
@@ -29167,6 +29167,7 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
+  <div id="@P@-cards"></div>
   <div class="step-card" id="@P@-saves"><div class="step-head"><div class="step-title">Build Save and Build Snapshot</div></div>
     <div class="step-body" id="@P@-saves-note"></div>
     <div id="@P@-saves-list" class="step-body"></div>
@@ -29176,11 +29177,9 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     </div>
     <div class="asl3-console shown" id="@P@-saves-out" style="display:none"></div>
   </div>
-  @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
-    <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
-      SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
-    <div id="@P@-radio">Loading...</div>
-  </div>
+  <details id="@P@-strip" style="margin-top:.6rem"><summary style="cursor:pointer;font-family:var(--sans);color:var(--muted)">Progress strip: every step in one list</summary>
+    <div id="@P@-stages" style="margin-top:.4rem">Loading...</div>
+  </details>
 </div>
 """
 
@@ -29255,6 +29254,89 @@ function @F@ShowErrors(d) {
   if (st) { st.textContent = n ? n + ' to fix' : 'complete'; }
 }
 
+var _@P@Order = '';
+var _@P@Html = {};
+var _@P@Out = {};
+
+function @F@PillClass(state) {
+  return {done: 'done', warn: 'attempted_unconfirmed'}[state] || 'not_started';
+}
+
+function @F@CardMain(s, num, isNext) {
+  var tab = _@P@Tabs[s.id];
+  var h = '<div class="step-head"><div class="step-title"><span class="step-num">' + num + '.</span>' + cfgEsc(s.label) + '</div>' +
+          '<span class="step-pill ' + @F@PillClass(s.state) + '">' + cfgEsc(@F@StateLabel(s.state)) + '</span></div>';
+  h += '<div class="step-body">' + (isNext ? '<b>Next: </b>' : '') + cfgEsc(s.detail || '') + '</div>';
+  if (tab && tab !== '@TAB@') {
+    h += '<div class="cfg-hint">Also on the <a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' +
+         cfgEsc(_@P@StageNames[s.id] || tab) + '</a>.</div>';
+  }
+  var b = @F@RunButtons(s);
+  if (b) { h += '<div class="step-actions">' + b + '</div>'; }
+  return h;
+}
+
+function @F@CardExtra(id) {
+  if (id === 'radio') { return '<div id="@P@-radio" style="margin-top:.4rem"></div>'; }
+  if (id === 'svx') { return '<div id="@P@-svx" style="margin-top:.4rem"></div>'; }
+  return '';
+}
+
+function @F@Progress(stages) {
+  var done = 0;
+  var next = null;
+  stages.forEach(function(s) {
+    if (s.state === 'done') { done += 1; }
+    if (!next && (s.state === 'todo' || s.state === 'locked')) { next = s; }
+  });
+  return done + ' of ' + stages.length + ' steps done' + (next ? '. Next: ' + next.label + '.' : '. Nothing left to do here.');
+}
+
+function @F@KeepOut(stage) {
+  var el = document.getElementById('@P@-out-' + stage);
+  if (el) { _@P@Out[stage] = {cls: el.className, text: el.textContent}; }
+}
+
+function @F@ShowOut(stage) {
+  var el = document.getElementById('@P@-out-' + stage);
+  var kept = _@P@Out[stage];
+  if (el && kept) { el.style.display = ''; el.className = kept.cls; el.textContent = kept.text; }
+}
+
+function @F@RenderCards(d) {
+  var box = document.getElementById('@P@-cards');
+  if (!box) { return; }
+  var all = d.stages || [];
+  var stages = all.filter(function(s) { return s.id !== 'preflight'; });
+  var order = stages.map(function(s) { return s.id; }).join(',');
+  if (order !== _@P@Order) {
+    var shell = '';
+    stages.forEach(function(s) {
+      shell += '<div class="step-card" id="@P@-card-' + s.id + '"><div id="@P@-main-' + s.id + '"></div>' + @F@CardExtra(s.id) +
+               '<div class="asl3-console shown" id="@P@-out-' + s.id + '" style="display:none"></div></div>';
+    });
+    box.innerHTML = shell;
+    _@P@Order = order;
+    _@P@Html = {};
+    stages.forEach(function(s) { @F@ShowOut(s.id); });
+  }
+  var nextId = '';
+  all.forEach(function(s) { if (!nextId && (s.state === 'todo' || s.state === 'locked')) { nextId = s.id; } });
+  if (nextId === 'preflight') { nextId = ''; }
+  stages.forEach(function(s, i) {
+    var main = @F@CardMain(s, i + 2, s.id === nextId);
+    if (_@P@Html[s.id] !== main) {
+      var el = document.getElementById('@P@-main-' + s.id);
+      if (el) { el.innerHTML = main; }
+      _@P@Html[s.id] = main;
+    }
+    var card = document.getElementById('@P@-card-' + s.id);
+    if (card) { card.style.borderColor = s.id === nextId ? 'var(--teal)' : ''; }
+  });
+  var pg = document.getElementById('@P@-progress');
+  if (pg) { pg.textContent = @F@Progress(all); }
+}
+
 function @F@RenderStages(d) {
   var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th><th></th></tr>';
   (d.stages || []).forEach(function(s, i) {
@@ -29289,7 +29371,8 @@ function @F@Run(stage, preview, btn, isLong) {
   var body = {action: 'run_stage', profile: '@PROFILE@', stage: stage, preview: preview};
   var wg = document.getElementById('@P@-wg');
   if (stage === 'tunnel' && wg) { body.config_text = wg.value; }
-  @F@Post(body, '@P@-run-out', btn).then(function(res) {
+  @F@Post(body, '@P@-out-' + stage, btn).then(function(res) {
+    @F@KeepOut(stage);
     if (stage === 'tunnel' && res && res.success && wg) { wg.value = ''; }
     if (res && res.job_key) { @F@Poll(res.job_key); }
     @F@Refresh();
@@ -29325,7 +29408,8 @@ var _@P@PollKey = '';
 function @F@Poll(key) {
   if (_@P@PollKey === key) { return; }
   _@P@PollKey = key;
-  var out = document.getElementById('@P@-run-out');
+  var stage = key.replace(/^build_[a-z]+_/, '');
+  var out = document.getElementById('@P@-out-' + stage) || document.getElementById('@P@-run-out');
   function tick() {
     fetch('/api/action_status?job_key=' + encodeURIComponent(key)).then(function(r) { return r.json(); }).then(function(j) {
       if (out) {
@@ -29334,6 +29418,7 @@ function @F@Poll(key) {
         var lines = String(j.output || '').split(String.fromCharCode(10));
         out.textContent = lines.slice(-60).join(String.fromCharCode(10));
         out.scrollTop = out.scrollHeight;
+        if (out.id === '@P@-out-' + stage) { @F@KeepOut(stage); }
       }
       if (j.status === 'running') { setTimeout(tick, 2500); } else { _@P@PollKey = ''; @F@Refresh(); }
     }).catch(function() { setTimeout(tick, 5000); });
@@ -29385,7 +29470,8 @@ function @F@RenderRadio(d) {
     h += '<tr><td>' + cfgEsc(c.name) + '</td><td>' + cfgEsc(c.usbid) + '</td><td>' + cfgEsc(c.devstr || '?') + '</td><td>' +
          (c.radio_chip ? cfgEsc(c.radio_chip) + ' (likely)' : 'unknown') + '</td></tr>';
   });
-  document.getElementById('@P@-radio').innerHTML = h + '</table>';
+  var rbox = document.getElementById('@P@-radio');
+  if (rbox) { rbox.innerHTML = h + '</table>'; }
 }
 
 function @F@RenderApt(d) {
@@ -29466,13 +29552,14 @@ function @F@RenderSvx(d) {
 function @F@Refresh() {
   return fetch('/api/build/status?profile=@PROFILE@').then(function(r) { return r.json(); }).then(function(d) {
     if (!d || !d.stages) {
-      document.getElementById('@P@-stages').textContent = (d && d.message) || 'Could not read the node.';
+      document.getElementById('@P@-progress').textContent = (d && d.message) || 'Could not read the node.';
       return;
     }
     _@P@Data = d;
     document.getElementById('@P@-checked').textContent = d.checked_at || '';
     if (!_@P@IsDirty) { @F@FillForm(d); }
     @F@ShowErrors(d);
+    @F@RenderCards(d);
     @F@RenderStages(d);
     @F@RenderMachine(d);
     @F@RenderWhere(d);
@@ -29483,7 +29570,7 @@ function @F@Refresh() {
     @F@RenderExtras(d);
     if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
-    document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
+    document.getElementById('@P@-progress').textContent = 'Request failed: ' + e;
   });
 }
 
@@ -29631,12 +29718,6 @@ _BLD_SVX_ROWS = (
     '<span class="cfg-hint" id="@P@-e-pw_reflector"></span></td></tr>\n'
     '      <tr><td>Monitored talkgroups</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_mon" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> '
     '<span class="cfg-hint" id="@P@-e-svx_mon"></span></td></tr>\n')
-_BLD_SVX_CARD = """<div class="step-card"><div class="step-head"><div class="step-title">SvxLink</div></div>
-    <div class="step-body">SvxLink is the program that joins the node to an SvxReflector through the bridge node (1900, USRP 34000 and 32000).
-      The reflector password is not kept here: enter it on the SVXLink tab, step 11. These rows only read the node.</div>
-    <div id="@P@-svx">Loading...</div>
-  </div>
-  """
 
 def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list[str]) -> str:
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
@@ -29655,7 +29736,7 @@ def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False
     tab = "magic" if magic else "build"
     out = (_BLD_PANEL_TMPL.replace("@NOTE@", _BLD_NOTE_MAGIC if magic else _BLD_NOTE_TRAVEL)
            .replace("@TITLE@", "Build a Magic Box" if magic else "Build a travel node")
-           .replace("@SVXROWS@", _BLD_SVX_ROWS if magic else "").replace("@SVXCARD@", _BLD_SVX_CARD if magic else ""))
+           .replace("@SVXROWS@", _BLD_SVX_ROWS if magic else ""))
     return _bld_fill(out, pfx, fn, tab, "magic" if magic else "travel", [])
 
 def _render_magic_panel() -> str:
