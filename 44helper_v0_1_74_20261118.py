@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.73"
+APP_VERSION = "0.1.74"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -31564,8 +31564,8 @@ def _bld_form_load() -> dict:
                 form[k] = v[:400]
     return form
 
-def _bld_form_clean(payload: dict) -> dict:
-    form = dict(_BLD_DEFAULT)
+def _bld_form_clean(payload: dict, base: dict | None = None) -> dict:
+    form = dict(base) if base else dict(_BLD_DEFAULT)
     for k in _BLD_FIELDS:
         v = payload.get(k, form[k])
         form[k] = v.strip()[:400] if isinstance(v, str) else form[k]
@@ -32176,8 +32176,8 @@ def build_build_status(profile: str = "travel") -> dict:
     return out
 
 def _bld_act_form_save(payload: dict) -> dict:
-    form = _bld_form_clean(payload)
     with _BLD_LOCK:
+        form = _bld_form_clean(payload, _bld_form_load())
         _bld_form_write(form)
     profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
     errs = _bld_form_errors(form, _bld_usb_cards(), profile)
@@ -33581,6 +33581,8 @@ def _bld_act_run_rest(payload: dict) -> dict:
     log("OK: Build tab started Run the rest")
     return {"success": True, "message": "Started: run the open steps in order.", "job_key": key}
 
+_BLD_ANSWERS = {True: "yes", False: "no", None: "not checked"}
+
 def build_build_report(profile: str = "travel") -> str:
     profile = profile if profile in _BLD_PROFILES else "travel"
     st = build_build_status(profile)
@@ -33622,7 +33624,7 @@ def build_build_report(profile: str = "travel") -> str:
         rf = v["reflector"]
         out += ["", "SvxLink", f"  installed: {v['installed']}; service running: {v['active']}; used as: {v['use'] or 'no answer saved'}",
                 f"  reflector: {rf['host'] + ':' + rf['port'] if rf['host'] else 'not set'}; callsign {rf['callsign'] or '?'}; password {'set' if rf['key_set'] else 'not set'}",
-                f"  log: {v['log'] or 'nothing'}; reflector answers: {v['reachable']}; UDP 34000 open: {v['udp_open']}"]
+                f"  log: {v['log'] or 'nothing'}; reflector answers: {_BLD_ANSWERS[v['reachable']]}; UDP 34000 open: {v['udp_open']}"]
     out += ["", "Tool versions"]
     try:
         out += [f"  {k}: {v}" for k, v in _bt_versions().items()]

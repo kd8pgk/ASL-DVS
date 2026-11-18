@@ -376,6 +376,61 @@ class Status(Tmp):
             r = h44._bld_act_form_save(dict(GOOD, profile="travel", svx_host="bad host"))
             self.assertEqual(r["errors"], {})
 
+    def test_a_travel_save_keeps_the_svxlink_fields_the_magic_tab_entered(self):
+        path = self.p("shared.json")
+        svx = ("svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "pw_reflector")
+        with mock.patch.object(h44, "_BLD_FILE", path), mock.patch.object(h44, "_bld_usb_cards", lambda: []):
+            h44._bld_act_form_save(dict(GOOD, profile="magic", svx_use="radio", svx_host="refl.example.org",
+                                        svx_port="5301", svx_tg="91", svx_mon="91,+92", pw_reflector="secret123"))
+            before = h44._bld_form_load()
+            self.assertEqual(before["svx_host"], "refl.example.org")
+            self.assertEqual(before["pw_reflector"], "secret123")
+            posted = {"profile": "travel", "usb": ""}
+            for k in h44._BLD_FIELDS_TRAVEL + ["mode"]:
+                posted[k] = before.get(k, "")
+            h44._bld_act_form_save(posted)
+            after = h44._bld_form_load()
+            self.assertEqual({k: after[k] for k in svx}, {k: before[k] for k in svx})
+
+    def test_a_tab_can_still_clear_and_change_the_fields_it_shows(self):
+        path = self.p("shared2.json")
+        with mock.patch.object(h44, "_BLD_FILE", path), mock.patch.object(h44, "_bld_usb_cards", lambda: []):
+            h44._bld_act_form_save(dict(GOOD, profile="magic", svx_host="refl.example.org", svx_tg="91",
+                                        pw_reflector="secret123"))
+            posted = {"profile": "magic", "usb": ""}
+            for k in h44._BLD_FIELDS_MAGIC + ["mode"]:
+                posted[k] = h44._bld_form_load().get(k, "")
+            posted["svx_host"] = ""
+            posted["pw_reflector"] = ""
+            posted["callsign"] = "W1AW"
+            h44._bld_act_form_save(posted)
+            after = h44._bld_form_load()
+            self.assertEqual(after["svx_host"], "")
+            self.assertEqual(after["pw_reflector"], "")
+            self.assertEqual(after["callsign"], "W1AW")
+            self.assertEqual(after["svx_tg"], "91")
+
+    def test_a_reset_still_goes_back_to_the_defaults(self):
+        path = self.p("shared3.json")
+        with mock.patch.object(h44, "_BLD_FILE", path), mock.patch.object(h44, "_bld_usb_cards", lambda: []):
+            h44._bld_act_form_save(dict(GOOD, profile="magic", svx_host="refl.example.org"))
+            h44._bld_act_form_reset({})
+            self.assertEqual(h44._bld_form_load()["svx_host"], h44._BLD_DEFAULT["svx_host"])
+
+    def test_a_loaded_build_save_is_normalised_from_the_defaults_not_the_stored_form(self):
+        path = self.p("shared4.json")
+        with mock.patch.object(h44, "_BLD_FILE", path), mock.patch.object(h44, "_bld_usb_cards", lambda: []):
+            h44._bld_act_form_save(dict(GOOD, profile="magic", svx_host="stored.example.org"))
+            doc = json.dumps({"format": "44helper-build", "version": 1, "kind": "save",
+                              "values": {"callsign": "W1AW"}})
+            values, _notes, err = h44._bs_parse(doc, "magic")
+        self.assertEqual(err, "")
+        self.assertEqual(values["callsign"], "W1AW")
+        self.assertEqual(values["svx_host"], h44._BLD_DEFAULT["svx_host"])
+
+    def test_the_report_says_not_checked_rather_than_none(self):
+        self.assertEqual([h44._BLD_ANSWERS[x] for x in (True, False, None)], ["yes", "no", "not checked"])
+
 
 if __name__ == "__main__":
     unittest.main()
