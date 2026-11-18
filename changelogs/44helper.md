@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_70_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_71_20261117.py`. Newest entries first.
+
+## 0.1.71 (2026-11-18)
+
+The install steps inside the build cards. This is a release: the page's JavaScript changes. It is stage 3 of putting the whole build on one tab.
+
+- **Steps in the card.** The ASL3, DVSwitch and M17 cards (and SvxLink on the Magic Box) have a collapsed "Show the steps" section. Open it and the tab's own step list appears in the card, with the same Run, Copy and output on every step, so the build never leaves the tab.
+- **Same steps, not a second copy.** The list is the install tab's own list, moved into the card while the Build tab is open and moved back when you leave. Its state, running jobs and output are the same in both places, and the distro is the one chosen on the install tab.
+- **On demand.** Nothing loads until a section is opened; opening one loads only that tab's data. A mode change hands the lists back before the cards are redrawn and keeps open sections open.
+- **Tests.** `ci/test_h44_dock.py` runs the real dock code on a small DOM stub; `ci/test_h44_cards.py` checks the sections.
 
 ## 0.1.70 (2026-11-18)
 

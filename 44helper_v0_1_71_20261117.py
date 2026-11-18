@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.70"
+APP_VERSION = "0.1.71"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -22218,6 +22218,37 @@ function tabFirstOpen(id) {
   if (_TAB_FIRST[id]) { _TAB_FIRST[id](); }
 }
 
+var _STEP_DOCKS = {
+  asl3: {pfx: 'asl3', tab: 'asl3'},
+  dvs: {pfx: 'dv', tab: 'dvswitch'},
+  m17: {pfx: 'm17', tab: 'm17'},
+  svx: {pfx: 'svx', tab: 'svxlink'}
+};
+
+function stepsDock(mode) {
+  Object.keys(_STEP_DOCKS).forEach(function(stage) {
+    var d = _STEP_DOCKS[stage];
+    var el = document.getElementById(d.pfx + '-steps');
+    if (!el) { return; }
+    var ph = document.getElementById(d.pfx + '-steps-home');
+    if (!ph) {
+      ph = document.createElement('span');
+      ph.id = d.pfx + '-steps-home';
+      ph.style.display = 'none';
+      el.parentNode.insertBefore(ph, el);
+    }
+    var base = mode === 'magic' ? 'mbx' : 'bld';
+    var det = mode ? document.getElementById(base + '-det-' + stage) : null;
+    var slot = det && det.open ? document.getElementById(base + '-steps-' + stage) : null;
+    if (slot) {
+      tabFirstOpen(d.tab);
+      if (el.parentNode !== slot) { slot.appendChild(el); }
+    } else if (ph.nextSibling !== el) {
+      ph.parentNode.insertBefore(el, ph.nextSibling);
+    }
+  });
+}
+
 function clickTab(id) {
   document.querySelectorAll('.tab').forEach(function(el) {
     el.classList.toggle('active', el.id === 'tab-' + id);
@@ -22231,6 +22262,7 @@ function clickTab(id) {
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
   if (id === 'build' && typeof buildRefresh === 'function') { buildRefresh(); }
   if (id === 'magic' && typeof magicRefresh === 'function') { magicRefresh(); }
+  stepsDock(id === 'build' || id === 'magic' ? id : '');
 }
 
 function fwToolsDock(id) {
@@ -29051,9 +29083,16 @@ function @F@CardMain(s, num, isNext) {
 }
 
 function @F@CardExtra(id) {
-  if (id === 'radio') { return '<div id="@P@-radio" style="margin-top:.4rem"></div>'; }
-  if (id === 'svx') { return '<div id="@P@-svx" style="margin-top:.4rem"></div>'; }
-  return '';
+  var h = '';
+  if (id === 'radio') { h += '<div id="@P@-radio" style="margin-top:.4rem"></div>'; }
+  if (id === 'svx') { h += '<div id="@P@-svx" style="margin-top:.4rem"></div>'; }
+  if (_STEP_DOCKS[id]) {
+    h += '<details class="step-dock" id="@P@-det-' + id + '" style="margin-top:.4rem" ontoggle="@F@StepsToggle(\'' + id + '\')">' +
+         '<summary style="cursor:pointer;color:var(--teal)">Show the steps</summary>' +
+         '<div class="cfg-hint">The same steps as on the tab, with the distro chosen there.</div>' +
+         '<div id="@P@-steps-' + id + '" style="margin-top:.4rem"></div></details>';
+  }
+  return h;
 }
 
 function @F@Progress(stages) {
@@ -29077,6 +29116,10 @@ function @F@ShowOut(stage) {
   if (el && kept) { el.style.display = ''; el.className = kept.cls; el.textContent = kept.text; }
 }
 
+function @F@StepsToggle(id) {
+  stepsDock('@TAB@');
+}
+
 function @F@RenderCards(d) {
   var box = document.getElementById('@P@-cards');
   if (!box) { return; }
@@ -29084,6 +29127,9 @@ function @F@RenderCards(d) {
   var stages = all.filter(function(s) { return s.id !== 'preflight'; });
   var order = stages.map(function(s) { return s.id; }).join(',');
   if (order !== _@P@Order) {
+    var wasOpen = [];
+    box.querySelectorAll('details.step-dock[open]').forEach(function(el) { wasOpen.push(el.id); });
+    stepsDock('');
     var shell = '';
     stages.forEach(function(s) {
       shell += '<div class="step-card" id="@P@-card-' + s.id + '"><div id="@P@-main-' + s.id + '"></div>' + @F@CardExtra(s.id) +
@@ -29093,6 +29139,7 @@ function @F@RenderCards(d) {
     _@P@Order = order;
     _@P@Html = {};
     stages.forEach(function(s) { @F@ShowOut(s.id); });
+    wasOpen.forEach(function(did) { var el = document.getElementById(did); if (el) { el.open = true; } });
   }
   var nextId = '';
   all.forEach(function(s) { if (!nextId && (s.state === 'todo' || s.state === 'locked')) { nextId = s.id; } });

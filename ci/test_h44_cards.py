@@ -28,10 +28,13 @@ h44._cfg = configparser.ConfigParser()
 PRELUDE = r"""
 function cfgEsc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function clickTab(id) {}
+var _STEP_DOCKS = {asl3: {}, dvs: {}, m17: {}, svx: {}};
+var __docks = [];
+function stepsDock(m) { __docks.push(m); }
 var __els = {};
 function __el(id) {
   if (!__els[id]) {
-    var e = {id: id, style: {}, className: '', textContent: '', _html: ''};
+    var e = {id: id, style: {}, className: '', textContent: '', _html: '', querySelectorAll: function() { return []; }};
     Object.defineProperty(e, 'innerHTML', {configurable: true, get: function() { return this._html; }, set: function(v) {
       this._html = v;
       var re = /id="([^"]+)"/g, m;
@@ -161,6 +164,40 @@ console.log(JSON.stringify({{radio: /id="{pfx}-card-radio".*?id="{pfx}-radio"/s.
             self.assertTrue(out["radio"], profile)
             self.assertEqual(out["svx"], profile == "magic")
             self.assertEqual(out["svxIn"], profile == "magic")
+
+    def test_the_install_steps_get_a_collapsed_section_in_their_cards_only(self):
+        for profile, pfx in (("travel", "bld"), ("magic", "mbx")):
+            data = json.dumps({"stages": stages(profile, "half")})
+            fn = "magic" if profile == "magic" else "build"
+            out = run_js(profile, f"""
+__box('{pfx}-cards'); __el('{pfx}-progress');
+var d = {data};
+{fn}RenderCards(d);
+var html = __els['{pfx}-cards']._html, have = [], re = /id="{pfx}-det-([a-z_0-9]+)"/g, m;
+while ((m = re.exec(html))) {{ have.push(m[1]); }}
+var closed = html.indexOf('<details class="step-dock" id="{pfx}-det-asl3"') !== -1 && html.indexOf(' open') === -1;
+var slotIn = /id="{pfx}-card-asl3".*?id="{pfx}-steps-asl3"/s.test(html);
+var svxBoth = /id="{pfx}-card-svx".*?id="{pfx}-svx".*?id="{pfx}-det-svx"/s.test(html);
+console.log(JSON.stringify({{have: have, closed: closed, slotIn: slotIn, svxBoth: svxBoth}}));
+""")
+            want = ["asl3", "dvs", "m17"] + (["svx"] if profile == "magic" else [])
+            self.assertEqual(sorted(out["have"]), sorted(want), profile)
+            self.assertTrue(out["closed"], profile)
+            self.assertTrue(out["slotIn"], profile)
+            if profile == "magic":
+                self.assertTrue(out["svxBoth"])
+
+    def test_a_mode_change_hands_the_steps_back_first(self):
+        data = json.dumps({"stages": stages("travel", "half")})
+        data2 = json.dumps({"stages": stages("travel", "none")})
+        out = run_js("travel", f"""
+__box('bld-cards'); __el('bld-progress');
+buildRenderCards({data});
+__docks.length = 0;
+buildRenderCards({data2});
+console.log(JSON.stringify({{docks: __docks}}));
+""")
+        self.assertEqual(out["docks"][0], "")
 
     def test_a_refresh_with_nothing_new_changes_no_card(self):
         data = json.dumps({"stages": stages("travel", "half")})
