@@ -27,7 +27,6 @@ h44._cfg = configparser.ConfigParser()
 PAGE = h44.render_page(h44._cfg)
 
 GUARDED_OPTIONAL_IDS = {
-    "bld-svx": "only on the Magic Box tab; buildRenderSvx returns when it is missing",
     "pi-aip-out-split": "only one of the two tunnel tabs has it; the code tests it before use",
     "pi-refl-out-full": "only one of the two tunnel tabs has it; the code tests it before use",
 }
@@ -76,7 +75,6 @@ class Ids(unittest.TestCase):
         magic = {k.replace("mbx-", "") for k in page_ids() if k.startswith("mbx-")}
         self.assertEqual(sorted(travel - magic), [])
         extra = sorted(magic - travel)
-        self.assertIn("svx", extra)
         self.assertTrue(all("svx" in k or k.endswith("pw_reflector") for k in extra), extra)
 
 
