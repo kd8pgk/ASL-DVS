@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_73_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_74_20261118.py`. Newest entries first.
+
+## 0.1.74 (2026-11-18)
+
+Two fixes found by an audit of the Magic Box tab.
+
+- **Saving one Build tab no longer clears the other's fields.** Both Build tabs share one saved Preflight, and a save rebuilt it from the defaults, so saving the Travel Node form wiped every field only the Magic Box has: SvxLink use, reflector host, port, talkgroup, monitored talkgroups and the reflector password. A save now keeps the fields the tab did not send, and still changes or clears the ones it did. Nothing else about saving changes: Clear the form still goes back to the defaults, and loading a Build Save still fills the form from the file alone.
+- **The build report said "reflector answers: None"** when the reflector had not been probed. It now says "not checked", as the SvxLink card on the page already did.
 
 ## 0.1.73 (2026-11-18)
 
