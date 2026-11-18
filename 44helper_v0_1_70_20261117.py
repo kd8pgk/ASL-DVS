@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.69"
+APP_VERSION = "0.1.70"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -22256,6 +22256,88 @@ function fwToolsDock(id) {
 // only (step notes, intro blurbs, mismatch/caution banners) — NOT for the
 // live purge-progress summary line, which keeps using a bare .step-warn
 // div so it stays visible while it updates.
+function stepCardsHtml(c) {
+  var steps = c.steps || [];
+  var p = c.pfx;
+  var esc = c.esc;
+  var html = '';
+  steps.forEach(function(step) {
+    var stateKey = c.mode + '_' + c.distro + '_' + step.id;
+    var st = (c.state || {})[stateKey] || {};
+    var args = '\\'' + c.mode + '\\',\\'' + c.distro + '\\',\\'' + step.id + '\\'';
+    var copyBtn = '<button class="btn-copy" onclick="' + c.copy + '(this,' + args + ')">Copy</button>';
+    var isBlock = c.block === 'any' ? step.manual_block : (c.block === 'manual' && step.manual && step.manual_block);
+    html += '<div class="step-card">';
+    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
+    if (isBlock || step.manual) {
+      html += '<span class="step-pill not_started">Manual</span></div>';
+      if (step.note) html += renderStepWarn(esc(step.note));
+      if (isBlock) {
+        html += '<textarea class="cmd-preview" id="' + p + '-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
+          'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
+          'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + esc(step.cmd) + '</textarea>';
+      } else {
+        html += '<input type="text" class="asl3-cmd-input" readonly value="' + esc(step.cmd) + '">';
+      }
+      html += '<div class="step-actions">' + copyBtn + '</div>';
+      html += '</div>';
+      return;
+    }
+    if (c.config && step.config_save) {
+      html += '<span class="step-pill not_started">Config</span></div>';
+      if (step.note) html += renderStepWarn(esc(step.note));
+      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'' + p + '-out-' + stateKey + '\\')">Save Restore point</button></div>';
+      html += '<div class="asl3-console shown placeholder" id="' + p + '-out-' + stateKey + '">(not saved from here yet)</div>';
+      html += '</div>';
+      return;
+    }
+    var consoleHtml = '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="' + p + '-out-' + stateKey + '">' + (st.output ? esc(st.output) : '(not run yet)') + '</div>';
+    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
+    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running…' : 'Not run'));
+    html += '<span class="step-pill ' + pillClass + '" id="' + p + '-pill-' + stateKey + '">' + pillLabel + '</span></div>';
+    if (step.note) html += renderStepWarn(esc(step.note));
+    if (c.pi && step.pi_action) {
+      html += '<div class="step-actions"><button class="btn-run" id="' + p + '-btn-' + stateKey + '" onclick="' + c.run + '(this,' + args + ')">' + esc(step.button || 'Run') + '</button>' + copyBtn + '</div>';
+      html += consoleHtml;
+      html += '</div>';
+      return;
+    }
+    if (step.fields) {
+      step.fields.forEach(function(f) {
+        var fid = p + '-field-' + f.id + '-' + stateKey;
+        if (c.vis) {
+          var hide = 'block';
+          if (f.show_if) {
+            var sp = f.show_if.split('=');
+            var ctl = null;
+            step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
+            hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
+          }
+          html += '<label data-showif="' + esc(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + esc(f.label) + ':';
+          if (f.options) {
+            html += '<select class="asl3-cmd-input" id="' + fid + '" onchange="' + c.fieldVis + '(this)">';
+            f.options.forEach(function(o) {
+              html += '<option value="' + esc(o[0]) + '"' + (o[0] === f.default ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+            });
+            html += '</select></label>';
+          } else {
+            html += '<input type="' + esc(f.type || 'text') + '" class="asl3-cmd-input" id="' + fid + '" value="' + esc(f.default || '') + '" autocomplete="off"></label>';
+          }
+        } else {
+          html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + esc(f.label) + ':' +
+            '<input type="' + esc(f.type || 'text') + '" class="asl3-cmd-input" id="' + fid + '" value="' + esc(f.default || '') + '" autocomplete="off"></label>';
+        }
+      });
+    } else {
+      html += '<input type="text" class="asl3-cmd-input" id="' + p + '-cmd-' + stateKey + '" readonly value="' + esc(step.cmd) + '">';
+    }
+    html += '<div class="step-actions"><button class="btn-run" id="' + p + '-btn-' + stateKey + '" onclick="' + c.run + '(this,' + args + ')">Run</button>' + copyBtn + '</div>';
+    html += consoleHtml;
+    html += '</div>';
+  });
+  return html || '<div class="step-body">(no steps defined)</div>';
+}
+
 function renderStepWarn(html) {
   return '<div class="step-warn-box"><button type="button" class="step-warn-toggle" ' +
     'onclick="toggleStepWarn(this)" aria-expanded="false" title="Show note">&#9660;</button>' +
@@ -24806,46 +24888,7 @@ function asl3EscapeAttr(s) {
 }
 
 function asl3RenderStepList(mode, distro) {
-  var steps = ((window._asl3Scripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._asl3State || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + asl3EscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'asl3-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="asl3-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="asl3-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + asl3EscapeAttr(f.label) + ':' +
-          '<input type="' + asl3EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="asl3-field-' + f.id + '-' + stateKey + '" value="' + asl3EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" readonly value="' + asl3EscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="asl3-btn-' + stateKey + '" onclick="asl3RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'asl3', run: 'asl3RunStep', copy: 'asl3CopyStep', mode: mode, distro: distro, steps: ((window._asl3Scripts || {})[mode] || {})[distro] || [], state: window._asl3State, esc: asl3EscapeAttr, block: false, config: true, pi: false, vis: false});
 }
 
 function asl3Render() {
@@ -25132,52 +25175,7 @@ function dvEscapeAttr(s) {
 }
 
 function dvRenderStepList(mode, distro) {
-  var steps = ((window._dvScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._dvState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + dvEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'dv-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="dv-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="dv-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-    if (step.pi_action) {
-      html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">' + dvEscapeAttr(step.button || 'Run') + '</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
-      html += '</div>';
-      return;
-    }
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + dvEscapeAttr(f.label) + ':' +
-          '<input type="' + dvEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="dv-field-' + f.id + '-' + stateKey + '" value="' + dvEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" readonly value="' + dvEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'dv', run: 'dvRunStep', copy: 'dvCopyStep', mode: mode, distro: distro, steps: ((window._dvScripts || {})[mode] || {})[distro] || [], state: window._dvState, esc: dvEscapeAttr, block: false, config: true, pi: true, vis: false});
 }
 
 function dvRender() {
@@ -25485,59 +25483,7 @@ function svxEscapeAttr(s) {
 }
 
 function svxRenderStepList(mode, distro) {
-  var steps = ((window._svxScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._svxState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
-      if (step.manual_block) {
-        html += '<textarea class="cmd-preview" id="svx-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-          'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-          'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + svxEscapeAttr(step.cmd) + '</textarea>';
-      } else {
-        html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
-      }
-      html += '<div class="step-actions"><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="svx-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        var hide = 'block';
-        if (f.show_if) {
-          var sp = f.show_if.split('=');
-          var ctl = null;
-          step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
-          hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
-        }
-        html += '<label data-showif="' + svxEscapeAttr(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':';
-        if (f.options) {
-          html += '<select class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" onchange="svxFieldVis(this)">';
-          f.options.forEach(function(o) {
-            html += '<option value="' + svxEscapeAttr(o[0]) + '"' + (o[0] === f.default ? ' selected' : '') + '>' + svxEscapeAttr(o[1]) + '</option>';
-          });
-          html += '</select></label>';
-        } else {
-          html += '<input type="' + svxEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" value="' + svxEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-        }
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" readonly value="' + svxEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="svx-btn-' + stateKey + '" onclick="svxRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'svx', run: 'svxRunStep', copy: 'svxCopyStep', fieldVis: 'svxFieldVis', mode: mode, distro: distro, steps: ((window._svxScripts || {})[mode] || {})[distro] || [], state: window._svxState, esc: svxEscapeAttr, block: 'manual', config: false, pi: false, vis: true});
 }
 
 function svxRender() {
@@ -25846,56 +25792,7 @@ function m17EscapeAttr(s) {
 }
 
 function m17RenderStepList(mode, distro) {
-  var steps = ((window._m17Scripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._m17State || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="m17-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + m17EscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + m17EscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'m17-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="m17-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="m17-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + m17EscapeAttr(f.label) + ':' +
-          '<input type="' + m17EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="m17-field-' + f.id + '-' + stateKey + '" value="' + m17EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" readonly value="' + m17EscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="m17-btn-' + stateKey + '" onclick="m17RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'm17', run: 'm17RunStep', copy: 'm17CopyStep', mode: mode, distro: distro, steps: ((window._m17Scripts || {})[mode] || {})[distro] || [], state: window._m17State, esc: m17EscapeAttr, block: 'any', config: true, pi: false, vis: false});
 }
 
 function m17Render() {
@@ -26191,48 +26088,7 @@ function ampEscapeAttr(s) {
 }
 
 function ampRenderStepList(mode, distro) {
-  var steps = ((window._ampScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._ampState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="amp-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + ampEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + ampEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="amp-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + ampEscapeAttr(f.label) + ':' +
-          '<input type="' + ampEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="amp-field-' + f.id + '-' + stateKey + '" value="' + ampEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" readonly value="' + ampEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="amp-btn-' + stateKey + '" onclick="ampRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'amp', run: 'ampRunStep', copy: 'ampCopyStep', mode: mode, distro: distro, steps: ((window._ampScripts || {})[mode] || {})[distro] || [], state: window._ampState, esc: ampEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function ampRender() {
@@ -26484,48 +26340,7 @@ function crEscapeAttr(s) {
 }
 
 function crRenderStepList(mode, distro) {
-  var steps = ((window._crScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._crState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="cr-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + crEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + crEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="cr-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + crEscapeAttr(f.label) + ':' +
-          '<input type="' + crEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cr-field-' + f.id + '-' + stateKey + '" value="' + crEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="cr-cmd-' + stateKey + '" readonly value="' + crEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="cr-btn-' + stateKey + '" onclick="crRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cr-out-' + stateKey + '">' + (st.output ? crEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'cr', run: 'crRunStep', copy: 'crCopyStep', mode: mode, distro: distro, steps: ((window._crScripts || {})[mode] || {})[distro] || [], state: window._crState, esc: crEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function crRender() {
@@ -26784,48 +26599,7 @@ function cfEscapeAttr(s) {
 }
 
 function cfRenderStepList(mode, distro) {
-  var steps = ((window._cfScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._cfState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="cf-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + cfEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + cfEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="cf-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + cfEscapeAttr(f.label) + ':' +
-          '<input type="' + cfEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cf-field-' + f.id + '-' + stateKey + '" value="' + cfEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" readonly value="' + cfEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="cf-btn-' + stateKey + '" onclick="cfRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'cf', run: 'cfRunStep', copy: 'cfCopyStep', mode: mode, distro: distro, steps: ((window._cfScripts || {})[mode] || {})[distro] || [], state: window._cfState, esc: cfEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function cfRender() {
