@@ -44,8 +44,8 @@ SERVERS = {
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
-    "nodemon": {"file": "nodemon_v0_6_0_20261116.py", "port": 7777, "scheme": "http", "health": "/api/health",
-                "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
+    "nodemon": {"file": "nodemon_v0_7_0_20261117.py", "port": 7777, "scheme": "https", "health": "/api/health",
+                "tls_conf": True, "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
                 "files_env": {"NODEMON_RPT_CONF": "run/rpt.conf", "NODEMON_AMI_CONF": "run/manager.conf",
                               "NODEMON_M17_INI": "run/m17.ini", "NODEMON_SVX_CONF": "run/svxlink.conf",
                               "NODEMON_SVX_LOG": "run/svxlink.log", "NODEMON_ABINFO_GLOB": "run/ABInfo_none.json"}},
@@ -97,8 +97,8 @@ def extract_routes(path):
                     public.add(c.value)
     literals = {"GET": set(), "POST": set()}
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST"):
-            kind = "GET" if node.name == "do_GET" else "POST"
+        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST", "_do_get", "_do_post"):
+            kind = "GET" if node.name in ("do_GET", "_do_get") else "POST"
             for c in ast.walk(node):
                 if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.startswith("/api/"):
                     literals[kind].add(c.value)
@@ -168,6 +168,8 @@ class Server:
         except FileNotFoundError:
             pass
         self.seed_login()
+        if self.spec.get("tls_conf"):
+            self.write_tls_config()
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
             [sys.executable] + self.launcher_args() + [os.path.join(ROOT, self.spec["file"])],
@@ -183,6 +185,15 @@ class Server:
             except OSError:
                 time.sleep(0.5)
         raise RuntimeError(f"{self.key} did not answer on port {self.spec['port']}")
+
+    def write_tls_config(self):
+        cfg = os.path.join(self.stub_dir, self.spec["dirs_env"]["NODEMON_CONFIG_DIR"])
+        os.makedirs(cfg, exist_ok=True)
+        cert, key = os.path.join(cfg, "nodemon.crt"), os.path.join(cfg, "nodemon.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-keyout", key, "-out", cert, "-subj", "/CN=localhost"], check=True, capture_output=True)
+        with open(os.path.join(cfg, "nodemon.conf"), "w") as f:
+            f.write("[nodemon]\nport = 7777\ncert_file = %s\nkey_file = %s\n" % (cert, key))
 
     def launcher_args(self):
         if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1" or self.spec.get("no_launcher"):
@@ -224,7 +235,14 @@ class Server:
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
+            if resp.status >= 500:
+                with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                    print(f"[{self.key}] {method} {path} -> {resp.status}; server log tail:\n{fh.read()[-2000:]}", file=sys.stderr)
             return resp.status, dict(resp.getheaders()), data
+        except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError) as exc:
+            with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                tail = fh.read()[-2000:]
+            raise RuntimeError(f"{self.key} dropped the connection on {method} {path}: {exc}\nserver log tail:\n{tail}") from exc
         finally:
             conn.close()
 

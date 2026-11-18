@@ -1,6 +1,25 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_6_0_20261116.py`. Newest entries first.
+Current file: `nodemon_v0_7_0_20261117.py`. Newest entries first.
+
+## 0.7.0 (2026-11-17)
+
+The page is served over TLS only, login sessions are bound to the client's address, and the power buttons need the root password again. This is a release: a node must be given a certificate or a TLS proxy, and a proxy must be listed in `trusted_proxies`.
+
+- **TLS is required.** The server does not start without `cert_file` and `key_file`, or with `https = on` on any address but loopback (a TLS proxy). It exits with code 78, which systemd does not restart. Plain HTTP is no longer served.
+- **Install makes a certificate.** When no TLS is configured, `--install` creates a self-signed certificate in `/etc/asl_dvs/tls` (10 years) and writes the paths to `nodemon.conf`.
+- **Sessions are bound to the client's address.** A session presented from another address is refused and dropped. `session_bind_ip = off` turns this off.
+- **Proxy headers only from `trusted_proxies`.** `CF-Connecting-IP`, `X-Real-IP` and `X-Forwarded-For` count only from a listed address. Any other request carrying them is treated as internet traffic.
+- **Logout ends every session**, as in every tool (shared policy). Each address is limited to 10 sessions.
+- **Reboot and Shutdown ask for the root password** and are hidden from users who are not root. A wrong password returns 403.
+- **Nothing sensitive without login.** `/api/health` and `/api/whoami` give only `{"ok": true}` (and `authed` in whoami) before login.
+- **AMI.** The account chosen for the manager interface must have write rights (`write = all` or `system`). Commands are cut off after 15 s, so a stalled Asterisk cannot hold the command lock.
+- **Page.** The page calls `POST /api/wake` to keep AMI polling alive. `GET /api/status` no longer changes state.
+- **Firewall.** Opening and closing the port handle a ufw IPv6 rule and a timed-out firewall command.
+- **Config.** `bridge_nodes` sets the node-number-to-bridge map (default `1999:34001,1917:34008,1900:34000,1921:34018`). `save_config` refuses a non-numeric `main_node`, a port outside 1024–65535, and a non-IPv4 `bind_addr`.
+- **Password hash.** A root hash that libcrypt cannot check is logged once by type (for example `$y$` needs libxcrypt 4.4 or later). The hash itself is never logged.
+- **A failed request answers 500.** If a handler raises, the reply is a 500 with a message, and the reason is written to the log. The connection is no longer dropped without a word.
+- The version is 0.7.0. Existing nodes need the new config keys above before the upgrade, or the install creates them.
 
 ## 0.6.0 (2026-11-16)
 
