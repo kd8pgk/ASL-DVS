@@ -24,7 +24,23 @@ def newest(pattern):
 spec = importlib.util.spec_from_file_location("h44_stepcards_under_test", os.environ.get("H44_UNDER_TEST") or newest("44helper_v[0-9]*.py"))
 h44 = importlib.util.module_from_spec(spec)
 sys.modules["h44_stepcards_under_test"] = h44
-spec.loader.exec_module(h44)
+import builtins
+import io
+
+_real_open = builtins.open
+
+
+def _open(file, *a, **k):
+    if file == "/etc/passwd":
+        return io.StringIO("pi:x:1000:1000:pi:/home/pi:/bin/bash\n")
+    return _real_open(file, *a, **k)
+
+
+builtins.open = _open
+try:
+    spec.loader.exec_module(h44)
+finally:
+    builtins.open = _real_open
 h44._cfg = configparser.ConfigParser()
 
 TABS = [
@@ -100,7 +116,7 @@ def render_tab(tab):
         parts.append(h44._JS_AMP)
     else:
         parts.append(getattr(h44, block))
-    cat_json = json.dumps(getattr(h44, cat)).replace(h44._CR_DEFAULT_USER, "pi")
+    cat_json = json.dumps(getattr(h44, cat))
     parts.append(f"var CAT = {cat_json}; var PFX = '{pfx}'; var FN = {fn};\n" + DRIVER)
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "t.js")
