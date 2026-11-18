@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_71_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_72_20261117.py`. Newest entries first.
+
+## 0.1.72 (2026-11-18)
+
+The tunnel inside the build cards. This is a release: the page's JavaScript changes. It is stage 4 of putting the whole build on one tab.
+
+- **Tunnel cards.** The Tunnel card has a collapsed "Show the steps" section with the tunnel tab's own step list (the tunnel steps and the cards under them); the Full tunnel exceptions card and the Half tunnel card have "Show the card". A full-tunnel build takes the Full Tunnel tab's list, any other mode the Split Tunnel tab's.
+- **Same as the tab.** The lists and cards are the tunnel tabs' own, moved into the build card while the Build tab is open and moved back when you leave, so their state and running jobs are shared. The Half tunnel card refreshes when it is moved in.
+- **Click order.** Opening a tunnel tab now puts the lists back before the tunnel tab takes its cards, so the half-tunnel card is not left in the build card.
+- **SvxLink.** The Magic Box wiring step keeps its Run button and the Reflector and checks steps are part of the SvxLink step list added in 0.1.71, so they need nothing more.
+- **Tests.** `ci/test_h44_dock.py` covers the tunnel, half and exceptions docks, the mode choice and the click order.
 
 ## 0.1.71 (2026-11-18)
 

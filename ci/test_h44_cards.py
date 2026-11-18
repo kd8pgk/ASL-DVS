@@ -28,7 +28,7 @@ h44._cfg = configparser.ConfigParser()
 PRELUDE = r"""
 function cfgEsc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function clickTab(id) {}
-var _STEP_DOCKS = {asl3: {}, dvs: {}, m17: {}, svx: {}};
+var _STEP_DOCKS = {asl3: {}, dvs: {}, m17: {}, svx: {}, tunnel: {}, half: {}, fullx: {}};
 var __docks = [];
 function stepsDock(m) { __docks.push(m); }
 var __els = {};
@@ -180,7 +180,7 @@ var slotIn = /id="{pfx}-card-asl3".*?id="{pfx}-steps-asl3"/s.test(html);
 var svxBoth = /id="{pfx}-card-svx".*?id="{pfx}-svx".*?id="{pfx}-det-svx"/s.test(html);
 console.log(JSON.stringify({{have: have, closed: closed, slotIn: slotIn, svxBoth: svxBoth}}));
 """)
-            want = ["asl3", "dvs", "m17"] + (["svx"] if profile == "magic" else [])
+            want = ["asl3", "dvs", "m17", "tunnel", "half"] + (["svx"] if profile == "magic" else [])
             self.assertEqual(sorted(out["have"]), sorted(want), profile)
             self.assertTrue(out["closed"], profile)
             self.assertTrue(out["slotIn"], profile)
