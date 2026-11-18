@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_69_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_70_20261117.py`. Newest entries first.
+
+## 0.1.70 (2026-11-18)
+
+One step-card renderer for the install tabs. This is a release: the page's JavaScript changes. It is stage 2 of putting the whole build on one tab. What the tabs show does not change.
+
+- **Shared renderer.** `stepCardsHtml` draws the step cards for ASL3, DVSwitch, SvxLink, M17, AllStar/Node Talker (amp), Config Recovery and Config Saves. Each tab's `*RenderStepList` is now a short wrapper that passes its ids, its handlers and which kinds of step it has (by-hand block, restore point, Pi action, show-if fields).
+- **Tests.** `ci/test_h44_stepcards.py` compares every step list, in every mode and distro, byte for byte with what the 0.1.69 code drew, plus synthetic steps for the kinds the real lists do not use.
 
 ## 0.1.69 (2026-11-18)
 

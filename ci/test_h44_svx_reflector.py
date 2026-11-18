@@ -362,7 +362,8 @@ class WireStep(ScriptBase):
         with open(h44.__file__, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("function svxFieldVis(sel)", src)
-        self.assertIn("'<select class=\"asl3-cmd-input\" id=\"svx-field-'", src)
+        self.assertIn("'<select class=\"asl3-cmd-input\" id=\"' + fid + '\" onchange=\"' + c.fieldVis + '(this)\">'", src)
+        self.assertIn("fieldVis: 'svxFieldVis'", src)
         self.assertIn("hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';", src)
         self.assertIn("style=\"display:' + hide + ';font-family", src)
 

@@ -100,6 +100,8 @@ jobs:
         run: python3 ci/test_h44_tabs.py
       - name: Build tab step cards (44helper)
         run: python3 ci/test_h44_cards.py
+      - name: Step cards match the old lists (44helper)
+        run: python3 ci/test_h44_stepcards.py
       - name: SVX tab tests (Node Controller full build)
         run: python3 ci/test_nodecontrol_svx.py
       - name: Link, tune and disconnect tests (Node Controller)

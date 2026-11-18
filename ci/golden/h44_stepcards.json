@@ -1,0 +1,266 @@
+{
+ "amp:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "amp:install:hub": {
+  "sha256": "48084fce4df87aa87e83d4b4b2393d6a0582ae17d70ce3de492c0dac9c9b6e86",
+  "length": 10279
+ },
+ "amp:install:hub (fresh)": {
+  "sha256": "dca9811b6d89a3ba8b35ab468127ac3e89531b48ee0eb02ec1524f84c56e84f6",
+  "length": 10251
+ },
+ "amp:install:server": {
+  "sha256": "359da0932ecfb19072706d6d835271e43bb154573bdefb006d7586af976a75d1",
+  "length": 11730
+ },
+ "amp:install:server (fresh)": {
+  "sha256": "3e13f3f718f2a4c04d8e0c8850cac7df226f01e3088ac62bcad44547412d9e4b",
+  "length": 11702
+ },
+ "amp:install:syn": {
+  "sha256": "385a6f8223dc14550a809e45f17f8c5149a74140c472506b612ecdfac78d6c00",
+  "length": 6863
+ },
+ "amp:purge:hub": {
+  "sha256": "94b54833b018b322762f2e2409bdbf0502008f8998ad85f35df94012ff57cf47",
+  "length": 12510
+ },
+ "amp:purge:hub (fresh)": {
+  "sha256": "f6a896a29cb34f4d4e2d541d28c9d511056bed21d2d052f7b88c4d0b49ccaf07",
+  "length": 12465
+ },
+ "amp:purge:server": {
+  "sha256": "110c23cd57952010d0797e474dcb4b33d90acab8a4fe0fb55fdbe888afa7a8a6",
+  "length": 11303
+ },
+ "amp:purge:server (fresh)": {
+  "sha256": "f300bf948eecccb98fd385336cbf5ca0ed1ebad711d149cedd65256c4858e083",
+  "length": 11269
+ },
+ "asl3:install:bookworm": {
+  "sha256": "e396a3aad17a0f6c266502ebc54ba2b39d61d5bcc587b1af8919972d9433e4dc",
+  "length": 19485
+ },
+ "asl3:install:bookworm (fresh)": {
+  "sha256": "397737afe6e35d13f12209cb34a06293f6addd0d4359cb4708501bdbcb96d4f6",
+  "length": 19439
+ },
+ "asl3:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "asl3:install:syn": {
+  "sha256": "415f64d70d223a9f555f6d5ecf636e389769777db6267302dcda71f01640e635",
+  "length": 6477
+ },
+ "asl3:install:trixie": {
+  "sha256": "c0be71c0d886f25ee42838eb87684e1eb23c2900919513994351f71aa2d568fd",
+  "length": 19309
+ },
+ "asl3:install:trixie (fresh)": {
+  "sha256": "d7a783dce9bcbd9e493f291e9e41857df3bf3bc0a38c09158c91bf60d2162353",
+  "length": 19263
+ },
+ "asl3:purge:bookworm": {
+  "sha256": "f5cba458a713a19e873f6ee90c08aa25aad56910f28dfcb10834797ffa31f3c2",
+  "length": 15782
+ },
+ "asl3:purge:bookworm (fresh)": {
+  "sha256": "a690da0cce2581312f22691e41ed38ad80c2420019dc300a78fbe3b2db99516a",
+  "length": 15748
+ },
+ "asl3:purge:trixie": {
+  "sha256": "7294eed724b085106c8545a9fbdc1066256869d0be6a3dc7ae81697a086f14ca",
+  "length": 15650
+ },
+ "asl3:purge:trixie (fresh)": {
+  "sha256": "55a2ea776b222d4f7f884e39639e74ff34aaef932820df853193e58f2ff325c5",
+  "length": 15616
+ },
+ "cf:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "cf:install:quick": {
+  "sha256": "9f000182c4e008b0ee7fa1aa83bf6627f1b2b84d82b7a2016552ba3c5e11709a",
+  "length": 8954
+ },
+ "cf:install:quick (fresh)": {
+  "sha256": "11ab4fe21236068a01483e45f0cd14b188ff09f67cfdff178722e111d3196c2a",
+  "length": 8942
+ },
+ "cf:install:syn": {
+  "sha256": "95a292e3458d3d93f192b20669b25a50c2e435b89efea1f56fd0d078dd00ccbc",
+  "length": 6816
+ },
+ "cf:install:token": {
+  "sha256": "40bc4deb4da61ab5b17389810856bbf840bf2c9f522a4cd669e4962acde524af",
+  "length": 12144
+ },
+ "cf:install:token (fresh)": {
+  "sha256": "ff96a684830b2480bd37083b2243e842cad8632551a12616d7401a8b816f7660",
+  "length": 12121
+ },
+ "cf:purge:quick": {
+  "sha256": "e47286886a380d0cb6cb5efbd1e4bcb0b76ca2a528926598a68baaa36269271f",
+  "length": 8362
+ },
+ "cf:purge:quick (fresh)": {
+  "sha256": "c8da0eb6f5a823892cbf8e93c18cbaf5357b991b82d942c12afd51d72066bb42",
+  "length": 8345
+ },
+ "cf:purge:token": {
+  "sha256": "bc8f29e0af4fc2cd1f845e17e06d36f7e10b6a348cdf1ad67495a9350d00f909",
+  "length": 10420
+ },
+ "cf:purge:token (fresh)": {
+  "sha256": "f81a2593ea58f527084a6747fe1f5c7ca6ff41170bb230698c6b07900b74f01f",
+  "length": 10391
+ },
+ "cr:install:claude": {
+  "sha256": "15d6a54bc51b99acfab48157bd23b809b1a17362aee28050c76d978f8a34de98",
+  "length": 11536
+ },
+ "cr:install:claude (fresh)": {
+  "sha256": "bac85db34d84e16296844f4c3d6b2b2f663d283030b1d4cf2400a1302a916997",
+  "length": 11518
+ },
+ "cr:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "cr:install:syn": {
+  "sha256": "f8254f459116f1e444f374654a86363e91597925cd941594bba51f914a510699",
+  "length": 6816
+ },
+ "cr:purge:claude": {
+  "sha256": "e5da971a584fb5ae34bac260bed08aea518421204444ca6b39a2bbf3a136bafc",
+  "length": 9102
+ },
+ "cr:purge:claude (fresh)": {
+  "sha256": "8c247763efd1994962ed64c77f815e5bd1670e7fe9e34c780673772459ffb6db",
+  "length": 9085
+ },
+ "dv:install:bookworm": {
+  "sha256": "2431d06b89cdbfc8d6a3c79f9654d0ac6c8749d22844731e73b6b61b5fa4eb5e",
+  "length": 19859
+ },
+ "dv:install:bookworm (fresh)": {
+  "sha256": "582b789d6d127c26d6307dd9f27ed55a0b80c3133aaed3a75a1238f302193fc1",
+  "length": 19825
+ },
+ "dv:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "dv:install:syn": {
+  "sha256": "100bd3fa0ce09ae5ffdbc2f5fa633fdb05c5febb7a6f6bbafd0de6ae4a492f90",
+  "length": 6224
+ },
+ "dv:install:trixie": {
+  "sha256": "f003c9a71968ccbb2eab16ca8415a9870446233fef60020a2c0037fa69298da1",
+  "length": 24560
+ },
+ "dv:install:trixie (fresh)": {
+  "sha256": "4589c980731a491d75c621d5068091a2defdb731aac6deedb24391c74c183a7d",
+  "length": 24514
+ },
+ "dv:purge:bookworm": {
+  "sha256": "c45be8a93fb186f33a9aac5e05aa520f4be37924268fb97fafe52a20daa251c1",
+  "length": 18124
+ },
+ "dv:purge:bookworm (fresh)": {
+  "sha256": "e32068aa834b92f94cef4fa44bdcc62262fad2475be91cf51b4c8a4dec2d57d5",
+  "length": 18090
+ },
+ "dv:purge:trixie": {
+  "sha256": "32769aca55fedae95dab2f36c3fd5fdef99d95486cb2dabe547807422d059790",
+  "length": 17982
+ },
+ "dv:purge:trixie (fresh)": {
+  "sha256": "a77faa7a914c306b60459dda6b1c2976ec931ff13e7cc947b9fbee9e8bed0c63",
+  "length": 17948
+ },
+ "m17:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "m17:install:standard": {
+  "sha256": "e0a79e3e7ea6d325036d77f297dd17e95dfe794b3f9d8740a7aeb5eb45be517d",
+  "length": 15181
+ },
+ "m17:install:standard (fresh)": {
+  "sha256": "26e7aac436b37e5d4f5210cc4160543a2c224806e230e2b4a52b41e504a26c9f",
+  "length": 15136
+ },
+ "m17:install:syn": {
+  "sha256": "c225329d95b56fbfbbaab92e5ad195a3eb08abf9791f15429632b4f55bebbd65",
+  "length": 6661
+ },
+ "m17:purge:standard": {
+  "sha256": "5edadc855d7aa079e9464b94ddbb88f7f19e301aa121c9de89a21b8e15ced604",
+  "length": 23842
+ },
+ "m17:purge:standard (fresh)": {
+  "sha256": "e219459981473f1b5890b4093cdc167431935cc6f5d8975bdc735c6b1e57975d",
+  "length": 23808
+ },
+ "svx:install:bookworm": {
+  "sha256": "3f502503c3ddb271016ae83db6a25ee163287835e3a626fdec48d5a903b978fc",
+  "length": 10360
+ },
+ "svx:install:bookworm (fresh)": {
+  "sha256": "9d45de5e52748c4cdbdfbd4a012408b21923b542239968a1b04bc38046371695",
+  "length": 10331
+ },
+ "svx:install:empty": {
+  "sha256": "8c179179e97f9f18cc3b1097fa28b585a25e37c34e5c9e6016305f4e1808c09c",
+  "length": 47
+ },
+ "svx:install:syn": {
+  "sha256": "5a2eb60e006e00edd2fdd9f7268ef87f6633c19fd72dcec60545be108548d537",
+  "length": 6988
+ },
+ "svx:install:trixie": {
+  "sha256": "b216110574c9f2c1c71968cc25cf307880e63221f95e25f262bd4efab5e69d57",
+  "length": 10264
+ },
+ "svx:install:trixie (fresh)": {
+  "sha256": "c3993fba6108d3d5c74ed2c2b25cadacbd8520ce1454ee186fe1fc8b0b592274",
+  "length": 10235
+ },
+ "svx:install:usrp": {
+  "sha256": "d639e111419aeeb7500e4a18cd1b3ecf870de13aa6c209195a85eddc3071fa1e",
+  "length": 33140
+ },
+ "svx:install:usrp (fresh)": {
+  "sha256": "b902a10edd191408128c19382656c3e0607cff357688a9a1052fbaddd35c9d49",
+  "length": 33094
+ },
+ "svx:purge:bookworm": {
+  "sha256": "4670bc7230e0a633bc18272480f5786855193219f3ea5a74eaad876ae01a8221",
+  "length": 16669
+ },
+ "svx:purge:bookworm (fresh)": {
+  "sha256": "87f615ae8792a69e0022a87adbbfdf40724894023f75681f84bb1173df5d9b35",
+  "length": 16635
+ },
+ "svx:purge:trixie": {
+  "sha256": "b5779c883dd975860f468065426082ed8330c6abbde18f93cf964f8120423571",
+  "length": 16525
+ },
+ "svx:purge:trixie (fresh)": {
+  "sha256": "b1e0d7a379ee0f9ea65601722bc92c31baed9e7c374c524328872b3063ffdfbb",
+  "length": 16491
+ },
+ "svx:purge:usrp": {
+  "sha256": "af119194464729f5c2dd0391bc7a3a52d18c4d3fb8a86f10fa14f865bc1e4236",
+  "length": 16381
+ },
+ "svx:purge:usrp (fresh)": {
+  "sha256": "fca341105b98ae3d4cb1b0139aba4485e5c164f7f1dcf94b4431529f0fdc968e",
+  "length": 16347
+ }
+}
