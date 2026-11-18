@@ -199,6 +199,79 @@ console.log(JSON.stringify({{docks: __docks}}));
 """)
         self.assertEqual(out["docks"][0], "")
 
+    def test_run_the_rest_output_goes_to_each_steps_card(self):
+        for profile, pfx, fn in (("travel", "bld", "build"), ("magic", "mbx", "magic")):
+            data = json.dumps({"stages": stages(profile, "half")})
+            out = run_js(profile, f"""
+__box('{pfx}-cards'); __el('{pfx}-progress');
+{fn}RenderCards({data});
+var nl = String.fromCharCode(10);
+var text = ['== Set the IAX port ==', 'iax ok', 'Saved.', '== Set the location ==', 'loc line', '== Not a step ==', 'x', '== Set the IAX port ==', 'again', 'Stopped at ASL3: do it in its card or on its own tab. Not installed.'].join(nl);
+var sp = {fn}SplitRest(text);
+console.log(JSON.stringify({{ids: Object.keys(sp.sections), iax: sp.sections.iax_port, loc: sp.sections.location, top: sp.top}}));
+""")
+            self.assertEqual(sorted(out["ids"]), ["iax_port", "location"])
+            self.assertEqual(out["iax"], ["iax ok", "Saved.", "again"])
+            self.assertEqual(out["loc"], ["loc line", "== Not a step ==", "x"])
+            self.assertEqual(out["top"], "Stopped at ASL3: do it in its card or on its own tab. Not installed.")
+
+    def test_a_steps_own_sub_headings_stay_in_its_card(self):
+        for profile, pfx, fn in (("travel", "bld", "build"), ("magic", "mbx", "magic")):
+            data = json.dumps({"stages": stages(profile, "half")})
+            out = run_js(profile, f"""
+__box('{pfx}-cards'); __el('{pfx}-progress');
+{fn}RenderCards({data});
+var nl = String.fromCharCode(10);
+var sp = {fn}SplitRest(['== ASL3 ==', '== ASL3 step 1: prereqs ==', 'reading package lists', '== ASL3 step 2: fetch ==', 'cloning',
+  '== Wiring checks ==', '== refs ==', 'ok', 'Stopped at AllStarLink registration: do it in its card or on its own tab.'].join(nl));
+console.log(JSON.stringify({{asl3: sp.sections.asl3, wiring: sp.sections.wiring, top: sp.top}}));
+""")
+            self.assertEqual(out["asl3"], ["== ASL3 step 1: prereqs ==", "reading package lists",
+                                           "== ASL3 step 2: fetch ==", "cloning"])
+            self.assertEqual(out["wiring"], ["== refs ==", "ok"])
+            self.assertEqual(out["top"], "Stopped at AllStarLink registration: do it in its card or on its own tab.")
+
+    def test_the_poll_of_run_the_rest_fills_the_step_cards_and_keeps_the_summary_on_top(self):
+        for profile, pfx, fn in (("travel", "bld", "build"), ("magic", "mbx", "magic")):
+            data = json.dumps({"stages": stages(profile, "half")})
+            out = run_js(profile, f"""
+__box('{pfx}-cards'); __el('{pfx}-progress'); __el('{pfx}-run-out');
+{fn}RenderCards({data});
+var nl = String.fromCharCode(10);
+var j = {{status: 'running', output: ['== Set the IAX port ==', 'iax ok', '== Set the location ==', 'loc line', 'Stopped at ASL3: do it in its card or on its own tab.'].join(nl)}};
+var fetch = function() {{ return Promise.resolve({{json: function() {{ return Promise.resolve(j); }}}}); }};
+var setTimeout = function() {{}};
+{fn}Poll('build_{profile}_rest');
+setImmediate(function() {{
+  console.log(JSON.stringify({{iax: __els['{pfx}-out-iax_port'].textContent, loc: __els['{pfx}-out-location'].textContent,
+    top: __els['{pfx}-run-out'].textContent, kept: _{pfx}Out.iax_port && _{pfx}Out.iax_port.text}}));
+}});
+""")
+            self.assertEqual(out["iax"], "iax ok")
+            self.assertEqual(out["loc"], "loc line")
+            self.assertEqual(out["top"], "Stopped at ASL3: do it in its card or on its own tab.")
+            self.assertEqual(out["kept"], "iax ok")
+
+    def test_the_card_and_tab_pieces_follow_the_mode(self):
+        want = {"half": {"tunnel", "half"}, "split": {"tunnel"}, "full": {"tunnel", "fullx"}, "none": set()}
+        for profile, pfx, fn in (("travel", "bld", "build"), ("magic", "mbx", "magic")):
+            for mode, pieces in want.items():
+                data = json.dumps({"stages": stages(profile, mode)})
+                out = run_js(profile, f"""
+__box('{pfx}-cards'); __el('{pfx}-progress');
+{fn}RenderCards({data});
+var html = __els['{pfx}-cards']._html, have = [], re = /id="{pfx}-det-([a-z_0-9]+)"/g, m, order = [], re2 = /id="{pfx}-card-([a-z_0-9]+)"/g;
+while ((m = re.exec(html))) {{ have.push(m[1]); }}
+while ((m = re2.exec(html))) {{ order.push(m[1]); }}
+console.log(JSON.stringify({{have: have, order: order}}));
+""")
+                base = {"asl3", "dvs", "m17"} | ({"svx"} if profile == "magic" else set())
+                self.assertEqual(set(out["have"]), base | pieces, (profile, mode))
+                want_order = [i for i, _ in h44._bld_stage_defs(mode, profile)][1:]
+                self.assertEqual(out["order"], want_order, (profile, mode))
+                for d in out["have"]:
+                    self.assertEqual(out["order"].count(d), 1, (profile, mode, d))
+
     def test_a_refresh_with_nothing_new_changes_no_card(self):
         data = json.dumps({"stages": stages("travel", "half")})
         out = run_js("travel", f"""

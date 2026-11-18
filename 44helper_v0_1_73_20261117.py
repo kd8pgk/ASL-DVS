@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.72"
+APP_VERSION = "0.1.73"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -29068,6 +29068,7 @@ function @F@ShowErrors(d) {
 
 var _@P@Order = '';
 var _@P@Html = {};
+var _@P@LabelId = {};
 var _@P@Out = {};
 
 function @F@PillClass(state) {
@@ -29130,6 +29131,8 @@ function @F@RenderCards(d) {
   var box = document.getElementById('@P@-cards');
   if (!box) { return; }
   var all = d.stages || [];
+  _@P@LabelId = {};
+  all.forEach(function(s) { _@P@LabelId[s.label] = s.id; });
   var stages = all.filter(function(s) { return s.id !== 'preflight'; });
   var order = stages.map(function(s) { return s.id; }).join(',');
   if (order !== _@P@Order) {
@@ -29232,6 +29235,24 @@ function @F@Report(btn) {
 
 var _@P@PollKey = '';
 
+function @F@SplitRest(text) {
+  var nl = String.fromCharCode(10);
+  var sections = {};
+  var top = [];
+  var cur = null;
+  String(text || '').split(nl).forEach(function(ln) {
+    var m = /^== (.+) ==$/.exec(ln);
+    if (m && _@P@LabelId[m[1]]) {
+      cur = _@P@LabelId[m[1]];
+      sections[cur] = sections[cur] || [];
+      return;
+    }
+    if (/^(Stopped|Every step is done)/.test(ln)) { top.push(ln); return; }
+    if (cur) { sections[cur].push(ln); } else { top.push(ln); }
+  });
+  return {sections: sections, top: top.join(nl)};
+}
+
 function @F@Poll(key) {
   if (_@P@PollKey === key) { return; }
   _@P@PollKey = key;
@@ -29239,10 +29260,24 @@ function @F@Poll(key) {
   var out = document.getElementById('@P@-out-' + stage) || document.getElementById('@P@-run-out');
   function tick() {
     fetch('/api/action_status?job_key=' + encodeURIComponent(key)).then(function(r) { return r.json(); }).then(function(j) {
+      var shown = j.output;
+      if (stage === 'rest') {
+        var sp = @F@SplitRest(j.output);
+        Object.keys(sp.sections).forEach(function(id) {
+          var card = document.getElementById('@P@-out-' + id);
+          if (card) {
+            card.style.display = '';
+            card.className = 'asl3-console shown';
+            card.textContent = sp.sections[id].slice(-60).join(String.fromCharCode(10)).replace(/^\s+|\s+$/g, '');
+            @F@KeepOut(id);
+          }
+        });
+        shown = sp.top;
+      }
       if (out) {
         out.style.display = '';
         out.className = 'asl3-console shown' + (j.status === 'done' ? (j.success ? ' ok' : ' fail') : '');
-        var lines = String(j.output || '').split(String.fromCharCode(10));
+        var lines = String(shown || '').split(String.fromCharCode(10));
         out.textContent = lines.slice(-60).join(String.fromCharCode(10));
         out.scrollTop = out.scrollHeight;
         if (out.id === '@P@-out-' + stage) { @F@KeepOut(stage); }
@@ -33513,7 +33548,7 @@ def _bld_rest_worker(key: str, profile: str, payload: dict) -> dict:
             tail = f"Stopped: {nxt['label']} waits for a step that is not done. {nxt['detail']}"
             break
         if nxt["id"] not in _BLD_RUNNABLE:
-            tail = f"Stopped at {nxt['label']}: do it on its own tab. {nxt['detail']}"
+            tail = f"Stopped at {nxt['label']}: do it in its card or on its own tab. {nxt['detail']}"
             break
         if nxt["id"] == last:
             tail = f"Stopped: {nxt['label']} is still open after it ran. {nxt['detail']}"
