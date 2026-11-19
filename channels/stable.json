@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "2a310cf334a1c8e8600463c8c794f1d020544eb2",
-   "commit": "f7329723fb7345b09f8d534d2c5d2fe2bd97f7e8",
-   "file": "44helper_v0_1_24_20261113.py",
-   "landed": "2026-11-13T09:39:55Z",
-   "promoted": "2026-11-16T09:39:55Z",
+   "blob": "9297cee34c127c2b9e43079140aa40233f5623d5",
+   "commit": "6beabda2192cf0550be0baec3ebba371462ddb04",
+   "file": "44helper_v0_1_42_20261116.py",
+   "landed": "2026-11-16T09:47:15Z",
+   "promoted": "2026-11-19T09:47:15Z",
    "reason": "count",
-   "version": "0.1.24"
+   "version": "0.1.42"
   },
   "amp_nodetalker": {
    "blob": "3f4ef9e0f36caefae42108e6f439e2b949a0a246",
@@ -72,6 +72,15 @@
    "promoted": "2026-11-16T17:56:31Z",
    "reason": "count",
    "version": "9.3.114-pi02w"
+  },
+  "nodemon": {
+   "blob": "b73519f3e7ab5c2645bc225f95b316fd2f37ac98",
+   "commit": "c121c36236b59fde9f7e24a8a03a985a1fbae9e6",
+   "file": "nodemon_v0_4_0_20261116.py",
+   "landed": "2026-11-16T14:21:27Z",
+   "promoted": "2026-11-19T14:21:27Z",
+   "reason": "count",
+   "version": "0.4.0"
   },
   "noderecorder": {
    "blob": "d17b463d6539fe04f18fc9252dfe4273ea85e184",
