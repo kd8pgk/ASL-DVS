@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.113.0"
+VERSION ="2.114.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -9313,9 +9313,15 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
             +''.join (f'<button data-action="save_alternate" data-name="{esc (n )}">Save {esc (n )}</button>'for n in live )
             +'</div>')
     card_cls ="card libgrp libgrp-nested collapsed"if nested else "card libgrp collapsed"
-    gh_update_html =(f'<button class="gh-group-update" data-action="gh_update_group" data-category="{category}" '
-    f'title="Download the newest file for this library from GitHub on this node\'s channel and replace the library copy">Update</button>'
-    if category in GH_CATEGORIES else "")
+    gh_update_html =""
+    if category in GH_CATEGORIES:
+        with _gh_lock :
+            busy_here =any (e .get ("name")in _gh_state ["busy"]for e in (_gh_state ["entries"]or [])if e .get ("category")==category )
+        if busy_here :
+            gh_update_html ='<button class="gh-group-update" disabled title="A download for this library is running">Downloading&hellip;</button>'
+        else :
+            gh_update_html =(f'<button class="gh-group-update" data-action="gh_update_group" data-category="{category}" '
+            f'title="Download the newest file for this library from GitHub on this node\'s channel and replace the library copy">Update</button>')
     upload_html =f"""
     <div class="librow libgrp-upload libgrp-upload-top">
       <input type="file" id="file-{category}" data-category="{category}">
