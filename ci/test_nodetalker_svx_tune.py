@@ -110,7 +110,7 @@ class SavedList(unittest.TestCase):
 
 class SvxServices(unittest.TestCase):
     def test_svxlink_is_in_the_service_table(self):
-        self.assertIn("svxlink", [r[0] for r in nt.svc_table()])
+        self.assertIn("svxlink", [r[0] for r in nt.svc_table_nt()])
 
     def test_unknown_action_is_refused(self):
         self.assertFalse(nt.svc_control({"key": "svxlink", "action": "reboot"})["ok"])
