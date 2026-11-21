@@ -538,7 +538,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `pibrary_v0_17_3_20261115.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
 | `nodemon_v0_7_0_20261117.py` | common |
-| `piper_dashboard_v0_8_0_20261121.py` | common |
+| `piper_dashboard_v0_8_1_20261121.py` | common |
 | `install_all_v7_9_0_20261121.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |
