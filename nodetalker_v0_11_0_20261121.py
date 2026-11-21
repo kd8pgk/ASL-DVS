@@ -3308,6 +3308,23 @@ def svc_classify(kv, now_mono):
 
 
 def svc_rows(run, now_mono, stfu_probe=None):
+    table = svc_table()
+    info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
+    rows = []
+    for key, label, units in table:
+        unit = next((u for u in units if (info.get(u + ".service") or {}).get("LoadState") not in (None, "not-found")), units[0])
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now_mono)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed and stfu_probe is not None:
+            by_hand = stfu_probe()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    return rows
+
+
+def svc_rows_nt(run, now_mono, stfu_probe=None):
     table = svc_table_nt()
     info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
     rows = []
@@ -3459,7 +3476,7 @@ def svc_status(_body=None):
         own_only = now < _svc_own_until["t"]
     v = None if own_only else svc_from_nc()
     if v is None:
-        rows = svc_rows(_svc_run, now, svc_stfu_by_hand)
+        rows = svc_rows_nt(_svc_run, now, svc_stfu_by_hand)
         reg = svc_registration(rows[0]["light"] == "on")
         v = {"ok": True, "source": "nodetalker", "checked_at": time.time(), "reg": reg, "services": rows}
     with _svc_lock:
