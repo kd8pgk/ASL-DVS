@@ -2,6 +2,13 @@
 
 Current file: `nodemon_v0_8_0_20261118.py`. Newest entries first.
 
+## 0.8.0.1 (2026-11-21)
+
+Cosmetic: colours and the phone layout on Overview. This is a cosmetic build: the file name is unchanged.
+
+- **Phone, held upright:** the Nodes table on Overview hides the State column (UP and DOWN badges) and shows the Linked to column in its place. Notes stays hidden. Landscape is unchanged.
+- **Palette:** the colour tokens match Node Controller's dark palette (purple, pink, FCS teal, muted and the dim variants are added). The Linked Nodes tab uses its pink.
+
 ## 0.8.0 (2026-11-18)
 
 A new **Linked Nodes** tab lists the main node and every link it has. This is a release: the page has a new tab.
