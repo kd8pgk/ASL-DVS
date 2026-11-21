@@ -1,6 +1,15 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_6_0_20261121.py`.
+Current file: `piper_dashboard_v0_7_0_20261121.py`.
+
+## 0.7.0 (2026-11-21)
+
+Settings tab, and saving output to a Pibrary drive. This is a release: the page has a second tab, and generated WAV files can go to Pibrary.
+
+- **Settings tab.** Bind address, port, GPU, preload voice, voice catalog URL, play on node (node numbers, sounds directory, longest clip, Asterisk command). Saving validates every field on the server and writes `/etc/asl_dvs/piper_dashboard.conf` atomically. Changes take effect on the next restart (Restart service to apply).
+- **Play on node.** Turning it on (node numbers set while blank) asks for confirmation on the page and again on the server (409 until confirmed). Nothing transmits from the Settings tab.
+- **Save output to Pibrary.** When the Pibrary service is running, the drive list is Pibrary's own library root and extra roots (read from `/etc/pibrary/pibrary.conf`, no Pibrary change). Generated WAV files go to `<drive>/audio/TTS`. If Pibrary is stopped, the drive is missing or not writable, the file goes to the local output folder and the Run page says why.
+- **Config format.** Adds a `[pibrary] root` key. Other keys are unchanged.
 
 ## 0.6.0 (2026-11-21)
 
