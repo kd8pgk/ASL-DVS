@@ -38,13 +38,13 @@
    "version": "1.0.0"
   },
   "install_all": {
-   "blob": "d06aba5da2f77dc824a226ec241b9802456f40fe",
-   "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
-   "file": "install_all_v7_4_0_20261020.sh",
-   "landed": "2026-10-20T15:25:49Z",
-   "promoted": "2026-11-03T15:25:49Z",
-   "reason": "age",
-   "version": "7.4.0"
+   "blob": "fc07884bf22916219663af3278fdb3da89a307d8",
+   "commit": "e998a2178640c9c895d24d905ee1f4276de10f4c",
+   "file": "install_all_v7_5_0_20261110.sh",
+   "landed": "2026-11-10T04:45:22Z",
+   "promoted": "2026-11-21T16:47:01Z",
+   "reason": "count",
+   "version": "7.5.0"
   },
   "instmon": {
    "blob": "5dec5074a41589742dcaeed84fadbffc86c5feaa",
