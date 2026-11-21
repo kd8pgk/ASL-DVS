@@ -722,15 +722,15 @@ class NodeDiscon(AmiCase):
         self.assertIn("classList.add('lit')", body)
         self.assertIn("if (n.txkeyed || n.rxkeyed) trs[i + 1].classList.add('hot')", body)
 
-    def test_on_a_portrait_phone_only_node_what_state_and_the_button_remain(self):
+    def test_on_a_portrait_phone_links_replace_state_and_the_button_remains(self):
         css = nm._CSS
         self.assertIn("@media (max-width:600px) and (orientation:portrait)", css)
         rule = css.split("@media (max-width:600px) and (orientation:portrait){", 1)[1].split("}}", 1)[0]
-        self.assertIn(".nodes-tbl th:nth-child(4)", rule)
+        self.assertIn(".nodes-tbl th:nth-child(3)", rule)
         self.assertIn(".nodes-tbl td:nth-child(5)", rule)
+        self.assertNotIn(".nodes-tbl th:nth-child(4)", rule)
         self.assertIn("display:none", rule)
         self.assertNotIn("nth-child(6)", rule)
-        self.assertNotIn("nth-child(3)", rule)
 
     def test_the_connections_tab_is_gone(self):
         self.assertNotIn("tab-conn", nm._HTML_TEMPLATE)
@@ -811,6 +811,14 @@ class QuickLinks(unittest.TestCase):
         with unittest.mock.patch.object(nm, "quick_links", lambda: [{"key": "x"}]):
             self.assertEqual(nm.build_status(True)["links"], [{"key": "x"}])
             self.assertEqual(nm.build_status(False)["links"], [])
+
+    def test_the_linked_nodes_tab_sits_after_main_and_is_wired(self):
+        html = nm._HTML_TEMPLATE
+        self.assertLess(html.index('id="tab-main"'), html.index('id="tab-linked"'))
+        self.assertLess(html.index('id="tab-linked"'), html.index('id="tab-priv"'))
+        self.assertIn('<section id="pg-linked" class="hidden">', html)
+        self.assertIn("'linked'", nm._JS)
+        self.assertIn("renderLinked(d)", nm._JS)
 
     def test_the_page_opens_on_the_overview_tab(self):
         html = nm._HTML_TEMPLATE

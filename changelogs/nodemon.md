@@ -1,6 +1,16 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_7_0_20261117.py`. Newest entries first.
+Current file: `nodemon_v0_8_0_20261118.py`. Newest entries first.
+
+## 0.8.0 (2026-11-18)
+
+A new **Linked Nodes** tab lists the main node and every link it has. This is a release: the page has a new tab.
+
+- **Linked Nodes tab**, after Main node. The card shows the main node's state, then one row per link: node, type, tuned to, state, mode, direction, time connected and audio.
+- **Private nodes are included.** A link to a private node (1000 to 1999) is marked `(local)`, so it is easy to tell apart from an outside link.
+- **Nothing else changes.** The Main node and Private nodes tabs and the status reply are as in 0.7.0.
+- **Phone, held upright:** the Nodes table on Overview hides the State column (UP and DOWN badges) and shows the Linked to column in its place. Notes stays hidden. Landscape is unchanged.
+- **Palette:** the colour tokens match Node Controller's dark palette (purple, pink, FCS teal, muted and the dim variants are added). The Linked Nodes tab uses its pink.
 
 ## 0.7.0 (2026-11-17)
 
