@@ -1,6 +1,13 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_101_20261116.py`. Newest entries first.
+Current file: `sysmon_v6_13_102_20261121.py`. Newest entries first.
+
+## 6.13.102 (2026-11-21)
+
+The Node Mon quick link opens **https**, because Node Monitor serves TLS only from 0.7.0. This is a release: the link's address changed.
+
+- **Node Mon** opens `https://<host>:7777/`. The other quick links are unchanged.
+- Node Monitor's certificate is self-signed unless the node has a CA-signed one, so the browser shows a warning the first time.
 
 ## 6.13.101.1 (2026-11-16)
 
