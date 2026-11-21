@@ -1,6 +1,18 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_4_0_20261121.py`.
+Current file: `piper_dashboard_v0_5_0_20261121.py`.
+
+## 0.5.0 (2026-11-21)
+
+Login, security headers and the root password check. This is a release: the service now runs as root (as Pibrary does) and every page and API route needs a sign-in, except the page itself and the status line.
+
+- **Sign-in.** The root password, checked through PAM when the `pam` module is present and otherwise against `/etc/shadow` (crypt). Shared session and lockout code from `shared/confio.py` (standard tier: 12 h idle, cookie refreshed about hourly, 5 s doubling to 300 s lockout after 5 wrong tries).
+- **Sign out ends every session.** A new session is the only way back in after a sign-out.
+- **Password change ends sessions.** The session is tied to the root shadow hash.
+- **Requests.** Every POST needs the `X-Requested-With: XMLHttpRequest` header (403 otherwise). The update route keeps its own token.
+- **Headers.** `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a Content-Security-Policy on every reply.
+- **Status line.** Without a sign-in `/api/status` returns only the version and engine state (the watchdog probe uses it).
+- **Service user.** Defaults to root. `--run-as` still accepts another user, but a non-root user cannot read the shadow file, so sign-in will not work for it.
 
 ## 0.4.0 (2026-11-21)
 

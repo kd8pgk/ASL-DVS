@@ -1,4 +1,4 @@
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 import argparse
 import configparser
@@ -35,7 +35,7 @@ INSTALL_ROOT = "/opt/piper_dashboard"
 UNIT_PATH = "/etc/systemd/system/piper_dashboard.service"
 INI_PATH = "/etc/piper_dashboard.ini"
 DATA_ROOT = "/srv/piper_dashboard"
-DEFAULT_USER = "piperdash"
+DEFAULT_USER = "root"
 USER_MARK = "/etc/piper_dashboard.user"
 KEEP_VERSIONS = 3
 EXPORT_FORMATS = {"ulaw": ".ulaw", "sln": ".sln", "wav8": "-8k.wav"}
@@ -80,6 +80,269 @@ TEXT_EXTS = {".txt", ".md", ".csv"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 CFG = {}
+
+
+_SESSION_COOKIE_NAME = "piper_session"
+SESS_TIER = "standard"
+SESS_STORE = {}
+SESS_LOCK = threading.Lock()
+LOCK_STATE = {}
+AUTH_ACCOUNT = "root"
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+       "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
+
+def _read_shadow_hash(account):
+    try:
+        with open("/etc/shadow", "r") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split(":")
+                if len(parts) >= 2 and parts[0] == account:
+                    return parts[1]
+    except OSError:
+        return None
+    return None
+
+
+def _crypt_verify(password, stored_hash):
+    import ctypes
+    import ctypes.util
+    for name in ("libcrypt.so.1", "libcrypt.so.2", "libcrypt.so", ctypes.util.find_library("crypt")):
+        if not name:
+            continue
+        try:
+            lib = ctypes.CDLL(name)
+            lib.crypt.restype = ctypes.c_char_p
+            lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        except (OSError, AttributeError):
+            continue
+        out = lib.crypt(password.encode("utf-8", "surrogateescape"), stored_hash.encode("utf-8", "surrogateescape"))
+        if out is None:
+            return False
+        return hmac.compare_digest(out.decode("utf-8", "surrogateescape"), stored_hash)
+    return False
+
+
+def verify_root_password(password):
+    if not password:
+        return False
+    try:
+        import pam as pam_mod
+        return bool(pam_mod.pam().authenticate(AUTH_ACCOUNT, password, service="login"))
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    stored = _read_shadow_hash(AUTH_ACCOUNT)
+    if not stored or stored[0] in ("!", "*"):
+        return False
+    return _crypt_verify(password, stored)
+
+
+def auth_stamp():
+    return sess_stamp(_read_shadow_hash(AUTH_ACCOUNT) or "")
+
+
+def sess_policy(tier):
+    if tier == "standard":
+        return {"idle": 12 * 3600, "absolute": 0, "renew": 3600, "max": 50}
+    if tier == "strict":
+        return {"idle": 2 * 3600, "absolute": 12 * 3600, "renew": 3600, "max": 50}
+    raise ValueError("unknown session tier: %s" % (tier,))
+
+
+def sess_digest(token):
+    import hashlib
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+
+def sess_stamp(password_hash):
+    import hashlib
+    return hashlib.sha256((password_hash or "").encode("utf-8")).hexdigest()[:32]
+
+
+def sess_dead(rec, now):
+    return rec["idle"] <= now or bool(rec["abs"] and rec["abs"] <= now)
+
+
+def sess_new(store, policy, now, stamp="", ip=""):
+    import secrets
+    for key in [k for k, r in store.items() if sess_dead(r, now)]:
+        del store[key]
+    while len(store) >= policy["max"]:
+        del store[min(store, key=lambda k: store[k]["born"])]
+    token = secrets.token_hex(32)
+    idle = now + policy["idle"]
+    hard = now + policy["absolute"] if policy["absolute"] else 0
+    store[sess_digest(token)] = {"idle": min(idle, hard) if hard else idle, "abs": hard, "born": now,
+                                 "renew": now, "stamp": stamp, "ip": ip}
+    return token, int(min(idle, hard) - now if hard else idle - now)
+
+
+def sess_check(store, token, policy, now, stamp=None, touch=True, ip=None):
+    if not token:
+        return False, False, 0
+    key = sess_digest(token)
+    rec = store.get(key)
+    if rec is None:
+        return False, False, 0
+    if (sess_dead(rec, now) or (stamp is not None and rec["stamp"] != stamp)
+            or (ip is not None and rec["ip"] and rec["ip"] != ip)):
+        del store[key]
+        return False, False, 0
+    if touch:
+        rec["idle"] = now + policy["idle"]
+        if rec["abs"]:
+            rec["idle"] = min(rec["idle"], rec["abs"])
+    renew = bool(touch and now - rec["renew"] >= policy["renew"])
+    if renew:
+        rec["renew"] = now
+    return True, renew, int(rec["idle"] - now)
+
+
+def sess_drop_all(store):
+    count = len(store)
+    store.clear()
+    return count
+
+
+def sess_cookie_name(name, secure):
+    return ("__Host-" if secure else "") + name
+
+
+def sess_cookie(name, token, max_age, secure):
+    parts = [sess_cookie_name(name, secure) + "=" + token, "Path=/", "HttpOnly", "SameSite=Strict",
+             "Max-Age=%d" % max(0, int(max_age))]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def sess_cookie_clear(name, secure):
+    return sess_cookie(name, "", 0, secure)
+
+
+def sess_token_from(cookie_header, name):
+    wanted = (name, "__Host-" + name)
+    for part in (cookie_header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key in wanted and value:
+            return value
+    return None
+
+
+def lock_wait(state, ip, now, wan=False):
+    recent = state.setdefault("wan", [])
+    while recent and now - recent[0] > 600:
+        recent.pop(0)
+    rec = state.setdefault("ip", {}).get(ip)
+    wait = max(0.0, rec["until"] - now) if rec else 0.0
+    if wan and len(recent) >= 20:
+        wait = max(wait, recent[0] + 600 - now)
+    return wait
+
+
+def lock_fail(state, ip, now, wan=False):
+    table = state.setdefault("ip", {})
+    recent = state.setdefault("wan", [])
+    for key in [k for k, r in table.items() if now - r["last"] > 3600 and r["until"] <= now]:
+        del table[key]
+    while len(table) >= 1000 and ip not in table:
+        del table[min(table, key=lambda k: table[k]["last"])]
+    if wan:
+        recent.append(now)
+        del recent[:-20]
+    rec = table.setdefault(ip, {"n": 0, "until": 0.0, "last": now})
+    rec["n"] += 1
+    rec["last"] = now
+    if rec["n"] >= 5:
+        rec["until"] = now + min(5 * 2 ** min(rec["n"] - 5, 10), 300)
+    return max(0.0, rec["until"] - now)
+
+
+def lock_ok(state, ip):
+    state.setdefault("ip", {}).pop(ip, None)
+
+
+def login_ui_html(input_id, nonce=""):
+    import json
+    attr = ' nonce="%s"' % nonce if nonce else ""
+    css = (
+        ".pw-wrap{position:relative;display:block}"
+        ".pw-wrap>input{box-sizing:border-box;width:100%;padding-right:2.7rem}"
+        ".pw-wrap>.pw-eye{position:absolute!important;top:50%!important;right:.3rem!important;transform:translateY(-50%)!important;"
+        "width:2.1rem!important;height:2.1rem!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;"
+        "border:0!important;border-radius:4px!important;background:transparent!important;color:inherit!important;opacity:.7;"
+        "cursor:pointer;box-shadow:none!important;filter:none!important;text-shadow:none!important;text-transform:none!important;"
+        "letter-spacing:0!important;font-size:1rem!important;line-height:1!important;display:flex!important;align-items:center!important;"
+        "justify-content:center!important}"
+        ".pw-wrap>.pw-eye:hover,.pw-wrap>.pw-eye:focus-visible{opacity:1;background:rgba(127,127,127,.2)!important;box-shadow:none!important;filter:none!important}"
+        ".pw-wrap>.pw-eye:active{transform:translateY(-50%)!important}"
+        ".pw-eye svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;"
+        "stroke-linejoin:round;pointer-events:none}"
+        ".pw-eye .pw-off{display:none}"
+        '.pw-eye[aria-pressed="true"] .pw-on{display:none}'
+        '.pw-eye[aria-pressed="true"] .pw-off{display:block}'
+    )
+    skin = (
+        ".lg-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;"
+        "gap:14px;box-sizing:border-box;padding:24px 16px 56px;background:#070b13;color:#e6edf6;"
+        "font-family:'Readex Pro',Arial,Helvetica,sans-serif}"
+        ".lg-screen.hidden,.lg-screen[hidden]{display:none}"
+        ".lg-card{box-sizing:border-box;width:100%;max-width:320px;margin:0;padding:25.6px 22.4px 19.2px;background:#121a29;"
+        "border:1px solid #2c3d5a;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;"
+        "gap:12px;text-align:center}"
+        ".lg-form{margin:0;padding:0;display:flex;flex-direction:column;gap:12px}"
+        ".lg-title{margin:0 0 4px;padding:0;font-family:inherit;font-size:18.4px;font-weight:700;line-height:1.2;"
+        "letter-spacing:.02em;color:#ffd040;text-shadow:none}"
+        "input.lg-in{box-sizing:border-box;width:100%;min-height:0;height:auto;margin:0;padding:9.6px 11.2px;font-family:inherit;"
+        "font-size:15.2px;line-height:1.2;background:#0a1020;color:#fff;border:1px solid #2c3d5a;border-radius:6px;outline:none}"
+        "input.lg-in:focus,input.lg-in:focus-visible{border-color:#ffd040;outline:none}"
+        "button.lg-btn{box-sizing:border-box;width:100%;min-height:0;margin:0;padding:10.4px;font-family:inherit;font-size:14.4px;"
+        "font-weight:700;line-height:1.2;letter-spacing:0;text-transform:none;background:#ffd040;color:#1a1300;border:0;"
+        "border-radius:6px;cursor:pointer;box-shadow:none;text-shadow:none;filter:none;transition:none}"
+        "button.lg-btn:hover:not(:disabled){background:#ffd040;color:#1a1300;filter:brightness(1.08);box-shadow:none}"
+        "button.lg-btn:disabled{opacity:.5;cursor:default}"
+        ".lg-msg{min-height:17.6px;margin:0;font-size:12.8px;line-height:1.3;color:#ff5d73;text-align:center}"
+        ".lg-note{margin:0;max-width:300px;font-size:12.5px;color:#ff5d73}.lg-note:empty{display:none}"
+        "button.lg-link{width:auto;min-height:0;margin:0 auto;padding:3.2px 8px;background:none;border:0;box-shadow:none;"
+        "color:#8aa0bf;font-family:inherit;font-size:12.8px;text-decoration:underline;text-transform:none;letter-spacing:0;cursor:pointer}"
+        ".lg-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;letter-spacing:.04em;color:#7d8aa0}"
+        ".lg-license a{color:#6cb6ff}"
+    )
+    js = (
+        "(function(){var ID=" + json.dumps(input_id).replace("</", "<\\/") + ";"
+        "function go(){var input=document.getElementById(ID);if(!input||input.getAttribute('data-pw-eye'))return;"
+        "input.setAttribute('data-pw-eye','1');"
+        "var wrap=document.createElement('span');wrap.className='pw-wrap';"
+        "input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);"
+        "var b=document.createElement('button');b.type='button';b.className='pw-eye';"
+        "b.innerHTML='<svg class=\"pw-on\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z\"/>"
+        "<circle cx=\"12\" cy=\"12\" r=\"3\"/></svg><svg class=\"pw-off\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        "<path d=\"M17.9 17.9A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7"
+        "a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2\"/><path d=\"M1 1l22 22\"/></svg>';"
+        "function show(on){input.type=on?'text':'password';b.setAttribute('aria-pressed',on?'true':'false');"
+        "var t=on?'Hide password':'Show password';b.setAttribute('aria-label',t);b.title=t;}"
+        "show(false);"
+        "b.addEventListener('mousedown',function(e){e.preventDefault();});"
+        "b.addEventListener('click',function(){show(input.type==='password');input.focus();});"
+        "if(input.form)input.form.addEventListener('submit',function(){show(false);});"
+        "document.addEventListener('visibilitychange',function(){if(document.hidden)show(false);});"
+        "window.addEventListener('pagehide',function(){show(false);});"
+        "wrap.appendChild(b);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();"
+    )
+    return "<style%s>%s</style><script%s>%s</script>" % (attr, skin + css, attr, js)
+
+
+def login_ui_inject(html, input_id, nonce=""):
+    head, sep, tail = html.rpartition("</body>")
+    if not sep:
+        return html
+    return head + login_ui_html(input_id, nonce) + sep + tail
+
+
 
 
 class Engine:
@@ -536,13 +799,22 @@ a { color: var(--blue); }
 .orow button { width: auto; margin: 0; padding: .15rem .55rem; font-size: .72rem; color: var(--blue); border-color: var(--blue-dim); }
 .orow button.air, .orow button.del { color: var(--red); border-color: var(--red-dim); }
 #clist { max-height: 260px; overflow: auto; margin-top: .5rem; }
+#logout{width:auto;margin:.2rem 0 0;padding:.15rem .6rem;font-size:.72rem}
 </style></head><body>
+<div id="lg" class="lg-screen" hidden>
+<form class="lg-card" id="lgform">
+<div class="lg-title">Pi-Piper TTS</div>
+<input id="lg-pw" class="lg-in" type="password" autocomplete="current-password" placeholder="Root password">
+<button class="lg-btn" type="submit">Sign in</button>
+<div class="lg-msg" id="lg-msg"></div>
+</form>
+</div>
 <header>
   <div class="hdr-left">
     <div class="logo">Pi-Piper TTS</div>
     <div class="logo-sub">Text to speech</div>
   </div>
-  <div class="hdr-right"><div class="hdr-ver">v__VERSION__</div></div>
+  <div class="hdr-right"><div class="hdr-ver">v__VERSION__</div><button id="logout" class="sec" hidden>Sign out</button></div>
 </header>
 <div class="wrap">
 <div id="eng"></div>
@@ -644,13 +916,16 @@ function setStatus(msg, err) {
 }
 async function getJSON(url) {
   const r = await fetch(url);
+  if (r.status === 401) showLogin();
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw new Error(j.message || j.error || r.statusText);
   return j;
 }
 async function loadEngine() {
   try {
     const s = await getJSON('/api/status');
+    $('logout').hidden = !s.auth;
+    if (!s.auth) { $('eng').textContent = ''; return; }
     const parts = [s.engine_ok ? 'engine ok' : 'engine MISSING: ' + s.engine_error];
     parts.push(s.loaded ? 'loaded: ' + s.loaded : 'no voice loaded');
     parts.push(s.busy ? 'busy' : 'idle');
@@ -780,11 +1055,12 @@ async function loadOutputs() {
 async function post(url, body) {
   const r = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
     body: JSON.stringify(body || {})
   });
+  if (r.status === 401) showLogin();
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw new Error(j.message || j.error || r.statusText);
   return j;
 }
 function showJob(msg, err) {
@@ -905,8 +1181,9 @@ $('upd').onclick = async () => {
       headers: { 'X-Update-Token': $('updtok').value, 'X-Restart': $('updrs').checked ? '1' : '0' },
       body: f
     });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
+    if (r.status === 401) showLogin();
+  const j = await r.json();
+    if (!r.ok) throw new Error(j.message || j.error || r.statusText);
     showJob('Staged ' + j.staged + (j.restarting ? ', restarting...' : ' (restart the service to apply)'));
     if (j.restarting) waitRestart();
   } catch (e) {
@@ -927,8 +1204,9 @@ $('ieng').onclick = async () => {
 
 $('unload').onclick = async () => {
   try {
-    const r = await fetch('/api/unload', { method: 'POST' });
-    const j = await r.json();
+    const r = await fetch('/api/unload', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    if (r.status === 401) showLogin();
+  const j = await r.json();
     if (!r.ok) throw new Error(j.error);
     setStatus('Voice unloaded');
   } catch (e) {
@@ -944,10 +1222,11 @@ $('up').onchange = async () => {
   try {
     const r = await fetch('/api/upload', {
       method: 'POST',
-      headers: { 'X-Filename': encodeURIComponent(f.name) },
+      headers: { 'X-Filename': encodeURIComponent(f.name), 'X-Requested-With': 'XMLHttpRequest' },
       body: f
     });
-    const j = await r.json();
+    if (r.status === 401) showLogin();
+  const j = await r.json();
     if (!r.ok) throw new Error(j.error);
     await loadFiles(j.name);
     setStatus('Uploaded ' + j.name);
@@ -1018,13 +1297,14 @@ $('stream').onclick = async () => {
   try {
     const r = await fetch('/api/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       body: JSON.stringify(reqBody()),
       signal: ctrl.signal
     });
     if (!r.ok) {
-      const j = await r.json();
-      throw new Error(j.error || r.statusText);
+      if (r.status === 401) showLogin();
+  const j = await r.json();
+      throw new Error(j.message || j.error || r.statusText);
     }
     const rate = parseInt(r.headers.get('X-Audio-Sample-Rate') || '22050', 10);
     const pre = Math.max(0, parseFloat($('pre').value) || 0);
@@ -1098,10 +1378,11 @@ $('run').onclick = async () => {
   try {
     const r = await fetch('/api/run', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       body: JSON.stringify(reqBody())
     });
-    const j = await r.json();
+    if (r.status === 401) showLogin();
+  const j = await r.json();
     if (!r.ok) throw new Error(j.error);
     setStatus('Done: ' + j.audio + ' (' + j.seconds + ' s)');
     play(j.audio);
@@ -1113,6 +1394,24 @@ $('run').onclick = async () => {
   loadEngine();
 };
 
+function showLogin() {
+  $('lg').hidden = false;
+  $('lg-pw').focus();
+}
+$('lgform').onsubmit = async e => {
+  e.preventDefault();
+  $('lg-msg').textContent = '';
+  try {
+    await post('/api/login', { password: $('lg-pw').value });
+    location.reload();
+  } catch (err) {
+    $('lg-msg').textContent = err.message;
+  }
+};
+$('logout').onclick = async () => {
+  try { await post('/api/logout'); } catch (e) {}
+  location.reload();
+};
 (async () => {
   try {
     await loadVoices();
@@ -1141,8 +1440,51 @@ def clamp_float(v, lo, hi, default):
 class Handler(BaseHTTPRequestHandler):
     server_version = "PiperDash/" + VERSION
 
+    _renew_token = None
+
     def log_message(self, fmt, *args):
         pass
+
+    def _sec_headers(self):
+        return {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+                "Referrer-Policy": "no-referrer", "Content-Security-Policy": CSP}
+
+    def authed(self):
+        token = sess_token_from(self.headers.get("Cookie"), _SESSION_COOKIE_NAME)
+        now = time.time()
+        with SESS_LOCK:
+            ok, renew, _left = sess_check(SESS_STORE, token, sess_policy(SESS_TIER), now, stamp=auth_stamp())
+        if ok and renew:
+            self._renew_token = token
+        return ok
+
+    def handle_login(self, raw):
+        ip = self.client_address[0]
+        now = time.time()
+        with SESS_LOCK:
+            wait = lock_wait(LOCK_STATE, ip, now)
+        if wait > 0:
+            return self._json(429, {"message": "too many attempts; wait %d s" % int(wait + 0.5)})
+        try:
+            pw = str(json.loads(raw.decode("utf-8")).get("password", ""))
+        except (ValueError, AttributeError):
+            return self._json(400, {"message": "bad request"})
+        if not verify_root_password(pw):
+            with SESS_LOCK:
+                wait = lock_fail(LOCK_STATE, ip, now)
+            msg = "wrong password" + ("; wait %d s" % int(wait + 0.5) if wait > 0 else "")
+            return self._json(401, {"message": msg})
+        with SESS_LOCK:
+            lock_ok(LOCK_STATE, ip)
+            token, max_age = sess_new(SESS_STORE, sess_policy(SESS_TIER), now, stamp=auth_stamp())
+        self._send(200, json.dumps({"ok": True}),
+                   extra={"Set-Cookie": sess_cookie(_SESSION_COOKIE_NAME, token, max_age, False)})
+
+    def handle_logout(self):
+        with SESS_LOCK:
+            sess_drop_all(SESS_STORE)
+        self._send(200, json.dumps({"ok": True}),
+                   extra={"Set-Cookie": sess_cookie_clear(_SESSION_COOKIE_NAME, False)})
 
     def _send(self, code, body, ctype="application/json", extra=None):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
@@ -1150,6 +1492,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in self._sec_headers().items():
+            self.send_header(k, v)
+        if self._renew_token:
+            self.send_header("Set-Cookie", sess_cookie(_SESSION_COOKIE_NAME, self._renew_token,
+                                                       sess_policy(SESS_TIER)["idle"], False))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -1160,8 +1507,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path not in ("/", "/api/status") and not self.authed():
+            return self._json(401, {"message": "login required", "login": True})
         if path == "/":
-            self._send(200, HTML.replace("__VERSION__", VERSION), "text/html; charset=utf-8")
+            self._send(200, login_ui_inject(HTML.replace("__VERSION__", VERSION), "lg-pw"),
+                       "text/html; charset=utf-8")
         elif path == "/api/voices":
             self._json(200, list_voices(CFG["voices"]))
         elif path == "/api/files":
@@ -1169,9 +1519,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/outputs":
             self._json(200, list_files(CFG["outdir"], OUT_EXTS))
         elif path == "/api/status":
+            if not self.authed():
+                return self._json(200, {"version": VERSION, "engine_ok": ENGINE_ERR is None, "auth": False})
             kb = rss_kb()
             self._json(200, {
                 "version": VERSION,
+                "auth": True,
                 "engine_ok": ENGINE_ERR is None,
                 "engine_error": ENGINE_ERR,
                 "loaded": ENG.name,
@@ -1209,6 +1562,15 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return self._json(413, {"error": "request too large"})
         raw = self.rfile.read(length)
+        if path != "/api/update":
+            if self.headers.get("X-Requested-With") != "XMLHttpRequest":
+                return self._json(403, {"message": "forbidden"})
+            if path == "/api/login":
+                return self.handle_login(raw)
+            if not self.authed():
+                return self._json(401, {"message": "login required", "login": True})
+            if path == "/api/logout":
+                return self.handle_logout()
         if path == "/api/upload":
             return self.handle_upload(raw)
         if path == "/api/run":
@@ -1475,6 +1837,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Cache-Control", "no-store")
+            for hk, hv in self._sec_headers().items():
+                self.send_header(hk, hv)
             self.send_header("Connection", "close")
             self.send_header("X-Audio-Format", "s16le")
             self.send_header("X-Audio-Sample-Rate", str(v.config.sample_rate))
@@ -2146,6 +2510,8 @@ def run_selftests():
             open(os.path.join(cls.tmp, "i", "t.txt"), "w").write("Hello there.")
             cls.saved = {k: getattr(M, k) for k in ("PiperVoice", "SynthesisConfig", "ENGINE_ERR", "ENG")}
             cls.saved_cfg = dict(M.CFG)
+            cls.saved_verify = M.verify_root_password
+            M.verify_root_password = lambda pw: pw == "pw-test"
             M.PiperVoice, M.SynthesisConfig, M.ENGINE_ERR = FakeVoice, fake_synth_cfg, None
             M.CFG.clear()
             M.CFG.update(voices=cls.tmp + "/v", workdir=cls.tmp + "/i", outdir=cls.tmp + "/o", venv=cls.tmp + "/nov",
@@ -2156,6 +2522,13 @@ def run_selftests():
             cls.srv.daemon_threads = True
             cls.port = cls.srv.server_address[1]
             threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+            conn = http.client.HTTPConnection("127.0.0.1", cls.port, timeout=15)
+            conn.request("POST", "/api/login", body=json.dumps({"password": "pw-test"}),
+                         headers={"X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json"})
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            cls.cookie = resp.getheader("Set-Cookie", "").split(";")[0]
 
         @classmethod
         def tearDownClass(cls):
@@ -2165,16 +2538,51 @@ def run_selftests():
                 setattr(M, k, v)
             M.CFG.clear()
             M.CFG.update(cls.saved_cfg)
+            M.verify_root_password = cls.saved_verify
             shutil.rmtree(cls.tmp, ignore_errors=True)
 
-        def call(self, method, path, body=None, headers=None, raw=False):
+        def call(self, method, path, body=None, headers=None, raw=False, auth=True):
             c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
             data = body if isinstance(body, (bytes, bytearray)) else (None if body is None else json.dumps(body).encode())
-            c.request(method, path, body=data, headers=headers or {})
+            hdr = dict(headers or {})
+            if auth:
+                hdr.setdefault("Cookie", self.cookie)
+                hdr.setdefault("X-Requested-With", "XMLHttpRequest")
+            c.request(method, path, body=data, headers=hdr)
             r = c.getresponse()
             b = r.read()
             c.close()
             return r.status, (b if raw else json.loads(b)), dict(r.getheaders())
+
+        def test_login_gate_and_headers(self):
+            xhr = {"X-Requested-With": "XMLHttpRequest"}
+            c, j, _ = self.call("GET", "/api/voices", auth=False)
+            self.assertEqual(c, 401, j)
+            c, _, h = self.call("GET", "/", auth=False, raw=True)
+            self.assertEqual(c, 200)
+            self.assertEqual(h.get("X-Frame-Options"), "DENY")
+            self.assertEqual(h.get("Referrer-Policy"), "no-referrer")
+            self.assertIn("default-src 'self'", h.get("Content-Security-Policy", ""))
+            c, _, _ = self.call("POST", "/api/run", {"voice": "a.onnx", "file": "t.txt"}, auth=False)
+            self.assertEqual(c, 403)
+            c, _, _ = self.call("POST", "/api/run", {"voice": "a.onnx", "file": "t.txt"}, xhr, auth=False)
+            self.assertEqual(c, 401)
+            c, j, _ = self.call("POST", "/api/login", {"password": "wrong"}, xhr, auth=False)
+            self.assertEqual(c, 401, j)
+            c, _, h = self.call("POST", "/api/login", {"password": "pw-test"}, xhr, auth=False)
+            self.assertEqual(c, 200)
+            self.assertTrue(h.get("Set-Cookie", "").startswith("piper_session="))
+            c, j, _ = self.call("GET", "/api/status", auth=False)
+            self.assertEqual((c, j.get("auth")), (200, False))
+
+        def test_logout_ends_every_session(self):
+            xhr = {"X-Requested-With": "XMLHttpRequest"}
+            other = self.call("POST", "/api/login", {"password": "pw-test"}, xhr, auth=False)[2]["Set-Cookie"].split(";")[0]
+            c, _, _ = self.call("POST", "/api/logout", {}, dict(xhr, Cookie=other), auth=False)
+            self.assertEqual(c, 200)
+            c, _, _ = self.call("GET", "/api/voices", None, {"Cookie": self.cookie}, auth=False)
+            self.assertEqual(c, 401)
+            type(self).cookie = self.call("POST", "/api/login", {"password": "pw-test"}, xhr, auth=False)[2]["Set-Cookie"].split(";")[0]
 
         def run_wav(self):
             c, j, _ = self.call("POST", "/api/run", {"voice": "a.onnx", "file": "t.txt"})
