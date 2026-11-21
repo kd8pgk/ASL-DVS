@@ -1,4 +1,4 @@
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 import argparse
 import configparser
@@ -35,6 +35,9 @@ INSTALL_DIR = "/usr/local/lib/piper_dashboard"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/piper_dashboard.service"
 SERVICE_NAME = "piper_dashboard.service"
 CONFIG_PATH = "/etc/asl_dvs/piper_dashboard.conf"
+PIBRARY_CONF = "/etc/pibrary/pibrary.conf"
+PIBRARY_SECTION = "pibrary"
+PIBRARY_SERVICE = "pibrary.service"
 DATA_ROOT = "/srv/piper_dashboard"
 EXPORT_FORMATS = {"ulaw": ".ulaw", "sln": ".sln", "wav8": "-8k.wav"}
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
@@ -797,6 +800,7 @@ a { color: var(--blue); }
 .orow button.air, .orow button.del { color: var(--red); border-color: var(--red-dim); }
 #clist { max-height: 260px; overflow: auto; margin-top: .5rem; }
 #logout{width:auto;margin:.2rem 0 0;padding:.15rem .6rem;font-size:.72rem}
+.tabs{display:flex;gap:.4rem}.tab{flex:1;margin:0}.tab.on{color:var(--amber);border-color:var(--amber)}
 </style></head><body>
 <div id="lg" class="lg-screen" hidden>
 <form class="lg-card" id="lgform">
@@ -814,6 +818,8 @@ a { color: var(--blue); }
   <div class="hdr-right"><div class="hdr-ver">v__VERSION__</div><button id="logout" class="sec" hidden>Sign out</button></div>
 </header>
 <div class="wrap">
+<div class="tabs"><button id="tab-run" class="tab on">Run</button><button id="tab-cfg" class="tab">Settings</button></div>
+<div id="pg-run">
 <div id="eng"></div>
 
 <details id="inst"><summary>Install engine / voices</summary>
@@ -888,7 +894,32 @@ a { color: var(--blue); }
 </div>
 <ul id="outs"></ul>
 </fieldset>
+</div>
 
+<div id="pg-cfg" hidden>
+<fieldset><legend>Server</legend>
+<label for="cf-host">Bind address (0.0.0.0 serves the LAN)</label><input id="cf-host" type="text" maxlength="255">
+<label for="cf-port">Port</label><input id="cf-port" type="number" min="1" max="65535">
+</fieldset>
+<fieldset><legend>Engine and voices</legend>
+<label><input id="cf-cuda" type="checkbox"> Use GPU (needs onnxruntime-gpu)</label>
+<label for="cf-preload">Preload voice at start (.onnx file name, blank = none)</label><input id="cf-preload" type="text" maxlength="140">
+<label for="cf-vbase">Voice catalog URL</label><input id="cf-vbase" type="text" maxlength="300">
+</fieldset>
+<fieldset><legend>Save output to Pibrary</legend>
+<label for="cf-pib">Drive</label><select id="cf-pib"></select>
+<div class="small" id="cf-pibnote"></div>
+</fieldset>
+<fieldset><legend>Play on node (transmits)</legend>
+<label for="cf-nodes">Node numbers (blank = off)</label><input id="cf-nodes" type="text" maxlength="200">
+<label for="cf-sounds">Sounds directory (dedicated; Asterisk must read it)</label><input id="cf-sounds" type="text" maxlength="300">
+<label for="cf-maxs">Longest clip on air (seconds)</label><input id="cf-maxs" type="number" min="1" max="600">
+<label for="cf-ast">Asterisk command</label><input id="cf-ast" type="text" maxlength="200">
+</fieldset>
+<button id="cf-save">Save settings</button>
+<button id="cf-restart" class="sec">Restart service to apply</button>
+<div id="cf-msg"></div>
+</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -1381,7 +1412,7 @@ $('run').onclick = async () => {
     if (r.status === 401) showLogin();
   const j = await r.json();
     if (!r.ok) throw new Error(j.error);
-    setStatus('Done: ' + j.audio + ' (' + j.seconds + ' s)');
+    setStatus('Done: ' + j.audio + ' (' + j.seconds + ' s)' + (j.note ? ' - ' + j.note : ''));
     play(j.audio);
     loadOutputs();
   } catch (e) {
@@ -1405,6 +1436,83 @@ $('lgform').onsubmit = async e => {
     $('lg-msg').textContent = err.message;
   }
 };
+function showTab(which) {
+  $('pg-run').hidden = which !== 'run';
+  $('pg-cfg').hidden = which !== 'cfg';
+  $('tab-run').className = 'tab' + (which === 'run' ? ' on' : '');
+  $('tab-cfg').className = 'tab' + (which === 'cfg' ? ' on' : '');
+  if (which === 'cfg') loadConfig();
+}
+function cfgMsg(m, err) {
+  $('cf-msg').textContent = m;
+  $('cf-msg').className = err ? 'err' : '';
+}
+async function loadConfig() {
+  try {
+    const c = await getJSON('/api/config');
+    $('cf-host').value = c.host;
+    $('cf-port').value = c.port;
+    $('cf-cuda').checked = c.cuda;
+    $('cf-preload').value = c.preload;
+    $('cf-vbase').value = c.voices_base;
+    $('cf-nodes').value = c.nodes;
+    $('cf-sounds').value = c.sounds_dir;
+    $('cf-maxs').value = c.max_seconds;
+    $('cf-ast').value = c.asterisk_cmd;
+    const sel = $('cf-pib');
+    sel.textContent = '';
+    c.pibrary.options.forEach(o => opt(sel, o.root, o.label));
+    sel.value = c.pibrary_root;
+    $('cf-pibnote').textContent = c.pibrary.running
+      ? 'Pibrary is running. Audio goes to the drive\'s audio/TTS folder.'
+      : 'Pibrary is not running: audio goes to the local output folder.';
+    cfgMsg('');
+  } catch (e) {
+    cfgMsg('Load failed: ' + e.message, true);
+  }
+}
+async function saveConfig(extra) {
+  const body = {
+    host: $('cf-host').value, port: $('cf-port').value, cuda: $('cf-cuda').checked,
+    preload: $('cf-preload').value, voices_base: $('cf-vbase').value, nodes: $('cf-nodes').value,
+    sounds_dir: $('cf-sounds').value, max_seconds: $('cf-maxs').value, asterisk_cmd: $('cf-ast').value,
+    pibrary_root: $('cf-pib').value
+  };
+  Object.assign(body, extra || {});
+  const r = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+    body: JSON.stringify(body)
+  });
+  if (r.status === 401) showLogin();
+  const j = await r.json();
+  if (r.status === 409 && j.confirm === 'radio') {
+    if (confirm('Play on node transmits on your node. Turn it on?')) return saveConfig({ radio_confirm: true });
+    loadConfig();
+    return null;
+  }
+  if (!r.ok) throw new Error(j.message || r.statusText);
+  return j;
+}
+$('cf-save').onclick = async () => {
+  try {
+    const j = await saveConfig();
+    if (j) cfgMsg(j.message, false);
+  } catch (e) {
+    cfgMsg('Save failed: ' + e.message, true);
+  }
+};
+$('cf-restart').onclick = async () => {
+  if (!confirm('Restart the Pi-Piper service now? Any run in progress stops.')) return;
+  try {
+    await post('/api/restart');
+    cfgMsg('Restarting...');
+  } catch (e) {
+    cfgMsg('Restart failed: ' + e.message, true);
+  }
+};
+$('tab-run').onclick = () => showTab('run');
+$('tab-cfg').onclick = () => showTab('cfg');
 $('logout').onclick = async () => {
   try { await post('/api/logout'); } catch (e) {}
   location.reload();
@@ -1531,6 +1639,8 @@ class Handler(BaseHTTPRequestHandler):
                 "venv": CFG["venv"],
                 "radio": {"enabled": radio_enabled(), "nodes": CFG.get("radio_nodes", [])},
             })
+        elif path == "/api/config":
+            self.handle_config_get()
         elif path == "/api/job":
             self._json(200, job_snapshot())
         elif path == "/api/catalog":
@@ -1580,11 +1690,46 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_output_delete(raw)
         if path == "/api/radio/play":
             return self.handle_radio_play(raw)
+        if path == "/api/config":
+            return self.handle_config_save(raw)
+        if path == "/api/restart":
+            return self.handle_restart()
         if path == "/api/install/engine":
             return self.handle_install_engine()
         if path == "/api/install/voice":
             return self.handle_install_voice(raw)
         self._json(404, {"error": "not found"})
+
+    def handle_config_get(self):
+        try:
+            vals = config_values(read_config())
+        except (ValueError, configparser.Error) as e:
+            return self._json(500, {"message": "settings unreadable: %s" % e})
+        vals["pibrary"] = pibrary_choices(vals["pibrary_root"])
+        self._json(200, vals)
+
+    def handle_config_save(self, raw):
+        try:
+            body = json.loads(raw.decode("utf-8"))
+            if not isinstance(body, dict):
+                raise ValueError("bad request")
+            vals = validate_config(body, config_values(read_config()))
+        except ConfirmNeeded as e:
+            return self._json(409, {"message": str(e), "confirm": "radio"})
+        except (ValueError, TypeError, AttributeError, configparser.Error) as e:
+            return self._json(400, {"message": str(e)})
+        try:
+            _atomic_write(CONFIG_PATH, config_text(vals), 0o644)
+        except OSError as e:
+            return self._json(500, {"message": "could not write %s: %s" % (CONFIG_PATH, e)})
+        self._json(200, {"ok": True, "message": "Saved. Restart the service to apply."})
+
+    def handle_restart(self):
+        if not os.environ.get("INVOCATION_ID"):
+            return self._json(409, {"message": "not running under systemd; restart it by hand"})
+        threading.Timer(1.0, lambda: subprocess.run(
+            ["systemctl", "--no-block", "restart", SERVICE_NAME], capture_output=True)).start()
+        self._json(202, {"ok": True})
 
     def handle_upload(self, raw):
         name = Path(unquote(self.headers.get("X-Filename", ""))).name
@@ -1781,7 +1926,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         voice, stem, text, cfg = r
         out_name = "%s-%s-%s.wav" % (stem, Path(voice).stem, time.strftime("%Y%m%d-%H%M%S"))
-        out = Path(CFG["outdir"]) / out_name
+        out_dir, note = tts_output_dir()
+        out = Path(out_dir) / out_name
         t0 = time.time()
         with ENG.lock:
             try:
@@ -1794,7 +1940,8 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
                 return self._json(500, {"error": "%s: %s" % (type(e).__name__, e)})
-        self._json(200, {"audio": out_name, "seconds": round(time.time() - t0, 1)})
+        self._json(200, {"audio": out_name, "seconds": round(time.time() - t0, 1),
+                         "saved_to": str(out), "note": note})
 
     def handle_stream(self, raw):
         r = self._parse_run(raw)
@@ -1988,12 +2135,37 @@ def run_selftests():
 
 
         def test_ini_defaults_flow_into_parser(self):
+            v = M.default_values("0.0.0.0", 9999)
             cp = configparser.ConfigParser(interpolation=None)
-            cp.read_string(M.ini_text("0.0.0.0", 9999))
+            cp.read_string(M.config_text(v))
+            self.assertEqual(M.config_values(cp), v)
             a = M.build_parser(cp).parse_args([])
             self.assertEqual((a.host, a.port, a.venv, a.radio_nodes), ("0.0.0.0", 9999, M.DATA_ROOT + "/venv", ""))
-            self.assertEqual(M.build_parser(cp).parse_args(["--port", "1"]).port, 1)
             self.assertFalse(cp.has_section("update"))
+
+        def test_config_validation_and_confirm(self):
+            cur = M.default_values("0.0.0.0", 8765)
+            good = {"host": "0.0.0.0", "port": "8765", "cuda": False, "preload": "", "voices_base": M.VOICES_BASE,
+                    "nodes": "", "sounds_dir": "", "max_seconds": 60, "asterisk_cmd": "asterisk", "pibrary_root": ""}
+            self.assertEqual(M.validate_config(good, cur)["port"], 8765)
+            for bad in ({"port": "0"}, {"host": "bad host!"}, {"preload": "../x.onnx"}, {"voices_base": "ftp://x"},
+                        {"nodes": "12,ab"}, {"pibrary_root": "relative/path"}, {"max_seconds": "9999"}):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(ValueError):
+                        M.validate_config(dict(good, **bad), cur)
+            with self.assertRaises(M.ConfirmNeeded):
+                M.validate_config(dict(good, nodes="1234", sounds_dir="/var/lib/x"), cur)
+            ok = M.validate_config(dict(good, nodes="1234", sounds_dir="/var/lib/x", radio_confirm=True), cur)
+            self.assertEqual(ok["nodes"], "1234")
+
+        def test_pibrary_output_falls_back_to_local(self):
+            saved = dict(M.CFG)
+            try:
+                M.CFG.update(outdir="/srv/local-out")
+                self.assertEqual(M.tts_output_dir(), ("/srv/local-out", ""))
+            finally:
+                M.CFG.clear()
+                M.CFG.update(saved)
 
 
         def test_sd_notify_datagram(self):
@@ -2377,30 +2549,154 @@ def main():
         srv.server_close()
 
 
-def ini_text(host, port):
-    return """[server]
-host = %s
-port = %d
+class ConfirmNeeded(ValueError):
+    pass
 
-[paths]
-voices = %s/voices
-workdir = %s/input
-outdir = %s/output
-venv = %s/venv
 
-[engine]
-cuda = false
-preload =
+RE_HOST = re.compile(r"^[A-Za-z0-9.\-:]{1,255}$")
+RE_PRELOAD = re.compile(r"^([A-Za-z0-9._-]{1,128}\.onnx)?$")
+RE_NODES = re.compile(r"^([0-9]{1,8}(\s*,\s*[0-9]{1,8})*)?$")
+RE_ASTERISK = re.compile(r"^[A-Za-z0-9_./-]{1,200}$")
 
-[catalog]
-voices_base = %s
 
-[radio]
-nodes =
-sounds_dir =
-max_seconds = 60
-asterisk_cmd = asterisk
-""" % (host, port, DATA_ROOT, DATA_ROOT, DATA_ROOT, DATA_ROOT, VOICES_BASE)
+def default_values(host, port):
+    return {"host": host, "port": port, "cuda": False, "preload": "", "voices_base": VOICES_BASE,
+            "nodes": "", "sounds_dir": "", "max_seconds": 60, "asterisk_cmd": "asterisk", "pibrary_root": ""}
+
+
+def read_config():
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(CONFIG_PATH)
+    return cp
+
+
+def config_values(cp):
+    d = default_values("0.0.0.0", 8765)
+    return {
+        "host": cp.get("server", "host", fallback=d["host"]),
+        "port": cp.getint("server", "port", fallback=d["port"]),
+        "cuda": cp.getboolean("engine", "cuda", fallback=d["cuda"]),
+        "preload": cp.get("engine", "preload", fallback=d["preload"]),
+        "voices_base": cp.get("catalog", "voices_base", fallback=d["voices_base"]),
+        "nodes": cp.get("radio", "nodes", fallback=d["nodes"]),
+        "sounds_dir": cp.get("radio", "sounds_dir", fallback=d["sounds_dir"]),
+        "max_seconds": cp.getint("radio", "max_seconds", fallback=d["max_seconds"]),
+        "asterisk_cmd": cp.get("radio", "asterisk_cmd", fallback=d["asterisk_cmd"]),
+        "pibrary_root": cp.get("pibrary", "root", fallback=d["pibrary_root"]),
+    }
+
+
+def config_text(v):
+    cp = configparser.ConfigParser(interpolation=None)
+    cp["server"] = {"host": v["host"], "port": str(v["port"])}
+    cp["paths"] = {"voices": DATA_ROOT + "/voices", "workdir": DATA_ROOT + "/input",
+                   "outdir": DATA_ROOT + "/output", "venv": DATA_ROOT + "/venv"}
+    cp["engine"] = {"cuda": "true" if v["cuda"] else "false", "preload": v["preload"]}
+    cp["catalog"] = {"voices_base": v["voices_base"]}
+    cp["radio"] = {"nodes": v["nodes"], "sounds_dir": v["sounds_dir"],
+                   "max_seconds": str(v["max_seconds"]), "asterisk_cmd": v["asterisk_cmd"]}
+    cp["pibrary"] = {"root": v["pibrary_root"]}
+    buf = io.StringIO()
+    cp.write(buf)
+    return buf.getvalue()
+
+
+def _clean_path(value, what):
+    if value and (not value.startswith("/") or ".." in value.split("/") or len(value) > 300):
+        raise ValueError("%s must be an absolute path" % what)
+    return value
+
+
+def validate_config(b, current):
+    host = str(b.get("host", "")).strip()
+    if not RE_HOST.match(host):
+        raise ValueError("bind address must be an IP address or host name")
+    try:
+        port = int(b.get("port"))
+    except (TypeError, ValueError):
+        raise ValueError("port must be a number")
+    if not 1 <= port <= 65535:
+        raise ValueError("port must be 1 to 65535")
+    preload = str(b.get("preload", "")).strip()
+    if not RE_PRELOAD.match(preload):
+        raise ValueError("preload must be a voice .onnx file name, or blank")
+    vbase = str(b.get("voices_base", "")).strip().rstrip("/")
+    if not re.match(r"^https?://[^\s]{1,300}$", vbase):
+        raise ValueError("voice catalog must be an http or https URL")
+    nodes = str(b.get("nodes", "")).strip()
+    if not RE_NODES.match(nodes):
+        raise ValueError("node numbers must be digits, comma separated")
+    nodes = ",".join(n.strip() for n in nodes.split(",") if n.strip())
+    sounds = _clean_path(str(b.get("sounds_dir", "")).strip(), "sounds directory")
+    if nodes and not sounds:
+        raise ValueError("play on node needs a sounds directory")
+    if nodes and not current.get("nodes") and not b.get("radio_confirm"):
+        raise ConfirmNeeded("Play on node transmits on your node. Confirm to turn it on.")
+    try:
+        maxs = int(b.get("max_seconds", 60))
+    except (TypeError, ValueError):
+        raise ValueError("longest clip must be a number of seconds")
+    if not 1 <= maxs <= 600:
+        raise ValueError("longest clip must be 1 to 600 seconds")
+    ast_cmd = str(b.get("asterisk_cmd", "asterisk")).strip()
+    if not RE_ASTERISK.match(ast_cmd):
+        raise ValueError("asterisk command must be a name or a path")
+    pib = _clean_path(str(b.get("pibrary_root", "")).strip(), "Pibrary drive")
+    return {"host": host, "port": port, "cuda": bool(b.get("cuda")), "preload": preload,
+            "voices_base": vbase, "nodes": nodes, "sounds_dir": sounds, "max_seconds": maxs,
+            "asterisk_cmd": ast_cmd, "pibrary_root": pib}
+
+
+def pibrary_roots():
+    if not shutil.which("systemctl"):
+        return None
+    r = subprocess.run(["systemctl", "is-active", PIBRARY_SERVICE], capture_output=True, text=True, timeout=10)
+    if r.stdout.strip() != "active":
+        return None
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(PIBRARY_CONF)
+    if not cp.has_section(PIBRARY_SECTION):
+        return []
+    items = [cp.get(PIBRARY_SECTION, "library_root", fallback="").strip()]
+    items += re.split(r"[,\n]", cp.get(PIBRARY_SECTION, "extra_roots", fallback=""))
+    roots = []
+    for item in items:
+        item = item.strip()
+        if item and item not in roots:
+            roots.append(item)
+    return roots
+
+
+def pibrary_choices(current):
+    roots = pibrary_roots()
+    options = [{"root": "", "label": "Local output folder"}]
+    if roots:
+        options += [{"root": r, "label": r + "/audio/TTS"} for r in roots]
+    if current and current not in [o["root"] for o in options]:
+        options.append({"root": current, "label": current + " (not available now)"})
+    return {"running": roots is not None, "options": options}
+
+
+def tts_output_dir():
+    try:
+        root = read_config().get("pibrary", "root", fallback="").strip()
+    except configparser.Error:
+        root = ""
+    if not root:
+        return CFG["outdir"], ""
+    roots = pibrary_roots()
+    if roots is None:
+        return CFG["outdir"], "Pibrary is not running: saved to the local output folder"
+    if root not in roots or not os.path.isdir(root):
+        return CFG["outdir"], "the Pibrary drive %s is missing: saved to the local output folder" % root
+    d = os.path.join(root, "audio", "TTS")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError as e:
+        return CFG["outdir"], "cannot write to %s (%s): saved to the local output folder" % (d, e)
+    if not os.access(d, os.W_OK):
+        return CFG["outdir"], "%s is not writable: saved to the local output folder" % d
+    return d, ""
 
 
 def _atomic_write(path, text, mode=0o644):
@@ -2497,7 +2793,7 @@ def install_service(a):
     for sub in ("voices", "input", "output"):
         os.makedirs(os.path.join(DATA_ROOT, sub), exist_ok=True)
     if not os.path.exists(CONFIG_PATH):
-        _atomic_write(CONFIG_PATH, ini_text(a.host, a.port), 0o644)
+        _atomic_write(CONFIG_PATH, config_text(default_values(a.host, a.port)), 0o644)
         print("  [+] Wrote %s" % CONFIG_PATH)
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(CONFIG_PATH)
