@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_111_0_20261116.py`.
+Current file: `instmon_v2_112_0_20261121.py`.
+
+## 2.112.0 (2026-11-21)
+
+Pi-Piper TTS is a managed tool.
+
+- **Pi-Piper TTS card.** The Components list shows it with Install, Uninstall, Start and Stop like the other tools. It opens at `http://<node>:8765`.
+- **Library and updates.** Its files (`piper_dashboard*.py`) have their own folder in the library, in the upload and import lists and in GitHub updates. A Full Update updates it after Node Monitor and before the Dashboard, SysMon and instmon.
+- **Logs.** Its unit is part of the suite log.
+- **Login cookie.** A Full Update also asks the browser to drop Pi-Piper's login cookie (`piper_session`), like the other tools'.
+- Nothing else changes.
 
 ## 2.111.0 (2026-11-16)
 

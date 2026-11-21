@@ -50,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_101_20261116.py` | `sysmon_pi02w_v6_13_89_20261116.py` | `instmon_v2_111_0_20261116.py` |
+| File name | `sysmon_v6_13_101_20261116.py` | `sysmon_pi02w_v6_13_89_20261116.py` | `instmon_v2_112_0_20261121.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -104,7 +104,7 @@ This downloads the installer and runs it. On a node with nothing installed, the 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_111_0_20261116.py --install
+   sudo python3 instmon_v2_112_0_20261121.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -529,7 +529,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_118_20261116.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_101_20261116.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_89_20261116.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_111_0_20261116.py` | common |
+| `instmon_v2_112_0_20261121.py` | common |
 | `wifimon_v5_57_0_20261115.py` | common |
 | `44helper_v0_1_74_20261118.py` | common |
 | `nodetalker_v0_10_51_20261117.py` | common |
