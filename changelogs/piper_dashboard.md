@@ -1,6 +1,12 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_8_0_20261121.py`.
+Current file: `piper_dashboard_v0_8_1_20261121.py`.
+
+## 0.8.1 (2026-11-21)
+
+The file starts with the `#!/usr/bin/env python3` line and the coding line, like the other tools. This is a release: instmon refuses a Python file that has no `#!` line, so the Update button, the GitHub check and Full Update could not download 0.8.0.
+
+- **Shebang.** Added at the top of the file. Nothing else changes.
 
 ## 0.8.0 (2026-11-21)
 

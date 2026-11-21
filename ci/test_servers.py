@@ -29,7 +29,7 @@ SERVERS = {
     "nodetalker": {"file": "nodetalker_v0_11_0_20261121.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_17_8_20261116.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
-    "piper_dashboard": {"file": "piper_dashboard_v0_8_0_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
+    "piper_dashboard": {"file": "piper_dashboard_v0_8_1_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
     "pibrary": {"file": "pibrary_v0_17_3_20261115.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
     "instmon": {"file": "instmon_v2_113_0_20261121.py", "port": 8990, "scheme": "http", "health": "/",
