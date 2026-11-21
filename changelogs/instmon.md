@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_114_0_20261121.py`.
+Current file: `instmon_v2_115_0_20261121.py`.
+
+## 2.115.0 (2026-11-21)
+
+Progress bars and a Skip manuals option. This is a release: the Tools tab shows each component's download and install, and Full Update can leave the manuals alone.
+
+- **Download bar.** Under each component on the Tools tab, a bar fills while a library file for that component downloads from GitHub (Update, Check GitHub's missing-file downloads, and Full Update). It shows the size, the total when GitHub gives one, and the speed (the average of the last few seconds). When GitHub gives no size, the bar moves without a fill and shows the bytes received.
+- **Install bar.** While a tool installs (Install, and Full Update's install step), the bar moves without a fill and reads "Installing:" with the latest line the install printed, cut to 120 characters and shown as plain text.
+- **Failures.** A download or install that does not finish keeps its bar as "Not finished" with the reason for two minutes, then clears.
+- **Skip manuals.** A checkbox under Check GitHub skips the manuals in Full Update, every time, until it is turned off. Check GitHub only lists the manuals and does not download them. The Manuals card's own Get from GitHub button still works, and the first-time manuals download still runs once on a new node.
+- Nothing else changes.
 
 ## 2.114.0 (2026-11-21)
 
