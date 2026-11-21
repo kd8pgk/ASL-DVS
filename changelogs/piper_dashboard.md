@@ -1,6 +1,16 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_5_0_20261121.py`.
+Current file: `piper_dashboard_v0_6_0_20261121.py`.
+
+## 0.6.0 (2026-11-21)
+
+Installs like the rest of the suite, and self-update is removed. This is a release: the install layout, the config file and the unit changed.
+
+- **Install layout.** The program is `/usr/local/lib/piper_dashboard/piper_dashboard.py`, linked from `/usr/local/bin/piper_dashboard.py`. The unit starts it through the shared launcher (`/usr/local/bin/asl_dvs_launch.py`, identical in every tool), as Node Monitor does. `--install` and `--uninstall` are the suite's commands; `--purge`, `--run-as`, `--destdir` and `--apply-staged`/`--rollback` are gone.
+- **Config.** `/etc/asl_dvs/piper_dashboard.conf` (was `/etc/piper_dashboard.ini`). Default bind is `0.0.0.0` (the sign-in protects every page). Data stays in `/srv/piper_dashboard`, and the engine venv is `/srv/piper_dashboard/venv`.
+- **Firewall.** `--install` opens the port with the suite's firewall helper; `--uninstall` closes it. Shared code from `shared/confio.py`.
+- **Self-update removed.** The service runs as root, so an uploaded update would run as root. Updates come through instmon instead.
+- **Launcher.** The unit uses the shared launcher text, so the test that checks it passes and the unit runs under the suite's launcher.
 
 ## 0.5.0 (2026-11-21)
 

@@ -1,4 +1,4 @@
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 import argparse
 import configparser
@@ -11,7 +11,6 @@ import importlib
 import json
 import math
 import os
-import pwd
 import re
 import shutil
 import signal
@@ -31,22 +30,22 @@ from urllib.parse import urlparse, unquote, parse_qs
 VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 
 APP = "piper_dashboard"
-INSTALL_ROOT = "/opt/piper_dashboard"
-UNIT_PATH = "/etc/systemd/system/piper_dashboard.service"
-INI_PATH = "/etc/piper_dashboard.ini"
+INSTALL_BIN_PATH = "/usr/local/bin/piper_dashboard.py"
+INSTALL_DIR = "/usr/local/lib/piper_dashboard"
+SYSTEMD_SERVICE_PATH = "/etc/systemd/system/piper_dashboard.service"
+SERVICE_NAME = "piper_dashboard.service"
+CONFIG_PATH = "/etc/asl_dvs/piper_dashboard.conf"
 DATA_ROOT = "/srv/piper_dashboard"
-DEFAULT_USER = "root"
-USER_MARK = "/etc/piper_dashboard.user"
-KEEP_VERSIONS = 3
 EXPORT_FORMATS = {"ulaw": ".ulaw", "sln": ".sln", "wav8": "-8k.wav"}
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
 EXPORT_LOCK = threading.Lock()
 RADIO_LOCK = threading.Lock()
 RADIO_BASE = "pipertts"
 OUT_EXTS = {".wav", ".ulaw", ".sln"}
-UPDATE_MAX = 2 * 1024 * 1024
-STAGED = "piper_dashboard.py"
-VER_RE = re.compile(r'^VERSION = "([0-9][0-9A-Za-z.\-]{0,30})"$', re.M)
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_LAUNCHER_CODE = '#!/usr/bin/env python3\nimport os\nimport runpy\nimport sys\n\n_OFF = "/etc/asl_dvs/launch_no_"\n_AGAIN = "ASL_DVS_LAUNCH"\n\nif _AGAIN in os.environ:\n    if os.environ.pop(_AGAIN) == "arena":\n        os.environ.pop("MALLOC_ARENA_MAX", None)\nelse:\n    flags = []\n    env = dict(os.environ)\n    env[_AGAIN] = ""\n    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):\n        flags.append("-OO")\n    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):\n        env["MALLOC_ARENA_MAX"] = "2"\n        env[_AGAIN] = "arena"\n    if (flags or env[_AGAIN]) and sys.executable:\n        try:\n            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)\n        except OSError:\n            pass\n\ndef _trim_loop():\n    import time\n    time.sleep(60)\n    try:\n        import ctypes\n        trim = ctypes.CDLL("libc.so.6").malloc_trim\n    except (ImportError, OSError, AttributeError):\n        return\n    trim.argtypes = [ctypes.c_size_t]\n    while True:\n        trim(0)\n        time.sleep(300)\n\nif not os.path.exists(_OFF + "trim"):\n    import threading\n    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()\n\ntarget = os.path.realpath(sys.argv[1])\nname = os.path.splitext(os.path.basename(target))[0]\nsys.argv = [target] + sys.argv[2:]\nsys.path.insert(0, os.path.dirname(target))\nif name.isidentifier():\n    runpy.run_module(name, run_name="__main__", alter_sys=True)\nelse:\n    import importlib.util\n    spec = importlib.util.spec_from_file_location("__main__", target)\n    main = importlib.util.module_from_spec(spec)\n    sys.modules["__main__"] = main\n    spec.loader.exec_module(main)\n'
+
 
 PiperVoice = SynthesisConfig = None
 ENGINE_ERR = "not checked"
@@ -341,8 +340,6 @@ def login_ui_inject(html, input_id, nonce=""):
     if not sep:
         return html
     return head + login_ui_html(input_id, nonce) + sep + tail
-
-
 
 
 class Engine:
@@ -1533,7 +1530,6 @@ class Handler(BaseHTTPRequestHandler):
                 "platform": sysconfig.get_platform(),
                 "venv": CFG["venv"],
                 "radio": {"enabled": radio_enabled(), "nodes": CFG.get("radio_nodes", [])},
-                "update": {"enabled": bool(CFG.get("update_token"))},
             })
         elif path == "/api/job":
             self._json(200, job_snapshot())
@@ -1557,20 +1553,19 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        limit = {"/api/upload": MAX_UPLOAD, "/api/update": UPDATE_MAX}.get(path, MAX_JSON)
+        limit = MAX_UPLOAD if path == "/api/upload" else MAX_JSON
         if length > limit:
             self.close_connection = True
             return self._json(413, {"error": "request too large"})
         raw = self.rfile.read(length)
-        if path != "/api/update":
-            if self.headers.get("X-Requested-With") != "XMLHttpRequest":
-                return self._json(403, {"message": "forbidden"})
-            if path == "/api/login":
-                return self.handle_login(raw)
-            if not self.authed():
-                return self._json(401, {"message": "login required", "login": True})
-            if path == "/api/logout":
-                return self.handle_logout()
+        if self.headers.get("X-Requested-With") != "XMLHttpRequest":
+            return self._json(403, {"message": "forbidden"})
+        if path == "/api/login":
+            return self.handle_login(raw)
+        if not self.authed():
+            return self._json(401, {"message": "login required", "login": True})
+        if path == "/api/logout":
+            return self.handle_logout()
         if path == "/api/upload":
             return self.handle_upload(raw)
         if path == "/api/run":
@@ -1579,8 +1574,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_unload()
         if path == "/api/stream":
             return self.handle_stream(raw)
-        if path == "/api/update":
-            return self.handle_update(raw)
         if path == "/api/export":
             return self.handle_export(raw)
         if path == "/api/output/delete":
@@ -1639,23 +1632,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(409, {"error": "another install is running"})
         self._json(202, {"ok": True})
 
-    def handle_update(self, raw):
-        tok = CFG.get("update_token", "")
-        if not tok:
-            return self._json(403, {"error": "self-update is not enabled ([update] enabled + token)"})
-        if not hmac.compare_digest(self.headers.get("X-Update-Token", "").encode("utf-8"), tok.encode("utf-8")):
-            time.sleep(1)
-            return self._json(403, {"error": "bad token"})
-        try:
-            ver = stage_update(CFG["update_dir"], raw)
-        except ValueError as e:
-            return self._json(400, {"error": str(e)})
-        except OSError as e:
-            return self._json(500, {"error": "stage failed: %s" % e})
-        restart = self.headers.get("X-Restart", "") == "1" and under_systemd()
-        self._json(200, {"staged": ver, "restarting": restart})
-        if restart:
-            threading.Timer(1.0, _self_terminate).start()
 
     def handle_output_delete(self, raw):
         try:
@@ -1880,14 +1856,6 @@ def sd_notify(msg):
         s.close()
 
 
-def under_systemd():
-    return bool(os.environ.get("INVOCATION_ID"))
-
-
-def _self_terminate():
-    os.kill(os.getpid(), signal.SIGTERM)
-
-
 def healthy(host, port):
     try:
         c = http.client.HTTPConnection(host, port, timeout=5)
@@ -1919,339 +1887,7 @@ def start_watchdog(host, port):
     threading.Thread(target=loop, daemon=True).start()
 
 
-def _p(destdir, path):
-    return os.path.join(destdir, path.lstrip("/")) if destdir else path
-
-
-def user_home(user, pw=None):
-    if pw:
-        return pw.pw_dir
-    return "/root" if user == "root" else "/home/" + user
-
-
-def unit_text(user, home):
-    lines = [
-        "[Unit]",
-        "Description=Piper TTS web dashboard",
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "",
-        "[Service]",
-        "Type=notify",
-        "NotifyAccess=main",
-    ]
-    if user != "root":
-        lines.append("User=" + user)
-    py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
-    lines += [
-        "Environment=HOME=" + home,
-        "Environment=PYTHONUNBUFFERED=1",
-        "ExecStartPre=-+%s %s/root/%s.py --config %s --apply-staged" % (py, INSTALL_ROOT, APP, INI_PATH),
-        "ExecStart=%s %s/current/%s.py --config %s" % (py, INSTALL_ROOT, APP, INI_PATH),
-        "WatchdogSec=30",
-        "Restart=always",
-        "RestartSec=3",
-        "TimeoutStopSec=15",
-        "NoNewPrivileges=yes",
-        "PrivateTmp=yes",
-        "ProtectSystem=full",
-        "",
-        "[Install]",
-        "WantedBy=multi-user.target",
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def ini_text(host, port, venv):
-    return """[server]
-host = %s
-port = %d
-
-[paths]
-voices = %s/voices
-workdir = %s/input
-outdir = %s/output
-venv = %s
-
-[engine]
-cuda = false
-preload =
-
-[catalog]
-voices_base = %s
-
-[radio]
-# Play-on-node is OFF until both nodes and sounds_dir are set. It TRANSMITS; you are the control operator.
-# sounds_dir must be a dedicated directory this service user can write and Asterisk can read.
-# The service user also needs permission to run `asterisk -rx` (e.g. group asterisk). Both are manual steps.
-nodes =
-sounds_dir =
-max_seconds = 60
-asterisk_cmd = asterisk
-
-[update]
-# Self-update card is OFF until enabled = true AND a token is set. Anyone holding the token can replace the
-# program code the service runs (as the service user; root only copies the staged file), so use a long random token.
-enabled = false
-token =
-dir = %s/update
-""" % (host, port, DATA_ROOT, DATA_ROOT, DATA_ROOT, venv, VOICES_BASE, DATA_ROOT)
-
-
-def _atomic_write(path, text, mode):
-    tmp = path + ".new"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
-
-
-def _systemctl(*args, check=True):
-    return subprocess.run(["systemctl"] + list(args), check=check)
-
-
-def _place_version(root, src_file, version):
-    lib = os.path.join(root, "lib")
-    name = "%s-%s" % (APP, version)
-    vdir = os.path.join(lib, name)
-    os.makedirs(vdir, exist_ok=True)
-    dst = os.path.join(vdir, APP + ".py")
-    tmp = dst + ".new"
-    shutil.copyfile(src_file, tmp)
-    os.chmod(tmp, 0o755)
-    os.replace(tmp, dst)
-    cur = os.path.join(root, "current")
-    cur_new = cur + ".new"
-    if os.path.lexists(cur_new):
-        os.unlink(cur_new)
-    os.symlink(os.path.join("lib", name), cur_new)
-    os.replace(cur_new, cur)
-    keep = sorted((n for n in os.listdir(lib) if os.path.isdir(os.path.join(lib, n))),
-                  key=lambda n: os.stat(os.path.join(lib, n)).st_mtime_ns, reverse=True)
-    for n in keep[KEEP_VERSIONS:]:
-        if n != name:
-            shutil.rmtree(os.path.join(lib, n), ignore_errors=True)
-    return name
-
-
-def validate_update(data):
-    if len(data) > UPDATE_MAX:
-        raise ValueError("file too large")
-    try:
-        src = data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ValueError("not UTF-8 text")
-    try:
-        compile(src, STAGED, "exec")
-    except (SyntaxError, ValueError) as e:
-        raise ValueError("syntax error: %s" % e)
-    m = VER_RE.search(src)
-    if not m:
-        raise ValueError("no VERSION found")
-    if 'APP = "piper_dashboard"' not in src or "def main():" not in src:
-        raise ValueError("not a Pi-Piper TTS dashboard file")
-    return m.group(1)
-
-
-def stage_update(update_dir, data):
-    ver = validate_update(data)
-    if ver == VERSION:
-        raise ValueError("same version as the running program (%s)" % ver)
-    os.makedirs(update_dir, exist_ok=True)
-    tmp = os.path.join(update_dir, STAGED + ".new")
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, os.path.join(update_dir, STAGED))
-    return ver
-
-
-def apply_staged(destdir, update_dir):
-    f = os.path.join(update_dir, STAGED)
-    if not os.path.isfile(f):
-        return None
-    try:
-        with open(f, "rb") as fh:
-            ver = validate_update(fh.read(UPDATE_MAX + 1))
-    except (ValueError, OSError) as e:
-        try:
-            os.replace(f, f + ".rejected")
-        except OSError:
-            pass
-        return "rejected staged update: %s" % e
-    name = _place_version(_p(destdir, INSTALL_ROOT), f, ver)
-    os.unlink(f)
-    return "applied staged update %s" % name
-
-
-def do_apply_staged(a):
-    if not a.destdir and os.geteuid() != 0:
-        sys.exit("--apply-staged must run as root")
-    print(apply_staged(a.destdir, a.update_dir) or "no staged update")
-    return 0
-
-
-def do_rollback(a):
-    stage = a.destdir
-    if not stage and os.geteuid() != 0:
-        sys.exit("--rollback must run as root (try sudo)")
-    root = _p(stage, INSTALL_ROOT)
-    lib = os.path.join(root, "lib")
-    cur = os.path.join(root, "current")
-    if not os.path.islink(cur):
-        sys.exit("not installed: no current symlink")
-    now = os.path.basename(os.readlink(cur))
-    vers = sorted((n for n in os.listdir(lib) if os.path.isdir(os.path.join(lib, n))),
-                  key=lambda n: os.stat(os.path.join(lib, n)).st_mtime_ns, reverse=True)
-    if now not in vers or vers.index(now) + 1 >= len(vers):
-        sys.exit("no older version to roll back to")
-    prev = vers[vers.index(now) + 1]
-    cur_new = cur + ".new"
-    if os.path.lexists(cur_new):
-        os.unlink(cur_new)
-    os.symlink(os.path.join("lib", prev), cur_new)
-    os.replace(cur_new, cur)
-    print("rolled back %s -> %s" % (now, prev))
-    if not stage:
-        _systemctl("restart", APP + ".service", check=False)
-    return 0
-
-
-def do_install(a):
-    stage = a.destdir
-    if not stage:
-        if os.geteuid() != 0:
-            sys.exit("--install must run as root (try sudo)")
-        if not shutil.which("systemctl"):
-            sys.exit("systemctl not found: systemd is required")
-    user = a.run_as
-    pw = None
-    created_user = False
-    if not stage and user != "root":
-        try:
-            pw = pwd.getpwnam(user)
-        except KeyError:
-            subprocess.run(["useradd", "--system", "--create-home", "--home-dir", "/home/" + user,
-                            "--shell", "/usr/sbin/nologin", user], check=True)
-            pw = pwd.getpwnam(user)
-            created_user = True
-            print("created system user", user)
-
-    home = user_home(user, pw)
-    if stage:
-        os.makedirs(_p(stage, home), exist_ok=True)
-    venv = home + "/venv"
-    for sub in ("", "voices", "input", "output", "update"):
-        d = _p(stage, DATA_ROOT + ("/" + sub if sub else ""))
-        os.makedirs(d, exist_ok=True)
-        if pw:
-            os.chown(d, pw.pw_uid, pw.pw_gid)
-
-    root = _p(stage, INSTALL_ROOT)
-    name = _place_version(root, os.path.abspath(__file__), VERSION)
-    rdir = os.path.join(root, "root")
-    os.makedirs(rdir, exist_ok=True)
-    rtmp = os.path.join(rdir, APP + ".py.new")
-    shutil.copyfile(os.path.abspath(__file__), rtmp)
-    os.chmod(rtmp, 0o755)
-    os.replace(rtmp, os.path.join(rdir, APP + ".py"))
-
-    ini = _p(stage, INI_PATH)
-    if os.path.exists(ini):
-        print("kept existing config", INI_PATH)
-    else:
-        os.makedirs(os.path.dirname(ini), exist_ok=True)
-        _atomic_write(ini, ini_text(a.host, a.port, venv), 0o640)
-        if pw:
-            os.chown(ini, 0, pw.pw_gid)
-        print("wrote config", INI_PATH)
-
-    unit = _p(stage, UNIT_PATH)
-    os.makedirs(os.path.dirname(unit), exist_ok=True)
-    _atomic_write(unit, unit_text(user, home), 0o644)
-    os.makedirs(os.path.dirname(_p(stage, USER_MARK)), exist_ok=True)
-    _atomic_write(_p(stage, USER_MARK), "%s %d\n" % (user, 1 if created_user else 0), 0o644)
-    print("installed %s -> %s/current (service user %s, venv %s)" % (name, INSTALL_ROOT, user, venv))
-
-    if stage:
-        print("staged install under %s (no systemctl/useradd/chown run)" % stage)
-        return 0
-    _systemctl("daemon-reload")
-    _systemctl("enable", APP + ".service")
-    _systemctl("restart", APP + ".service", check=False)
-    time.sleep(2)
-    r = subprocess.run(["systemctl", "is-active", APP + ".service"], capture_output=True, text=True)
-    state = r.stdout.strip()
-    print("service:", state)
-    if state != "active":
-        print("check: journalctl -u %s -n 30 --no-pager" % APP)
-        return 1
-    cp = configparser.ConfigParser(interpolation=None)
-    cp.read(INI_PATH)
-    print("listening on %s:%s (edit %s to change, then: systemctl restart %s)" % (
-        cp.get("server", "host", fallback="?"), cp.get("server", "port", fallback="?"), INI_PATH, APP))
-    return 0
-
-
-def do_uninstall(a):
-    stage = a.destdir
-    if not stage:
-        if os.geteuid() != 0:
-            sys.exit("--uninstall must run as root (try sudo)")
-        if shutil.which("systemctl"):
-            _systemctl("disable", "--now", APP + ".service", check=False)
-    unit = _p(stage, UNIT_PATH)
-    if os.path.exists(unit):
-        os.unlink(unit)
-        print("removed", UNIT_PATH)
-    if not stage and shutil.which("systemctl"):
-        _systemctl("daemon-reload", check=False)
-    root = _p(stage, INSTALL_ROOT)
-    if os.path.isdir(root):
-        shutil.rmtree(root)
-        print("removed", INSTALL_ROOT)
-    ini = _p(stage, INI_PATH)
-    data = _p(stage, DATA_ROOT)
-    if a.purge:
-        if os.path.exists(ini):
-            os.unlink(ini)
-            print("removed", INI_PATH)
-        if os.path.isdir(data):
-            shutil.rmtree(data)
-            print("removed", DATA_ROOT)
-        mark = _p(stage, USER_MARK)
-        owner, created = "", 0
-        if os.path.exists(mark):
-            with open(mark, encoding="utf-8") as f:
-                parts = f.read().split()
-            if len(parts) == 2:
-                owner, created = parts[0], int(parts[1] == "1")
-        if owner:
-            if stage:
-                home = user_home(owner)
-            else:
-                try:
-                    home = pwd.getpwnam(owner).pw_dir
-                except KeyError:
-                    home = None
-            if home:
-                shutil.rmtree(_p(stage, home + "/venv"), ignore_errors=True)
-            if created and not stage:
-                subprocess.run(["userdel", "--remove", owner], check=False)
-                print("removed user %s and its home" % owner)
-            elif created and stage:
-                shutil.rmtree(_p(stage, user_home(owner)), ignore_errors=True)
-            print("removed venv of service user %s" % owner)
-        if os.path.exists(mark):
-            os.unlink(mark)
-    else:
-        print("kept %s, %s and the service user's home (venv); use --uninstall --purge to remove"
-              % (INI_PATH, DATA_ROOT))
-    return 0
-
-
 def run_selftests():
-    import argparse as _ap
     import contextlib
     import struct
     import tempfile
@@ -2350,87 +1986,15 @@ def run_selftests():
             self.assertIsNone(M.parse_voice("en_US-x-low", {"files": {"../../etc/passwd": {}, "a/en_US-x-low.onnx": {}}}))
             self.assertIsNone(M.parse_voice("en_US-x-low", "notadict"))
 
-        def test_venv_site_and_user_home(self):
-            self.assertTrue(str(M.venv_site("/v")).startswith("/v/lib/python3."))
-            self.assertEqual(M.user_home("root"), "/root")
-            self.assertEqual(M.user_home("piperdash"), "/home/piperdash")
-            self.assertEqual(M.user_home("x", types.SimpleNamespace(pw_dir="/srv/x")), "/srv/x")
-
-        def test_unit_text_contents(self):
-            u = M.unit_text("piperdash", "/home/piperdash")
-            for want in ("Type=notify", "WatchdogSec=30", "User=piperdash", "ExecStartPre=-+", "--apply-staged",
-                         "Restart=always", "HOME=/home/piperdash"):
-                self.assertIn(want, u)
-            self.assertNotIn("User=", M.unit_text("root", "/root"))
 
         def test_ini_defaults_flow_into_parser(self):
             cp = configparser.ConfigParser(interpolation=None)
-            cp.read_string(M.ini_text("0.0.0.0", 9999, "/h/venv"))
+            cp.read_string(M.ini_text("0.0.0.0", 9999))
             a = M.build_parser(cp).parse_args([])
-            self.assertEqual((a.host, a.port, a.venv, a.radio_nodes), ("0.0.0.0", 9999, "/h/venv", ""))
+            self.assertEqual((a.host, a.port, a.venv, a.radio_nodes), ("0.0.0.0", 9999, M.DATA_ROOT + "/venv", ""))
             self.assertEqual(M.build_parser(cp).parse_args(["--port", "1"]).port, 1)
-            self.assertFalse(cp.getboolean("update", "enabled"))
-            self.assertEqual(cp.get("update", "token"), "")
+            self.assertFalse(cp.has_section("update"))
 
-        def test_validate_update_accepts_and_rejects(self):
-            self.assertEqual(M.validate_update(variant("3.2.1")), "3.2.1")
-            for bad in (b"def (", b"x = 1\n", b'VERSION = "1.0"\n', b"\xff\xfe", b"#" * (M.UPDATE_MAX + 1)):
-                with self.assertRaises(ValueError):
-                    M.validate_update(bad)
-
-        def test_stage_update_rejects_same_version(self):
-            d = tempfile.mkdtemp()
-            with self.assertRaises(ValueError):
-                M.stage_update(d, variant(M.VERSION))
-            self.assertEqual(M.stage_update(d, variant("8.8.8")), "8.8.8")
-            self.assertTrue(os.path.isfile(os.path.join(d, M.STAGED)))
-
-        def test_apply_staged_copies_and_rejects(self):
-            d, up = tempfile.mkdtemp(), tempfile.mkdtemp()
-            self.assertIsNone(M.apply_staged(d, up))
-            open(os.path.join(up, M.STAGED), "wb").write(variant("7.7.7"))
-            self.assertIn("7.7.7", M.apply_staged(d, up))
-            root = M._p(d, M.INSTALL_ROOT)
-            self.assertEqual(os.readlink(os.path.join(root, "current")), "lib/piper_dashboard-7.7.7")
-            self.assertFalse(os.path.exists(os.path.join(up, M.STAGED)))
-            open(os.path.join(up, M.STAGED), "wb").write(b"not python (")
-            self.assertIn("rejected", M.apply_staged(d, up))
-            self.assertTrue(os.path.exists(os.path.join(up, M.STAGED + ".rejected")))
-            self.assertEqual(os.readlink(os.path.join(root, "current")), "lib/piper_dashboard-7.7.7")
-
-        def test_rollback_steps_back_once_per_version(self):
-            d = tempfile.mkdtemp()
-            root = M._p(d, M.INSTALL_ROOT)
-            src = os.path.join(d, "src.py")
-            open(src, "w").write("x")
-            for v in ("0.0.1", "0.0.2"):
-                M._place_version(root, src, v)
-                time.sleep(0.01)
-            ns = _ap.Namespace(destdir=d)
-            self.assertEqual(quiet(M.do_rollback, ns), 0)
-            self.assertEqual(os.readlink(os.path.join(root, "current")), "lib/piper_dashboard-0.0.1")
-            with self.assertRaises(SystemExit):
-                quiet(M.do_rollback, ns)
-
-        def test_install_uninstall_staged(self):
-            d = tempfile.mkdtemp()
-            ns = _ap.Namespace(destdir=d, run_as="piperdash", host="127.0.0.1", port=8765, purge=False)
-            quiet(M.do_install, ns)
-            ini = M._p(d, M.INI_PATH)
-            self.assertEqual(oct(os.stat(ini).st_mode & 0o777), "0o640")
-            self.assertTrue(os.access(os.path.join(M._p(d, M.INSTALL_ROOT), "current", "piper_dashboard.py"), os.X_OK))
-            self.assertIn("Type=notify", open(M._p(d, M.UNIT_PATH)).read())
-            ns.port = 1111
-            quiet(M.do_install, ns)
-            self.assertIn("port = 8765", open(ini).read())
-            quiet(M.do_uninstall, ns)
-            self.assertFalse(os.path.exists(M._p(d, M.UNIT_PATH)))
-            self.assertFalse(os.path.exists(M._p(d, M.INSTALL_ROOT)))
-            self.assertTrue(os.path.exists(ini))
-            ns.purge = True
-            quiet(M.do_uninstall, ns)
-            self.assertFalse(os.path.exists(ini))
-            self.assertFalse(os.path.exists(M._p(d, M.DATA_ROOT)))
 
         def test_sd_notify_datagram(self):
             d = tempfile.mkdtemp()
@@ -2593,8 +2157,14 @@ def run_selftests():
             c, j, _ = self.call("GET", "/api/status")
             self.assertEqual((c, j["version"], j["engine_ok"]), (200, M.VERSION, True))
             self.assertFalse(j["radio"]["enabled"])
-            self.assertFalse(j["update"]["enabled"])
+            self.assertNotIn("update", j)
             self.assertTrue(M.healthy("127.0.0.1", self.port))
+
+        def test_service_unit_uses_the_suite_launcher(self):
+            unit = M.service_content()
+            self.assertIn("Type=notify", unit)
+            self.assertIn("ExecStart=/usr/bin/python3 %s %s --config %s" % (M._LAUNCHER_PATH, M.INSTALL_BIN_PATH, M.CONFIG_PATH), unit)
+            self.assertNotIn("ExecStartPre", unit)
 
         def test_index_page_has_title_and_version(self):
             c, b, _ = self.call("GET", "/", raw=True)
@@ -2692,30 +2262,6 @@ def run_selftests():
             finally:
                 M.CFG.update(radio_nodes=[], radio_sounds="", asterisk="false")
 
-        def test_update_endpoint_gating_and_staging(self):
-            upd = self.tmp + "/upd"
-            good = variant("9.9.9")
-            self.assertEqual(self.call("POST", "/api/update", good)[0], 403)
-            M.CFG["update_token"] = "s3cret-token"
-            try:
-                self.assertEqual(self.call("POST", "/api/update", good, {"X-Update-Token": "wrong"})[0], 403)
-                self.assertFalse(os.listdir(upd))
-                h = {"X-Update-Token": "s3cret-token", "X-Restart": "1"}
-                with mock.patch.object(M, "under_systemd", lambda: False):
-                    c, j, _ = self.call("POST", "/api/update", good, h)
-                self.assertEqual((c, j["staged"], j["restarting"]), (200, "9.9.9", False))
-                self.assertTrue(os.path.isfile(upd + "/" + M.STAGED))
-                self.assertEqual(self.call("POST", "/api/update", variant(M.VERSION), h)[0], 400)
-                self.assertEqual(self.call("POST", "/api/update", b"def (", h)[0], 400)
-                hits = []
-                with mock.patch.object(M, "under_systemd", lambda: True), \
-                        mock.patch.object(M, "_self_terminate", lambda: hits.append(1)):
-                    c, j, _ = self.call("POST", "/api/update", variant("9.9.8"), h)
-                    self.assertEqual((c, j["restarting"]), (200, True))
-                    time.sleep(1.4)
-                self.assertEqual(hits, [1])
-            finally:
-                M.CFG["update_token"] = ""
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite([loader.loadTestsFromTestCase(PureTests), loader.loadTestsFromTestCase(HttpTests)])
@@ -2740,16 +2286,16 @@ def build_parser(cp):
 
     ap = argparse.ArgumentParser(description="Piper TTS web dashboard")
     ap.add_argument("--config", metavar="INI", help="INI config file (CLI flags override it)")
-    ap.add_argument("--host", default=g("server", "host", "127.0.0.1"),
-                    help="bind address (0.0.0.0 exposes it on the LAN, no auth)")
+    ap.add_argument("--host", default=g("server", "host", "0.0.0.0"),
+                    help="bind address (0.0.0.0 serves the LAN; every page needs the root password)")
     ap.add_argument("--port", type=int, default=cp.getint("server", "port", fallback=8765))
-    ap.add_argument("--voices", default=g("paths", "voices", os.path.expanduser("~/piper/voices")),
+    ap.add_argument("--voices", default=g("paths", "voices", DATA_ROOT + "/voices"),
                     help="dir with .onnx + .onnx.json")
-    ap.add_argument("--workdir", default=g("paths", "workdir", os.path.expanduser("~/piper/input")),
+    ap.add_argument("--workdir", default=g("paths", "workdir", DATA_ROOT + "/input"),
                     help="uploaded text files")
-    ap.add_argument("--outdir", default=g("paths", "outdir", os.path.expanduser("~/piper/output")),
+    ap.add_argument("--outdir", default=g("paths", "outdir", DATA_ROOT + "/output"),
                     help="generated WAV files")
-    ap.add_argument("--venv", default=g("paths", "venv", os.path.expanduser("~/piper/venv")),
+    ap.add_argument("--venv", default=g("paths", "venv", DATA_ROOT + "/venv"),
                     help="venv for the installed piper-tts engine")
     ap.add_argument("--voices-base", default=g("catalog", "voices_base", VOICES_BASE),
                     help="voice catalog/download base URL")
@@ -2764,17 +2310,9 @@ def build_parser(cp):
     ap.add_argument("--radio-max-seconds", type=int, default=cp.getint("radio", "max_seconds", fallback=60),
                     help="refuse to play longer clips on air")
     ap.add_argument("--asterisk", default=g("radio", "asterisk_cmd", "asterisk"), help="asterisk CLI binary")
-    ap.add_argument("--update-dir", default=g("update", "dir", os.path.expanduser("~/piper/update")),
-                    help="where self-update stages the uploaded file")
-    ap.add_argument("--apply-staged", action="store_true", help="install a staged update (root; run by the unit's ExecStartPre)")
-    ap.add_argument("--rollback", action="store_true", help="point `current` at the previous installed version (root)")
     ap.add_argument("--selftest", action="store_true", help="run the embedded unit tests and exit")
     ap.add_argument("--install", action="store_true", help="install as a systemd service (root)")
     ap.add_argument("--uninstall", action="store_true", help="remove the service and program files (root)")
-    ap.add_argument("--purge", action="store_true", help="with --uninstall: also remove config, data and service user")
-    ap.add_argument("--run-as", default=DEFAULT_USER, metavar="USER",
-                    help="service user for --install (default %s; 'root' allowed)" % DEFAULT_USER)
-    ap.add_argument("--destdir", metavar="DIR", help="stage --install/--uninstall under DIR, no systemctl/useradd")
     ap.add_argument("--version", action="version", version=VERSION)
     return ap
 
@@ -2784,29 +2322,24 @@ def main():
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config")
     known, _rest = pre.parse_known_args()
+    cfg_path = known.config or (CONFIG_PATH if os.path.isfile(CONFIG_PATH) else None)
     cp = configparser.ConfigParser(interpolation=None)
-    if known.config and not cp.read(known.config):
-        sys.exit("cannot read config file: %s" % known.config)
+    if cfg_path and not cp.read(cfg_path):
+        sys.exit("cannot read config file: %s" % cfg_path)
     try:
         ap = build_parser(cp)
     except ValueError as e:
-        sys.exit("bad value in %s: %s" % (known.config, e))
+        sys.exit("bad value in %s: %s" % (cfg_path, e))
     a = ap.parse_args()
 
-    if sum(map(bool, (a.install, a.uninstall, a.apply_staged, a.rollback, a.selftest))) > 1:
-        ap.error("--install, --uninstall, --apply-staged, --rollback and --selftest are mutually exclusive")
-    if a.purge and not a.uninstall:
-        ap.error("--purge only applies to --uninstall")
+    if sum(map(bool, (a.install, a.uninstall, a.selftest))) > 1:
+        ap.error("--install, --uninstall and --selftest are mutually exclusive")
     if a.selftest:
         sys.exit(run_selftests())
-    if a.apply_staged:
-        sys.exit(do_apply_staged(a))
-    if a.rollback:
-        sys.exit(do_rollback(a))
     if a.install:
-        sys.exit(do_install(a))
+        sys.exit(install_service(a))
     if a.uninstall:
-        sys.exit(do_uninstall(a))
+        sys.exit(uninstall_service(a))
 
     for d in (a.voices, a.workdir, a.outdir):
         os.makedirs(d, exist_ok=True)
@@ -2817,14 +2350,6 @@ def main():
     if nodes and not (a.radio_sounds and os.path.isdir(a.radio_sounds)):
         print("warning: play-on-node disabled: sounds dir missing: %r" % a.radio_sounds, file=sys.stderr)
         nodes = []
-    try:
-        upd_on = cp.getboolean("update", "enabled", fallback=False)
-    except ValueError as e:
-        sys.exit("bad [update] enabled in %s: %s" % (known.config, e))
-    upd_tok = cp.get("update", "token", fallback="").strip()
-    if upd_on and not upd_tok:
-        print("warning: self-update disabled: [update] token is empty", file=sys.stderr)
-    CFG.update(update_token=upd_tok if upd_on else "", update_dir=a.update_dir)
     CFG.update(voices=a.voices, workdir=a.workdir, outdir=a.outdir,
                venv=a.venv, voices_base=a.voices_base, radio_nodes=nodes,
                radio_sounds=a.radio_sounds, radio_max_seconds=max(1, a.radio_max_seconds),
@@ -2850,6 +2375,319 @@ def main():
     finally:
         sd_notify("STOPPING=1")
         srv.server_close()
+
+
+def ini_text(host, port):
+    return """[server]
+host = %s
+port = %d
+
+[paths]
+voices = %s/voices
+workdir = %s/input
+outdir = %s/output
+venv = %s/venv
+
+[engine]
+cuda = false
+preload =
+
+[catalog]
+voices_base = %s
+
+[radio]
+nodes =
+sounds_dir =
+max_seconds = 60
+asterisk_cmd = asterisk
+""" % (host, port, DATA_ROOT, DATA_ROOT, DATA_ROOT, DATA_ROOT, VOICES_BASE)
+
+
+def _atomic_write(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    atomic_write(path, text, mode=mode)
+
+
+def _systemctl(*args):
+    return subprocess.run(["systemctl"] + list(args), capture_output=True, text=True)
+
+
+def _replace_link(path, target):
+    tmp = path + ".tmp"
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(target, tmp)
+    os.replace(tmp, path)
+
+
+def _write_launcher():
+    _atomic_write(_LAUNCHER_PATH, _LAUNCHER_CODE, 0o755)
+    print("  [+] Wrote launcher %s" % _LAUNCHER_PATH)
+
+
+def _remove_launcher_if_unused():
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    try:
+        names = os.listdir(_SYSTEMD_UNIT_DIR)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(_SYSTEMD_UNIT_DIR, n)
+        try:
+            if os.path.isfile(p):
+                with open(p, errors="replace") as fh:
+                    if _LAUNCHER_PATH in fh.read():
+                        return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+        print("  [-] Removed unused launcher %s" % _LAUNCHER_PATH)
+    except OSError:
+        pass
+
+
+def service_content():
+    return f"""[Unit]
+Description=Pi-Piper TTS: Piper text-to-speech dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH} --config {CONFIG_PATH}
+Restart=always
+RestartSec=3s
+TimeoutStopSec=15s
+WatchdogSec=30s
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def install_service(a):
+    if os.geteuid() != 0:
+        print("Error: installing needs root. Run with sudo.")
+        return 1
+    if not shutil.which("systemctl"):
+        print("Error: systemd is required (systemctl not found).")
+        return 1
+    current = os.path.realpath(__file__)
+    print("Installing %s v%s..." % (APP, VERSION))
+    os.makedirs(INSTALL_DIR, mode=0o755, exist_ok=True)
+    dest = os.path.join(INSTALL_DIR, APP + ".py")
+    if current != dest:
+        tmp = dest + ".tmp"
+        shutil.copy2(current, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        print("  [+] Copied %s -> %s" % (os.path.basename(current), dest))
+    os.chmod(dest, 0o755)
+    _replace_link(INSTALL_BIN_PATH, dest)
+    print("  [+] Symlinked %s -> %s" % (INSTALL_BIN_PATH, dest))
+    _write_launcher()
+    for sub in ("voices", "input", "output"):
+        os.makedirs(os.path.join(DATA_ROOT, sub), exist_ok=True)
+    if not os.path.exists(CONFIG_PATH):
+        _atomic_write(CONFIG_PATH, ini_text(a.host, a.port), 0o644)
+        print("  [+] Wrote %s" % CONFIG_PATH)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(CONFIG_PATH)
+    port = cp.getint("server", "port", fallback=8765)
+    _atomic_write(SYSTEMD_SERVICE_PATH, service_content(), 0o644)
+    print("  [+] Wrote %s" % SYSTEMD_SERVICE_PATH)
+    mark, msg = open_firewall_port(port)
+    print("  [%s] %s" % (mark, msg))
+    for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
+        r = _systemctl(*args)
+        if r.returncode != 0:
+            print("  [!] systemctl %s failed: %s" % (" ".join(args), (r.stderr or r.stdout).strip()))
+    r = _systemctl("restart", SERVICE_NAME)
+    if r.returncode != 0:
+        print("  [!] systemctl restart failed: %s" % (r.stderr or r.stdout).strip())
+        print("      check: journalctl -u %s -n 30 --no-pager" % SERVICE_NAME)
+        return 1
+    print("  [+] %s enabled and started" % SERVICE_NAME)
+    print("Open http://<node-address>:%d and sign in with the root password." % port)
+    return 0
+
+
+def uninstall_service(a):
+    if os.geteuid() != 0:
+        print("Error: uninstalling needs root. Run with sudo.")
+        return 1
+    print("Removing %s..." % APP)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(CONFIG_PATH)
+    port = cp.getint("server", "port", fallback=8765)
+    _systemctl("disable", "--now", SERVICE_NAME)
+    for p in (SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH):
+        if os.path.lexists(p):
+            os.remove(p)
+            print("  [-] Removed %s" % p)
+    _systemctl("daemon-reload")
+    if os.path.isdir(INSTALL_DIR):
+        shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+        print("  [-] Removed %s" % INSTALL_DIR)
+    _remove_launcher_if_unused()
+    print("  Settings kept in %s; voices, input and output kept in %s" % (CONFIG_PATH, DATA_ROOT))
+    mark, msg = close_firewall_port(port)
+    print("  [%s] %s" % (mark, msg))
+    return 0
+
+
+def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
+    import os
+    import secrets
+    import stat
+    path = os.fspath(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    folder = os.path.dirname(path) or "."
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        st = None
+    if skip_same and st is not None:
+        try:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    return False
+        except OSError:
+            pass
+    tmp = os.path.join(folder, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(6)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        if st is not None and os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+        if mode is not None:
+            os.fchmod(fd, mode)
+        elif st is not None:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode))
+        else:
+            os.fchmod(fd, new_mode)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    return True
+
+
+def firewall_backend():
+    import shutil
+    import subprocess
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "none"
+
+
+def open_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        target = subprocess.run(["firewall-cmd", "--zone=" + zone, "--get-target"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if target == "ACCEPT" or subprocess.run(check, capture_output=True, text=True,
+                                                timeout=10).stdout.strip() == "yes":
+            return "=", "%s is already open in firewalld zone %s" % (spec, zone)
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "+", "opened %s in firewalld zone %s (now and after a reboot)" % (spec, zone)
+        return "!", "could not open %s in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+            return "=", "%s is already open in ufw" % spec
+        subprocess.run(["ufw", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "+", "opened %s in ufw" % spec
+        return "!", "could not open %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so %s is not blocked" % spec
+
+
+def close_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        was_open = subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes"
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "!", "could not close %s in firewalld zone %s" % (spec, zone)
+        if was_open:
+            return "-", "closed %s in firewalld zone %s" % (spec, zone)
+        return "=", "%s was not open in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if not re.search(allow, status, re.M):
+            return "=", "%s was not open in ufw" % spec
+        subprocess.run(["ufw", "--force", "delete", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "!", "could not close %s in ufw" % spec
+        if "Default: allow (incoming)" in status:
+            return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
+        return "-", "closed %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
 
 
 if __name__ == "__main__":
