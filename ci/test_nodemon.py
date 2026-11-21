@@ -812,6 +812,14 @@ class QuickLinks(unittest.TestCase):
             self.assertEqual(nm.build_status(True)["links"], [{"key": "x"}])
             self.assertEqual(nm.build_status(False)["links"], [])
 
+    def test_the_linked_nodes_tab_sits_after_main_and_is_wired(self):
+        html = nm._HTML_TEMPLATE
+        self.assertLess(html.index('id="tab-main"'), html.index('id="tab-linked"'))
+        self.assertLess(html.index('id="tab-linked"'), html.index('id="tab-priv"'))
+        self.assertIn('<section id="pg-linked" class="hidden">', html)
+        self.assertIn("'linked'", nm._JS)
+        self.assertIn("renderLinked(d)", nm._JS)
+
     def test_the_page_opens_on_the_overview_tab(self):
         html = nm._HTML_TEMPLATE
         self.assertLess(html.index('id="tab-ov"'), html.index('id="tab-main"'))

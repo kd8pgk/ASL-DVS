@@ -25,8 +25,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.7.0"
-DATE_STR = "2026-11-17"
+VERSION = "0.8.0"
+DATE_STR = "2026-11-18"
 APP_NAME = "Node Monitor"
 PORT = 7777
 
@@ -1719,6 +1719,7 @@ main{padding:.6rem 1rem;max-width:1100px;margin:0 auto}
 .t-ov{--mc:var(--orange);--mc-rgb:255,170,34}
 .t-main{--mc:var(--teal);--mc-rgb:0,255,229}
 .t-priv{--mc:var(--lime);--mc-rgb:212,255,0}
+.t-linked{--mc:#ff7ad9;--mc-rgb:255,122,217}
 .t-log{--mc:var(--blue);--mc-rgb:34,212,255}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.7rem .8rem;margin-top:.7rem}
 .card h2{font-size:var(--fs-md);color:var(--amber);letter-spacing:.06em;margin-bottom:.45rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
@@ -1822,12 +1823,14 @@ __CSS__</style>
 <div class="tabs" id="tabs" role="tablist">
 <div class="tab t-ov active" id="tab-ov" data-tab="ov" role="tab">Overview</div>
 <div class="tab t-main" id="tab-main" data-tab="main" role="tab">Main node</div>
+<div class="tab t-linked" id="tab-linked" data-tab="linked" role="tab">Linked Nodes</div>
 <div class="tab t-priv" id="tab-priv" data-tab="priv" role="tab">Private nodes</div>
 <div class="tab t-log" id="tab-log" data-tab="log" role="tab">Log</div>
 </div>
 <div id="status-banner"></div>
 <section id="pg-ov"></section>
 <section id="pg-main" class="hidden"></section>
+<section id="pg-linked" class="hidden"></section>
 <section id="pg-priv" class="hidden"></section>
 <section id="pg-log" class="hidden"><div class="card"><h2>Node Monitor log</h2><div class="logbox" id="logbox"></div></div></section>
 <div id="sysbar">
@@ -1891,7 +1894,7 @@ async function logout() { await api('/api/logout', {method: 'POST', body: {}}); 
 function showTab(name) {
   current = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  ['ov', 'main', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
+  ['ov', 'main', 'linked', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
   if (name === 'log') pollLog();
 }
 function kv(label, node) {
@@ -2169,6 +2172,28 @@ function gatewayTable(d) {
   });
   return table(['Gateway', 'State', 'Tuned to', 'Detail', 'Source'], rows, 'No gateways.');
 }
+function renderLinked(d) {
+  const root = $('pg-linked');
+  root.textContent = '';
+  if (!d.main) { root.appendChild(el('div', 'banner warn', 'No node was found in rpt.conf.')); return; }
+  const n = d.main;
+  const card = el('div', 'card');
+  const h = el('h2');
+  h.appendChild(el('span', '', 'Linked Nodes from node ' + n.node));
+  const st = stateOf(n);
+  h.appendChild(badge(st[0], st[1]));
+  card.appendChild(h);
+  if (!n.ok && n.error) card.appendChild(el('div', 'banner warn', n.error));
+  const privNodes = (d.private || []).map((p) => p.node);
+  const rows = linkRows(n).map((r, i) => {
+    const l = n.links[i];
+    const local = privNodes.indexOf(l.node) !== -1;
+    r[0] = {text: l.node + (local ? ' (local)' : ''), mono: true};
+    return r;
+  });
+  card.appendChild(table(LINK_COLS, rows, 'No links.'));
+  root.appendChild(card);
+}
 function renderPriv(d) {
   const root = $('pg-priv');
   root.textContent = '';
@@ -2192,6 +2217,7 @@ function renderAll(d) {
   if (busy) return;
   renderOv(d);
   renderMain(d);
+  renderLinked(d);
   renderPriv(d);
 }
 async function poll() {
