@@ -21,6 +21,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 | Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
 | Node Monitor (nodemon) | `nodemon_v*.py` | 7777 | Allmon3-style status page for the node: an Overview of every node and links to the node's other tools, its ASL3 registration, every link on the main public node and on each private node (state, mode, direction, time connected), and what the DVSwitch, M17 and SvxLink gateways are tuned to, each read from the service's own status. Link state is polled from Asterisk's manager interface (AMI). Link commands (every ilink operation) from drop-down menus. Installed by the installer or instmon. |
+| Pi-Piper TTS | `piper_dashboard_v*.py` | 8765 | Text-to-speech dashboard for a Piper TTS install: pick a voice, run a file or pasted text, stream or save WAV, export 8 kHz audio, and optionally play on the node or store output in a Pibrary drive. Installs its own engine and voices from the Config tab. Stands alone. |
 | Terminal Monitor (termon) | `termon_v*.py` | 7878 | LAN-only web terminal and process monitor: top, htop or btop, and a root bash shell in the browser (xterm.js). HTTPS with a self-signed certificate, audit lines in the journal and syslog. The web page runs as an unprivileged user and asks a small root helper for terminals; the shell can run as a normal user with sudo instead of root (Setup card). Installs its own two services with `--install`; not yet managed by instmon or the installer. |
 
 Scripts:
@@ -537,6 +538,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `pibrary_v0_17_3_20261115.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
 | `nodemon_v0_7_0_20261117.py` | common |
+| `piper_dashboard_v0_6_0_20261121.py` | common |
 | `install_all_v7_8_0_20261116.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |

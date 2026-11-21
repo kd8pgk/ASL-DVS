@@ -25,6 +25,7 @@ TOOLS = [(ts.SERVERS[key]["file"], unit, f"/usr/local/bin/{unit}.py") for key, u
     ("noderecorder", "noderecorder"),
     ("pibrary", "pibrary"),
     ("nodemon", "nodemon"),
+    ("piper_dashboard", "piper_dashboard"),
 )]
 
 
