@@ -32,7 +32,7 @@ SERVERS = {
     "piper_dashboard": {"file": "piper_dashboard_v0_8_0_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
     "pibrary": {"file": "pibrary_v0_17_3_20261115.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
-    "instmon": {"file": "instmon_v2_112_0_20261121.py", "port": 8990, "scheme": "http", "health": "/",
+    "instmon": {"file": "instmon_v2_113_0_20261121.py", "port": 8990, "scheme": "http", "health": "/",
                 "health_expect": b"<html", "error_keys": ("message",),
                 "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
                 "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",

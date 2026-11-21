@@ -40,7 +40,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.112.0"
+VERSION ="2.113.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -5968,6 +5968,86 @@ def gh_start_update (name ,allow_older =False ):
         entry =dict (entry ,allow_older =bool (older_ok ))
     log_event (f"GitHub update started: {name }","info")
     threading .Thread (target =_gh_update_bg ,args =(entry ,),daemon =True ).start ()
+
+def _gh_group_pick (category ):
+    with _gh_lock :
+        phase =_gh_state ["phase"]
+        entries =[dict (e )for e in (_gh_state ["entries"]or [])]
+    if phase =="checking":
+        return None ,409 ,"A GitHub check is running -- wait for it to finish.","warn"
+    if phase !="done"or not entries :
+        return None ,404 ,"Press Check GitHub first -- there is no list to update from yet.","warn"
+    cands =[e for e in entries if e .get ("category")==category and not _gh_other_build (e )]
+    if not cands :
+        return None ,404 ,f"The last GitHub check has no {category} file for this node.","warn"
+    return max (cands ,key =lambda e :_version_sort_key (e .get ("version"))),200 ,"","info"
+
+def gh_start_group_update (category ):
+    if category not in GH_CATEGORIES :
+        return 400 ,"This library has no GitHub source.","warn"
+    if full_update_running ():
+        return 409 ,"A Full Update is running -- wait for it to finish.","warn"
+    pick ,code ,msg ,level =_gh_group_pick (category )
+    if pick is None :
+        return code ,msg ,level
+    cmp =_gh_compare (dict (pick ))
+    if cmp ["status"]=="newer_local":
+        return 409 ,(f"{pick ['name']}: the library has v{cmp ['local_version']or '?'}, newer than GitHub's "
+        f"v{pick ['version']} on this channel -- nothing was replaced."),"warn"
+    with _gh_lock :
+        if pick ["name"]in _gh_state ["busy"]:
+            return 409 ,f"{pick ['name']} is already downloading.","warn"
+        _gh_state ["busy"].add (pick ["name"])
+    log_event (f"GitHub group update started: {category} -> {pick ['name']}","info")
+    threading .Thread (target =_gh_group_update_bg ,args =(pick ,),daemon =True ).start ()
+    return 200 ,f"Updating {pick ['name']} (v{pick ['version']}) from GitHub -- the result shows in the log.","info"
+
+def _gh_group_update_bg (entry ):
+    name =entry ["name"]
+    category =entry ["category"]
+    try :
+        data =_gh_fetch_impl (_gh_entry_url (entry ),GITHUB_FILE_MAX_BYTES )
+        _gh_verify_content (entry ,data )
+        ensure_dirs ()
+        dest =safe_join (LIB_SUBDIRS [category ],name )
+        if dest is None :
+            raise GhRejected ("invalid file name")
+        if os .path .isfile (dest )and lib_locked (category ,name )and _gh_local_blob_id (dest )!=entry ["blob"]:
+            raise GhRejected (_locked_msg (name ))
+        wanted =_gh_variant (entry .get ("version"))
+        old =[n for n ,ver ,_key ,_full in _gh_local_files (category ,entry ["glob"])
+        if _gh_variant (ver )==wanted and n !=name ]
+        wrote ,reason =compare_before_write (dest ,data )
+        removed ,kept =[],[]
+        for n in old :
+            if lib_locked (category ,n ):
+                kept .append (n )
+                continue
+            path =safe_join (LIB_SUBDIRS [category ],n )
+            try :
+                os .unlink (path )
+                removed .append (n )
+            except OSError :
+                kept .append (n )
+        with _file_meta_cache_lock :
+            _file_meta_cache .clear ()
+        _fetched_record (entry )
+        how ="saved"if wrote else f"already the same ({reason })"
+        msg =f"Updated {name } (v{entry ['version']}) in the {category } library from GitHub: {how }."
+        if removed :
+            msg +=f" Deleted the old copy {', '.join (removed )}."
+        if kept :
+            msg +=f" Left {', '.join (kept )} in place (locked or could not be deleted)."
+        level ="ok"
+    except GhRejected as exc :
+        msg ,level =f"GitHub update of {name } refused: {exc }","err"
+    except Exception as exc :
+        msg ,level =f"GitHub update of {name } failed (unexpected): {exc }","err"
+    refreshed =_gh_compare (dict (entry ))
+    with _gh_lock :
+        _gh_state ["busy"].discard (name )
+        _gh_state ["entries"]=[refreshed if e ["name"]==name else e for e in _gh_state ["entries"]]
+    _gh_event (msg ,level )
     return 200 ,f"Downloading {name } -- it is checked before it is saved.","info"
 
 def _gh_group_html (category ):
@@ -6417,7 +6497,7 @@ RECORDER_STATUS_URL = os.environ.get("INSTMON_RECORDER_STATUS_URL", "http://127.
 _recorder_cache = {"t": -1e9, "v": None}
 _RECORDING_BLOCKED_ACTIONS = frozenset((
     "install", "install_suite", "uninstall", "start", "stop", "install_config", "run_script", "rpiclone_install", "save_alternate",
-    "comms_restart", "reboot", "shutdown", "gh_update", "quiet", "restore", "full_update", "install_confgetter",
+    "comms_restart", "reboot", "shutdown", "gh_update", "gh_update_group", "quiet", "restore", "full_update", "install_confgetter",
     "cg_run", "cg_uninstall", "install_confputter", "cp_uninstall", "cp_apply", "cp_undo"))
 SUITELOG_PATH = os.environ.get("INSTMON_SUITELOG", "/run/asl_dvs/suitelog.jsonl")
 SUITELOG_FLAG = os.environ.get("INSTMON_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
@@ -9233,11 +9313,15 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
             +''.join (f'<button data-action="save_alternate" data-name="{esc (n )}">Save {esc (n )}</button>'for n in live )
             +'</div>')
     card_cls ="card libgrp libgrp-nested collapsed"if nested else "card libgrp collapsed"
+    gh_update_html =(f'<button class="gh-group-update" data-action="gh_update_group" data-category="{category}" '
+    f'title="Download the newest file for this library from GitHub on this node\'s channel and replace the library copy">Update</button>'
+    if category in GH_CATEGORIES else "")
     upload_html =f"""
     <div class="librow libgrp-upload libgrp-upload-top">
       <input type="file" id="file-{category}" data-category="{category}">
       <button data-action="upload" data-category="{category}">Upload &amp; stage</button>
       <span id="upmsg-{category}" class="small muted"></span>
+      {gh_update_html }
     </div>"""
     return f"""
   <div class="{card_cls}" data-libcat="{category}">
@@ -9567,6 +9651,7 @@ input[type=file]{color:var(--muted);font-size:var(--fs-base);max-width:100%}
   border-top:1px dashed var(--border2);border-bottom:none;padding-top:.6rem}
 .libgrp-upload input[type=file]{flex:1;min-width:8rem}
 .libgrp-upload-top{border-top:none;border-bottom:1px dashed var(--border2);padding-top:.55rem;padding-bottom:.6rem}
+.libgrp-upload-top .gh-group-update{margin-left:auto}
 /* GitHub status rows: sit between a library group's header and its
    rows so they stay visible while the group is collapsed. */
 .gh-rows{display:flex;flex-direction:column;gap:.3rem;margin:.1rem 0 .4rem}
@@ -10094,11 +10179,11 @@ function renderQuietFullUpdate(quiet, fu) {
 
 let recBusy = null;
 const REC_UI = ['start', 'stop', 'uninstall', 'install', 'install_suite', 'run_script', 'install_config', 'install_confgetter', 'install_confputter', 'cg_run',
-  'cg_uninstall', 'cp_apply', 'cp_undo', 'cp_uninstall', 'restore', 'quiet', 'reboot', 'shutdown', 'comms_restart', 'gh_update', 'full_update',
+  'cg_uninstall', 'cp_apply', 'cp_undo', 'cp_uninstall', 'restore', 'quiet', 'reboot', 'shutdown', 'comms_restart', 'gh_update', 'gh_update_group', 'full_update',
   'save_alternate', 'rpiclone_install', 'diskimg_backup_start', 'diskimg_format_start', 'diskimg_clone_start', 'diskimg_restore_start',
   'diskimg_mount', 'diskimg_unmount', 'diskimg_eject', 'diskimg_schedule_save'];
 const REC_API = ['install', 'install_suite', 'uninstall', 'start', 'stop', 'install_config', 'run_script', 'rpiclone_install', 'save_alternate', 'comms_restart',
-  'reboot', 'shutdown', 'gh_update', 'quiet', 'restore', 'full_update', 'install_confgetter', 'cg_run', 'cg_uninstall', 'install_confputter',
+  'reboot', 'shutdown', 'gh_update', 'gh_update_group', 'quiet', 'restore', 'full_update', 'install_confgetter', 'cg_run', 'cg_uninstall', 'install_confputter',
   'cp_uninstall', 'cp_apply', 'cp_undo'];
 const REC_PATHS = ['/api/file', '/api/confputter/upload', '/api/diskimg/backup/start', '/api/diskimg/format/start', '/api/diskimg/clone/start',
   '/api/diskimg/restore/start', '/api/diskimg/mount', '/api/diskimg/unmount', '/api/diskimg/eject', '/api/diskimg/schedule'];
@@ -11809,6 +11894,9 @@ function wireButtons() {
           if (!confirm(`Download ${btn.dataset.name} from GitHub into the ${btn.dataset.category} library? It is checked before it is saved, and nothing runs or installs until you press its button.`)) { btn.disabled = false; return; }
           await postAction({action: 'gh_update', name: btn.dataset.name, confirm: true});
           }
+        } else if (action === 'gh_update_group') {
+          if (!confirm(`Update the ${btn.dataset.category} library from GitHub? The newest file on this node's channel is downloaded, even if the same version is already here, and the old library copy is deleted once the new one is saved. Nothing installs until you press Install.`)) { btn.disabled = false; return; }
+          await postAction({action: 'gh_update_group', category: btn.dataset.category, confirm: true});
         } else if (action === 'run_script') {
           if (btn.dataset.uninstaller === '1') {
             if (!confirm(`Run ${btn.dataset.name}? This removes the ASL-DVS stack from this node.`)) { btn.disabled = false; return; }
@@ -13681,6 +13769,7 @@ _ACTION_HANDLERS ={
 "shutdown":lambda self ,body :self ._action_shutdown (body ),
 "gh_check":lambda self ,body :self ._action_gh_check (body ),
 "gh_update":lambda self ,body :self ._action_gh_update (body ),
+"gh_update_group":lambda self ,body :self ._action_gh_update_group (body ),
 "quiet":lambda self ,body :self ._action_quiet (body ),
 "restore":lambda self ,body :self ._action_restore (body ),
 "full_update":lambda self ,body :self ._action_full_update (body ),
@@ -15689,8 +15778,15 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _action_gh_update (self ,body ):
         if not body .get ("confirm"):
             self ._error_json (400 ,"A GitHub update requires confirm:true in the request body")
-            return 
+            return
         code ,msg ,level =gh_start_update (body .get ("name"),body .get ("allow_older")is True )
+        self ._send_json (code ,{"message":msg ,"level":level })
+
+    def _action_gh_update_group (self ,body ):
+        if not body .get ("confirm"):
+            self ._error_json (400 ,"A GitHub group update requires confirm:true in the request body")
+            return
+        code ,msg ,level =gh_start_group_update (body .get ("category"))
         self ._send_json (code ,{"message":msg ,"level":level })
 
     def _action_quiet(self, body):
