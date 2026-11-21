@@ -156,7 +156,7 @@ class NodeTalkerReadsItTests:
         self.mod._svc_file_write()
         d = nt.svc_from_nc()
         self.assertEqual(d["source"], "nodecontrol")
-        self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17"])
+        self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17", "svxlink"])
         self.assertEqual(d["reg"]["state"], "registered")
         self.assertLess(d["age_s"], 5)
 
