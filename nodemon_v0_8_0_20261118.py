@@ -25,8 +25,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.8.0.1"
-DATE_STR = "2026-11-21"
+VERSION = "0.8.0"
+DATE_STR = "2026-11-18"
 APP_NAME = "Node Monitor"
 PORT = 7777
 
