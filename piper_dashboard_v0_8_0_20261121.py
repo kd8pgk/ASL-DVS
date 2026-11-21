@@ -1,4 +1,4 @@
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 import argparse
 import configparser
@@ -518,7 +518,7 @@ def job_set(**kw):
 def job_log(line):
     with JOB_LOCK:
         JOB["log"].append(line.rstrip()[:300])
-        del JOB["log"][:-60]
+        del JOB["log"][:-180]
 
 
 def job_add(n):
@@ -579,7 +579,40 @@ def run_cmd(cmd, timeout):
         raise RuntimeError("command failed, exit %d%s" % (rc, hint))
 
 
+LEGACY_VENV_GLOBS = ("/root/piper/venv", "/home/*/piper/venv", "/home/*/piper-tts/venv",
+                     "/opt/piper/venv", "/usr/local/piper/venv", "/srv/piper_dashboard/venv")
+LEGACY_CLI_PATHS = ("/usr/local/bin/piper", "/usr/bin/piper")
+
+
+def piper_site_ok(venv):
+    return any(Path(venv).glob("lib/python*/site-packages/piper/__init__.py"))
+
+
+def find_legacy_venvs():
+    import glob
+    cands = [CFG.get("venv", "")]
+    for g in LEGACY_VENV_GLOBS:
+        cands += sorted(glob.glob(g))
+    seen = []
+    for c in cands:
+        if c and c not in seen and os.path.isdir(c) and piper_site_ok(c):
+            seen.append(c)
+    return seen
+
+
+def find_legacy_cli():
+    for p in LEGACY_CLI_PATHS:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
 def install_engine():
+    for v in find_legacy_venvs():
+        if try_import_engine(v):
+            CFG["venv"] = v
+            job_set(msg="found an existing piper-tts install at %s: not reinstalling" % v)
+            return
     plat = sysconfig.get_platform()
     if plat not in ("linux-x86_64", "linux-aarch64"):
         raise RuntimeError("no piper-tts wheel for %s (needs 64-bit Linux, x86_64 or aarch64)" % plat)
@@ -787,7 +820,7 @@ button.sec { color: #ffffff; border-color: var(--border2); }
 .err { color: var(--red) !important; }
 audio { width: 100%; margin-top: .6rem; color-scheme: dark; }
 progress { width: 100%; height: 10px; margin-top: .5rem; accent-color: var(--green); }
-pre { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: .4rem; font-size: .75rem; color: var(--text-bright); max-height: 140px; overflow: auto; white-space: pre-wrap; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: .4rem; font-size: .75rem; color: var(--text-bright); max-height: 420px; overflow: auto; white-space: pre-wrap; }
 ul { padding-left: 1.1rem; }
 li { margin: .25rem 0; }
 a { color: var(--blue); }
@@ -823,7 +856,7 @@ a { color: var(--blue); }
 <div id="eng"></div>
 
 <details id="inst"><summary>Install engine / voices</summary>
-<fieldset><legend>Engine</legend>
+<fieldset id="engcard"><legend>Engine</legend>
 <div id="engtxt"></div>
 <button id="ieng" class="sec">Install piper-tts (venv + pip)</button>
 </fieldset>
@@ -883,6 +916,7 @@ a { color: var(--blue); }
 <div><button id="stream">Stream</button></div>
 </div>
 <button id="stop" class="sec" hidden>Stop</button>
+<progress id="runp" max="100" value="0" hidden></progress>
 <div id="status"></div>
 <audio id="player" controls hidden></audio>
 </fieldset>
@@ -962,6 +996,7 @@ async function loadEngine() {
     $('eng').className = s.engine_ok ? '' : 'err';
     $('unload').disabled = !s.loaded;
     $('ieng').disabled = s.engine_ok;
+    $('engcard').hidden = !!s.engine_ok;
     const r = s.radio || { enabled: false, nodes: [] };
     const changed = r.enabled !== radio.enabled;
     radio = r;
@@ -1283,6 +1318,24 @@ function checkSrc() {
   }
   return true;
 }
+let progTimer = null;
+function trackProgress() {
+  const p = $('runp');
+  p.hidden = false;
+  p.value = 0;
+  clearInterval(progTimer);
+  progTimer = setInterval(async () => {
+    try {
+      const j = await getJSON('/api/progress');
+      if (j.total > 0) { p.max = j.total; p.value = j.done; }
+      if (j.state !== 'running') {
+        clearInterval(progTimer);
+        progTimer = null;
+        setTimeout(() => { p.hidden = true; }, 1500);
+      }
+    } catch (e) {}
+  }, 400);
+}
 function setBusy(b) {
   $('run').disabled = b;
   $('stream').disabled = b;
@@ -1321,6 +1374,7 @@ $('stream').onclick = async () => {
   $('stop').hidden = false;
   setBusy(true);
   setStatus('Streaming... (first run loads the voice)');
+  trackProgress();
   const t0 = performance.now();
   try {
     const r = await fetch('/api/stream', {
@@ -1403,6 +1457,7 @@ $('run').onclick = async () => {
   if (!checkSrc()) return;
   setBusy(true);
   setStatus('Synthesizing... (first run loads the voice; slow on a Pi)');
+  trackProgress();
   try {
     const r = await fetch('/api/run', {
       method: 'POST',
@@ -1542,6 +1597,37 @@ def clamp_float(v, lo, hi, default):
     return min(max(f, lo), hi)
 
 
+PROG_LOCK = threading.Lock()
+PROG = {"state": "idle", "done": 0, "total": 0}
+
+
+def sentence_count(text):
+    return max(1, len(re.findall(r"[.!?]+(?:\s|$)", text)))
+
+
+def prog_start(text):
+    with PROG_LOCK:
+        PROG.update(state="running", done=0, total=sentence_count(text))
+
+
+def prog_tick():
+    with PROG_LOCK:
+        if PROG["state"] == "running" and PROG["done"] < PROG["total"] - 1:
+            PROG["done"] += 1
+
+
+def prog_end(ok):
+    with PROG_LOCK:
+        PROG["state"] = "done" if ok else "error"
+        if ok:
+            PROG["done"] = PROG["total"]
+
+
+def prog_snapshot():
+    with PROG_LOCK:
+        return dict(PROG)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "PiperDash/" + VERSION
 
@@ -1637,10 +1723,13 @@ class Handler(BaseHTTPRequestHandler):
                 "rss_mb": None if kb is None else round(kb / 1024),
                 "platform": sysconfig.get_platform(),
                 "venv": CFG["venv"],
+                "legacy_cli": find_legacy_cli(),
                 "radio": {"enabled": radio_enabled(), "nodes": CFG.get("radio_nodes", [])},
             })
         elif path == "/api/config":
             self.handle_config_get()
+        elif path == "/api/progress":
+            self._json(200, prog_snapshot())
         elif path == "/api/job":
             self._json(200, job_snapshot())
         elif path == "/api/catalog":
@@ -1930,11 +2019,20 @@ class Handler(BaseHTTPRequestHandler):
         out = Path(out_dir) / out_name
         t0 = time.time()
         with ENG.lock:
+            prog_start(text)
             try:
                 v = ENG.ensure(voice)
                 with wave.open(str(out), "wb") as wf:
-                    v.synthesize_wav(text, wf, syn_config=cfg)
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(v.config.sample_rate)
+                    for chunk in v.synthesize(text, syn_config=cfg):
+                        if chunk.audio_int16_bytes:
+                            wf.writeframes(chunk.audio_int16_bytes)
+                        prog_tick()
+                prog_end(True)
             except Exception as e:
+                prog_end(False)
                 try:
                     out.unlink()
                 except OSError:
@@ -1969,11 +2067,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Audio-Channels", "1")
             self.end_headers()
             gen = v.synthesize(text, syn_config=cfg)
+            prog_start(text)
+            ok = False
             try:
                 for chunk in gen:
                     data = chunk.audio_int16_bytes
                     if data:
                         self.wfile.write(data)
+                    prog_tick()
+                ok = True
             except OSError:
                 pass
             except Exception as e:
@@ -1982,6 +2084,7 @@ class Handler(BaseHTTPRequestHandler):
                 close = getattr(gen, "close", None)
                 if close:
                     close()
+                prog_end(ok)
         finally:
             ENG.lock.release()
 
@@ -2142,6 +2245,24 @@ def run_selftests():
             a = M.build_parser(cp).parse_args([])
             self.assertEqual((a.host, a.port, a.venv, a.radio_nodes), ("0.0.0.0", 9999, M.DATA_ROOT + "/venv", ""))
             self.assertFalse(cp.has_section("update"))
+
+        def test_legacy_venv_is_found_and_counted(self):
+            d = tempfile.mkdtemp(prefix="pd_legacy_")
+            try:
+                os.makedirs(os.path.join(d, "lib", "python3.13", "site-packages", "piper"))
+                open(os.path.join(d, "lib", "python3.13", "site-packages", "piper", "__init__.py"), "w").close()
+                saved = (M.LEGACY_VENV_GLOBS, dict(M.CFG))
+                try:
+                    M.LEGACY_VENV_GLOBS = (d,)
+                    M.CFG.pop("venv", None)
+                    self.assertEqual(M.find_legacy_venvs(), [d])
+                    self.assertEqual(M.sentence_count("Hello there. Bye! Ok?"), 3)
+                finally:
+                    M.LEGACY_VENV_GLOBS = saved[0]
+                    M.CFG.clear()
+                    M.CFG.update(saved[1])
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
 
         def test_config_validation_and_confirm(self):
             cur = M.default_values("0.0.0.0", 8765)
@@ -2338,6 +2459,14 @@ def run_selftests():
             self.assertIn("ExecStart=/usr/bin/python3 %s %s --config %s" % (M._LAUNCHER_PATH, M.INSTALL_BIN_PATH, M.CONFIG_PATH), unit)
             self.assertNotIn("ExecStartPre", unit)
 
+        def test_progress_reports_the_finished_run(self):
+            self.run_wav()
+            c, j, _ = self.call("GET", "/api/progress")
+            self.assertEqual(c, 200)
+            self.assertEqual(j["state"], "done")
+            self.assertTrue(j["total"] > 0)
+            self.assertEqual(j["done"], j["total"])
+
         def test_index_page_has_title_and_version(self):
             c, b, _ = self.call("GET", "/", raw=True)
             self.assertEqual(c, 200)
@@ -2398,9 +2527,9 @@ def run_selftests():
         def test_export_and_download(self):
             name = self.run_wav()
             c, j, _ = self.call("POST", "/api/export", {"name": name, "format": "ulaw"})
-            self.assertEqual((c, j["bytes"]), (200, 8000))
+            self.assertEqual((c, j["bytes"]), (200, 1600))
             c, b, h = self.call("GET", "/audio/" + j["name"], raw=True)
-            self.assertEqual((c, len(b)), (200, 8000))
+            self.assertEqual((c, len(b)), (200, 1600))
             self.assertIn("attachment", h["Content-Disposition"])
             self.assertEqual(self.call("POST", "/api/export", {"name": name, "format": "mp3"})[0], 400)
             c, j2, _ = self.call("POST", "/api/export", {"name": name, "format": "wav8"})
@@ -2527,7 +2656,13 @@ def main():
                radio_sounds=a.radio_sounds, radio_max_seconds=max(1, a.radio_max_seconds),
                asterisk=a.asterisk)
     if not try_import_engine(a.venv):
-        print("warning: piper engine unavailable: %s (install from the UI)" % ENGINE_ERR, file=sys.stderr)
+        for v in find_legacy_venvs():
+            if try_import_engine(v):
+                CFG["venv"] = v
+                print("piper engine found in an existing install: %s" % v, file=sys.stderr)
+                break
+        else:
+            print("warning: piper engine unavailable: %s (install from the UI)" % ENGINE_ERR, file=sys.stderr)
     ENG = Engine(a.voices, a.cuda)
 
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
