@@ -572,6 +572,20 @@ class GroupUpdate(unittest.TestCase):
         with im._gh_lock:
             self.assertNotIn(self.NEW, im._gh_state["busy"])
 
+    def test_the_button_shows_downloading_while_a_download_runs(self):
+        with im._gh_lock:
+            im._gh_state["busy"].add(self.NEW)
+        try:
+            busy = im.render_library_group_html("Test", "wifimon", [], "Install")
+        finally:
+            with im._gh_lock:
+                im._gh_state["busy"].discard(self.NEW)
+        idle = im.render_library_group_html("Test", "wifimon", [], "Install")
+        self.assertIn("Downloading", busy)
+        self.assertIn("disabled", busy)
+        self.assertNotIn('data-action="gh_update_group"', busy)
+        self.assertIn('data-action="gh_update_group"', idle)
+
     def test_a_failed_download_keeps_the_old_copy(self):
         with mock.patch.object(im, "_gh_fetch_impl", side_effect=im.GhRejected("network")), \
                 mock.patch.object(im, "_gh_compare", return_value={"status": "update"}), \

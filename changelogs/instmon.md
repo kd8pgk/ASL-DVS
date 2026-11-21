@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_113_0_20261121.py`.
+Current file: `instmon_v2_114_0_20261121.py`.
+
+## 2.114.0 (2026-11-21)
+
+The Update button stays disabled while its download runs. This is a release: the card now renders its state from the server.
+
+- **Downloading.** While a file for that card is downloading (or still being checked by the server), the button reads "Downloading…" and is disabled, so a second click cannot start another download. It comes back when the download ends, on the next refresh.
+- **Why.** The button used to be enabled again as soon as the request returned, while the download was still running in the background.
+- Nothing else changes.
 
 ## 2.113.0 (2026-11-21)
 
