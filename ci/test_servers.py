@@ -22,30 +22,31 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_113_20261116.py", "port": 8989, "scheme": "http"},
-    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_118_20261116.py", "port": 8989, "scheme": "https", "plain_loopback": True},
-    "sysmon": {"file": "sysmon_v6_13_101_20261116.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_89_20261116.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "nodetalker": {"file": "nodetalker_v0_10_51_20261117.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "nodecontrol": {"file": "nodecontrol_v9_3_114_20261121.py", "port": 8989, "scheme": "http"},
+    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_119_20261121.py", "port": 8989, "scheme": "https", "plain_loopback": True},
+    "sysmon": {"file": "sysmon_v6_13_102_20261121.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_90_20261121.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "nodetalker": {"file": "nodetalker_v0_11_0_20261121.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_17_8_20261116.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "piper_dashboard": {"file": "piper_dashboard_v0_8_0_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
     "pibrary": {"file": "pibrary_v0_17_3_20261115.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
-    "instmon": {"file": "instmon_v2_112_0_20261121.py", "port": 8990, "scheme": "http", "health": "/",
+    "instmon": {"file": "instmon_v2_113_0_20261121.py", "port": 8990, "scheme": "http", "health": "/",
                 "health_expect": b"<html", "error_keys": ("message",),
                 "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
                 "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",
                               "INSTMON_RECORDER_STATUS_URL": None}},
     "wifimon": {"file": "wifimon_v5_57_0_20261115.py", "port": 8991, "scheme": "http", "health": "/api/whoami",
                 "health_expect": b'"version"', "error_keys": ("message",)},
-    "44helper": {"file": "44helper_v0_1_59_20261117.py", "port": 9997, "scheme": "http",
+    "44helper": {"file": "44helper_v0_1_74_20261118.py", "port": 9997, "scheme": "http",
                  "error_keys": ("message",)},
     "termon": {"file": "termon_v0_2_5_20261113.py", "port": 7878, "scheme": "https", "health": "/api/health",
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
-    "nodemon": {"file": "nodemon_v0_6_0_20261116.py", "port": 7777, "scheme": "http", "health": "/api/health",
-                "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
+    "nodemon": {"file": "nodemon_v0_7_0_20261117.py", "port": 7777, "scheme": "https", "health": "/api/health",
+                "tls_conf": True, "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
                 "files_env": {"NODEMON_RPT_CONF": "run/rpt.conf", "NODEMON_AMI_CONF": "run/manager.conf",
                               "NODEMON_M17_INI": "run/m17.ini", "NODEMON_SVX_CONF": "run/svxlink.conf",
                               "NODEMON_SVX_LOG": "run/svxlink.log", "NODEMON_ABINFO_GLOB": "run/ABInfo_none.json"}},
@@ -68,6 +69,7 @@ PUBLIC_BY_DESIGN = {
     "wifimon": {"/api/whoami", "/api/countries"},
     "44helper": set(),
     "termon": {"/api/health", "/api/whoami"},
+    "piper_dashboard": {"/api/status"},
     "nodemon": {"/api/health", "/api/whoami"},
 }
 
@@ -97,8 +99,8 @@ def extract_routes(path):
                     public.add(c.value)
     literals = {"GET": set(), "POST": set()}
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST"):
-            kind = "GET" if node.name == "do_GET" else "POST"
+        if isinstance(node, ast.FunctionDef) and node.name in ("do_GET", "do_POST", "_do_get", "_do_post"):
+            kind = "GET" if node.name in ("do_GET", "_do_get") else "POST"
             for c in ast.walk(node):
                 if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.startswith("/api/"):
                     literals[kind].add(c.value)
@@ -168,6 +170,8 @@ class Server:
         except FileNotFoundError:
             pass
         self.seed_login()
+        if self.spec.get("tls_conf"):
+            self.write_tls_config()
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
             [sys.executable] + self.launcher_args() + [os.path.join(ROOT, self.spec["file"])],
@@ -183,6 +187,15 @@ class Server:
             except OSError:
                 time.sleep(0.5)
         raise RuntimeError(f"{self.key} did not answer on port {self.spec['port']}")
+
+    def write_tls_config(self):
+        cfg = os.path.join(self.stub_dir, self.spec["dirs_env"]["NODEMON_CONFIG_DIR"])
+        os.makedirs(cfg, exist_ok=True)
+        cert, key = os.path.join(cfg, "nodemon.crt"), os.path.join(cfg, "nodemon.key")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-keyout", key, "-out", cert, "-subj", "/CN=localhost"], check=True, capture_output=True)
+        with open(os.path.join(cfg, "nodemon.conf"), "w") as f:
+            f.write("[nodemon]\nport = 7777\ncert_file = %s\nkey_file = %s\n" % (cert, key))
 
     def launcher_args(self):
         if os.environ.get("ASL_TEST_VIA_LAUNCHER") != "1" or self.spec.get("no_launcher"):
@@ -224,7 +237,14 @@ class Server:
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
+            if resp.status >= 500:
+                with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                    print(f"[{self.key}] {method} {path} -> {resp.status}; server log tail:\n{fh.read()[-2000:]}", file=sys.stderr)
             return resp.status, dict(resp.getheaders()), data
+        except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError) as exc:
+            with open(self.log_path, encoding="utf-8", errors="replace") as fh:
+                tail = fh.read()[-2000:]
+            raise RuntimeError(f"{self.key} dropped the connection on {method} {path}: {exc}\nserver log tail:\n{tail}") from exc
         finally:
             conn.close()
 

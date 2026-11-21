@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.59"
+APP_VERSION = "0.1.74"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2849,7 +2849,7 @@ def _config_save_step(step_id: str, num: int) -> dict:
             "note": "Do not run this until ASL3, DVSwitch and USRP2M17 (whichever of them you will use) are all "
                     "installed and set up. It saves the config files of every installed system to the library as "
                     "the Restore point, once. Running it again only adds systems installed since; saved files are "
-                    "never overwritten. The Restore point, save points and presets are on the Config tab."}
+                    "never overwritten. The Restore point, Config Saves and presets are on the Config tab."}
 
 _SYSTEM_CACHE: dict = {"data": None}
 
@@ -13265,65 +13265,73 @@ def _half_lan_ip(dev: str) -> str:
                 return toks[toks.index("inet") + 1].split("/")[0]
     return ""
 
-def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
-    v = ctx["values"]
-    bl = ctx.get("baseline") or {}
-    now = time.time()
-    res: list[dict] = []
+def _chk(n: int, group: str, title: str, level: str, text: str, hint: str = "") -> list[dict]:
+    return [{"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint}]
 
-    def add(n, group, title, level, text, hint=""):
-        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
+def _chk_state(ctx: dict, client_ip: str) -> dict:
+    return {"ctx": ctx, "v": ctx["values"], "bl": ctx.get("baseline") or {}, "now": time.time(), "client_ip": client_ip}
 
-    def late(level_if_early="wait"):
-        return level_if_early if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
+def _chk_late(c: dict, level_if_early: str = "wait") -> str:
+    return level_if_early if c["now"] - c["ctx"]["ref"] < _HALF_WAIT_SEC else "fail"
 
+def _chk_was(failing: bool) -> str:
+    return " (was already failing before the test)" if failing else ""
+
+def _chk_handshake(c: dict, since: str, hint_down: str, hint_wait: str, hint_stale: str) -> tuple[str, str, str]:
+    now = c["now"]
     rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
     stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
     if rc != 0:
-        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.",
-            "Check the WireGuard key and config on the tunnel tab. This isn't the half-tunnel rules.")
-    elif not stamps or max(stamps) == 0:
-        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["up_at"] < 60 else "fail",
-            "No contact with the 44Net server yet.",
-            "Re-run checks in a minute. If it stays red, check the key and Endpoint on the tunnel tab.")
-    else:
-        age = int(now - max(stamps))
-        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail",
-            f"Last heard from the 44Net server {age}s ago.",
-            "" if age <= 180 else "The tunnel stopped talking. Check the tunnel tab.")
+        return "fail", "wg0 isn't up.", hint_down
+    if not stamps or max(stamps) == 0:
+        return "wait" if now - c["ctx"][since] < 60 else "fail", "No contact with the 44Net server yet.", hint_wait
+    age = int(now - max(stamps))
+    return "pass" if age <= 180 else "fail", f"Last heard from the 44Net server {age}s ago.", "" if age <= 180 else hint_stale
 
-    rules_text = _half_q(["ip", "-4", "rule", "show"])[1]
+def _half_chk_1(c: dict) -> list[dict]:
+    level, text, hint = _chk_handshake(
+        c, "up_at", "Check the WireGuard key and config on the tunnel tab. This isn't the half-tunnel rules.",
+        "Re-run checks in a minute. If it stays red, check the key and Endpoint on the tunnel tab.",
+        "The tunnel stopped talking. Check the tunnel tab.")
+    return _chk(1, "Tunnel", "Tunnel is up", level, text, hint)
+
+def _half_chk_2(c: dict) -> list[dict]:
+    ctx = c["ctx"]
+    c["rules_text"] = _half_q(["ip", "-4", "rule", "show"])[1]
     md = _half_main_default()
     if ctx["mode"] == "testing":
         temp = _half_wg_text(_HALF_TEMP_CONF) or ""
         half_on = "Table = off" in temp and _wg0_interface_present()
     else:
         half_on = _half_conf_is_permanent(_half_wg_text()) and _systemctl_is_active("wg-quick@wg0")
-    full_rules = "lookup 51820" in rules_text
+    full_rules = "lookup 51820" in c["rules_text"]
     if half_on and not full_rules and not md["dev"].startswith("wg"):
-        add(2, "Tunnel", "Running in half mode", "pass", "The tunnel is up with Table = off.")
-    else:
-        add(2, "Tunnel", "Running in half mode", "fail",
-            "Full-tunnel rules are loaded." if full_rules else "The tunnel isn't running in half mode.",
-            "Use Undo now, then start again from Check first." if ctx["mode"] == "testing"
-            else "Restart the tunnel: systemctl restart wg-quick@wg0")
+        return _chk(2, "Tunnel", "Running in half mode", "pass", "The tunnel is up with Table = off.")
+    return _chk(2, "Tunnel", "Running in half mode", "fail",
+                "Full-tunnel rules are loaded." if full_rules else "The tunnel isn't running in half mode.",
+                "Use Undo now, then start again from Check first." if ctx["mode"] == "testing"
+                else "Restart the tunnel: systemctl restart wg-quick@wg0")
 
+def _half_chk_3(c: dict) -> list[dict]:
     conflicts = _half_direct_conflicts()
-    add(3, "Tunnel", "No conflicting rules", "fail" if conflicts else "pass",
-        ("Outbound block rules found: " + " | ".join(conflicts)) if conflicts else "No outbound block rules.",
-        "Remove the Full Tunnel outbound-port blocks before going on." if conflicts else "")
+    return _chk(3, "Tunnel", "No conflicting rules", "fail" if conflicts else "pass",
+                ("Outbound block rules found: " + " | ".join(conflicts)) if conflicts else "No outbound block rules.",
+                "Remove the Full Tunnel outbound-port blocks before going on." if conflicts else "")
 
-    dev, _src, raw = _half_route_dev(["1.1.1.1"])
+def _half_chk_4(c: dict) -> list[dict]:
+    dev, _src, _raw = _half_route_dev(["1.1.1.1"])
     ok4 = bool(dev) and not dev.startswith("wg")
-    add(4, "Normal route", "Internet still uses the normal link", "pass" if ok4 else "fail",
-        f"1.1.1.1 goes out {dev or '?'}.",
-        "" if ok4 else "This is what broke things last time. Use Undo now.")
+    return _chk(4, "Normal route", "Internet still uses the normal link", "pass" if ok4 else "fail", f"1.1.1.1 goes out {dev or '?'}.",
+                "" if ok4 else "This is what broke things last time. Use Undo now.")
 
+def _half_chk_5(c: dict) -> list[dict]:
     rc5, out5 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
-    add(5, "Normal route", "DNS works", "pass" if rc5 == 0 and out5 else "fail",
-        "allstarlink.org resolves." if rc5 == 0 and out5 else "Name lookups are failing.",
-        "" if rc5 == 0 and out5 else "DVSwitch and usrp2m17 dial by name, so they'll drop. Use Undo now.")
+    return _chk(5, "Normal route", "DNS works", "pass" if rc5 == 0 and out5 else "fail",
+                "allstarlink.org resolves." if rc5 == 0 and out5 else "Name lookups are failing.",
+                "" if rc5 == 0 and out5 else "DVSwitch and usrp2m17 dial by name, so they'll drop. Use Undo now.")
 
+def _half_chk_6(c: dict) -> list[dict]:
+    v, bl, client_ip = c["v"], c["bl"], c["client_ip"]
     problems: list[str] = []
     seen: list[str] = []
     if client_ip and not client_ip.startswith("127.") and client_ip != "::1":
@@ -13347,13 +13355,13 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
                 continue
         seen.append(f"{name} :{port}")
     if problems:
-        add(6, "Normal route", "LAN tools still respond", "fail", "; ".join(problems),
-            "Last time the LAN pages went unresponsive. Use Undo now.")
-    elif seen:
-        add(6, "Normal route", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
-    else:
-        add(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+        return _chk(6, "Normal route", "LAN tools still respond", "fail", "; ".join(problems), "Last time the LAN pages went unresponsive. Use Undo now.")
+    if seen:
+        return _chk(6, "Normal route", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    return _chk(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
 
+def _half_chk_7(c: dict) -> list[dict]:
+    v, ctx = c["v"], c["ctx"]
     table = _half_q(["ip", "-4", "route", "show", "table", _HALF_TABLE])[1]
     if v.get("fwmark"):
         net_dev, _ns, _nr = _half_route_dev(["44.0.0.1"])
@@ -13371,31 +13379,35 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         main44 = _half_q(["ip", "-4", "route", "show", "dev", "wg0"])[1] if _wg0_interface_present() else ""
         ok7 = "default dev wg0" in table and all(n in main44 for n in _HALF_NETS)
         text7 = f"Table {_HALF_TABLE} and the 44Net routes are in place." if ok7 else "The tunnel route table or 44Net routes are missing."
-    add(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail", text7,
-        "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
+    return _chk(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail", text7,
+                "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
 
-    specs = _half_rule_specs(v)
-    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", rules_text)]
-    add(8, "Half-tunnel pieces", "Routing rules are loaded", "fail" if missing else "pass",
-        ("Missing at priority " + ", ".join(missing)) if missing else f"All {len(specs)} rules loaded.",
-        "Undo now, then run the steps again." if missing and ctx["mode"] == "testing" else
-        ("Restart the tunnel." if missing else ""))
+def _half_chk_8(c: dict) -> list[dict]:
+    specs = _half_rule_specs(c["v"])
+    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", c["rules_text"])]
+    return _chk(8, "Half-tunnel pieces", "Routing rules are loaded", "fail" if missing else "pass",
+                ("Missing at priority " + ", ".join(missing)) if missing else f"All {len(specs)} rules loaded.",
+                "Undo now, then run the steps again." if missing and c["ctx"]["mode"] == "testing" else
+                ("Restart the tunnel." if missing else ""))
 
+def _half_chk_9(c: dict) -> list[dict]:
+    v = c["v"]
     bad9: list[str] = []
     good9: list[str] = []
     iax = str(v.get("iax_port", "4569"))
     dev9, src9, _r9 = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", iax])
-    (good9 if dev9 == "wg0" and src9 == v.get("addr44") else bad9).append(
-        f"IAX {iax} -> {dev9 or '?'} from {src9 or '?'}")
+    (good9 if dev9 == "wg0" and src9 == v.get("addr44") else bad9).append(f"IAX {iax} -> {dev9 or '?'} from {src9 or '?'}")
     if v.get("use_uid_rule") and v.get("asterisk_uid") is not None:
         devu, _su, _ru = _half_route_dev(["1.1.1.1", "uid", str(v["asterisk_uid"])])
         (good9 if devu == "wg0" else bad9).append(f"Asterisk user -> {devu or '?'}")
     if v.get("echolink"):
         deve, _se, _re = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", "5198"])
         (good9 if deve == "wg0" else bad9).append(f"EchoLink -> {deve or '?'}")
-    add(9, "Half-tunnel pieces", "ASL traffic really goes into the tunnel", "fail" if bad9 else "pass",
-        "; ".join(bad9 + good9), "The rules are loaded but traffic doesn't follow them." if bad9 else "")
+    return _chk(9, "Half-tunnel pieces", "ASL traffic really goes into the tunnel", "fail" if bad9 else "pass", "; ".join(bad9 + good9),
+                "The rules are loaded but traffic doesn't follow them." if bad9 else "")
 
+def _half_chk_10(c: dict) -> list[dict]:
+    v = c["v"]
     zone = _fw_zone_of_iface("wg0") or v.get("zone") or ""
     closed = [pp for pp in (v.get("ports") or []) if not zone or not _half_port_covered(zone, pp)]
     rp_all, rp_wg = _half_rp_value("all"), _half_rp_value("wg0")
@@ -13408,62 +13420,68 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         bad10.append("not open on " + (zone or "?") + ": " + ", ".join(closed))
     if rp_eff == 1 or rp_eff < 0:
         bad10.append(f"return-path check is strict (all={rp_all or '?'}, wg0={rp_wg or '?'})")
-    add(10, "Half-tunnel pieces", "Ports open in the tunnel's zone, return-path check loose", "fail" if bad10 else "pass",
-        "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
-        "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and ctx["mode"] == "testing" else "")
+    return _chk(10, "Half-tunnel pieces", "Ports open in the tunnel's zone, return-path check loose", "fail" if bad10 else "pass",
+                "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
+                "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and c["ctx"]["mode"] == "testing" else "")
 
-    def was(key: str, failing: bool) -> str:
-        return " (was already failing before the test)" if failing else ""
-
-    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+def _half_chk_11(c: dict) -> list[dict]:
+    d, bd = _half_probe_dvs(), c["bl"].get("dvs") or {}
     if not d["installed"]:
-        add(11, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
-    elif not d["active"]:
-        add(11, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was("dvs", not bd.get("active")),
-            "Check the DVSwitch tab or the dashboard.")
-    elif d["dmr"] == "out":
-        add(11, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was("dvs", bd.get("dmr") == "out"),
-            "Check checks 4 and 5 first; DVSwitch needs the normal route and DNS.")
-    elif d["dmr"] == "in":
-        add(11, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
-    else:
-        add(11, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+        return _chk(11, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    if not d["active"]:
+        return _chk(11, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + _chk_was(not bd.get("active")),
+                    "Check the DVSwitch tab or the dashboard.")
+    if d["dmr"] == "out":
+        return _chk(11, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + _chk_was(bd.get("dmr") == "out"),
+                    "Check checks 4 and 5 first; DVSwitch needs the normal route and DNS.")
+    if d["dmr"] == "in":
+        return _chk(11, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    return _chk(11, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
 
-    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+def _half_chk_12(c: dict) -> list[dict]:
+    u, bu = _half_probe_usrp(), c["bl"].get("usrp") or {}
     if not u["installed"]:
-        add(12, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
-    elif u["active"]:
-        add(12, "Services", "usrp2m17 connected", "pass", "Running.")
-    else:
-        add(12, "Services", "usrp2m17 connected", "fail", "Stopped" + was("usrp", not bu.get("active")),
-            "Check the M17 tab or the dashboard.")
+        return _chk(12, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    if u["active"]:
+        return _chk(12, "Services", "usrp2m17 connected", "pass", "Running.")
+    return _chk(12, "Services", "usrp2m17 connected", "fail", "Stopped" + _chk_was(not bu.get("active")), "Check the M17 tab or the dashboard.")
 
-    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+def _half_chk_13(c: dict) -> list[dict]:
+    v = c["v"]
+    r, br = _half_probe_reg(v.get("addr44", "")), c["bl"].get("reg") or {}
     if not r["available"] and r["why"] == "not installed":
-        add(13, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
-    elif not r["available"]:
-        add(13, "Services", "ASL registration shows your 44 address", "fail",
-            "Asterisk isn't running" + was("reg", not br.get("available")), "Start ASL, then re-run checks.")
-    elif r["has44"]:
-        add(13, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
-    else:
-        shown = ", ".join(sorted(set(r["ips"]))) or "nothing yet"
-        hint = ("Registration can take a few minutes to update. Re-run checks."
-                if late() == "wait" else
-                "Registration is going out the normal route. Asterisk needs its own user for that (see Check first notes).")
-        add(13, "Services", "ASL registration shows your 44 address", late(), f"Shows {shown}.", hint)
+        return _chk(13, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    if not r["available"]:
+        return _chk(13, "Services", "ASL registration shows your 44 address", "fail", "Asterisk isn't running" + _chk_was(not br.get("available")),
+                    "Start ASL, then re-run checks.")
+    if r["has44"]:
+        return _chk(13, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    shown = ", ".join(sorted(set(r["ips"]))) or "nothing yet"
+    hint = ("Registration can take a few minutes to update. Re-run checks."
+            if _chk_late(c) == "wait" else
+            "Registration is going out the normal route. Asterisk needs its own user for that (see Check first notes).")
+    return _chk(13, "Services", "ASL registration shows your 44 address", _chk_late(c), f"Shows {shown}.", hint)
 
-    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+def _half_chk_14(c: dict) -> list[dict]:
+    e, be = _half_probe_el(bool(c["v"].get("echolink"))), c["bl"].get("el") or {}
     if not e["enabled"]:
-        add(14, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
-    elif e["entries"] is None:
-        add(14, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version. Check it on the dashboard.")
-    elif e["entries"] > 0:
-        add(14, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
-    else:
-        add(14, "Services", "EchoLink logged in", late(),
-            "Directory list is empty" + was("el", (be.get("entries") or 0) == 0 and be.get("entries") is not None),
-            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+        return _chk(14, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    if e["entries"] is None:
+        return _chk(14, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version. Check it on the dashboard.")
+    if e["entries"] > 0:
+        return _chk(14, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    return _chk(14, "Services", "EchoLink logged in", _chk_late(c),
+                "Directory list is empty" + _chk_was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
+                "The directory can take a few minutes. Re-run checks." if _chk_late(c) == "wait" else "EchoLink can't reach its directory.")
+
+_HALF_CHECKS = (_half_chk_1, _half_chk_2, _half_chk_3, _half_chk_4, _half_chk_5, _half_chk_6, _half_chk_7, _half_chk_8, _half_chk_9,
+                _half_chk_10, _half_chk_11, _half_chk_12, _half_chk_13, _half_chk_14)
+
+def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    c = _chk_state(ctx, client_ip)
+    res: list[dict] = []
+    for fn in _HALF_CHECKS:
+        res += fn(c)
     return res
 
 def _half_checks_summary(results: list[dict]) -> dict:
@@ -14379,87 +14397,72 @@ def _fx_ctx() -> dict | None:
                 "ref": perm.get("restarted_at") or perm.get("made_at") or time.time()}
     return None
 
-def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
-    v = ctx["values"]
-    bl = ctx.get("baseline") or {}
-    now = time.time()
-    res: list[dict] = []
+def _fx_chk_1(c: dict) -> list[dict]:
+    level, text, hint = _chk_handshake(c, "ref", "Check the tunnel steps on this tab.", "Re-run checks in a minute. If it stays red, check the key and Endpoint.",
+                                       "The tunnel stopped talking.")
+    return _chk(1, "Tunnel", "Tunnel is up", level, text, hint)
 
-    def add(n, group, title, level, text, hint=""):
-        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
-
-    def late():
-        return "wait" if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
-
-    undo = "Use Undo now." if ctx["mode"] == "testing" else "Restart the tunnel: systemctl restart wg-quick@wg0"
-    rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
-    stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
-    if rc != 0:
-        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.", "Check the tunnel steps on this tab.")
-    elif not stamps or max(stamps) == 0:
-        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["ref"] < 60 else "fail", "No contact with the 44Net server yet.",
-            "Re-run checks in a minute. If it stays red, check the key and Endpoint.")
-    else:
-        age = int(now - max(stamps))
-        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail", f"Last heard from the 44Net server {age}s ago.",
-            "" if age <= 180 else "The tunnel stopped talking.")
-
+def _fx_chk_2(c: dict) -> list[dict]:
     rules = _half_q(["ip", "-4", "rule", "show"])[1]
     full_ok = "lookup 51820" in rules and "suppress_prefixlength 0" in rules
-    add(2, "Tunnel", "Full-tunnel rules are loaded", "pass" if full_ok else "fail",
-        "wg-quick's table 51820 rules are in place." if full_ok else "wg-quick's full-tunnel rules are missing.",
-        "" if full_ok else "Restart the tunnel: systemctl restart wg-quick@wg0")
+    return _chk(2, "Tunnel", "Full-tunnel rules are loaded", "pass" if full_ok else "fail",
+                "wg-quick's table 51820 rules are in place." if full_ok else "wg-quick's full-tunnel rules are missing.",
+                "" if full_ok else "Restart the tunnel: systemctl restart wg-quick@wg0")
 
+def _fx_chk_3(c: dict) -> list[dict]:
     dev3, src3, _r3 = _half_route_dev(["1.1.1.1"])
-    add(3, "Tunnel", "Internet goes into the tunnel", "pass" if dev3 == "wg0" else "fail",
-        f"1.1.1.1 goes out {dev3 or '?'}" + (f" from {src3}" if src3 else "") + ".",
-        "" if dev3 == "wg0" else "The full tunnel isn't carrying the internet. " + undo)
+    return _chk(3, "Tunnel", "Internet goes into the tunnel", "pass" if dev3 == "wg0" else "fail",
+                f"1.1.1.1 goes out {dev3 or '?'}" + (f" from {src3}" if src3 else "") + ".",
+                "" if dev3 == "wg0" else "The full tunnel isn't carrying the internet. " + c["undo"])
 
+def _fx_chk_4(c: dict) -> list[dict]:
     my = check_myip()
     if my.get("ip"):
-        good = bool(v.get("addr44")) and my["ip"] == v.get("addr44")
-        add(4, "Tunnel", "The internet sees your 44 address", "pass" if good else "fail",
-            f"connect.44net.cloud/myip reports {my['ip']}.",
-            "" if good else "Your traffic isn't leaving through 44Net. " + undo)
-    else:
-        add(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
-            "No answer through the tunnel. Check checks 1 and 3.")
+        good = bool(c["v"].get("addr44")) and my["ip"] == c["v"].get("addr44")
+        return _chk(4, "Tunnel", "The internet sees your 44 address", "pass" if good else "fail", f"connect.44net.cloud/myip reports {my['ip']}.",
+                    "" if good else "Your traffic isn't leaving through 44Net. " + c["undo"])
+    return _chk(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
+                "No answer through the tunnel. Check checks 1 and 3.")
 
-    lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
+def _fx_chk_5(c: dict) -> list[dict]:
+    lan_ip, gw_dev = c["v"].get("lan_ip", ""), c["v"].get("gw_dev", "")
     if lan_ip and gw_dev:
         dev5, _s5, _r5 = _half_route_dev(["1.1.1.1", "from", lan_ip])
-        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "pass" if dev5 == gw_dev else "fail",
-            f"Traffic from {lan_ip} goes out {dev5 or '?'}.",
-            "" if dev5 == gw_dev else ("Step 2 isn't in place. " + undo))
-    else:
-        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "fail", "No LAN address found.",
-            "Check first didn't find the normal link.")
+        return _chk(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "pass" if dev5 == gw_dev else "fail",
+                    f"Traffic from {lan_ip} goes out {dev5 or '?'}.", "" if dev5 == gw_dev else ("Step 2 isn't in place. " + c["undo"]))
+    return _chk(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "fail", "No LAN address found.",
+                "Check first didn't find the normal link.")
 
-    bypass = ctx.get("bypass") or {}
+def _fx_chk_6(c: dict) -> list[dict]:
+    bypass = c["ctx"].get("bypass") or {}
     resolved = bypass.get("resolved") or {}
     ports = bypass.get("ports") or []
+    gw_dev = c["v"].get("gw_dev", "")
     if not resolved and not ports:
-        add(6, "Exceptions", "Bypass list uses the normal link", "skip", "The bypass list is empty.")
-    else:
-        bad6: list[str] = []
-        good6: list[str] = []
-        for h, ips in resolved.items():
-            for ip in ips:
-                d, _s, _r = _half_route_dev([ip])
-                (good6 if d == gw_dev else bad6).append(f"{h} {ip} -> {d or '?'}")
-            if not ips:
-                bad6.append(f"{h} couldn't be looked up")
-        for p in ports:
-            d, _s, _r = _half_route_dev(["1.1.1.1", "ipproto", "udp", "dport", str(p)])
-            (good6 if d == gw_dev else bad6).append(f"UDP {p} -> {d or '?'}")
-        add(6, "Exceptions", "Bypass list uses the normal link", "fail" if bad6 else "pass", "; ".join(bad6 + good6),
-            "Some bypass entries still go into the tunnel. " + undo if bad6 else "")
+        return _chk(6, "Exceptions", "Bypass list uses the normal link", "skip", "The bypass list is empty.")
+    bad6: list[str] = []
+    good6: list[str] = []
+    for h, ips in resolved.items():
+        for ip in ips:
+            d, _s, _r = _half_route_dev([ip])
+            (good6 if d == gw_dev else bad6).append(f"{h} {ip} -> {d or '?'}")
+        if not ips:
+            bad6.append(f"{h} couldn't be looked up")
+    for p in ports:
+        d, _s, _r = _half_route_dev(["1.1.1.1", "ipproto", "udp", "dport", str(p)])
+        (good6 if d == gw_dev else bad6).append(f"UDP {p} -> {d or '?'}")
+    return _chk(6, "Exceptions", "Bypass list uses the normal link", "fail" if bad6 else "pass", "; ".join(bad6 + good6),
+                "Some bypass entries still go into the tunnel. " + c["undo"] if bad6 else "")
 
+def _fx_chk_7(c: dict) -> list[dict]:
     rc7, out7 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
-    add(7, "Normal use", "DNS works", "pass" if rc7 == 0 and out7 else "fail",
-        "allstarlink.org resolves." if rc7 == 0 and out7 else "Name lookups are failing.",
-        "" if rc7 == 0 and out7 else "Check the DNS card (4a) on this tab. " + undo)
+    return _chk(7, "Normal use", "DNS works", "pass" if rc7 == 0 and out7 else "fail",
+                "allstarlink.org resolves." if rc7 == 0 and out7 else "Name lookups are failing.",
+                "" if rc7 == 0 and out7 else "Check the DNS card (4a) on this tab. " + c["undo"])
 
+def _fx_chk_8(c: dict) -> list[dict]:
+    v, bl, client_ip = c["v"], c["bl"], c["client_ip"]
+    lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
     problems: list[str] = []
     seen: list[str] = []
     if client_ip and not client_ip.startswith("127."):
@@ -14481,61 +14484,67 @@ def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
                 continue
         seen.append(f"{name} :{port}")
     if problems:
-        add(8, "Normal use", "LAN tools still respond", "fail", "; ".join(problems), "The LAN pages may hang. " + undo)
-    elif seen:
-        add(8, "Normal use", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
-    else:
-        add(8, "Normal use", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+        return _chk(8, "Normal use", "LAN tools still respond", "fail", "; ".join(problems), "The LAN pages may hang. " + c["undo"])
+    if seen:
+        return _chk(8, "Normal use", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    return _chk(8, "Normal use", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
 
-    def was(failing: bool) -> str:
-        return " (was already failing before the test)" if failing else ""
-
-    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+def _fx_chk_9(c: dict) -> list[dict]:
+    d, bd = _half_probe_dvs(), c["bl"].get("dvs") or {}
     if not d["installed"]:
-        add(9, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
-    elif not d["active"]:
-        add(9, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was(not bd.get("active")),
-            "Check the DVSwitch tab or the dashboard.")
-    elif d["dmr"] == "out":
-        add(9, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was(bd.get("dmr") == "out"),
-            "Put the DMR master on the bypass list (step 3) if it won't take the 44 address.")
-    elif d["dmr"] == "in":
-        add(9, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
-    else:
-        add(9, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+        return _chk(9, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    if not d["active"]:
+        return _chk(9, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + _chk_was(not bd.get("active")),
+                    "Check the DVSwitch tab or the dashboard.")
+    if d["dmr"] == "out":
+        return _chk(9, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + _chk_was(bd.get("dmr") == "out"),
+                    "Put the DMR master on the bypass list (step 3) if it won't take the 44 address.")
+    if d["dmr"] == "in":
+        return _chk(9, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    return _chk(9, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
 
-    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+def _fx_chk_10(c: dict) -> list[dict]:
+    u, bu = _half_probe_usrp(), c["bl"].get("usrp") or {}
     if not u["installed"]:
-        add(10, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
-    else:
-        add(10, "Services", "usrp2m17 connected", "pass" if u["active"] else "fail",
-            "Running." if u["active"] else "Stopped" + was(not bu.get("active")), "" if u["active"] else "Check the M17 tab.")
+        return _chk(10, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    return _chk(10, "Services", "usrp2m17 connected", "pass" if u["active"] else "fail",
+                "Running." if u["active"] else "Stopped" + _chk_was(not bu.get("active")), "" if u["active"] else "Check the M17 tab.")
 
-    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+def _fx_chk_11(c: dict) -> list[dict]:
+    v = c["v"]
+    r, br = _half_probe_reg(v.get("addr44", "")), c["bl"].get("reg") or {}
     if not r["available"] and r["why"] == "not installed":
-        add(11, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
-    elif not r["available"]:
-        add(11, "Services", "ASL registration shows your 44 address", "fail",
-            "Asterisk isn't running" + was(not br.get("available")), "Start ASL, then re-run checks.")
-    elif r["has44"]:
-        add(11, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
-    else:
-        add(11, "Services", "ASL registration shows your 44 address", late(),
-            f"Shows {', '.join(sorted(set(r['ips']))) or 'nothing yet'}.",
-            "Registration can take a few minutes to update. Re-run checks." if late() == "wait"
-            else "Registration isn't going out the tunnel. Check checks 3 and 4.")
+        return _chk(11, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    if not r["available"]:
+        return _chk(11, "Services", "ASL registration shows your 44 address", "fail", "Asterisk isn't running" + _chk_was(not br.get("available")),
+                    "Start ASL, then re-run checks.")
+    if r["has44"]:
+        return _chk(11, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    return _chk(11, "Services", "ASL registration shows your 44 address", _chk_late(c, "wait"),
+                f"Shows {', '.join(sorted(set(r['ips']))) or 'nothing yet'}.",
+                "Registration can take a few minutes to update. Re-run checks." if _chk_late(c, "wait") == "wait"
+                else "Registration isn't going out the tunnel. Check checks 3 and 4.")
 
-    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+def _fx_chk_12(c: dict) -> list[dict]:
+    e, be = _half_probe_el(bool(c["v"].get("echolink"))), c["bl"].get("el") or {}
     if not e["enabled"]:
-        add(12, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
-    elif e["entries"] is None:
-        add(12, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version.")
-    elif e["entries"] > 0:
-        add(12, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
-    else:
-        add(12, "Services", "EchoLink logged in", late(),
-            "Directory list is empty" + was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
-            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+        return _chk(12, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    if e["entries"] is None:
+        return _chk(12, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version.")
+    if e["entries"] > 0:
+        return _chk(12, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    return _chk(12, "Services", "EchoLink logged in", _chk_late(c, "wait"),
+                "Directory list is empty" + _chk_was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
+                "The directory can take a few minutes. Re-run checks." if _chk_late(c, "wait") == "wait" else "EchoLink can't reach its directory.")
+
+_FX_CHECKS = (_fx_chk_1, _fx_chk_2, _fx_chk_3, _fx_chk_4, _fx_chk_5, _fx_chk_6, _fx_chk_7, _fx_chk_8, _fx_chk_9, _fx_chk_10, _fx_chk_11, _fx_chk_12)
+
+def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    c = _chk_state(ctx, client_ip)
+    c["undo"] = "Use Undo now." if ctx["mode"] == "testing" else "Restart the tunnel: systemctl restart wg-quick@wg0"
+    res: list[dict] = []
+    for fn in _FX_CHECKS:
+        res += fn(c)
     return res
 
 def action_fx_run_checks(client_ip: str = "") -> dict:
@@ -15657,7 +15666,7 @@ def _cfgr_auto_point(reason: str, groups: list[str]) -> tuple[str, list[str]]:
     label = f"auto before {reason}"
     sid = _cfgr_new_id(label)
     _cfgr_take(os.path.join(_CFGR_DIR, "auto", sid), groups, label, "auto")
-    log(f"OK: CONFIG automatic save point {sid}")
+    log(f"OK: CONFIG automatic Config Save {sid}")
     return sid, _cfgr_prune(keep_id=sid)
 
 def _cfgr_read(path: str) -> bytes | None:
@@ -16800,7 +16809,7 @@ def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
     if missing:
         tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
     tail += ["", "The registration on allstarlink.org must already exist for node " + new + " with the same password, "
-             "or the node stops registering. The Asterisk and Allmon3 files are in the automatic save point; the "
+             "or the node stops registering. The Asterisk and Allmon3 files are in the automatic Config Save; the "
              "Node Controller, Node Talker, Node Listen and SysMon settings files are not."]
     if services:
         tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
@@ -16813,7 +16822,7 @@ def _cfgr_act_node_rename(payload: dict, apply: bool) -> dict:
     lines_out = [f"Node {old} renamed to {new}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"node {old} to {new}", groups)
-        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append(f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = _cfgr_write_plan(plan, changed, lines_out)
     if ok and helper_change and c is not None:
@@ -16957,7 +16966,7 @@ def _cfgr_act_svx_nodeinfo(payload: dict, apply: bool, row: dict) -> dict:
     lines_out = [f"{row['label']} set to {shown(new_val)}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"{row['label']} {shown(new_val)}", groups)
-        lines_out += [f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""), ""]
+        lines_out += [f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""), ""]
     ok = _cfgr_write_plan(plan, changed, lines_out)
     log(f"{'OK' if ok else 'FAIL'}: CONFIG {row['label']} set")
     return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
@@ -17030,7 +17039,7 @@ def _cfgr_act_id_set(payload: dict, apply: bool) -> dict:
     lines_out = [f"{noun[:1].upper()}{noun[1:]} set to {shown}.", ""]
     if groups:
         sid, pruned = _cfgr_auto_point(f"{noun} {shown}", groups)
-        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append(f"Automatic Config Save: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
         lines_out.append("")
     ok = _cfgr_write_plan(plan, changed, lines_out)
     if ok and extra_commit is not None:
@@ -17138,11 +17147,11 @@ def _cfgr_act_retake_restore(payload: dict) -> dict:
         old["label"] = label
         old["kind"] = "user"
         _cfgr_write_manifest(dest, old)
-        lines.append(f"Old Restore point kept as save point '{label}'.")
+        lines.append(f"Old Restore point kept as Config Save '{label}'.")
         users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
         if len(users) > _CFGR_MAX_POINTS:
-            lines.append(f"There are now {len(users)} save points, more than the {_CFGR_MAX_POINTS} allowed: delete one "
-                         "before creating a new save point.")
+            lines.append(f"There are now {len(users)} Config Saves, more than the {_CFGR_MAX_POINTS} allowed: delete one "
+                         "before creating a new Config Save.")
     elif os.path.isdir(snap):
         shutil.rmtree(snap, ignore_errors=True)
     m = _cfgr_take(snap, groups, "Restore", "restore")
@@ -17165,28 +17174,28 @@ def _cfgr_act_create_point(payload: dict) -> dict:
         return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17, SvxLink USRP or Phone) is installed on this node."}
     users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
     if len(users) >= _CFGR_MAX_POINTS:
-        return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} save points. Delete one first."}
+        return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} Config Saves. Delete one first."}
     sid = _cfgr_new_id(name)
     m = _cfgr_take(os.path.join(_CFGR_DIR, "user", sid), groups, name, "user")
-    lines = [f"Save point '{name}' created."]
+    lines = [f"Config Save '{name}' created."]
     for g in groups:
         lines.append(f"  {_CFGR_GROUPS[g]['label']}: {_cfgr_files_line(m['groups'][g])}")
     removed = _cfgr_prune(keep_id=sid)
     if removed:
         lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
-    log(f"OK: CONFIG save point created: {sid}")
+    log(f"OK: CONFIG Config Save created: {sid}")
     return {"success": True, "output": "\n".join(lines)}
 
 def _cfgr_act_delete_point(payload: dict) -> dict:
     kind = str(payload.get("kind", ""))
     sid = str(payload.get("id", ""))
     if kind not in ("user", "auto"):
-        return {"success": False, "output": "Only save points and automatic copies can be deleted."}
+        return {"success": False, "output": "Only Config Saves and automatic copies can be deleted."}
     snap = _cfgr_snap_dir(kind, sid)
     if snap is None or _cfgr_read_manifest(snap) is None:
-        return {"success": False, "output": "That save point was not found."}
+        return {"success": False, "output": "That Config Save was not found."}
     shutil.rmtree(snap)
-    log(f"OK: CONFIG save point deleted: {kind}/{sid}")
+    log(f"OK: CONFIG Config Save deleted: {kind}/{sid}")
     return {"success": True, "output": f"Deleted {sid}."}
 
 def _cfgr_act_restore(payload: dict) -> dict:
@@ -17855,7 +17864,8 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
 def _cfgr_bindport() -> str:
     b = _cfgr_read(_CFGR_IAX)
     if b is None:
-        return "4569"
+        want = _bld_form_load().get("iax_port", "")
+        return want if _cfgr_port_ok(want) else "4569"
     sec = ""
     for line in _cfgr_lines(b.decode("utf-8", "replace")):
         m = _CFGR_HDR_RE.match(line)
@@ -20485,7 +20495,7 @@ function cfgRetake(btn) {
   });
   lines.push('');
   lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 / SvxLink USRP on this node? If yes, cancel and wait until after the last install. A phone set up later is added with Save Restore point.');
-  lines.push('The old Restore point is kept as a save point named restore_replaced_<date>.');
+  lines.push('The old Restore point is kept as a Config Save named restore_replaced_<date>.');
   lines.push('');
   lines.push('Type RETAKE to confirm:');
   var typed = prompt(lines.join('\n'), '');
@@ -20637,23 +20647,6 @@ function cfgGateways(btn, action) {
     : 'Disable and stop the gateways this tab enabled?';
   if (!confirm(msg)) return;
   cfgPost({action: action}, 'cfg-gw-out', btn);
-}
-
-function cfgPresetReset(btn, pid) {
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (!confirm('Remove your saved ' + name + ' preset and use the built-in default again?\n\nYour saved preset is deleted. Files on this node do not change.')) return;
-  cfgPost({action: 'preset_reset', preset: pid}, pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
-}
-
-function cfgPresetCapture(btn, save, pid) {
-  pid = pid || 'travel_node';
-  var name = pid === 'magic_box' ? 'Magic Box' : 'Travel Node';
-  if (save && !confirm('Save this node\'s wiring and private nodes as the ' + name + ' preset?\n\n' +
-                       'Only wiring is saved: no callsign, IDs or passwords' + (pid === 'magic_box' ? ', no reflector password' : '') +
-                       '. An existing ' + name + ' preset is replaced.\n' +
-                       'Use Preview first to see exactly what goes in.')) return;
-  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: pid},
-          pid === 'magic_box' ? 'cfg-mpreset-out' : 'cfg-preset-out', btn);
 }
 
 function cfgPnKind() {
@@ -20821,15 +20814,11 @@ function cfgRender(d) {
     var opt = '<option value="' + p.kind + ':' + cfgEsc(p.id) + '">' + cfgEsc(p.label) + ' (' + cfgEsc(p.created_at) + ')</option>';
     if (p.kind === 'user') us += opt; else au += opt;
   });
-  if (us) o += '<optgroup label="Save points">' + us + '</optgroup>';
+  if (us) o += '<optgroup label="Config Saves">' + us + '</optgroup>';
   if (au) o += '<optgroup label="Automatic copies">' + au + '</optgroup>';
   sel.innerHTML = o || '<option value="">(nothing saved yet)</option>';
   if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
   cfgOnPointChange();
-  var tp = (d.presets || {}).travel_node || {};
-  document.getElementById('cfg-preset-state').textContent = tp.default ? 'built-in default in use' : (tp.exists ? ('your saved preset, ' + tp.saved_at) : 'not available');
-  var mp = (d.presets || {}).magic_box || {};
-  document.getElementById('cfg-mpreset-state').textContent = mp.default ? 'built-in default in use' : (mp.exists ? ('your saved preset, ' + mp.saved_at) : 'not available');
   cfgPnRender(d.private_nodes);
   var sb = document.getElementById('cfg-svx-bridge');
   if (sb) sb.style.display = (d.installed && d.installed.svx && d.private_nodes && d.private_nodes.available) ? '' : 'none';
@@ -21042,7 +21031,7 @@ function cfgIdRowSet(btn) {
   if (!val.trim()) { cfgOut('cfg-id-call-out', 'Type the new value first.', false); return; }
   cfgPost({action: 'id_set_preview', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write this change?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write this change?')) return;
     cfgPost({action: 'id_set', group: 'alone', rid: rid, value: val}, 'cfg-id-call-out', btn).then(function(r) {
       if (r.success && el) el.value = '';
     });
@@ -21066,7 +21055,7 @@ function cfgIdSetGroup(gid, btn, clear) {
   var extra = ne && ne.value ? {node: ne.value} : {};
   cfgPost(Object.assign({action: 'id_set_preview', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write these changes?')) return;
     cfgPost(Object.assign({action: 'id_set', group: gid, value: val}, extra), 'cfg-id-call-out', btn).then(function(r) {
       if (r.success) { CFG_ID_VALS[gid] = ''; var e = document.getElementById('cfg-id-set-' + gid); if (e) e.value = ''; }
     });
@@ -21089,7 +21078,7 @@ function cfgIdSetCall(btn) {
   }
   cfgPost({action: 'id_set_callsign_preview', callsign: call}, 'cfg-id-call-out', btn).then(function(res) {
     if (!res.success || !res.changes) return;
-    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    if (!confirm(res.output + '\n\nAn automatic Config Save is taken first. Write these changes?')) return;
     cfgPost({action: 'id_set_callsign', callsign: call}, 'cfg-id-call-out', btn).then(function(r) {
       if (r.success) { CFG_ID_CALL = ''; var e = document.getElementById('cfg-id-call'); if (e) e.value = ''; }
     });
@@ -21252,45 +21241,11 @@ def _render_config_panel() -> str:
   </div>
 
   <div class="step-card">
-    <div class="step-head"><div class="step-title">Create save point</div></div>
+    <div class="step-head"><div class="step-title">Create Config Save</div></div>
     <div class="step-body">Saves the current config files of every installed system under a name of your choice.</div>
     <input type="text" class="asl3-cmd-input" id="cfg-point-name" maxlength="40" placeholder="Name, e.g. before reflector change">
-    <div class="step-actions"><button class="btn-run" onclick="cfgCreatePoint(this)">Create save point</button></div>
+    <div class="step-actions"><button class="btn-run" onclick="cfgCreatePoint(this)">Create Config Save</button></div>
     <div class="asl3-console shown placeholder" id="cfg-create-out">(nothing run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Travel Node preset</div>
-      <span class="cfg-hint" id="cfg-preset-state"></span></div>
-    <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
-      [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
-      [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. A built-in default is used until you save your own from a node you have set up the way you want; saving replaces it, and "Use the built-in default"
-      brings it back. Apply it on any node from the Restore list above, or from the Build tabs.</div>
-    <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'travel_node')">Use the built-in default</button>
-    </div>
-    <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Magic Box preset</div>
-      <span class="cfg-hint" id="cfg-mpreset-state"></span></div>
-    <div class="step-body">Everything the Travel Node preset saves, plus the SvxLink bridge setup from svxlink.conf and its
-      svxlink.d/UsrpLogic.conf: which logics and links are on (LOGICS and LINKS), the USRP link (host and the two ports,
-      jitter buffer, limiters), the reflector (host, port, default and monitored talkgroups, timeouts), the reflector link and
-      the control logic. Never the callsign, the reflector password (AUTH_KEY), the EchoLink password or any radio sections
-      (a node whose SvxLink has its own radio cannot save this preset). Applying it changes only values in sections that already
-      exist in svxlink.conf; a section the SVXLink tab has not created yet (steps 8 and 11) is left out and named in the preview.
-      Applied from Restore like the Travel Node preset, with a preview and an automatic copy first. Nothing restarts. It also has a built-in default, replaced when you save your own.</div>
-    <div class="step-actions">
-      <button class="btn-copy" onclick="cfgPresetCapture(this,false,'magic_box')">Preview</button>
-      <button class="btn-run" onclick="cfgPresetCapture(this,true,'magic_box')">Save as Magic Box</button>
-      <button class="btn-copy" onclick="cfgPresetReset(this,'magic_box')">Use the built-in default</button>
-    </div>
-    <div class="asl3-console shown placeholder" id="cfg-mpreset-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-pn-card">
@@ -21351,7 +21306,7 @@ def _render_config_panel() -> str:
     <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
       same value. Every value is shown in the clear, passwords included: this page needs the root login, and anyone looking
       at the screen can read them. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
-      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic save point. It
+      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic Config Save. It
       restarts nothing. Change other values in their file, or for phone accounts on the dashboard's Phone tab.
       The Travel Node preset never carries any of these.</div>
     <div id="cfg-id"></div>
@@ -21420,7 +21375,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
-    ("config", "Config", "t-config", "Restore point, save points, Travel Node and Magic Box presets"),
+    ("config", "Config", "t-config", "Restore point, Config Saves, presets"),
     ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -22236,6 +22191,70 @@ def action_save_node_snippet(cfg: configparser.ConfigParser, scope: str, text: s
     return {**result, "scope": scope}
 
 _JS_TABS = """
+var _tabSeen = {};
+var _TAB_FIRST = {
+  router_install: function() { refreshRouterInstall(); },
+  full_tunnel: function() { refreshPiInstall('full'); refreshFullX(); },
+  split_tunnel: function() { refreshPiInstall('split'); },
+  nodes: function() { refreshNodes(); },
+  services: function() { refreshServices(); },
+  ports: function() { refreshPorts(); },
+  actions_log: function() { refreshActionsLog(); },
+  asl3: function() { refreshAsl3(); },
+  dvswitch: function() { refreshDvswitch(); },
+  svxlink: function() { refreshSvxlink(); },
+  m17: function() { refreshM17(); },
+  amp: function() { refreshAmp(); },
+  cloudflare: function() { refreshCF(); },
+  'claude-remote': function() { refreshCr(); },
+  update: function() { refreshUpdate(); },
+  system_opt: function() { refreshSystemOpt(); },
+  config: function() { refreshConfig(); }
+};
+
+function tabFirstOpen(id) {
+  if (_tabSeen[id]) { return; }
+  _tabSeen[id] = true;
+  if (_TAB_FIRST[id]) { _TAB_FIRST[id](); }
+}
+
+var _STEP_DOCKS = {
+  asl3: function() { return {el: 'asl3-steps', tab: 'asl3'}; },
+  dvs: function() { return {el: 'dv-steps', tab: 'dvswitch'}; },
+  m17: function() { return {el: 'm17-steps', tab: 'm17'}; },
+  svx: function() { return {el: 'svx-steps', tab: 'svxlink'}; },
+  tunnel: function(base) {
+    var k = document.getElementById(base + '-det-fullx') ? 'full' : 'split';
+    return {el: 'pi-steps-' + k, tab: k + '_tunnel'};
+  },
+  half: function() { return {el: 'ht-card', tab: '', after: function() { if (typeof refreshHalfTunnel === 'function') { refreshHalfTunnel(); } }}; },
+  fullx: function() { return {el: 'fx-card', tab: 'full_tunnel'}; }
+};
+
+function stepsDock(mode) {
+  var base = mode === 'magic' ? 'mbx' : 'bld';
+  Object.keys(_STEP_DOCKS).forEach(function(stage) {
+    var d = _STEP_DOCKS[stage](base);
+    var el = document.getElementById(d.el);
+    if (!el) { return; }
+    var ph = document.getElementById(d.el + '-home');
+    if (!ph) {
+      ph = document.createElement('span');
+      ph.id = d.el + '-home';
+      ph.style.display = 'none';
+      el.parentNode.insertBefore(ph, el);
+    }
+    var det = mode ? document.getElementById(base + '-det-' + stage) : null;
+    var slot = det && det.open ? document.getElementById(base + '-steps-' + stage) : null;
+    if (slot) {
+      if (d.tab) { tabFirstOpen(d.tab); }
+      if (el.parentNode !== slot) { slot.appendChild(el); if (d.after) { d.after(); } }
+    } else if (ph.nextSibling !== el) {
+      ph.parentNode.insertBefore(el, ph.nextSibling);
+    }
+  });
+}
+
 function clickTab(id) {
   document.querySelectorAll('.tab').forEach(function(el) {
     el.classList.toggle('active', el.id === 'tab-' + id);
@@ -22243,6 +22262,8 @@ function clickTab(id) {
   document.querySelectorAll('.tab-panel').forEach(function(el) {
     el.classList.toggle('hidden', el.id !== 'panel-' + id);
   });
+  tabFirstOpen(id);
+  stepsDock(id === 'build' || id === 'magic' ? id : '');
   if (typeof guardOnTab === 'function') guardOnTab(id);
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
   if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
@@ -22273,6 +22294,88 @@ function fwToolsDock(id) {
 // only (step notes, intro blurbs, mismatch/caution banners) — NOT for the
 // live purge-progress summary line, which keeps using a bare .step-warn
 // div so it stays visible while it updates.
+function stepCardsHtml(c) {
+  var steps = c.steps || [];
+  var p = c.pfx;
+  var esc = c.esc;
+  var html = '';
+  steps.forEach(function(step) {
+    var stateKey = c.mode + '_' + c.distro + '_' + step.id;
+    var st = (c.state || {})[stateKey] || {};
+    var args = '\\'' + c.mode + '\\',\\'' + c.distro + '\\',\\'' + step.id + '\\'';
+    var copyBtn = '<button class="btn-copy" onclick="' + c.copy + '(this,' + args + ')">Copy</button>';
+    var isBlock = c.block === 'any' ? step.manual_block : (c.block === 'manual' && step.manual && step.manual_block);
+    html += '<div class="step-card">';
+    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
+    if (isBlock || step.manual) {
+      html += '<span class="step-pill not_started">Manual</span></div>';
+      if (step.note) html += renderStepWarn(esc(step.note));
+      if (isBlock) {
+        html += '<textarea class="cmd-preview" id="' + p + '-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
+          'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
+          'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + esc(step.cmd) + '</textarea>';
+      } else {
+        html += '<input type="text" class="asl3-cmd-input" readonly value="' + esc(step.cmd) + '">';
+      }
+      html += '<div class="step-actions">' + copyBtn + '</div>';
+      html += '</div>';
+      return;
+    }
+    if (c.config && step.config_save) {
+      html += '<span class="step-pill not_started">Config</span></div>';
+      if (step.note) html += renderStepWarn(esc(step.note));
+      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'' + p + '-out-' + stateKey + '\\')">Save Restore point</button></div>';
+      html += '<div class="asl3-console shown placeholder" id="' + p + '-out-' + stateKey + '">(not saved from here yet)</div>';
+      html += '</div>';
+      return;
+    }
+    var consoleHtml = '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="' + p + '-out-' + stateKey + '">' + (st.output ? esc(st.output) : '(not run yet)') + '</div>';
+    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
+    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running…' : 'Not run'));
+    html += '<span class="step-pill ' + pillClass + '" id="' + p + '-pill-' + stateKey + '">' + pillLabel + '</span></div>';
+    if (step.note) html += renderStepWarn(esc(step.note));
+    if (c.pi && step.pi_action) {
+      html += '<div class="step-actions"><button class="btn-run" id="' + p + '-btn-' + stateKey + '" onclick="' + c.run + '(this,' + args + ')">' + esc(step.button || 'Run') + '</button>' + copyBtn + '</div>';
+      html += consoleHtml;
+      html += '</div>';
+      return;
+    }
+    if (step.fields) {
+      step.fields.forEach(function(f) {
+        var fid = p + '-field-' + f.id + '-' + stateKey;
+        if (c.vis) {
+          var hide = 'block';
+          if (f.show_if) {
+            var sp = f.show_if.split('=');
+            var ctl = null;
+            step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
+            hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
+          }
+          html += '<label data-showif="' + esc(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + esc(f.label) + ':';
+          if (f.options) {
+            html += '<select class="asl3-cmd-input" id="' + fid + '" onchange="' + c.fieldVis + '(this)">';
+            f.options.forEach(function(o) {
+              html += '<option value="' + esc(o[0]) + '"' + (o[0] === f.default ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+            });
+            html += '</select></label>';
+          } else {
+            html += '<input type="' + esc(f.type || 'text') + '" class="asl3-cmd-input" id="' + fid + '" value="' + esc(f.default || '') + '" autocomplete="off"></label>';
+          }
+        } else {
+          html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + esc(f.label) + ':' +
+            '<input type="' + esc(f.type || 'text') + '" class="asl3-cmd-input" id="' + fid + '" value="' + esc(f.default || '') + '" autocomplete="off"></label>';
+        }
+      });
+    } else {
+      html += '<input type="text" class="asl3-cmd-input" id="' + p + '-cmd-' + stateKey + '" readonly value="' + esc(step.cmd) + '">';
+    }
+    html += '<div class="step-actions"><button class="btn-run" id="' + p + '-btn-' + stateKey + '" onclick="' + c.run + '(this,' + args + ')">Run</button>' + copyBtn + '</div>';
+    html += consoleHtml;
+    html += '</div>';
+  });
+  return html || '<div class="step-body">(no steps defined)</div>';
+}
+
 function renderStepWarn(html) {
   return '<div class="step-warn-box"><button type="button" class="step-warn-toggle" ' +
     'onclick="toggleStepWarn(this)" aria-expanded="false" title="Show note">&#9660;</button>' +
@@ -23725,7 +23828,6 @@ function ndEditorHtml(scope) {
 }
 
 function renderNodes(data) {
-  window._ndData = data;
 
   var banner = document.getElementById('nd-banner');
   if (banner) {
@@ -23889,27 +23991,6 @@ function _startApp() {
   termInit();  // v0.0.149: optional terminal buttons on by-hand steps
   clickTab('overview');
   refreshOverview();
-  refreshPiInstall('full');
-  refreshPiInstall('split');
-  refreshRouterInstall();
-  refreshNodes();
-  refreshServices();
-  refreshPorts();
-  refreshFirewall();
-  refreshFirewall2();
-  refreshHalfTunnel();
-  refreshFullX();
-  refreshActionsLog();
-  refreshAsl3();
-  refreshDvswitch();
-  refreshSvxlink();
-  refreshM17();
-  refreshAmp();
-  refreshCr();
-  refreshCF();
-  refreshUpdate();
-  refreshSystemOpt();
-  refreshConfig();
   startQuietPolling();
   _ovTimer = setInterval(refreshOverview, 5000);
 }
@@ -24845,46 +24926,7 @@ function asl3EscapeAttr(s) {
 }
 
 function asl3RenderStepList(mode, distro) {
-  var steps = ((window._asl3Scripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._asl3State || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + asl3EscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'asl3-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="asl3-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="asl3-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + asl3EscapeAttr(f.label) + ':' +
-          '<input type="' + asl3EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="asl3-field-' + f.id + '-' + stateKey + '" value="' + asl3EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" readonly value="' + asl3EscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="asl3-btn-' + stateKey + '" onclick="asl3RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'asl3', run: 'asl3RunStep', copy: 'asl3CopyStep', mode: mode, distro: distro, steps: ((window._asl3Scripts || {})[mode] || {})[distro] || [], state: window._asl3State, esc: asl3EscapeAttr, block: false, config: true, pi: false, vis: false});
 }
 
 function asl3Render() {
@@ -25171,52 +25213,7 @@ function dvEscapeAttr(s) {
 }
 
 function dvRenderStepList(mode, distro) {
-  var steps = ((window._dvScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._dvState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + dvEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'dv-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="dv-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="dv-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
-    if (step.pi_action) {
-      html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">' + dvEscapeAttr(step.button || 'Run') + '</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
-      html += '</div>';
-      return;
-    }
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + dvEscapeAttr(f.label) + ':' +
-          '<input type="' + dvEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="dv-field-' + f.id + '-' + stateKey + '" value="' + dvEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" readonly value="' + dvEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'dv', run: 'dvRunStep', copy: 'dvCopyStep', mode: mode, distro: distro, steps: ((window._dvScripts || {})[mode] || {})[distro] || [], state: window._dvState, esc: dvEscapeAttr, block: false, config: true, pi: true, vis: false});
 }
 
 function dvRender() {
@@ -25524,59 +25521,7 @@ function svxEscapeAttr(s) {
 }
 
 function svxRenderStepList(mode, distro) {
-  var steps = ((window._svxScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._svxState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
-      if (step.manual_block) {
-        html += '<textarea class="cmd-preview" id="svx-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-          'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-          'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + svxEscapeAttr(step.cmd) + '</textarea>';
-      } else {
-        html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
-      }
-      html += '<div class="step-actions"><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="svx-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        var hide = 'block';
-        if (f.show_if) {
-          var sp = f.show_if.split('=');
-          var ctl = null;
-          step.fields.forEach(function(g) { if (g.id === sp[0]) ctl = g; });
-          hide = (ctl && String(ctl.default || '') === sp[1]) ? 'block' : 'none';
-        }
-        html += '<label data-showif="' + svxEscapeAttr(f.show_if || '') + '" style="display:' + hide + ';font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + svxEscapeAttr(f.label) + ':';
-        if (f.options) {
-          html += '<select class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" onchange="svxFieldVis(this)">';
-          f.options.forEach(function(o) {
-            html += '<option value="' + svxEscapeAttr(o[0]) + '"' + (o[0] === f.default ? ' selected' : '') + '>' + svxEscapeAttr(o[1]) + '</option>';
-          });
-          html += '</select></label>';
-        } else {
-          html += '<input type="' + svxEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" value="' + svxEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-        }
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" readonly value="' + svxEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="svx-btn-' + stateKey + '" onclick="svxRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'svx', run: 'svxRunStep', copy: 'svxCopyStep', fieldVis: 'svxFieldVis', mode: mode, distro: distro, steps: ((window._svxScripts || {})[mode] || {})[distro] || [], state: window._svxState, esc: svxEscapeAttr, block: 'manual', config: false, pi: false, vis: true});
 }
 
 function svxRender() {
@@ -25885,56 +25830,7 @@ function m17EscapeAttr(s) {
 }
 
 function m17RenderStepList(mode, distro) {
-  var steps = ((window._m17Scripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._m17State || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="m17-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + m17EscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + m17EscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.config_save) {
-      html += '<span class="step-pill not_started">Config</span></div>';
-      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'m17-out-' + stateKey + '\\')">Save Restore point</button></div>';
-      html += '<div class="asl3-console shown placeholder" id="m17-out-' + stateKey + '">(not saved from here yet)</div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="m17-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + m17EscapeAttr(f.label) + ':' +
-          '<input type="' + m17EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="m17-field-' + f.id + '-' + stateKey + '" value="' + m17EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" readonly value="' + m17EscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="m17-btn-' + stateKey + '" onclick="m17RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'm17', run: 'm17RunStep', copy: 'm17CopyStep', mode: mode, distro: distro, steps: ((window._m17Scripts || {})[mode] || {})[distro] || [], state: window._m17State, esc: m17EscapeAttr, block: 'any', config: true, pi: false, vis: false});
 }
 
 function m17Render() {
@@ -26230,48 +26126,7 @@ function ampEscapeAttr(s) {
 }
 
 function ampRenderStepList(mode, distro) {
-  var steps = ((window._ampScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._ampState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="amp-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + ampEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + ampEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="amp-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + ampEscapeAttr(f.label) + ':' +
-          '<input type="' + ampEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="amp-field-' + f.id + '-' + stateKey + '" value="' + ampEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" readonly value="' + ampEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="amp-btn-' + stateKey + '" onclick="ampRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'amp', run: 'ampRunStep', copy: 'ampCopyStep', mode: mode, distro: distro, steps: ((window._ampScripts || {})[mode] || {})[distro] || [], state: window._ampState, esc: ampEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function ampRender() {
@@ -26523,48 +26378,7 @@ function crEscapeAttr(s) {
 }
 
 function crRenderStepList(mode, distro) {
-  var steps = ((window._crScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._crState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="cr-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + crEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + crEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="cr-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + crEscapeAttr(f.label) + ':' +
-          '<input type="' + crEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cr-field-' + f.id + '-' + stateKey + '" value="' + crEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="cr-cmd-' + stateKey + '" readonly value="' + crEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="cr-btn-' + stateKey + '" onclick="crRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cr-out-' + stateKey + '">' + (st.output ? crEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'cr', run: 'crRunStep', copy: 'crCopyStep', mode: mode, distro: distro, steps: ((window._crScripts || {})[mode] || {})[distro] || [], state: window._crState, esc: crEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function crRender() {
@@ -26823,48 +26637,7 @@ function cfEscapeAttr(s) {
 }
 
 function cfRenderStepList(mode, distro) {
-  var steps = ((window._cfScripts || {})[mode] || {})[distro] || [];
-  var html = '';
-  steps.forEach(function(step) {
-    var stateKey = mode + '_' + distro + '_' + step.id;
-    var st = (window._cfState || {})[stateKey] || {};
-    html += '<div class="step-card">';
-    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
-    if (step.manual_block) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-      html += '<textarea class="cmd-preview" id="cf-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
-        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + cfEscapeAttr(step.cmd) + '</textarea>';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    if (step.manual) {
-      html += '<span class="step-pill not_started">Manual</span></div>';
-      if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + cfEscapeAttr(step.cmd) + '">';
-      html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-      html += '</div>';
-      return;
-    }
-    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
-    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
-    html += '<span class="step-pill ' + pillClass + '" id="cf-pill-' + stateKey + '">' + pillLabel + '</span></div>';
-    if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
-    if (step.fields) {
-      step.fields.forEach(function(f) {
-        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + cfEscapeAttr(f.label) + ':' +
-          '<input type="' + cfEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cf-field-' + f.id + '-' + stateKey + '" value="' + cfEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
-      });
-    } else {
-      html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" readonly value="' + cfEscapeAttr(step.cmd) + '">';
-    }
-    html += '<div class="step-actions"><button class="btn-run" id="cf-btn-' + stateKey + '" onclick="cfRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
-    html += '</div>';
-  });
-  return html || '<div class="step-body">(no steps defined)</div>';
+  return stepCardsHtml({pfx: 'cf', run: 'cfRunStep', copy: 'cfCopyStep', mode: mode, distro: distro, steps: ((window._cfScripts || {})[mode] || {})[distro] || [], state: window._cfState, esc: cfEscapeAttr, block: 'any', config: false, pi: false, vis: false});
 }
 
 function cfRender() {
@@ -29106,16 +28879,14 @@ function piPasteCancel(boxId) {
 _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
   <div class="step-card"><div class="step-head"><div class="step-title">@TITLE@</div>
       <span class="cfg-hint" id="@P@-checked"></span></div>
-    <div class="step-body">@NOTE@ The standard config
-      bundle is for the Pi Zero 2 W; on the full build, set the ASL3, DVSwitch and M17 config on the Config tab and the "Apply" rows
-      turn done when the files match the form below. The whole build in order, from a bare Pi to a working node, with where each step stands read from this
-      node, not from memory. Pick the tunnel mode first; the order changes with it. A row with a Run button does its step from here
+    <div class="step-body">@NOTE@ The whole build in order, from a bare Pi to a working node, with where each step stands read from this
+      node, not from memory. Pick the tunnel mode first; the order changes with it. A card with a Run button does its step from here
       (Preview first where there is one); each Run asks before it changes anything and saves an automatic copy of the config first. The
       installs and the tunnel steps run in the background and keep going if you close the page; they stop at the first failing step. The
-      tunnel step uses the WireGuard config pasted in the box under the form, once, and does not keep it. The other rows link to the tab that does the step.
-      Nothing runs by itself.</div>
+      tunnel step uses the WireGuard config pasted in the box under the form, once, and does not keep it. Every step is its own card below,
+      after the Preflight, in the order to do them. Nothing runs by itself.</div>
     <div id="@P@-where"></div>
-    <div id="@P@-stages">Loading...</div>
+    <div id="@P@-progress" class="step-body">Loading...</div>
     <div class="step-actions">
       <button class="btn-run" onclick="@F@RunRest(this)">Run the rest</button>
       <button class="btn-copy" onclick="@F@Report(this)">Build report</button>
@@ -29123,10 +28894,10 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="asl3-console shown" id="@P@-run-out" style="display:none"></div>
     <textarea class="asl3-cmd-input" id="@P@-report" rows="14" spellcheck="false" readonly style="display:none;width:100%"></textarea>
   </div>
-  <div class="step-card"><div class="step-head"><div class="step-title">Preflight</div>
+  <div class="step-card"><div class="step-head"><div class="step-title"><span class="step-num">1.</span>Preflight</div>
       <span class="cfg-hint" id="@P@-form-state"></span></div>
-    <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). It holds no
-      passwords and no keys: the WireGuard config below is checked and then forgotten.</div>
+    <div class="step-body">Fill this in once. It is saved on this node in /etc/44helper/build.json (root only). Passwords you
+      enter are kept there until the reboot test is done and are then removed; the WireGuard config below is checked and then forgotten.</div>
     <table class="cfg-table">
       <tr><td>Tunnel mode</td><td><select id="@P@-mode" onchange="@F@Dirty();@F@ShowBypass()">
         <option value="half">Half tunnel (ASL and EchoLink through the tunnel, the rest of the Pi on the normal link)</option>
@@ -29140,6 +28911,46 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
       <tr><td>DMR ID (7 digits)</td><td><input type="text" class="asl3-cmd-input" id="@P@-dmr_id" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-dmr_id"></span></td></tr>
       <tr><td>NXDN ID (optional)</td><td><input type="text" class="asl3-cmd-input" id="@P@-nxdn_id" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-nxdn_id"></span></td></tr>
       <tr><td>M17 node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-m17_node" maxlength="4" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-m17_node"></span></td></tr>
+      <tr><td colspan="2"><b>Location</b> <span class="cfg-hint">(optional; the SvxLink node info and EchoLink use it. The locator is worked out from the coordinates.)</span></td></tr>
+      <tr><td>Sysop name</td><td><input type="text" class="asl3-cmd-input" id="@P@-sysop" maxlength="27" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-sysop"></span></td></tr>
+      <tr><td>Location (city, state)</td><td><input type="text" class="asl3-cmd-input" id="@P@-location" maxlength="27" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-location"></span></td></tr>
+      <tr><td>QTH name</td><td><input type="text" class="asl3-cmd-input" id="@P@-qth" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-qth"></span></td></tr>
+      <tr><td>Latitude / longitude</td><td><input type="text" class="asl3-cmd-input" id="@P@-lat" maxlength="10" autocomplete="off" placeholder="latitude" oninput="@F@Dirty()"> <input type="text" class="asl3-cmd-input" id="@P@-lon" maxlength="11" autocomplete="off" placeholder="longitude" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-lat"></span> <span class="cfg-hint" id="@P@-e-lon"></span></td></tr>
+      <tr><td colspan="2"><b>Passwords</b> <span class="cfg-hint">(optional; shown in the clear, kept on this node until the reboot test is done, then removed. Blank leaves the file as it is.)</span></td></tr>
+      <tr><td>ASL node password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_node" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_node"></span></td></tr>
+      <tr><td>BrandMeister password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_bm" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_bm"></span></td></tr>
+      <tr><td>AMI secret (blank: one is generated)</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ami" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ami"></span></td></tr>
+      <tr><td>Allmon3 admin password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_allmon" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_allmon"></span> <span class="cfg-hint">set once with allmon3-passwd (it is stored as a hash), then forgotten</span></td></tr>
+      <tr><td>EchoLink node number</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_node" maxlength="7" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_node"></span></td></tr>
+      <tr><td>EchoLink password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_el" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_el"></span></td></tr>
+      <tr><td>TGIF password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_tgif" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_tgif"></span></td></tr>
+      <tr><td colspan="2"><details><summary>More (optional)</summary><table class="cfg-table">
+        <tr><td>ircDDB password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ircddb" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ircddb"></span></td></tr>
+        <tr><td>ircDDB remote password</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_ircddb_remote" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_ircddb_remote"></span></td></tr>
+        <tr><td>IAX client secret</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_iax" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-pw_iax"></span></td></tr>
+        <tr><td>DMR talker alias</td><td><input type="text" class="asl3-cmd-input" id="@P@-ta" maxlength="30" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-ta"></span></td></tr>
+      </table></details></td></tr>
+      <tr><td colspan="2"><b>STFU</b> <span class="cfg-hint">(optional; BrandMeister terminal mode. Node Controller starts it when you pick the STFU mode.)</span></td></tr>
+      <tr><td>Master server</td><td><select id="@P@-stfu_master" onchange="@F@Dirty()"><option value="">(not set: pick one)</option>@STFUMASTERS@<option value="other">Other (type it below)</option></select> <input type="text" class="asl3-cmd-input" id="@P@-stfu_other" maxlength="253" autocomplete="off" placeholder="other master address" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_master"></span> <span class="cfg-hint" id="@P@-e-stfu_other"></span></td></tr>
+      <tr><td>Master port (blank: 54006)</td><td><input type="text" class="asl3-cmd-input" id="@P@-stfu_port" maxlength="5" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_port"></span></td></tr>
+      <tr><td>Start talkgroup</td><td><input type="text" class="asl3-cmd-input" id="@P@-stfu_tg" maxlength="7" inputmode="numeric" autocomplete="off" placeholder="for example 3166" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-stfu_tg"></span></td></tr>
+      <tr><td>Log level</td><td><select id="@P@-stfu_log" onchange="@F@Dirty()"><option value="">(leave as it is)</option><option value="0">0 none</option><option value="1">1 debug</option><option value="2">2 message</option><option value="3">3 info</option><option value="4">4 warning</option><option value="5">5 error</option></select> <span class="cfg-hint" id="@P@-e-stfu_log"></span></td></tr>
+      <tr><td>Install</td><td><button class="btn-run" onclick="@F@InstallStfu(this)">Install STFU (apt)</button> <span class="cfg-hint" id="@P@-stfu-state"></span></td></tr>
+      <tr><td colspan="2"><b>EchoLink</b> <span class="cfg-hint">(optional; it runs in the one service that has the radio, never in both)</span></td></tr>
+      <tr><td>Use EchoLink</td><td><select id="@P@-el_enable" onchange="@F@Dirty()"><option value="">Off (left as it is)</option><option value="1">On</option></select> <span class="cfg-hint" id="@P@-e-el_enable"></span> <span class="cfg-hint" id="@P@-el-owner"></span></td></tr>
+      <tr><td>Runs in</td><td><select id="@P@-el_owner" onchange="@F@Dirty()"><option value="auto">Automatic (ASL3, which has the radio)</option><option value="asl3">ASL3</option><option value="svx">SvxLink (only with its own radio, Magic Box)</option></select> <span class="cfg-hint" id="@P@-e-el_owner"></span></td></tr>
+      <tr><td>EchoLink callsign</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_call" maxlength="9" autocomplete="off" placeholder="KD8PGK-L" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_call"></span></td></tr>
+      <tr><td>EchoLink name</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_name" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_name"></span></td></tr>
+      <tr><td>EchoLink QTH</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_qth" maxlength="40" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_qth"></span></td></tr>
+      <tr><td>EchoLink e-mail</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_email" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_email"></span></td></tr>
+      <tr><td colspan="2"><details><summary>EchoLink station details (optional)</summary><table class="cfg-table">
+        <tr><td>Power (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_power" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_power"></span></td></tr>
+        <tr><td>Height (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_height" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_height"></span></td></tr>
+        <tr><td>Gain (0 to 9)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_gain" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_gain"></span></td></tr>
+        <tr><td>Direction (0 to 8)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_dir" maxlength="1" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_dir"></span></td></tr>
+        <tr><td>Frequency (MHz)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_freq" maxlength="9" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_freq"></span></td></tr>
+        <tr><td>CTCSS tone (Hz)</td><td><input type="text" class="asl3-cmd-input" id="@P@-el_tone" maxlength="5" autocomplete="off" oninput="@F@Dirty()"> <span class="cfg-hint" id="@P@-e-el_tone"></span></td></tr>
+      </table></details></td></tr>
       <tr><td>Suite build</td><td><select id="@P@-suite_build" onchange="@F@Dirty()"><option value="auto">Automatic (by the board)</option>
         <option value="pi02w">Pi Zero 2 W build</option><option value="full">Full build</option></select></td></tr>
       <tr><td>Suite channel</td><td><select id="@P@-suite_channel" onchange="@F@Dirty()"><option value="stable">Stable</option>
@@ -29150,6 +28961,7 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div class="step-actions">
       <button class="btn-run" onclick="@F@Save(this)">Save the form</button>
       <button class="btn-copy" onclick="@F@Reset(this)">Clear it</button>
+      <button class="btn-copy" onclick="@F@ClearSaved(this)">Remove the saved passwords</button>
     </div>
     <div class="asl3-console shown" id="@P@-form-out" style="display:none"></div>
     <div class="step-body" style="margin-top:.8rem">WireGuard config for this node. Paste it to check it before the tunnel step. It is not saved.</div>
@@ -29167,13 +28979,25 @@ _BLD_PANEL_TMPL = """<div class="tab-panel hidden" id="panel-@TAB@">
     <div id="@P@-suite" style="margin-top:.8rem"></div>
     <div class="step-actions"><button class="btn-run" id="@P@-suite-btn" onclick="@F@InstallSuite(this)">Install the missing suite tools</button></div>
   </div>
-  @SVXCARD@<div class="step-card"><div class="step-head"><div class="step-title">Radio and Node Talker</div></div>
-    <div class="step-body">Node Talker needs the node to use SimpleUSB. With no USB card, devstr stays empty. With one card,
-      SimpleUSB takes it by itself. With more than one, pick one in the form above.</div>
-    <div id="@P@-radio">Loading...</div>
+  <div id="@P@-cards"></div>
+  <div class="step-card" id="@P@-saves"><div class="step-head"><div class="step-title">Build Save and Build Snapshot</div></div>
+    <div class="step-body" id="@P@-saves-note"></div>
+    <div id="@P@-saves-list" class="step-body"></div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="@F@SaveNow(this)">Save now</button>
+      <label class="btn-copy" style="cursor:pointer">Load a file from your computer <input type="file" accept="application/json,.json" style="display:none" onchange="@F@SaveFile(this)"></label>
+    </div>
+    <div class="asl3-console shown" id="@P@-saves-out" style="display:none"></div>
   </div>
+  <details id="@P@-strip" style="margin-top:.6rem"><summary style="cursor:pointer;font-family:var(--sans);color:var(--muted)">Progress strip: every step in one list</summary>
+    <div id="@P@-stages" style="margin-top:.4rem">Loading...</div>
+  </details>
 </div>
 """
+
+_BLD_STFU_MASTERS = (("3104.master.brandmeister.network", "3104: North America"),)
+_BLD_PANEL_TMPL = _BLD_PANEL_TMPL.replace(
+    "@STFUMASTERS@", "".join(f'<option value="{h}">{n}</option>' for h, n in _BLD_STFU_MASTERS))
 
 _BLD_JS_TMPL = r"""
 var _@P@Fields = @FIELDS@;
@@ -29181,14 +29005,14 @@ var _@P@Data = null;
 var _@P@IsDirty = false;
 var _@P@Tabs = {
   tunnel: 'split_tunnel', asl3: 'asl3', dvs: 'dvswitch', m17: 'm17',
-  apply_asl3: 'config', iax_port: 'config', apply_dvs: 'config', apply_m17: 'config',
+  iax_port: 'config', identity: 'config', restart: 'config', registration: 'asl3', stfu: 'dvswitch', stfu_setup: 'config', echolink: 'config', location: 'config', passwords: 'config', ready: '@TAB@',
   half: 'split_tunnel', fullx: 'full_tunnel', ports: 'ports', preset: 'config', boot: 'split_tunnel', wiring: 'config',
   radio: 'config', save: 'config', reboot: 'boot', preflight: '@TAB@',
   svx: 'svxlink', svx_wire: 'config', svx_reflector: 'svxlink', svx_checks: 'svxlink'
 };
 var _@P@StageNames = {
-  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', apply_asl3: 'Config tab', iax_port: 'Config tab',
-  apply_dvs: 'Config tab', apply_m17: 'Config tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
+  tunnel: 'Tunnel', asl3: 'ASL3 tab', dvs: 'DVSwitch tab', m17: 'M17 tab', iax_port: 'Config tab', identity: 'Config tab',
+  restart: 'Config tab', registration: 'ASL3 tab', stfu: 'DVSwitch tab', stfu_setup: 'Config tab', echolink: 'Config tab', location: 'Config tab, Identity card', passwords: 'Config tab, Identity card', ready: 'this tab', half: 'Split Tunnel tab', fullx: 'Full Tunnel tab', ports: 'Ports tab', preset: 'Config tab',
   boot: 'Split Tunnel tab, card 6b', wiring: 'Config tab', radio: 'Config tab', save: 'Config tab',
   reboot: 'Boot tab', preflight: 'this tab', svx: 'SVXLink tab', svx_wire: 'Config tab', svx_reflector: 'SVXLink tab, step 11',
   svx_checks: 'SVXLink tab'
@@ -29242,6 +29066,107 @@ function @F@ShowErrors(d) {
   if (st) { st.textContent = n ? n + ' to fix' : 'complete'; }
 }
 
+var _@P@Order = '';
+var _@P@Html = {};
+var _@P@LabelId = {};
+var _@P@Out = {};
+
+function @F@PillClass(state) {
+  return {done: 'done', warn: 'attempted_unconfirmed'}[state] || 'not_started';
+}
+
+function @F@CardMain(s, num, isNext) {
+  var tab = _@P@Tabs[s.id];
+  var h = '<div class="step-head"><div class="step-title"><span class="step-num">' + num + '.</span>' + cfgEsc(s.label) + '</div>' +
+          '<span class="step-pill ' + @F@PillClass(s.state) + '">' + cfgEsc(@F@StateLabel(s.state)) + '</span></div>';
+  h += '<div class="step-body">' + (isNext ? '<b>Next: </b>' : '') + cfgEsc(s.detail || '') + '</div>';
+  if (tab && tab !== '@TAB@') {
+    h += '<div class="cfg-hint">Also on the <a href="#" style="color:var(--teal)" onclick="clickTab(\'' + tab + '\');return false;">' +
+         cfgEsc(_@P@StageNames[s.id] || tab) + '</a>.</div>';
+  }
+  var b = @F@RunButtons(s);
+  if (b) { h += '<div class="step-actions">' + b + '</div>'; }
+  return h;
+}
+
+function @F@CardExtra(id) {
+  var h = '';
+  if (id === 'radio') { h += '<div id="@P@-radio" style="margin-top:.4rem"></div>'; }
+  if (id === 'svx') { h += '<div id="@P@-svx" style="margin-top:.4rem"></div>'; }
+  if (_STEP_DOCKS[id]) {
+    h += '<details class="step-dock" id="@P@-det-' + id + '" style="margin-top:.4rem" ontoggle="@F@StepsToggle(\'' + id + '\')">' +
+         '<summary style="cursor:pointer;color:var(--teal)">' + (id === 'half' || id === 'fullx' ? 'Show the card' : 'Show the steps') + '</summary>' +
+         '<div class="cfg-hint">' + (id === 'tunnel' || id === 'half' || id === 'fullx' ? 'The same as on the tunnel tab.' : 'The same steps as on the tab, with the distro chosen there.') + '</div>' +
+         '<div id="@P@-steps-' + id + '" style="margin-top:.4rem"></div></details>';
+  }
+  return h;
+}
+
+function @F@Progress(stages) {
+  var done = 0;
+  var next = null;
+  stages.forEach(function(s) {
+    if (s.state === 'done') { done += 1; }
+    if (!next && (s.state === 'todo' || s.state === 'locked')) { next = s; }
+  });
+  return done + ' of ' + stages.length + ' steps done' + (next ? '. Next: ' + next.label + '.' : '. Nothing left to do here.');
+}
+
+function @F@KeepOut(stage) {
+  var el = document.getElementById('@P@-out-' + stage);
+  if (el) { _@P@Out[stage] = {cls: el.className, text: el.textContent}; }
+}
+
+function @F@ShowOut(stage) {
+  var el = document.getElementById('@P@-out-' + stage);
+  var kept = _@P@Out[stage];
+  if (el && kept) { el.style.display = ''; el.className = kept.cls; el.textContent = kept.text; }
+}
+
+function @F@StepsToggle(id) {
+  stepsDock('@TAB@');
+}
+
+function @F@RenderCards(d) {
+  var box = document.getElementById('@P@-cards');
+  if (!box) { return; }
+  var all = d.stages || [];
+  _@P@LabelId = {};
+  all.forEach(function(s) { _@P@LabelId[s.label] = s.id; });
+  var stages = all.filter(function(s) { return s.id !== 'preflight'; });
+  var order = stages.map(function(s) { return s.id; }).join(',');
+  if (order !== _@P@Order) {
+    var wasOpen = [];
+    box.querySelectorAll('details.step-dock[open]').forEach(function(el) { wasOpen.push(el.id); });
+    stepsDock('');
+    var shell = '';
+    stages.forEach(function(s) {
+      shell += '<div class="step-card" id="@P@-card-' + s.id + '"><div id="@P@-main-' + s.id + '"></div>' + @F@CardExtra(s.id) +
+               '<div class="asl3-console shown" id="@P@-out-' + s.id + '" style="display:none"></div></div>';
+    });
+    box.innerHTML = shell;
+    _@P@Order = order;
+    _@P@Html = {};
+    stages.forEach(function(s) { @F@ShowOut(s.id); });
+    wasOpen.forEach(function(did) { var el = document.getElementById(did); if (el) { el.open = true; } });
+  }
+  var nextId = '';
+  all.forEach(function(s) { if (!nextId && (s.state === 'todo' || s.state === 'locked')) { nextId = s.id; } });
+  if (nextId === 'preflight') { nextId = ''; }
+  stages.forEach(function(s, i) {
+    var main = @F@CardMain(s, i + 2, s.id === nextId);
+    if (_@P@Html[s.id] !== main) {
+      var el = document.getElementById('@P@-main-' + s.id);
+      if (el) { el.innerHTML = main; }
+      _@P@Html[s.id] = main;
+    }
+    var card = document.getElementById('@P@-card-' + s.id);
+    if (card) { card.style.borderColor = s.id === nextId ? 'var(--teal)' : ''; }
+  });
+  var pg = document.getElementById('@P@-progress');
+  if (pg) { pg.textContent = @F@Progress(all); }
+}
+
 function @F@RenderStages(d) {
   var h = '<table class="cfg-table"><tr><th>#</th><th>Step</th><th>State</th><th>Where</th><th>Detail</th><th></th></tr>';
   (d.stages || []).forEach(function(s, i) {
@@ -29276,7 +29201,8 @@ function @F@Run(stage, preview, btn, isLong) {
   var body = {action: 'run_stage', profile: '@PROFILE@', stage: stage, preview: preview};
   var wg = document.getElementById('@P@-wg');
   if (stage === 'tunnel' && wg) { body.config_text = wg.value; }
-  @F@Post(body, '@P@-run-out', btn).then(function(res) {
+  @F@Post(body, '@P@-out-' + stage, btn).then(function(res) {
+    @F@KeepOut(stage);
     if (stage === 'tunnel' && res && res.success && wg) { wg.value = ''; }
     if (res && res.job_key) { @F@Poll(res.job_key); }
     @F@Refresh();
@@ -29309,18 +29235,52 @@ function @F@Report(btn) {
 
 var _@P@PollKey = '';
 
+function @F@SplitRest(text) {
+  var nl = String.fromCharCode(10);
+  var sections = {};
+  var top = [];
+  var cur = null;
+  String(text || '').split(nl).forEach(function(ln) {
+    var m = /^== (.+) ==$/.exec(ln);
+    if (m && _@P@LabelId[m[1]]) {
+      cur = _@P@LabelId[m[1]];
+      sections[cur] = sections[cur] || [];
+      return;
+    }
+    if (/^(Stopped|Every step is done)/.test(ln)) { top.push(ln); return; }
+    if (cur) { sections[cur].push(ln); } else { top.push(ln); }
+  });
+  return {sections: sections, top: top.join(nl)};
+}
+
 function @F@Poll(key) {
   if (_@P@PollKey === key) { return; }
   _@P@PollKey = key;
-  var out = document.getElementById('@P@-run-out');
+  var stage = key.replace(/^build_[a-z]+_/, '');
+  var out = document.getElementById('@P@-out-' + stage) || document.getElementById('@P@-run-out');
   function tick() {
     fetch('/api/action_status?job_key=' + encodeURIComponent(key)).then(function(r) { return r.json(); }).then(function(j) {
+      var shown = j.output;
+      if (stage === 'rest') {
+        var sp = @F@SplitRest(j.output);
+        Object.keys(sp.sections).forEach(function(id) {
+          var card = document.getElementById('@P@-out-' + id);
+          if (card) {
+            card.style.display = '';
+            card.className = 'asl3-console shown';
+            card.textContent = sp.sections[id].slice(-60).join(String.fromCharCode(10)).replace(/^\s+|\s+$/g, '');
+            @F@KeepOut(id);
+          }
+        });
+        shown = sp.top;
+      }
       if (out) {
         out.style.display = '';
         out.className = 'asl3-console shown' + (j.status === 'done' ? (j.success ? ' ok' : ' fail') : '');
-        var lines = String(j.output || '').split(String.fromCharCode(10));
+        var lines = String(shown || '').split(String.fromCharCode(10));
         out.textContent = lines.slice(-60).join(String.fromCharCode(10));
         out.scrollTop = out.scrollHeight;
+        if (out.id === '@P@-out-' + stage) { @F@KeepOut(stage); }
       }
       if (j.status === 'running') { setTimeout(tick, 2500); } else { _@P@PollKey = ''; @F@Refresh(); }
     }).catch(function() { setTimeout(tick, 5000); });
@@ -29372,7 +29332,8 @@ function @F@RenderRadio(d) {
     h += '<tr><td>' + cfgEsc(c.name) + '</td><td>' + cfgEsc(c.usbid) + '</td><td>' + cfgEsc(c.devstr || '?') + '</td><td>' +
          (c.radio_chip ? cfgEsc(c.radio_chip) + ' (likely)' : 'unknown') + '</td></tr>';
   });
-  document.getElementById('@P@-radio').innerHTML = h + '</table>';
+  var rbox = document.getElementById('@P@-radio');
+  if (rbox) { rbox.innerHTML = h + '</table>'; }
 }
 
 function @F@RenderApt(d) {
@@ -29453,13 +29414,14 @@ function @F@RenderSvx(d) {
 function @F@Refresh() {
   return fetch('/api/build/status?profile=@PROFILE@').then(function(r) { return r.json(); }).then(function(d) {
     if (!d || !d.stages) {
-      document.getElementById('@P@-stages').textContent = (d && d.message) || 'Could not read the node.';
+      document.getElementById('@P@-progress').textContent = (d && d.message) || 'Could not read the node.';
       return;
     }
     _@P@Data = d;
     document.getElementById('@P@-checked').textContent = d.checked_at || '';
     if (!_@P@IsDirty) { @F@FillForm(d); }
     @F@ShowErrors(d);
+    @F@RenderCards(d);
     @F@RenderStages(d);
     @F@RenderMachine(d);
     @F@RenderWhere(d);
@@ -29467,9 +29429,10 @@ function @F@Refresh() {
     @F@RenderSvx(d);
     @F@RenderApt(d);
     @F@RenderSuite(d);
+    @F@RenderExtras(d);
     if (d.job && d.job.status === 'running') { @F@Poll(d.job.key); }
   }).catch(function(e) {
-    document.getElementById('@P@-stages').textContent = 'Request failed: ' + e;
+    document.getElementById('@P@-progress').textContent = 'Request failed: ' + e;
   });
 }
 
@@ -29508,6 +29471,86 @@ function @F@Save(btn) {
   @F@Post(@F@FormValues(), '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
 
+function @F@InstallStfu(btn) {
+  if (!confirm('Install STFU now? It runs apt as root in the background and needs DVSwitch installed first.')) { return; }
+  @F@Post({action: 'install_stfu', profile: '@PROFILE@'}, '@P@-run-out', btn).then(function(res) {
+    if (res && res.job_key) { @F@Poll(res.job_key); }
+    @F@Refresh();
+  });
+}
+
+function @F@SaveNow(btn) {
+  @F@Post({action: 'save_write', profile: '@PROFILE@'}, '@P@-saves-out', btn).then(function() { @F@Refresh(); });
+}
+
+function @F@ApplyLoaded(res) {
+  if (!res || !res.success) { return; }
+  Object.keys(res.values || {}).forEach(function(k) {
+    var el = document.getElementById('@P@-' + k);
+    if (el) { el.value = res.values[k]; }
+  });
+  @F@ShowBypass();
+  @F@Dirty();
+}
+
+function @F@SaveLoad(name) {
+  @F@Post({action: 'save_load', profile: '@PROFILE@', name: name}, '@P@-saves-out', null).then(@F@ApplyLoaded);
+}
+
+function @F@SaveFile(input) {
+  var f = input.files && input.files[0];
+  if (!f) { return; }
+  var reader = new FileReader();
+  reader.onload = function() {
+    @F@Post({action: 'save_load', profile: '@PROFILE@', text: String(reader.result)}, '@P@-saves-out', null).then(@F@ApplyLoaded);
+  };
+  reader.readAsText(f);
+  input.value = '';
+}
+
+function @F@SaveDownload(name, kind) {
+  if (kind === 'save' && !confirm('This file contains your passwords in plain text. Download it anyway?')) { return; }
+  fetch('/api/build/save?name=' + encodeURIComponent(name)).then(function(r) { return r.blob(); }).then(function(b) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+}
+
+function @F@RenderSaves(d) {
+  var sv = d.saves || {};
+  var note = document.getElementById('@P@-saves-note');
+  if (note) { note.textContent = sv.note || ''; }
+  var box = document.getElementById('@P@-saves-list');
+  if (!box) { return; }
+  var files = sv.files || [];
+  if (!files.length) { box.textContent = 'No Build Save yet. Both files are written automatically when the Reboot test is done, or press Save now.'; return; }
+  var h = '<table class="cfg-table"><tr><th>File</th><th>When</th><th></th></tr>';
+  files.forEach(function(f) {
+    h += '<tr><td>' + cfgEsc(f.name) + '</td><td>' + cfgEsc(f.saved_at) + '</td><td>' +
+      '<button class="btn-copy" onclick="@F@SaveLoad(\'' + cfgEsc(f.name) + '\')">Load</button> ' +
+      '<button class="btn-copy" onclick="@F@SaveDownload(\'' + cfgEsc(f.name) + '\',\'' + f.kind + '\')">Download</button></td></tr>';
+  });
+  box.innerHTML = h + '</table>';
+}
+
+function @F@RenderExtras(d) {
+  @F@RenderSaves(d);
+  var x = d.extras || {};
+  var a = document.getElementById('@P@-stfu-state');
+  if (a) { a.textContent = x.stfu_installed ? 'installed' : 'not installed'; }
+  var b = document.getElementById('@P@-el-owner');
+  if (b) { b.textContent = x.el_owner_text || ''; }
+}
+
+function @F@ClearSaved(btn) {
+  if (!confirm('Remove every saved password from the Preflight form? Files on this node do not change.')) return;
+  @F@Post({action: 'clear_saved'}, '@P@-form-out', btn).then(function() { @F@Refresh(); });
+}
+
 function @F@Reset(btn) {
   @F@Post({action: 'form_reset'}, '@P@-form-out', btn).then(function() { _@P@IsDirty = false; @F@Refresh(); });
 }
@@ -29533,27 +29576,29 @@ _BLD_SVX_ROWS = (
     '<span class="cfg-hint" id="@P@-e-svx_port"></span></td></tr>\n'
     '      <tr><td>Default talkgroup (0 = none)</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_tg" maxlength="6" inputmode="numeric" autocomplete="off" oninput="@F@Dirty()"> '
     '<span class="cfg-hint" id="@P@-e-svx_tg"></span></td></tr>\n'
+    '      <tr><td>Reflector password (AUTH_KEY)</td><td><input type="text" class="asl3-cmd-input" id="@P@-pw_reflector" maxlength="64" autocomplete="off" oninput="@F@Dirty()"> '
+    '<span class="cfg-hint" id="@P@-e-pw_reflector"></span></td></tr>\n'
     '      <tr><td>Monitored talkgroups</td><td><input type="text" class="asl3-cmd-input" id="@P@-svx_mon" maxlength="120" autocomplete="off" oninput="@F@Dirty()"> '
     '<span class="cfg-hint" id="@P@-e-svx_mon"></span></td></tr>\n')
-_BLD_SVX_CARD = """<div class="step-card"><div class="step-head"><div class="step-title">SvxLink</div></div>
-    <div class="step-body">SvxLink is the program that joins the node to an SvxReflector through the bridge node (1900, USRP 34000 and 32000).
-      The reflector password is not kept here: enter it on the SVXLink tab, step 11. These rows only read the node.</div>
-    <div id="@P@-svx">Loading...</div>
-  </div>
-  """
 
 def _bld_fill(text: str, pfx: str, fn: str, tab: str, profile: str, fields: list[str]) -> str:
     return (text.replace("@FIELDS@", json.dumps(fields)).replace("@PROFILE@", profile).replace("@TAB@", tab)
             .replace("@P@", pfx).replace("@F@", fn))
 
-_BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"]
-_BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon"]
+_BLD_LOCATION_FIELDS = ("sysop", "location", "qth", "lat", "lon")
+_BLD_SECRET_FIELDS = ("pw_node", "pw_bm", "pw_ami", "pw_allmon", "pw_el", "pw_tgif", "pw_reflector", "pw_ircddb", "pw_ircddb_remote", "pw_iax")
+_BLD_EL_FIELDS = ("el_enable", "el_owner", "el_call", "el_name", "el_qth", "el_email", "el_power", "el_height", "el_gain", "el_dir", "el_freq", "el_tone")
+_BLD_STFU_FIELDS = ("stfu_master", "stfu_other", "stfu_port", "stfu_tg", "stfu_log")
+_BLD_VALUE_FIELDS = _BLD_LOCATION_FIELDS + _BLD_SECRET_FIELDS + ("el_node", "ta") + _BLD_EL_FIELDS + _BLD_STFU_FIELDS
+_BLD_FIELDS_TRAVEL = ["callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "bypass", "suite_build", "suite_channel"] + [
+    k for k in _BLD_VALUE_FIELDS if k != "pw_reflector"]
+_BLD_FIELDS_MAGIC = _BLD_FIELDS_TRAVEL + ["svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "pw_reflector"]
 
 def _render_build_panel(pfx: str = "bld", fn: str = "build", magic: bool = False) -> str:
     tab = "magic" if magic else "build"
     out = (_BLD_PANEL_TMPL.replace("@NOTE@", _BLD_NOTE_MAGIC if magic else _BLD_NOTE_TRAVEL)
            .replace("@TITLE@", "Build a Magic Box" if magic else "Build a travel node")
-           .replace("@SVXROWS@", _BLD_SVX_ROWS if magic else "").replace("@SVXCARD@", _BLD_SVX_CARD if magic else ""))
+           .replace("@SVXROWS@", _BLD_SVX_ROWS if magic else ""))
     return _bld_fill(out, pfx, fn, tab, "magic" if magic else "travel", [])
 
 def _render_magic_panel() -> str:
@@ -30452,6 +30497,40 @@ def login_ui_inject(html, input_id, nonce=""):
 def _route_index(query: dict) -> tuple[int, str, bytes]:
     return 200, "text/html; charset=utf-8", login_ui_inject(render_page(_cfg), "login-pw").encode("utf-8")
 
+_PAGE_GZ: dict = {"tag": "", "data": b""}
+_PAGE_GZ_LOCK = threading.Lock()
+
+def _accepts_gzip(header: str) -> bool:
+    for part in header.split(","):
+        name, _, params = part.partition(";")
+        if name.strip().lower() not in ("gzip", "x-gzip"):
+            continue
+        q = re.search(r"q\s*=\s*([0-9.]+)", params)
+        try:
+            return q is None or float(q.group(1)) > 0
+        except ValueError:
+            return False
+    return False
+
+def _etag_matches(header: str, tag: str) -> bool:
+    return any(x.strip().removeprefix("W/") == tag for x in header.split(",")) or header.strip() == "*"
+
+def _index_response(accept_encoding: str, if_none_match: str) -> tuple[int, dict, bytes]:
+    raw = login_ui_inject(render_page(_cfg), "login-pw").encode("utf-8")
+    tag = '"' + hashlib.md5(raw).hexdigest() + '"'
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if if_none_match and _etag_matches(if_none_match, tag):
+        return 304, headers, b""
+    if not _accepts_gzip(accept_encoding):
+        return 200, headers, raw
+    with _PAGE_GZ_LOCK:
+        if _PAGE_GZ["tag"] != tag:
+            _PAGE_GZ["data"] = gzip.compress(raw, 6, mtime=0)
+            _PAGE_GZ["tag"] = tag
+        data = _PAGE_GZ["data"]
+    headers["Content-Encoding"] = "gzip"
+    return 200, headers, data
+
 def _route_version(query: dict) -> tuple[int, str, bytes]:
     payload = {"app": APP_TITLE, "version": APP_VERSION, "stage": APP_STAGE}
     return 200, "application/json", json.dumps(payload).encode("utf-8")
@@ -31322,17 +31401,44 @@ def _route_actions_log_notes(query: dict) -> tuple[int, str, bytes]:
     body = json.dumps(list_known_good_router_notes()).encode("utf-8")
     return 200, "application/json", body
 
+_BLD_PREFILL = {
+    "callsign": "callsign", "dmrid": "dmr_id", "refl_host": "svx_host", "refl_port": "svx_port", "refl_tg": "svx_tg",
+    "refl_monitor": "svx_mon",
+}
+_BLD_PREFILL_STEP = {
+    ("configure_node_identity", "password"): "pw_bm", ("usrp_refl_conn", "refl_key"): "pw_reflector",
+    ("allmon3_set_admin", "password"): "pw_allmon", ("m17_asterisk_conf", "node"): "m17_node",
+}
+
+def _bld_prefill(obj: object, form: dict, step_id: str = "") -> object:
+    if isinstance(obj, list):
+        return [_bld_prefill(x, form, step_id) for x in obj]
+    if not isinstance(obj, dict):
+        return obj
+    sid = str(obj.get("id", "")) if "fields" in obj else step_id
+    out = {}
+    for k, v in obj.items():
+        out[k] = _bld_prefill(v, form, sid) if isinstance(v, (list, dict)) else v
+    if "type" in out and "default" in out and "id" in out and step_id:
+        key = _BLD_PREFILL_STEP.get((step_id, out["id"])) or (_BLD_PREFILL.get(out["id"]) if out["id"] in _BLD_PREFILL and step_id != "usrp_refl_test" else None)
+        if key and form.get(key) and not out["default"]:
+            out["default"] = form[key]
+    return out
+
+def _scripts_with_prefill(scripts: dict) -> bytes:
+    return json.dumps(_bld_prefill(scripts, _bld_form_load())).encode("utf-8")
+
 def _route_asl3_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_ASL3_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_ASL3_SCRIPTS)
 
 def _route_dvswitch_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_DVSWITCH_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_DVSWITCH_SCRIPTS)
 
 def _route_svxlink_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_SVXLINK_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_SVXLINK_SCRIPTS)
 
 def _route_m17_script(query: dict) -> tuple[int, str, bytes]:
-    return 200, "application/json", json.dumps(_M17_SCRIPTS).encode("utf-8")
+    return 200, "application/json", _scripts_with_prefill(_M17_SCRIPTS)
 
 def _cr_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _CR_SCRIPTS.get(mode, {}).get(distro, []):
@@ -31383,10 +31489,11 @@ _BLD_NODETALKER = "/usr/local/bin/nodetalker.py"
 _BLD_CM_VENDORS = {"0d8c": "C-Media", "0c76": "JMTek"}
 _BLD_MODES = {"half": "Half tunnel", "split": "Split tunnel", "full": "Full tunnel with exceptions", "none": "No tunnel"}
 _BLD_FIELDS = ("mode", "callsign", "node", "iax_port", "dmr_id", "nxdn_id", "m17_node", "usb", "bypass",
-               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel")
+               "svx_use", "svx_host", "svx_port", "svx_tg", "svx_mon", "suite_build", "suite_channel") + _BLD_VALUE_FIELDS
 _BLD_DEFAULT = {"mode": "half", "callsign": "", "node": "", "iax_port": "", "dmr_id": "", "nxdn_id": "", "m17_node": "1917",
                 "usb": "", "bypass": "", "svx_use": "bridge", "svx_host": "", "svx_port": "", "svx_tg": "0", "svx_mon": "",
-                "suite_build": "auto", "suite_channel": "stable"}
+                "suite_build": "auto", "suite_channel": "stable", **{k: "" for k in _BLD_VALUE_FIELDS}}
+_BLD_DEFAULT["el_owner"] = "auto"
 _BLD_PROFILES = ("travel", "magic")
 _BLD_SVX_MON_RE = re.compile(r"\+?[0-9]{1,6}(,\+?[0-9]{1,6}){0,19}")
 _BLD_SVX_CONF = "/usr/local/etc/svxlink/svxlink.conf"
@@ -31402,6 +31509,35 @@ _BLD_FIELD_RES = {
     "m17_node": (re.compile(r"1[0-9]{3}"), "a node number from 1000 to 1999"),
 }
 _BLD_REQUIRED = ("callsign", "node", "dmr_id")
+_BLD_VALUE_RES = {
+    "pw_node": (r"[^\s:@;\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, : @ ; $, backtick or backslash"),
+    "pw_bm": (r"[^\s#\"'$`\\]{1,64}", "1 to 64 characters, no spaces, # quotes, $, backtick or backslash"),
+    "pw_ami": (r"[^\s\"';#%=\\$`]{1,64}", "1 to 64 characters, no spaces, quotes, ; # % = $, backtick or backslash"),
+    "pw_allmon": (r"[^\s\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, $, backtick or backslash"),
+    "pw_el": (r"[^\s;#\"'\\]{1,64}", "1 to 64 characters, no spaces, ; # or quotes"),
+    "pw_tgif": (r"[^\s\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, $, backtick or backslash"),
+    "pw_reflector": (r"[^\s#\"'\\]{1,64}", "1 to 64 characters, no spaces, # or quotes"),
+    "pw_ircddb": (r"[^\s\"'\\]{1,64}", "1 to 64 characters, no spaces, quotes or backslash"),
+    "pw_ircddb_remote": (r"[^\s\"'\\]{1,64}", "1 to 64 characters, no spaces, quotes or backslash"),
+    "pw_iax": (r"[^\s;\"'$`\\]{1,64}", "1 to 64 characters, no spaces, quotes, ; $, backtick or backslash"),
+    "el_node": (r"\d{1,7}", "1 to 7 digits"),
+    "ta": (r"[^\r\n;#\"'\\]{1,30}", "1 to 30 characters, no ; # or quotes"),
+    "sysop": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
+    "location": (r"[^\r\n#\"'\\]{1,27}", "1 to 27 characters, no # or quotes"),
+    "qth": (r"[^\r\n\"\\]{1,40}", "1 to 40 characters, no quotes"),
+    "el_call": (r"[A-Za-z0-9]{3,7}-[LRlr]", "your callsign with -L or -R, for example KD8PGK-L"),
+    "el_name": (r"[^\r\n;#\"'\\]{1,40}", "1 to 40 characters, no ; # or quotes"),
+    "el_qth": (r"[^\r\n;#\"'\\]{1,40}", "1 to 40 characters, no ; # or quotes"),
+    "el_email": (r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,120}\.[A-Za-z]{2,}", "an e-mail address"),
+    "el_power": (r"[0-9]", "a digit 0 to 9"), "el_height": (r"[0-9]", "a digit 0 to 9"), "el_gain": (r"[0-9]", "a digit 0 to 9"),
+    "el_dir": (r"[0-8]", "a digit 0 to 8"), "el_freq": (r"[0-9]{1,4}(\.[0-9]{1,4})?", "a frequency in MHz"),
+    "el_tone": (r"[0-9]{1,3}(\.[0-9])?", "a tone in Hz"),
+    "stfu_master": (r"other|(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*", "a master server from the list"),
+    "stfu_other": (r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*", "a host name"),
+    "stfu_port": (r"[0-9]{1,5}", "a port from 1 to 65535"), "stfu_tg": (r"[0-9]{1,7}", "a talkgroup number"), "stfu_log": (r"[0-5]", "a level 0 to 5"),
+    "lat": (r"-?(90(\.0{1,6})?|[1-8]?[0-9](\.[0-9]{1,6})?)", "a latitude from -90 to 90"),
+    "lon": (r"-?(180(\.0{1,6})?|(1[0-7][0-9]|[1-9]?[0-9])(\.[0-9]{1,6})?)", "a longitude from -180 to 180"),
+}
 _BLD_HOST_RE = re.compile(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _BLD_MAX_BYPASS = 20
 _BLD_HS_FRESH = 180
@@ -31428,8 +31564,8 @@ def _bld_form_load() -> dict:
                 form[k] = v[:400]
     return form
 
-def _bld_form_clean(payload: dict) -> dict:
-    form = dict(_BLD_DEFAULT)
+def _bld_form_clean(payload: dict, base: dict | None = None) -> dict:
+    form = dict(base) if base else dict(_BLD_DEFAULT)
     for k in _BLD_FIELDS:
         v = payload.get(k, form[k])
         form[k] = v.strip()[:400] if isinstance(v, str) else form[k]
@@ -31442,6 +31578,9 @@ def _bld_form_clean(payload: dict) -> dict:
     if form["suite_channel"] not in _BLD_SUITE_CHANNELS:
         form["suite_channel"] = _BLD_DEFAULT["suite_channel"]
     form["callsign"] = form["callsign"].upper()
+    form["el_call"] = form["el_call"].upper()
+    if not form["el_owner"]:
+        form["el_owner"] = "auto"
     return form
 
 def _bld_form_write(form: dict) -> None:
@@ -31497,6 +31636,20 @@ def _bld_form_errors(form: dict, cards: list[dict], profile: str = "travel") -> 
                 errs[k] = "required"
         elif _BLD_FIELD_RES[k][0].fullmatch(v) is None:
             errs[k] = "use " + _BLD_FIELD_RES[k][1]
+    for k, (rx, why) in _BLD_VALUE_RES.items():
+        v = form.get(k, "")
+        if v and re.fullmatch(rx, v) is None:
+            errs[k] = "use " + why
+    if form.get("el_enable", "") not in ("", "1"):
+        errs["el_enable"] = "use off or on"
+    if form.get("el_owner", "auto") not in ("auto", "asl3", "svx"):
+        errs["el_owner"] = "use automatic, ASL3 or SvxLink"
+    if form.get("stfu_master", "") == "other" and not form.get("stfu_other"):
+        errs["stfu_other"] = "type the master server address"
+    if form.get("stfu_port") and "stfu_port" not in errs and not 1 <= int(form["stfu_port"]) <= 65535:
+        errs["stfu_port"] = "use a port from 1 to 65535"
+    if bool(form.get("lat")) != bool(form.get("lon")):
+        errs["lon" if form.get("lat") else "lat"] = "give both latitude and longitude"
     iax = form.get("iax_port", "")
     if iax and not _cfgr_port_ok(iax):
         errs["iax_port"] = "use " + _BLD_FIELD_RES["iax_port"][1]
@@ -31671,17 +31824,17 @@ def _bld_lan_addrs() -> dict:
 
 def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]:
     tunnel = ("tunnel", "Tunnel steps 1 to 6")
-    systems = [("asl3", "ASL3"), ("apply_asl3", "Apply the ASL3 config"), ("iax_port", "Set the IAX port"),
-               ("dvs", "DVSwitch"), ("apply_dvs", "Apply the DVSwitch config"),
-               ("m17", "USRP2M17"), ("apply_m17", "Apply the M17 config")]
+    systems = [("asl3", "ASL3"), ("iax_port", "Set the IAX port"), ("dvs", "DVSwitch"), ("stfu", "STFU (optional)"), ("m17", "USRP2M17")]
     if profile == "magic":
         systems = systems + [("svx", "SvxLink"), ("svx_wire", "SvxLink bridge wiring"), ("svx_reflector", "Reflector")]
+    systems = systems + [("identity", "Set the callsign, node number and IDs"), ("location", "Set the location"),
+                         ("passwords", "Set the passwords"), ("stfu_setup", "Set up STFU"), ("echolink", "Set up EchoLink"),
+                         ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset")]
     tail = [("boot", "Boot order"), ("wiring", "Wiring checks")]
     if profile == "magic":
         tail.append(("svx_checks", "SvxLink checks"))
-    tail += [("radio", "Radio and Node Talker"),
-             ("preset", "Apply the Magic Box preset" if profile == "magic" else "Apply the Travel Node preset"),
-             ("save", "Restore point"), ("reboot", "Reboot test")]
+    tail += [("radio", "Radio and Node Talker"), ("restart", "Restart the services"), ("registration", "AllStarLink registration"),
+             ("ready", "Ready to reboot"), ("save", "Restore point"), ("reboot", "Reboot test")]
     ports = ("ports", "Open the ports")
     if mode == "none":
         return [("preflight", "Preflight")] + systems + [ports] + tail
@@ -31689,21 +31842,6 @@ def _bld_stage_defs(mode: str, profile: str = "travel") -> list[tuple[str, str]]
         return [("preflight", "Preflight")] + systems + [tunnel, ("fullx", "Full tunnel exceptions"), ports] + tail
     mid = [("half", "Half tunnel")] if mode == "half" else []
     return [("preflight", "Preflight"), tunnel] + systems + mid + [ports] + tail
-
-def _bld_applied(stage: str, form: dict, node: str) -> tuple[bool, str]:
-    call = form.get("callsign", "")
-    if stage == "apply_asl3":
-        rpt = _bld_read(_BLD_RPT)
-        ok = bool(node) and re.search(r"^\s*\[" + re.escape(node) + r"\]\s*\(node-main", rpt, re.M) is not None
-        return ok, ("" if ok else "No [" + (node or "node") + "](node-main) in rpt.conf yet.")
-    if stage == "apply_dvs":
-        text = _bld_read(_BLD_MMDVM)
-        ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-        ok = ok and bool(form.get("dmr_id")) and re.search(r"^Id=" + re.escape(form["dmr_id"]) + r"\s*$", text, re.M) is not None
-        return ok, ("" if ok else "MMDVM_Bridge.ini does not have this callsign and DMR ID yet.")
-    text = _bld_read(_BLD_M17INI)
-    ok = bool(call) and re.search(r"^Callsign=" + re.escape(call) + r"\s*$", text, re.M | re.I) is not None
-    return ok, ("" if ok else "USRP2M17.ini does not have this callsign yet.")
 
 _BLD_EXT = "/etc/asterisk/extensions.conf"
 
@@ -31910,7 +32048,6 @@ def build_build_status(profile: str = "travel") -> dict:
     except Exception:
         pn = {"available": False}
     restore = _cfgr_read_manifest(_cfgr_snap_dir("restore")) is not None
-    preset = _cfgr_load_preset("travel_node") is not None
     radio = _bld_radio(form, cards)
     mode = form["mode"]
     defs = _bld_stage_defs(mode, profile)
@@ -31952,12 +32089,22 @@ def build_build_status(profile: str = "travel") -> dict:
             have = inst(_BLD_PRODUCT[sid])
             state = "done" if have else "todo"
             detail = "installed" if have else ("not installed" if installed.get(_BLD_PRODUCT[sid], "absent") == "absent" else installed[_BLD_PRODUCT[sid]])
-        elif sid.startswith("apply_"):
-            if not inst(_BLD_PRODUCT[sid.split("_", 1)[1]]):
-                state, detail = "todo", "Needs the system installed first."
-            else:
-                ok, why = _bld_applied(sid, form, node)
-                state, detail = ("done", "Config matches the form.") if ok else ("todo", why)
+        elif sid == "identity":
+            state, detail = _bld_identity_state(form)
+        elif sid == "restart":
+            state, detail = _bld_restart_state()
+        elif sid == "registration":
+            state, detail = _bld_registration_state(node)
+        elif sid in ("location", "passwords"):
+            state, detail = _bld_values_state(sid, form, profile)
+        elif sid == "stfu":
+            state, detail = _bld_stfu_state()
+        elif sid == "stfu_setup":
+            state, detail = _bld_stfu_setup_state(form)
+        elif sid == "echolink":
+            state, detail = _bld_echolink_state(form, profile)
+        elif sid == "ready":
+            state, detail = _bld_ready_state(stages, mode, up, age, form)
         elif sid.startswith("svx"):
             state, detail = _bld_svx_stage(sid, svx, form, radio)
         elif sid == "ports":
@@ -31989,7 +32136,7 @@ def build_build_status(profile: str = "travel") -> dict:
             state, detail = _bld_radio_state(radio)
         elif sid == "save":
             state = "done" if restore else "todo"
-            detail = "Restore point saved." + (" Travel Node preset saved." if preset else "") if restore else "No Restore point yet."
+            detail = "Restore point saved." if restore else "No Restore point yet."
         elif sid == "reboot":
             state, detail = "manual", ""
         stages.append({"id": sid, "label": label, "state": state, "detail": detail})
@@ -31997,6 +32144,12 @@ def build_build_status(profile: str = "travel") -> dict:
         if s["id"] == "reboot":
             others = [x for x in stages if x["id"] != "reboot"]
             s["state"], s["detail"] = _bld_reboot_state(all(x["state"] in ("done", "warn") for x in others), up, age)
+            if s["state"] == "done":
+                has_secrets = any(form.get(k) for k in _BLD_SECRET_FIELDS)
+                if has_secrets or not _bs_list():
+                    _bs_write(profile)
+                if has_secrets and _bld_wipe_secrets():
+                    form = dict(form, **{k: "" for k in _BLD_SECRET_FIELDS})
     prev_ok = True
     for s in stages:
         if s["state"] in ("todo",) and not prev_ok:
@@ -32010,6 +32163,9 @@ def build_build_status(profile: str = "travel") -> dict:
     out = {"form": form, "errors": errs, "modes": _BLD_MODES, "machine": machine, "stages": stages, "profile": profile,
            "radio": radio, "addrs": _bld_lan_addrs(), "tunnel_kind": kind, "board": _bld_board(),
            "checked_at": _cfgr_now()}
+    out["saves"] = {"files": _bs_list(), "note": _BS_NOTE}
+    out["extras"] = {"stfu_installed": _bld_stfu_installed(),
+                     "el_owner_text": {"": "EchoLink stays off.", "asl3": "EchoLink will run in ASL3.", "svx": "EchoLink will run in SvxLink."}[_bld_el_owner(form, profile)]}
     out["job"] = _bld_job_info(profile)
     out["apt"] = _bld_apt_state(form.get("mode", "half"))
     out["suite"] = {"tools": _bld_suite_state(), "build": _bld_suite_build(form), "channel": form.get("suite_channel", "stable")}
@@ -32020,8 +32176,8 @@ def build_build_status(profile: str = "travel") -> dict:
     return out
 
 def _bld_act_form_save(payload: dict) -> dict:
-    form = _bld_form_clean(payload)
     with _BLD_LOCK:
+        form = _bld_form_clean(payload, _bld_form_load())
         _bld_form_write(form)
     profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
     errs = _bld_form_errors(form, _bld_usb_cards(), profile)
@@ -32076,7 +32232,7 @@ def _bld_skipped_ports(installed: dict) -> list[tuple[str, str]]:
     for key, (name, specs) in _BLD_COMPONENT_PORTS.items():
         if not have[key]:
             out += [(spec, name) for spec in specs]
-    if not have["asl3"] and not have["svx"]:
+    if (not have["asl3"] and not have["svx"]) or not _bld_el_wanted():
         out += [(spec, "EchoLink") for spec in _BLD_ECHOLINK_PORTS]
     return out
 
@@ -32129,7 +32285,7 @@ def _bld_ports_plan(mode: str, installed: dict, cockpit: bool) -> tuple[list[dic
     peers = "lan" if mode == "none" else "tunnel"
     if asl3:
         rows.append({"zone": peers, "spec": "4569/udp", "why": "AllStarLink IAX2"})
-    if mode != "split" and (asl3 or svx):
+    if mode != "split" and (asl3 or svx) and _bld_el_wanted():
         rows.append({"zone": peers, "spec": "5198-5199/udp", "why": "EchoLink"})
         rows.append({"zone": peers, "spec": "5200/tcp", "why": "EchoLink (direct)"})
     if installed.get("dvs") == "installed":
@@ -32241,6 +32397,662 @@ def _bld_run_ports(preview: bool, mode: str, installed: dict) -> tuple[bool, lis
 
 _BLD_PRESET_ID = {"travel": "travel_node", "magic": "magic_box"}
 
+def _bld_scan_values(group: str, fids: tuple[str, ...] = ()) -> list[str]:
+    scan = _cfgr_identity_scan()
+    return [str(r["value"]).strip() for r in scan["rows"]
+            if (group in r["groups"] if not fids else r["fid"] in fids) and str(r["value"]).strip()]
+
+def _bld_identity_wants(form: dict) -> list[tuple[str, str, tuple[str, ...]]]:
+    wants = [("callsign", form.get("callsign", "").upper(), ()), ("dmr", form.get("dmr_id", ""), ())]
+    if form.get("nxdn_id"):
+        wants.append(("nxdn", form["nxdn_id"], ("mb_nxdn_id", "var_nxdn_id")))
+    return wants
+
+def _bld_identity_state(form: dict) -> tuple[str, str]:
+    if not form.get("callsign") or not form.get("node") or not form.get("dmr_id"):
+        return "todo", "Fill in the callsign, node number and DMR ID in the Preflight first."
+    rpt = _cfgr_text(_CFGR_RPT)
+    if rpt is None:
+        return "todo", "rpt.conf is not on this node yet (the ASL3 install creates it)."
+    off: list[str] = []
+    if form["node"] not in _cfgr_node_public(rpt):
+        off.append("node number")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if not vals:
+            if group != "nxdn":
+                off.append(group)
+        elif any(v.upper() != want.upper() for v in vals):
+            off.append({"dmr": "DMR ID", "nxdn": "NXDN ID"}.get(group, group))
+    if off:
+        return "todo", "Does not match the form yet: " + ", ".join(off) + "."
+    return "done", "The callsign, node number and IDs in the files match the form."
+
+def _bld_run_identity(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    rpt = _cfgr_text(_CFGR_RPT)
+    public = _cfgr_node_public(rpt) if rpt is not None else []
+    steps: list[tuple[str, dict]] = []
+    if form["node"] not in public:
+        if len(public) == 1:
+            steps.append(("node " + public[0] + " -> " + form["node"], {"group": "node", "node": public[0], "value": form["node"]}))
+        elif not public:
+            lines.append("No node stanza in rpt.conf yet, so the node number is left alone.")
+        else:
+            lines.append("rpt.conf has more than one public node: change the node number on the Config tab, Identity card.")
+    for group, want, fids in _bld_identity_wants(form):
+        vals = _bld_scan_values(group, fids)
+        if vals and all(v.upper() == want.upper() for v in vals):
+            continue
+        if group == "nxdn":
+            for r in _cfgr_identity_scan()["rows"]:
+                if r["fid"] in fids and str(r["value"]).strip() != want:
+                    steps.append((f"{r['label']} ({r['file']})", {"group": "alone", "rid": r["rid"], "value": want}))
+        else:
+            steps.append((group, {"group": group, "value": want, "callsign": want}))
+    if not steps:
+        lines.append("Nothing to change.")
+    for name, payload in steps:
+        res = _cfgr_act_id_set(payload, not preview)
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {name} =="] + _bld_out(res)
+    if not preview and steps:
+        lines.append("Restart the services afterwards (the Restart the services step).")
+    return ok, lines
+
+def _bld_restart_groups() -> list[str]:
+    inst = _cfgr_installed()
+    return [g for g in _CFGR_GROUPS if inst.get(g)]
+
+def _bld_restart_state() -> tuple[str, str]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return "done", "No system installed yet, so nothing to restart."
+    newest = 0.0
+    for g in groups:
+        for path in _CFGR_GROUPS[g]["files"]:
+            try:
+                newest = max(newest, os.stat(path).st_mtime)
+            except OSError:
+                continue
+    at = _bld_marks_load().get("restarted_at")
+    if not isinstance(at, int) or at < int(newest):
+        return "todo", "Config files changed since the last restart, or the services were never restarted from here."
+    return "done", "Restarted after the last config change."
+
+def _bld_run_restart() -> tuple[bool, list[str]]:
+    groups = _bld_restart_groups()
+    if not groups:
+        return True, ["Nothing installed to restart."]
+    res = _cfgr_act_restart({"groups": groups})
+    ok = bool(res.get("success"))
+    if ok:
+        _bld_mark_set("restarted_at")
+    return ok, ["Restarting: " + ", ".join(_CFGR_GROUPS[g].get("label", g) for g in groups)] + _bld_out(res)
+
+def _bld_registration_state(node: str) -> tuple[str, str]:
+    if not shutil.which("asterisk"):
+        return "warn", "Asterisk is not installed yet."
+    try:
+        entries = asl_registration_info().get("entries", [])
+    except Exception:
+        entries = []
+    mine = [e for e in entries if not node or str(e.get("node")) == node] or entries
+    if any(e.get("registered") for e in mine):
+        e = next(e for e in mine if e.get("registered"))
+        return "done", f"Node {e['node']} is registered" + (f" as {e['ip']}:{e['port']}." if e.get("ip") else ".")
+    return "warn", ("Not registered with AllStarLink. Enter the node password (Config tab, Identity card: ASL node password), "
+                    "restart, then check again. A node that stays private needs no registration.")
+
+_BLD_GROUP_SETS = {"pw_node": "node_pw", "pw_bm": "bm_pw", "pw_ami": "ami"}
+_BLD_ALONE_SETS = {
+    "pw_bm": ("mb_dmr_pw",), "pw_el": ("el_pwd", "svx_el_pw"), "el_node": ("el_node",), "pw_tgif": ("var_tgif_pw",),
+    "pw_reflector": ("svx_refl_key",), "pw_ircddb": ("ircddb_pw",), "pw_ircddb_remote": ("ircddb_remote_pw",),
+    "pw_iax": ("iax_secret",), "ta": ("stfu_ta",),
+    "sysop": ("svx_el_sysop", "svx_ni_sysop"), "location": ("svx_el_location", "svx_ni_location"), "qth": ("svx_ni_qth",),
+    "lat": ("svx_ni_lat",), "lon": ("svx_ni_lon",), "locator": ("svx_ni_loc",),
+}
+_BLD_STEP_KEYS = {
+    "location": ("sysop", "location", "qth", "lat", "lon", "locator"),
+    "passwords": ("pw_node", "pw_bm", "pw_ami", "pw_el", "el_node", "pw_tgif", "pw_reflector", "pw_ircddb", "pw_ircddb_remote",
+                  "pw_iax", "ta"),
+}
+_BLD_NAMES = {
+    "pw_node": "ASL node password", "pw_bm": "BrandMeister password", "pw_ami": "AMI secret", "pw_el": "EchoLink password",
+    "el_node": "EchoLink node number", "pw_tgif": "TGIF password", "pw_reflector": "SvxLink reflector password",
+    "pw_ircddb": "ircDDB password", "pw_ircddb_remote": "ircDDB remote password", "pw_iax": "IAX client secret",
+    "ta": "DMR talker alias", "sysop": "sysop name", "location": "location", "qth": "QTH name", "lat": "latitude", "lon": "longitude",
+    "locator": "locator",
+}
+
+def _bld_locator(lat: str, lon: str) -> str:
+    try:
+        la, lo = float(lat) + 90.0, float(lon) + 180.0
+    except ValueError:
+        return ""
+    if not (0 <= la < 180 and 0 <= lo < 360):
+        return ""
+    f_lo, f_la = int(lo // 20), int(la // 10)
+    s_lo, s_la = int((lo % 20) // 2), int(la % 10)
+    x_lo, x_la = int(((lo % 2) * 12) // 1), int(((la % 1) * 24) // 1)
+    return chr(65 + f_lo) + chr(65 + f_la) + str(s_lo) + str(s_la) + chr(97 + x_lo) + chr(97 + x_la)
+
+def _bld_value_of(form: dict, key: str) -> str:
+    if key == "locator":
+        return _bld_locator(form.get("lat", ""), form.get("lon", ""))
+    return form.get(key, "")
+
+def _bld_values_plan(step: str, form: dict) -> tuple[list[tuple[str, dict]], list[str], list[str]]:
+    scan = _cfgr_identity_scan()
+    todo: list[tuple[str, dict]] = []
+    absent: list[str] = []
+    blank: list[str] = []
+    for key in _BLD_STEP_KEYS[step]:
+        want = _bld_value_of(form, key)
+        if not want:
+            blank.append(key)
+            continue
+        group = _BLD_GROUP_SETS.get(key)
+        if group:
+            vals = [str(r["value"]) for r in scan["rows"] if group in r["groups"] and str(r["value"]).strip()]
+            if not vals or any(v != want for v in vals):
+                todo.append((_BLD_NAMES[key], {"group": group, "value": want}))
+        fids = _BLD_ALONE_SETS.get(key, ())
+        rows = [r for r in scan["rows"] if r["fid"] in fids]
+        if fids and not rows and not group:
+            absent.append(_BLD_NAMES[key])
+        for r in rows:
+            if str(r["value"]) != want:
+                todo.append((f"{_BLD_NAMES[key]} ({r['label']})", {"group": "alone", "rid": r["rid"], "value": want}))
+    return todo, absent, blank
+
+def _bld_values_state(step: str, form: dict, profile: str) -> tuple[str, str]:
+    try:
+        todo, absent, blank = _bld_values_plan(step, form)
+    except Exception as exc:
+        return "warn", "Could not read the files: " + type(exc).__name__
+    keys = [k for k in _BLD_STEP_KEYS[step] if k != "pw_reflector" or profile == "magic"]
+    blank = [k for k in blank if k in keys]
+    if step == "passwords" and form.get("pw_allmon") and _bld_marks_load().get("allmon_set_at") is None:
+        todo.append(("Allmon3 admin password", {}))
+    if todo:
+        return "todo", "Not in the files yet: " + ", ".join(sorted({t[0].split(" (")[0] for t in todo})) + "."
+    if step == "passwords":
+        need = [k for k in ("pw_node", "pw_bm") if k in blank]
+        if profile == "magic" and "pw_reflector" in blank:
+            need.append("pw_reflector")
+        if need:
+            return "warn", "Not entered in the Preflight: " + ", ".join(_BLD_NAMES[k] for k in need) + ". Blank leaves the file as it is."
+        return "done", "The passwords in the files match the Preflight."
+    return "done", "The location in the files matches the Preflight." if len(blank) < len(keys) else "Nothing entered in the Preflight; left as it is."
+
+def _bld_secret_hint(text: str, form: dict) -> str:
+    for k in _BLD_SECRET_FIELDS:
+        v = form.get(k, "")
+        if v:
+            text = text.replace(v, "<hidden>")
+    return text
+
+def _bld_run_values(step: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    ok = True
+    if step == "passwords" and not form.get("pw_ami"):
+        scan = _cfgr_identity_scan()
+        if scan["groups"].get("ami", {}).get("state") == "not set" and not preview:
+            gen = secrets.token_hex(12)
+            form = dict(form, pw_ami=gen)
+            with _BLD_LOCK:
+                _bld_form_write(dict(_bld_form_load(), pw_ami=gen))
+            lines.append("The AMI secret was empty, so a new one was generated and put in the Preflight form.")
+    todo, absent, _blank = _bld_values_plan(step, form)
+    if absent:
+        lines.append("Not on this node yet, left out: " + ", ".join(absent) + ".")
+    for name, payload in todo:
+        if not payload:
+            continue
+        res = _cfgr_act_id_set(payload, not preview)
+        ok = ok and bool(res.get("success"))
+        lines += [f"== {name} =="] + [_bld_secret_hint(x, form) for x in _bld_out(res)]
+    if step == "passwords" and form.get("pw_allmon") and _bld_marks_load().get("allmon_set_at") is None:
+        if preview:
+            lines.append("== Allmon3 admin password == would be set with allmon3-passwd (user admin), then forgotten.")
+        elif shutil.which("allmon3-passwd") is None:
+            lines.append("allmon3-passwd is not installed yet, so the Allmon3 admin password was not set.")
+            ok = False
+        else:
+            res = _run_argv(["allmon3-passwd", "--password", form["pw_allmon"], "admin"], timeout=30)
+            ok = ok and res["success"]
+            lines.append("== Allmon3 admin password == " + ("set, and forgotten." if res["success"] else "failed: " + _bld_secret_hint(res["output"], form)[:200]))
+            if res["success"]:
+                _bld_mark_set("allmon_set_at")
+                with _BLD_LOCK:
+                    _bld_form_write(dict(_bld_form_load(), pw_allmon=""))
+    if not todo and not lines:
+        lines.append("Nothing to change.")
+    if not preview and todo:
+        lines.append("Restart the services afterwards (the Restart the services step).")
+    return ok, lines
+
+_BLD_DVSINI = "/opt/MMDVM_Bridge/DVSwitch.ini"
+_BLD_MODULES = "/etc/asterisk/modules.conf"
+_BLD_STFU_BIN = "/opt/STFU/STFU"
+
+def _bld_write_changes(label: str, changes: dict, notes: list[str], preview: bool) -> tuple[bool, list[str]]:
+    lines: list[str] = []
+    for path, (old, new) in changes.items():
+        lines += list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(),
+                                           f"now: {path}", f"after: {path}", lineterm=""))
+    lines += notes
+    if not changes:
+        lines.append("Nothing to change.")
+    if not changes or preview:
+        return True, lines
+    groups = [g for g in _CFGR_GROUPS if any(path in _CFGR_GROUPS[g]["files"] for path in changes)]
+    auto_id, _dropped = _cfgr_auto_point(label, groups)
+    lines.append(f"Current files saved first as automatic copy {auto_id}.")
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, mode)
+        ok = ok and not res.startswith("NOT")
+        lines.append(f"  {path}: {res}")
+    lines.append("Restart the services afterwards (the Restart the services step).")
+    log(f"{'OK' if ok else 'FAIL'}: Build {label}")
+    return ok, lines
+
+def _bld_ini_changes(path: str, section: str, wanted: dict[str, str]) -> tuple[dict, list[str]]:
+    cur = _cfgr_read(path)
+    if cur is None:
+        return {}, [f"{path} is not on this node yet."]
+    lines = _cfgr_lines(cur.decode("utf-8", "replace"))
+    notes: list[str] = []
+    for key, value in wanted.items():
+        lines, _old, ok = _cfgr_set_key(lines, section, key, value)
+        if not ok:
+            notes.append(f"{path} has no [{section}] section, so {key} was not set.")
+            break
+    data = _cfgr_join(lines).encode("utf-8")
+    return ({path: (cur, data)} if data != cur else {}), notes
+
+def _bld_ini_has(path: str, section: str, wanted: dict[str, str]) -> bool:
+    text = _cfgr_text(path)
+    if text is None:
+        return False
+    cur = _cfgr_ini_sections(text).get(section.lower(), {})
+    return all(cur.get(k.lower(), "") == v for k, v in wanted.items())
+
+def _bld_stfu_installed() -> bool:
+    if os.path.exists(_BLD_STFU_BIN):
+        return True
+    pk = _installed_dpkg_all()
+    return bool(pk) and "stfu" in pk
+
+def _bld_stfu_master(form: dict) -> str:
+    m = form.get("stfu_master", "")
+    return form.get("stfu_other", "") if m == "other" else m
+
+def _bld_stfu_wanted(form: dict) -> dict[str, str]:
+    pairs = (("BMAddress", _bld_stfu_master(form)), ("BMPort", form.get("stfu_port", "")), ("StartTG", form.get("stfu_tg", "")),
+             ("LogLevel", form.get("stfu_log", "")))
+    return {k: v for k, v in pairs if v}
+
+def _bld_stfu_state() -> tuple[str, str]:
+    if _bld_stfu_installed():
+        return "done", "STFU is installed."
+    return "warn", "STFU is not installed (optional). Use Install STFU in the Preflight; it needs the DVSwitch step first."
+
+def _bld_stfu_setup_state(form: dict) -> tuple[str, str]:
+    if not _bld_stfu_installed():
+        return "warn", "STFU is not installed (optional)."
+    wanted = _bld_stfu_wanted(form)
+    if not wanted:
+        return "warn", "No STFU values in the Preflight; DVSwitch.ini is left as it is. Without a master server STFU will not connect."
+    if not _bld_ini_has(_BLD_DVSINI, "STFU", wanted):
+        return "todo", "DVSwitch.ini [STFU] does not match the Preflight yet."
+    if "BMAddress" not in wanted:
+        return "warn", "The settings match, but no master server is picked: STFU will not connect."
+    return "done", "DVSwitch.ini [STFU] matches the Preflight."
+
+def _bld_run_stfu(form: dict, preview: bool) -> tuple[bool, list[str]]:
+    if not _bld_stfu_installed():
+        return False, ["STFU is not installed. Use Install STFU in the Preflight first."]
+    wanted = _bld_stfu_wanted(form)
+    if not wanted:
+        return True, ["No STFU values in the Preflight, so nothing was changed."]
+    changes, notes = _bld_ini_changes(_BLD_DVSINI, "STFU", wanted)
+    return _bld_write_changes("STFU settings", changes, notes, preview)
+
+def _bld_act_install_stfu(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if _bld_running_job():
+        return {"success": False, "message": "Another build step is still running. Wait for it to finish."}
+    if _bld_stfu_installed():
+        return {"success": True, "message": "STFU is already installed."}
+    if {p["key"]: p["state"] for p in _detect_installed_products()}.get("dvs") != "installed":
+        return {"success": False, "message": "Install DVSwitch first: the stfu package comes from its repository."}
+    cmd = _bld_apt_cmd(["stfu"])
+    gate = _pkg_health_gate(cmd)
+    if gate:
+        return {"success": False, "message": "The package system has unfinished installs. Fix it on the Update tab first, then try again.",
+                "notes": str(gate.get("output", "")).splitlines()[-12:]}
+    key = f"{_BLD_JOB_PREFIX}{profile}_stfu"
+    _start_unit_job(key, cmd)
+    log("OK: Build tab started the STFU apt install")
+    return {"success": True, "message": "Started: apt install stfu.", "job_key": key}
+
+def _bld_el_owner(form: dict, profile: str) -> str:
+    if form.get("el_enable") != "1":
+        return ""
+    if form.get("el_owner") == "svx" and profile == "magic" and form.get("svx_use") == "radio":
+        return "svx"
+    return "asl3"
+
+def _bld_el_live() -> bool:
+    mod = _cfgr_text(_BLD_MODULES)
+    if mod is not None and _cfgr_module_state(_cfgr_lines(mod), "chan_echolink") in ("load", "preload", "require"):
+        return True
+    svx = _cfgr_text(_CFGR_SVX_CONF)
+    return svx is not None and re.search(r"^\s*MODULES\s*=.*\bModuleEchoLink\b", svx, re.M) is not None
+
+def _bld_el_wanted() -> bool:
+    return _bld_form_load().get("el_enable") == "1" or _bld_el_live()
+
+def _bld_module_set(lines: list[str], name: str, want: str) -> list[str]:
+    mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re(name)
+    out = list(lines)
+    found = False
+    for i, line in enumerate(lines):
+        mm = None if mask[i] else rx.match(line)
+        if mm:
+            found = True
+            if mm.group(2) not in ("require", "preload"):
+                out[i] = mm.group(1) + want + mm.group(3)
+    if not found:
+        secs = _cfgr_sections(lines, mask)
+        sec = next((x for x in secs if x["name"].lower() == "modules"), None)
+        if sec is None:
+            out += ["", "[modules]", f"{want} => {name}.so"]
+        else:
+            last = sec["start"]
+            for i in range(sec["start"] + 1, sec["end"]):
+                if lines[i].strip():
+                    last = i
+            out.insert(last + 1, f"{want} => {name}.so")
+    return out
+
+def _bld_svx_el_modules(lines: list[str], want: bool) -> tuple[list[str], bool]:
+    out = list(lines)
+    changed = False
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*MODULES\s*=\s*)(.*?)(\s*)$", line)
+        if not m:
+            continue
+        mods = [x.strip() for x in m.group(2).split(",") if x.strip()]
+        if want and "ModuleEchoLink" not in mods and mods:
+            mods.append("ModuleEchoLink")
+        elif not want and "ModuleEchoLink" in mods:
+            mods.remove("ModuleEchoLink")
+        else:
+            continue
+        out[i] = m.group(1) + ",".join(mods) + m.group(3)
+        changed = True
+    return out, changed
+
+def _bld_el_changes(form: dict, profile: str) -> tuple[dict, list[str]]:
+    owner = _bld_el_owner(form, profile)
+    changes: dict = {}
+    notes: list[str] = []
+    if not owner:
+        return changes, notes
+    if owner == "asl3":
+        want = {"call": form.get("el_call", ""), "name": form.get("el_name", ""), "qth": form.get("el_qth", ""),
+                "email": form.get("el_email", ""), "lat": form.get("lat", ""), "lon": form.get("lon", ""), "node": form.get("el_node", ""),
+                "astnode": form.get("node", ""), "context": "radio-secure", "power": form.get("el_power", ""),
+                "height": form.get("el_height", ""), "gain": form.get("el_gain", ""), "dir": form.get("el_dir", ""),
+                "freq": form.get("el_freq", ""), "tone": form.get("el_tone", "")}
+        c, n = _bld_ini_changes(_CFGR_ECHOLINK, "el0", {k: v for k, v in want.items() if v})
+        changes.update(c)
+        notes += n
+    else:
+        want = {"CALLSIGN": form.get("el_call", ""), "SYSOPNAME": form.get("sysop", "") or form.get("el_name", ""),
+                "LOCATION": form.get("location", "") or form.get("el_qth", "")}
+        c, n = _bld_ini_changes(_CFGR_SVX_EL, "ModuleEchoLink", {k: v for k, v in want.items() if v})
+        changes.update(c)
+        notes += n
+    mod = _cfgr_read(_BLD_MODULES)
+    if mod is not None:
+        new = _cfgr_join(_bld_module_set(_cfgr_lines(mod.decode("utf-8", "replace")), "chan_echolink", "load" if owner == "asl3" else "noload")).encode("utf-8")
+        if new != mod:
+            changes[_BLD_MODULES] = (mod, new)
+    svx = _cfgr_read(_CFGR_SVX_CONF)
+    if svx is not None:
+        lines, hit = _bld_svx_el_modules(_cfgr_lines(svx.decode("utf-8", "replace")), owner == "svx")
+        if hit:
+            changes[_CFGR_SVX_CONF] = (svx, _cfgr_join(lines).encode("utf-8"))
+        elif owner == "svx" and not re.search(r"^\s*MODULES\s*=.*ModuleEchoLink", svx.decode("utf-8", "replace"), re.M):
+            notes.append("svxlink.conf has no MODULES line for the radio logic: add ModuleEchoLink to it on the SVXLink tab.")
+    return changes, notes
+
+def _bld_echolink_state(form: dict, profile: str) -> tuple[str, str]:
+    owner = _bld_el_owner(form, profile)
+    if not owner:
+        return "done", "EchoLink is left off in the Preflight."
+    missing = [n for k, n in (("el_call", "callsign"), ("el_node", "node number"), ("pw_el", "password")) if not form.get(k)]
+    try:
+        changes, _notes = _bld_el_changes(form, profile)
+    except Exception as exc:
+        return "warn", "Could not read the files: " + type(exc).__name__
+    who = "ASL3" if owner == "asl3" else "SvxLink"
+    if changes:
+        return "todo", f"EchoLink runs in {who}; its files do not match the Preflight yet."
+    if missing:
+        return "warn", f"EchoLink runs in {who}. Still to enter in the Preflight: " + ", ".join(missing) + "."
+    return "done", f"EchoLink runs in {who} and the files match the Preflight."
+
+def _bld_run_echolink(form: dict, profile: str, preview: bool) -> tuple[bool, list[str]]:
+    if not _bld_el_owner(form, profile):
+        return True, ["EchoLink is left off in the Preflight, so nothing was changed."]
+    changes, notes = _bld_el_changes(form, profile)
+    owner = _bld_el_owner(form, profile)
+    notes.insert(0, "EchoLink runs in " + ("ASL3 (chan_echolink); SvxLink's EchoLink module is switched off." if owner == "asl3"
+                                            else "SvxLink (ModuleEchoLink); Asterisk's chan_echolink is switched off."))
+    return _bld_write_changes("EchoLink", changes, notes, preview)
+
+_BS_DIR = "/etc/44helper/saves"
+_BS_KEEP = 5
+_BS_MAX = 30000
+_BS_NAME_RE = re.compile(r"^build-(save|snapshot)-[A-Za-z0-9]{1,10}-[0-9]{8}-[0-9]{6}\.json$")
+_BS_NEVER = ("usb", "pw_allmon")
+_BS_NOTE = ("A Build Save holds everything you entered in the Preflight, passwords included. It stays on this node, and downloading it asks you to "
+            "confirm. A Build Snapshot is the same without the passwords: share it, or load it on another node. Loading either one fills in the "
+            "Preflight; nothing changes on the node until you Save the form and run the steps.")
+
+def _bs_values(kind: str, form: dict) -> dict:
+    return {k: form.get(k, "") for k in _BLD_FIELDS if form.get(k, "") and k not in _BS_NEVER and (kind == "save" or k not in _BLD_SECRET_FIELDS)}
+
+def _bs_doc(kind: str, form: dict, profile: str) -> dict:
+    return {"format": "44helper-build", "version": 1, "kind": kind, "profile": profile, "saved_at": _cfgr_now(), "app_version": APP_VERSION,
+            "values": _bs_values(kind, form)}
+
+def _bs_list() -> list[dict]:
+    out: list[dict] = []
+    try:
+        names = os.listdir(_BS_DIR)
+    except OSError:
+        return out
+    for n in sorted(names, reverse=True):
+        m = _BS_NAME_RE.match(n)
+        path = os.path.join(_BS_DIR, n)
+        if not m or os.path.islink(path):
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        out.append({"name": n, "kind": m.group(1), "size": st.st_size,
+                    "saved_at": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
+    return out
+
+def _bs_path(name: str) -> str | None:
+    if not isinstance(name, str) or _BS_NAME_RE.match(name) is None:
+        return None
+    path = os.path.join(_BS_DIR, name)
+    if os.path.islink(path) or not os.path.isfile(path):
+        return None
+    return path
+
+def _bs_read_values(path: str) -> dict | None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return doc.get("values") if isinstance(doc, dict) and isinstance(doc.get("values"), dict) else None
+
+def _bs_write(profile: str) -> tuple[list[str], str]:
+    form = _bld_form_load()
+    call = re.sub(r"[^A-Za-z0-9]", "", form.get("callsign", "").upper())[:10] or "node"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    names: list[str] = []
+    try:
+        os.makedirs(_BS_DIR, mode=0o700, exist_ok=True)
+        os.chmod(_BS_DIR, 0o700)
+        for kind in ("save", "snapshot"):
+            same = next((x for x in _bs_list() if x["kind"] == kind), None)
+            if same is not None and _bs_read_values(os.path.join(_BS_DIR, same["name"])) == _bs_values(kind, form):
+                continue
+            name = f"build-{kind}-{call}-{stamp}.json"
+            tmp = os.path.join(_BS_DIR, name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(_bs_doc(kind, form, profile), f, indent=1, sort_keys=True)
+                f.write("\n")
+            os.replace(tmp, os.path.join(_BS_DIR, name))
+            names.append(name)
+        for kind in ("save", "snapshot"):
+            for old in [x for x in _bs_list() if x["kind"] == kind][_BS_KEEP:]:
+                os.unlink(os.path.join(_BS_DIR, old["name"]))
+    except OSError as exc:
+        return names, f"Could not write the files: {exc}"
+    return names, ""
+
+def _bs_parse(text: str, profile: str) -> tuple[dict | None, list[str], str]:
+    if not isinstance(text, str) or len(text.encode("utf-8")) > _BS_MAX:
+        return None, [], "That file is too large to be a Build Save."
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None, [], "That is not a JSON file."
+    if not isinstance(doc, dict) or doc.get("format") != "44helper-build" or doc.get("version") != 1:
+        return None, [], "That is not a Build Save or Build Snapshot from this tool."
+    kind = doc.get("kind")
+    values = doc.get("values")
+    if kind not in ("save", "snapshot") or not isinstance(values, dict):
+        return None, [], "That file has no readable values."
+    notes: list[str] = []
+    allowed = (set(_BLD_FIELDS_MAGIC if profile == "magic" else _BLD_FIELDS_TRAVEL) | {"mode"}) - set(_BS_NEVER)
+    clean: dict[str, str] = {}
+    unknown, other_tab = [], []
+    for k, v in values.items():
+        if k in _BS_NEVER or not isinstance(v, str) or len(v) > 400:
+            if k not in _BS_NEVER:
+                return None, [], f"The value for {str(k)[:30]} is not valid."
+            continue
+        if k not in _BLD_FIELDS:
+            unknown.append(k)
+        elif k not in allowed:
+            other_tab.append(k)
+        else:
+            clean[k] = v
+    if unknown:
+        notes.append("Ignored, not known to this version: " + ", ".join(sorted(unknown)[:8]))
+    if other_tab:
+        notes.append("Left out, this tab does not have them: " + ", ".join(sorted(other_tab)[:8]))
+    if kind == "snapshot":
+        clean = {k: v for k, v in clean.items() if k not in _BLD_SECRET_FIELDS}
+        notes.append("A Build Snapshot has no passwords: the password fields were left as they are.")
+    cleaned = _bld_form_clean(clean)
+    bad = sorted(k for k in _bld_form_errors(cleaned, [], profile) if k in clean and clean[k])
+    if bad:
+        return None, [], "These values are not valid: " + ", ".join(bad[:8])
+    out = {k: cleaned[k] for k in allowed if k in cleaned and (k in clean or kind == "save" or k not in _BLD_SECRET_FIELDS)}
+    if kind == "snapshot":
+        out = {k: v for k, v in out.items() if k not in _BLD_SECRET_FIELDS}
+    out["kind"] = kind
+    return out, notes, ""
+
+def _bld_act_save_write(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    names, err = _bs_write(profile)
+    if err:
+        return {"success": False, "message": err}
+    if not names:
+        return {"success": True, "message": "Nothing new to save: the newest Build Save and Build Snapshot already match the Preflight."}
+    return {"success": True, "message": "Written: " + ", ".join(names), "files": _bs_list()}
+
+def _bld_act_save_load(payload: dict) -> dict:
+    profile = payload.get("profile") if payload.get("profile") in _BLD_PROFILES else "travel"
+    if payload.get("text") is not None:
+        text = str(payload.get("text"))
+    else:
+        path = _bs_path(str(payload.get("name", "")))
+        if path is None:
+            return {"success": False, "message": "That file is not on this node."}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read(_BS_MAX + 1)
+        except OSError as exc:
+            return {"success": False, "message": f"Could not read it: {exc}"}
+    values, notes, err = _bs_parse(text, profile)
+    if values is None:
+        return {"success": False, "message": err}
+    kind = values.pop("kind")
+    return {"success": True, "message": ("Loaded a Build " + ("Save" if kind == "save" else "Snapshot") + f" with {len(values)} value(s). Review the form, change what you want, then Save the form."),
+            "notes": notes, "values": values, "kind": kind}
+
+def _route_build_save(query: dict) -> tuple[int, str, bytes]:
+    path = _bs_path((query.get("name") or [""])[0])
+    if path is None:
+        return 404, "application/json", json.dumps({"message": "That file is not on this node."}).encode("utf-8")
+    try:
+        with open(path, "rb") as f:
+            data = f.read(_BS_MAX + 1)
+    except OSError:
+        return 404, "application/json", json.dumps({"message": "That file is not on this node."}).encode("utf-8")
+    return 200, "application/json", data
+
+def _bld_wipe_secrets() -> bool:
+    form = _bld_form_load()
+    if not any(form.get(k) for k in _BLD_SECRET_FIELDS):
+        return False
+    with _BLD_LOCK:
+        _bld_form_write(dict(form, **{k: "" for k in _BLD_SECRET_FIELDS}))
+    log("OK: Build tab wiped the saved passwords")
+    return True
+
+def _bld_act_clear_saved(payload: dict) -> dict:
+    wiped = _bld_wipe_secrets()
+    return {"success": True, "message": "The saved passwords were removed from the Preflight." if wiped else "No passwords were saved."}
+
+def _bld_ready_state(stages: list[dict], mode: str, up: bool, age: float | None, form: dict) -> tuple[str, str]:
+    bad: list[str] = []
+    rs = next((x for x in stages if x["id"] == "restart"), None)
+    if rs is not None and rs["state"] != "done":
+        bad.append("restart the services first")
+    port = _cfgr_bindport()
+    bind = _iax_bindaddr()
+    host = "127.0.0.1" if bind in ("0.0.0.0", "", "::") else bind
+    ok, _msg = _iax_poke(host, int(port), 1.5)
+    if not ok:
+        bad.append(f"IAX does not answer on {port}/udp")
+    if mode != "none" and (not up or age is None or age > _BLD_HS_FRESH):
+        bad.append("the tunnel has no fresh handshake")
+    if bad:
+        return "todo", "Not ready: " + "; ".join(bad) + "."
+    return "done", f"IAX answers on {port}/udp" + ("" if mode == "none" else ", the tunnel handshake is fresh") + ", no restart pending."
+
 def _bld_iax_state(form: dict) -> tuple[str, str]:
     want = form.get("iax_port", "")
     cur = _cfgr_bindport()
@@ -32303,10 +33115,9 @@ def _bld_run_preset(profile: str, preview: bool, iax_port: str = "") -> tuple[bo
              for ln in _bld_out(res)]
     return bool(res.get("success")), lines
 
-_BLD_RUN_GROUP = {"apply_asl3": "asl3", "apply_dvs": "dvs", "apply_m17": "m17"}
-_BLD_RUNNABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "boot", "wiring", "svx_wire", "radio", "save",
+_BLD_RUNNABLE = frozenset({"iax_port", "identity", "location", "passwords", "stfu_setup", "echolink", "restart", "boot", "wiring", "svx_wire", "radio", "save",
                            "asl3", "dvs", "m17", "svx", "tunnel", "reboot", "ports", "preset"})
-_BLD_PREVIEWABLE = frozenset({"apply_asl3", "iax_port", "apply_dvs", "apply_m17", "wiring", "svx_wire", "radio", "ports", "preset"})
+_BLD_PREVIEWABLE = frozenset({"iax_port", "identity", "location", "passwords", "stfu_setup", "echolink", "wiring", "svx_wire", "radio", "ports", "preset"})
 _BLD_RUN_MAX_LINES = 120
 
 def _bld_out(res: dict) -> list[str]:
@@ -32317,25 +33128,6 @@ def _bld_cfg(action: str, payload: dict | None = None) -> dict:
     body = {"action": action}
     body.update(payload or {})
     return _dispatch_config_action(body)
-
-def _bld_run_apply(sid: str, form: dict, preview: bool) -> tuple[bool, list[str]]:
-    group = _BLD_RUN_GROUP[sid]
-    lines: list[str] = []
-    m, _meta = _fcr_load()
-    if m is None:
-        res = _bld_cfg("bundle_fetch", {"ref": "main"})
-        lines += _bld_out(res)
-        if not res.get("success"):
-            return False, lines + ["The bundle could not be fetched, so nothing was written."]
-    body: dict = {"values": {k: form.get(k, "") for k in ("callsign", "node", "dmr_id", "nxdn_id")}, "groups": [group]}
-    if preview:
-        res = _bld_cfg("bundle_preview", body)
-    else:
-        body["confirm"] = True
-        res = _bld_cfg("bundle_apply", body)
-    out = [ln.replace("Use the Restart buttons below when ready.", "Use Restart services on the Config tab when ready.")
-           for ln in _bld_out(res)]
-    return bool(res.get("success")), lines + out
 
 def _bld_run_wiring(preview: bool, which: tuple[str, ...]) -> tuple[bool, list[str]]:
     lines: list[str] = []
@@ -32434,14 +33226,24 @@ def _bld_act_run_stage(payload: dict) -> dict:
     if stage["state"] not in ("todo", "warn"):
         return {"success": False, "message": "Nothing to do: " + stage["detail"]}
     form = st["form"]
-    if (sid in _BLD_RUN_GROUP or sid in _BLD_LONG) and st["errors"]:
+    if (sid in _BLD_LONG or sid in ("identity", "iax_port", "location", "passwords", "stfu_setup", "echolink")) and st["errors"]:
         return {"success": False, "message": "Fix the form first: " + ", ".join(sorted(st["errors"]))}
     if sid in _BLD_LONG:
         return _bld_start_long(sid, profile, form, payload)
     try:
         with _BLD_LOCK:
-            if sid in _BLD_RUN_GROUP:
-                ok, lines = _bld_run_apply(sid, form, preview)
+            if sid == "identity":
+                ok, lines = _bld_run_identity(form, preview)
+            elif sid == "location":
+                ok, lines = _bld_run_values("location", form, preview)
+            elif sid == "passwords":
+                ok, lines = _bld_run_values("passwords", form, preview)
+            elif sid == "stfu_setup":
+                ok, lines = _bld_run_stfu(form, preview)
+            elif sid == "echolink":
+                ok, lines = _bld_run_echolink(form, profile, preview)
+            elif sid == "restart":
+                ok, lines = _bld_run_restart()
             elif sid == "boot":
                 res = action_boot_order_apply()
                 ok, lines = bool(res.get("success")), _bld_out(res)
@@ -32688,7 +33490,15 @@ def _bld_mark_ready() -> None:
     tmp = _BLD_MARKS + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"ready_at": int(time.time())}, f)
+        json.dump(dict(_bld_marks_load(), ready_at=int(time.time())), f)
+    os.replace(tmp, _BLD_MARKS)
+
+def _bld_mark_set(key: str, value: object = None) -> None:
+    os.makedirs(os.path.dirname(_BLD_MARKS), mode=0o755, exist_ok=True)
+    tmp = _BLD_MARKS + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(dict(_bld_marks_load(), **{key: int(time.time()) if value is None else value}), f)
     os.replace(tmp, _BLD_MARKS)
 
 def _bld_boot_ready_line() -> str:
@@ -32738,7 +33548,7 @@ def _bld_rest_worker(key: str, profile: str, payload: dict) -> dict:
             tail = f"Stopped: {nxt['label']} waits for a step that is not done. {nxt['detail']}"
             break
         if nxt["id"] not in _BLD_RUNNABLE:
-            tail = f"Stopped at {nxt['label']}: do it on its own tab. {nxt['detail']}"
+            tail = f"Stopped at {nxt['label']}: do it in its card or on its own tab. {nxt['detail']}"
             break
         if nxt["id"] == last:
             tail = f"Stopped: {nxt['label']} is still open after it ran. {nxt['detail']}"
@@ -32770,6 +33580,8 @@ def _bld_act_run_rest(payload: dict) -> dict:
     _start_python_job(key, lambda: _bld_rest_worker(key, profile, keep))
     log("OK: Build tab started Run the rest")
     return {"success": True, "message": "Started: run the open steps in order.", "job_key": key}
+
+_BLD_ANSWERS = {True: "yes", False: "no", None: "not checked"}
 
 def build_build_report(profile: str = "travel") -> str:
     profile = profile if profile in _BLD_PROFILES else "travel"
@@ -32812,7 +33624,7 @@ def build_build_report(profile: str = "travel") -> str:
         rf = v["reflector"]
         out += ["", "SvxLink", f"  installed: {v['installed']}; service running: {v['active']}; used as: {v['use'] or 'no answer saved'}",
                 f"  reflector: {rf['host'] + ':' + rf['port'] if rf['host'] else 'not set'}; callsign {rf['callsign'] or '?'}; password {'set' if rf['key_set'] else 'not set'}",
-                f"  log: {v['log'] or 'nothing'}; reflector answers: {v['reachable']}; UDP 34000 open: {v['udp_open']}"]
+                f"  log: {v['log'] or 'nothing'}; reflector answers: {_BLD_ANSWERS[v['reachable']]}; UDP 34000 open: {v['udp_open']}"]
     out += ["", "Tool versions"]
     try:
         out += [f"  {k}: {v}" for k, v in _bt_versions().items()]
@@ -32981,6 +33793,10 @@ _BLD_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "run_rest": _bld_act_run_rest,
     "form_save": _bld_act_form_save,
     "form_reset": _bld_act_form_reset,
+    "clear_saved": _bld_act_clear_saved,
+    "save_write": _bld_act_save_write,
+    "save_load": _bld_act_save_load,
+    "install_stfu": _bld_act_install_stfu,
     "wg_check": _bld_act_wg_check,
     "run_stage": _bld_act_run_stage,
 }
@@ -33028,6 +33844,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/services/status": _route_services_status,
     "/api/ports/status": _route_ports_status,
     "/api/ports/iax": _route_ports_iax,
+    "/api/build/save": _route_build_save,
     "/api/firewall/status": _route_firewall_status,
     "/api/firewall/half_status": _route_half_status,
     "/api/fullx/status": _route_fx_status,
@@ -33503,6 +34320,11 @@ class Handler(BaseHTTPRequestHandler):
                        json.dumps(_term_status(self._client_ip(), self.headers)).encode("utf-8"))
             return
 
+        if path in ("/", "/index.html"):
+            status, headers, body = _index_response(self.headers.get("Accept-Encoding", ""), self.headers.get("If-None-Match", ""))
+            self._send(status, "text/html; charset=utf-8", body, extra_headers=headers)
+            return
+
         route_fn = _GET_ROUTES.get(path)
         if route_fn is not None:
             status, content_type, body = route_fn(query)
@@ -33546,230 +34368,63 @@ class Handler(BaseHTTPRequestHandler):
                        json.dumps({"success": ok, "output": msg}).encode("utf-8"))
             return
 
-        if path == "/api/router/config":
-            payload, err = self._read_json_body()
+        handler_fn = _POST_JSON.get(path)
+        if handler_fn is not None:
+            payload, err = ({}, None) if path in _POST_NO_BODY else self._read_json_body()
             if err is not None:
                 self._send(400, "application/json", err)
                 return
-            result = save_router_config(
-                _cfg,
-                payload.get("access_method", "none"),
-                payload.get("host", ""),
-                payload.get("user", ""),
-                payload.get("key_path", ""),
-                payload.get("poll_interval_sec", "60"),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/pi_install/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_guarded(_dispatch_pi_install_action, payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/router_install/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_router_install_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/firewall/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            payload["_client_ip"] = self._client_ip()
-            result = _dispatch_guarded(_dispatch_firewall_action, payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/build/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            payload["_client_ip"] = self._client_ip()
-            result = _dispatch_build_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/config/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_config_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/system_opt/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_system_opt_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path in ("/api/nodes/peer_add", "/api/nodes/peer_edit"):
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_upsert_peer(
-                _cfg,
-                str(payload.get("node", "")).strip(),
-                str(payload.get("ip", "")).strip(),
-                str(payload.get("port", "")).strip(),
-                str(payload.get("label", "")).strip(),
-                str(payload.get("helper_url", "")).strip(),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/nodes/peer_remove":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_remove_peer(_cfg, str(payload.get("node", "")).strip())
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/nodes/save_snippet":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_save_node_snippet(
-                _cfg,
-                str(payload.get("scope", "")).strip(),
-                str(payload.get("text", "")),
-            )
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/asl3/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_asl3_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/dvswitch/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_dvswitch_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/svxlink/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_svxlink_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/m17/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_m17_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/amp/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_amp_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/cr/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_cr_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/cf/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_cf_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_update_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/repair/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_repair_action(payload if isinstance(payload, dict) else {})
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/guard/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_guard_action(payload if isinstance(payload, dict) else {})
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/quiet/action":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = _dispatch_quiet_action(payload)
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/lookup_installed":
-            result = action_update_lookup_installed()
-            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
-            return
-
-        if path == "/api/update/lookup_policy":
-            payload, err = self._read_json_body()
-            if err is not None:
-                self._send(400, "application/json", err)
-                return
-            result = action_update_lookup_policy(str(payload.get("pkg", "")))
+            result = handler_fn(payload, self)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
         self._send(404, "text/plain; charset=utf-8", b"not found")
+
+def _post_router_config(p: dict, h: "Handler") -> dict:
+    return save_router_config(_cfg, p.get("access_method", "none"), p.get("host", ""), p.get("user", ""), p.get("key_path", ""),
+                              p.get("poll_interval_sec", "60"))
+
+def _post_with_ip(dispatch: Callable[[dict], dict]) -> Callable[[dict, "Handler"], dict]:
+    def run(p: dict, h: "Handler") -> dict:
+        p["_client_ip"] = h._client_ip()
+        return dispatch(p)
+    return run
+
+def _post_peer_upsert(p: dict, h: "Handler") -> dict:
+    return action_upsert_peer(_cfg, str(p.get("node", "")).strip(), str(p.get("ip", "")).strip(), str(p.get("port", "")).strip(),
+                              str(p.get("label", "")).strip(), str(p.get("helper_url", "")).strip())
+
+def _post_dict_only(dispatch: Callable[[dict], dict]) -> Callable[[dict, "Handler"], dict]:
+    return lambda p, h: dispatch(p if isinstance(p, dict) else {})
+
+_POST_NO_BODY = frozenset({"/api/update/lookup_installed"})
+
+_POST_JSON: dict[str, Callable[[dict, "Handler"], dict]] = {
+    "/api/router/config": _post_router_config,
+    "/api/pi_install/action": lambda p, h: _dispatch_guarded(_dispatch_pi_install_action, p),
+    "/api/router_install/action": lambda p, h: _dispatch_router_install_action(p),
+    "/api/firewall/action": _post_with_ip(lambda p: _dispatch_guarded(_dispatch_firewall_action, p)),
+    "/api/build/action": _post_with_ip(lambda p: _dispatch_build_action(p)),
+    "/api/config/action": lambda p, h: _dispatch_config_action(p),
+    "/api/system_opt/action": lambda p, h: _dispatch_system_opt_action(p),
+    "/api/nodes/peer_add": _post_peer_upsert,
+    "/api/nodes/peer_edit": _post_peer_upsert,
+    "/api/nodes/peer_remove": lambda p, h: action_remove_peer(_cfg, str(p.get("node", "")).strip()),
+    "/api/nodes/save_snippet": lambda p, h: action_save_node_snippet(_cfg, str(p.get("scope", "")).strip(), str(p.get("text", ""))),
+    "/api/asl3/action": lambda p, h: _dispatch_asl3_action(p),
+    "/api/dvswitch/action": lambda p, h: _dispatch_dvswitch_action(p),
+    "/api/svxlink/action": lambda p, h: _dispatch_svxlink_action(p),
+    "/api/m17/action": lambda p, h: _dispatch_m17_action(p),
+    "/api/amp/action": lambda p, h: _dispatch_amp_action(p),
+    "/api/cr/action": lambda p, h: _dispatch_cr_action(p),
+    "/api/cf/action": lambda p, h: _dispatch_cf_action(p),
+    "/api/update/action": lambda p, h: _dispatch_update_action(p),
+    "/api/repair/action": _post_dict_only(lambda p: _dispatch_repair_action(p)),
+    "/api/guard/action": _post_dict_only(lambda p: _dispatch_guard_action(p)),
+    "/api/quiet/action": lambda p, h: _dispatch_quiet_action(p),
+    "/api/update/lookup_installed": lambda p, h: action_update_lookup_installed(),
+    "/api/update/lookup_policy": lambda p, h: action_update_lookup_policy(str(p.get("pkg", ""))),
+}
 
 _HB_PROBE_SEC = 15.0
 _HB_HTTP_STALL_SEC = 45.0

@@ -1,6 +1,13 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_118_20261116.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_119_20261121.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.119-pi02w (2026-11-21)
+
+The Node Mon quick link opens **https**, because Node Monitor serves TLS only from 0.7.0. This is a release: the link's address changed.
+
+- **Node Mon** opens `https://<host>:7777/`. The other quick links are unchanged.
+- Node Monitor's certificate is self-signed unless the node has a CA-signed one, so the browser shows a warning the first time.
 
 ## 9.3.118.1-pi02w (2026-11-16)
 

@@ -109,7 +109,8 @@ def make_bar_case(key, pattern):
         def test_the_button_opens_node_monitor(self):
             m = re.search(r'<a id="lnk-nodemon" class="ql-btn" href="([^"]+)" target="_blank" rel="noopener"\s+title="([^"]+)">([^<]+)</a>', self.bar)
             self.assertIsNotNone(m)
-            self.assertEqual(m.groups(), ("http://localhost:7777/", "Node Monitor", LABELS[key]))
+            self.assertEqual(m.groups(), ("https://localhost:7777/", "Node Monitor", LABELS[key]))
+            self.assertIn('id === "lnk-nodemon" ? "https" : "http"', self.src)
 
         def test_the_page_points_it_at_this_nodes_port_7777(self):
             self.assertIn('const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};', self.src)

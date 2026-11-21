@@ -171,11 +171,11 @@ class BuildForm(Tmp):
         self.assertIn("iax_port", h44._BLD_FIELDS_MAGIC)
         self.assertIn("-iax_port", h44._BLD_PANEL_TMPL)
 
-    def test_the_step_is_after_apply_asl3_on_both_tabs(self):
+    def test_the_step_is_right_after_asl3_on_both_tabs(self):
         for profile in ("travel", "magic"):
             for mode in ("half", "split", "full", "none"):
                 ids = [i for i, _ in h44._bld_stage_defs(mode, profile)]
-                self.assertEqual(ids[ids.index("apply_asl3") + 1], "iax_port", (profile, mode))
+                self.assertEqual(ids[ids.index("asl3") + 1], "iax_port", (profile, mode))
         self.assertIn("iax_port", h44._BLD_RUNNABLE)
         self.assertIn("iax_port", h44._BLD_PREVIEWABLE)
 

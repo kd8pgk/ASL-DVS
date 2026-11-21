@@ -80,6 +80,30 @@ jobs:
         run: python3 ci/test_h44_iaxport.py
       - name: Built-in default presets (44helper)
         run: python3 ci/test_h44_default_presets.py
+      - name: Build tab identity, restart and finishing steps (44helper)
+        run: python3 ci/test_h44_finish.py
+      - name: Build tab values, passwords and prefill (44helper)
+        run: python3 ci/test_h44_values.py
+      - name: Build tab STFU and EchoLink (44helper)
+        run: python3 ci/test_h44_stfu_el.py
+      - name: Build Save and Build Snapshot (44helper)
+        run: python3 ci/test_h44_buildsave.py
+      - name: Page compression and caching (44helper)
+        run: python3 ci/test_h44_pagegz.py
+      - name: POST routes (44helper)
+        run: python3 ci/test_h44_post.py
+      - name: Half and full tunnel check lists (44helper)
+        run: python3 ci/test_h44_checklists.py
+      - name: Page consistency (44helper)
+        run: python3 ci/test_h44_page.py
+      - name: Tabs load on first open (44helper)
+        run: python3 ci/test_h44_tabs.py
+      - name: Build tab step cards (44helper)
+        run: python3 ci/test_h44_cards.py
+      - name: Step cards match the old lists (44helper)
+        run: python3 ci/test_h44_stepcards.py
+      - name: Install steps dock into the Build cards (44helper)
+        run: python3 ci/test_h44_dock.py
       - name: SVX tab tests (Node Controller full build)
         run: python3 ci/test_nodecontrol_svx.py
       - name: Link, tune and disconnect tests (Node Controller)

@@ -1,6 +1,160 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_59_20261117.py`. Newest entries first.
+Current file: `44helper_v0_1_74_20261118.py`. Newest entries first.
+
+## 0.1.74 (2026-11-18)
+
+Two fixes found by an audit of the Magic Box tab.
+
+- **Saving one Build tab no longer clears the other's fields.** Both Build tabs share one saved Preflight, and a save rebuilt it from the defaults, so saving the Travel Node form wiped every field only the Magic Box has: SvxLink use, reflector host, port, talkgroup, monitored talkgroups and the reflector password. A save now keeps the fields the tab did not send, and still changes or clears the ones it did. Nothing else about saving changes: Clear the form still goes back to the defaults, and loading a Build Save still fills the form from the file alone.
+- **The build report said "reflector answers: None"** when the reflector had not been probed. It now says "not checked", as the SvxLink card on the page already did.
+
+## 0.1.73 (2026-11-18)
+
+Run the rest writes into the step cards. This is a release: the page's JavaScript and one result message change. It is stage 5, the last, of putting the whole build on one tab.
+
+- **Run the rest across the cards.** While it runs, each step's part of the output ("== Step name ==" and its lines) is written into that step's own card, and kept there like any step's output. A step's own sub-headings (an install's "== ASL3 step 1: ... ==", the tunnel steps, the wiring parts) stay in that step's card with the rest of its output. The top console keeps only the summary line (which step it stopped at, or "Every step is done").
+- **The stop message.** "Stopped at X: do it on its own tab" now reads "do it in its card or on its own tab", because the install and tunnel steps can be done in their cards.
+- **Mode switching.** Changing the tunnel mode and saving the form reorders the cards; open step sections stay open and every list goes back to its tab before the cards are redrawn. A headless check across all four modes on both tabs found no duplicate ids and no script errors.
+- **Tests.** `ci/test_h44_cards.py` now checks the card order and the sections for every mode on both tabs, the splitting of the output, and the poll that fills the cards.
+
+## 0.1.72 (2026-11-18)
+
+The tunnel inside the build cards. This is a release: the page's JavaScript changes. It is stage 4 of putting the whole build on one tab.
+
+- **Tunnel cards.** The Tunnel card has a collapsed "Show the steps" section with the tunnel tab's own step list (the tunnel steps and the cards under them); the Full tunnel exceptions card and the Half tunnel card have "Show the card". A full-tunnel build takes the Full Tunnel tab's list, any other mode the Split Tunnel tab's.
+- **Same as the tab.** The lists and cards are the tunnel tabs' own, moved into the build card while the Build tab is open and moved back when you leave, so their state and running jobs are shared. The Half tunnel card refreshes when it is moved in.
+- **Click order.** Opening a tunnel tab now puts the lists back before the tunnel tab takes its cards, so the half-tunnel card is not left in the build card.
+- **SvxLink.** The Magic Box wiring step keeps its Run button and the Reflector and checks steps are part of the SvxLink step list added in 0.1.71, so they need nothing more.
+- **Tests.** `ci/test_h44_dock.py` covers the tunnel, half and exceptions docks, the mode choice and the click order.
+
+## 0.1.71 (2026-11-18)
+
+The install steps inside the build cards. This is a release: the page's JavaScript changes. It is stage 3 of putting the whole build on one tab.
+
+- **Steps in the card.** The ASL3, DVSwitch and M17 cards (and SvxLink on the Magic Box) have a collapsed "Show the steps" section. Open it and the tab's own step list appears in the card, with the same Run, Copy and output on every step, so the build never leaves the tab.
+- **Same steps, not a second copy.** The list is the install tab's own list, moved into the card while the Build tab is open and moved back when you leave. Its state, running jobs and output are the same in both places, and the distro is the one chosen on the install tab.
+- **On demand.** Nothing loads until a section is opened; opening one loads only that tab's data. A mode change hands the lists back before the cards are redrawn and keeps open sections open.
+- **Tests.** `ci/test_h44_dock.py` runs the real dock code on a small DOM stub; `ci/test_h44_cards.py` checks the sections.
+
+## 0.1.70 (2026-11-18)
+
+One step-card renderer for the install tabs. This is a release: the page's JavaScript changes. It is stage 2 of putting the whole build on one tab. What the tabs show does not change.
+
+- **Shared renderer.** `stepCardsHtml` draws the step cards for ASL3, DVSwitch, SvxLink, M17, AllStar/Node Talker (amp), Config Recovery and Config Saves. Each tab's `*RenderStepList` is now a short wrapper that passes its ids, its handlers and which kinds of step it has (by-hand block, restore point, Pi action, show-if fields).
+- **Tests.** `ci/test_h44_stepcards.py` compares every step list, in every mode and distro, byte for byte with what the 0.1.69 code drew, plus synthetic steps for the kinds the real lists do not use.
+
+## 0.1.69 (2026-11-18)
+
+Every build step is its own card on the Travel Node and Magic Box tabs. This is a release: the page's layout and logic change. It is stage 1 of putting the whole build on one tab.
+
+- **Order.** The Preflight is step 1, then one card per step in the order to do them, then the Build Save and Build Snapshot card. A Travel Node in half-tunnel mode has 23 steps; a Magic Box in the same mode has 27. The order changes with the tunnel mode as before.
+- **The cards.** Each card has the step number, its title, a status pill (done, to do, waits, check or by hand), the detail line, Preview and Run where the step has them, and its own result console. The first open step is marked "Next". A card's result stays when the page refreshes, and a refresh only redraws a card whose text changed.
+- **Progress.** The top card shows "n of 23 steps done. Next: ..." with Run the rest and Build report.
+- **The old checklist.** It stays as a collapsed "Progress strip: every step in one list" at the bottom.
+- **Radio and SvxLink details.** The Radio and Node Talker card and the SvxLink card are gone as separate cards; their tables are now inside the Radio step's card and the first SvxLink step's card.
+- **Output.** A running install or tunnel job writes its live output into its own step's card. Run the rest, the Preflight installs and the report keep using the top console.
+- **Words.** The page says "card" where it said "row", and the Preflight note now says that passwords you enter are kept until the reboot test is done (it still said none were kept).
+- **Not yet.** The install and tunnel steps show their status and Run button; their own step lists (the 16 ASL3 steps and so on) are still on their tabs. They come in the next stages.
+- **Tests.** `ci/test_h44_cards.py` runs the card code in node: one card per step in order for every mode on both tabs, numbering, pills and buttons, the Next marker, the radio and SvxLink slots, no redraw of an unchanged card, output surviving a refresh and a mode change, and the strip. I also checked the page in headless Chromium on a test node: 20 cards on the Travel Node tab, 24 on Magic Box, no script errors.
+
+## 0.1.68 (2026-11-17)
+
+Each tab loads its data when it is first opened, not all at once when the page opens. This is a release: page JavaScript logic changes. It is stage 6 of a tidy of the file, and the one that takes load off the node.
+
+- **Why.** Opening the dashboard used to start 23 status loads at once, one for every tab, and each one runs commands on the node (firewall-cmd, wg, systemctl, asterisk, dpkg and more). In a headless browser against a test node that was 203 requests in the first 4 seconds, 173 of them job-status checks. On a Pi Zero 2 W that burst is the heaviest moment of using the page.
+- **Now.** The page opens with the Overview, the live updates and the quiet-mode status: 3 requests. Every other tab loads its data once, the first time you open it, and the tabs that already refreshed on every open (Travel Node, Magic Box, Boot and the firewall cards on the two tunnel tabs) still do. Opening a tab again does not reload it; its buttons and the live updates keep it current as before.
+- **Not changed.** What each tab shows and does, the Overview refresh every 5 seconds, the live updates, and the polling of running jobs.
+- **Tests.** `ci/test_h44_tabs.py` runs the tab code in node and checks that each tab loads its own data once on first open and nothing else, and that the startup loads only the first tab. I also ran the page in headless Chromium against a test node before and after: 203 requests at load before, 3 after, the same single console error before and after (the 401 of the login probe), and every tab opened without a script error.
+
+## 0.1.67 (2026-11-17)
+
+The half-tunnel and full-tunnel check lists are split into one function per check. This is a release: the structure of two functions changes, with no change in any check. It is stage 3 of a tidy of the file.
+
+- **Before the change, tests.** `ci/test_h44_checklists.py` records what both lists give for 104 scenarios (every check passing, each check failing in each way, the wait-versus-fail time limits on both sides of the boundary, the half and full variants, testing and permanent mode) in `ci/golden/h44_checklists.json`, taken from the old code. The recorded answers have to match exactly.
+- **The change.** `_half_check_list` (200 lines) and `_fx_check_list` (158 lines) are now short loops over `_HALF_CHECKS` (14 functions) and `_FX_CHECKS` (12 functions), one function per numbered check, with the shared parts (the result shape, the wait-or-fail rule, the "was already failing" note and the handshake check) written once. Each check keeps its number, group, title, text and hint, and the commands are run in the same order.
+- **Not changed.** What each check looks at, its pass, fail, wait or skip answer, its text and hints, and the order of the results.
+- **Page tidy.** `window._ndData` on the Nodes tab was stored on every refresh and never read anywhere; the line is removed. The new `ci/test_h44_page.py` found it: it renders the page and checks that every element the script looks up by name exists, that every function the buttons and fields call is defined, that every tab button has a panel, that no page function is defined and never used, and that every script block parses.
+- **Tests.** The recorded-answers test passes unchanged against the old and the new code, and three deliberate edits to the old code (a time limit, a title and a pass test) each made it fail.
+
+## 0.1.66 (2026-11-17)
+
+The POST handler is a table. This is a release: the request handler's structure changes, with no change in what any route does. It is stage 2 of a tidy of the file.
+
+- **One table for the JSON routes.** The 24 POST routes that read a JSON body and answer JSON (router config, the Pi and router install actions, firewall, build, config, system options, the node peer routes, the ASL3, DVSwitch, SvxLink, M17, Ampersand, Cloudflare, update, repair, guard and quiet actions and the two update lookups) are now entries in `_POST_JSON`, the way the GET side already is. They replaced a 250-line chain of `if path ==` blocks that each read the body, handled its error and sent the answer. The login, logout and terminal routes stay in `do_POST`, because they use the handler's own methods.
+- **Unchanged.** The login and cross-site header checks still run before every route except login, a body error is still a 400, an unknown path is still a 404, firewall and build still receive the client address, repair and guard still accept only a dictionary, and the update lookup that takes no body still does not read one.
+- **Tests.** `ci/test_h44_post.py` pins the route list so none can be dropped by accident, and checks each of the behaviours above.
+
+## 0.1.65 (2026-11-17)
+
+The page is compressed and can be answered with 304. This is a release: the page's response headers and body encoding change. It is stage 1 of a tidy of the file; nothing else changes.
+
+- **Gzip.** The page (about 608 KB of HTML, script and styles) is sent gzipped to browsers that accept it, about 137 KB. The compressed copy is built once per page and kept. A browser that does not send `Accept-Encoding: gzip` (or sends `gzip;q=0`) still gets the plain page.
+- **Reload without a download.** The page carries an `ETag` and `Cache-Control: no-cache`, so a reload with an unchanged page is a 304 with no body. The ETag changes whenever the page does, for example when the callsign or node changes.
+- **Not changed.** The page content, the login, every other route, and the security headers (frame, content type, referrer, CSP) are as before. Other routes are not compressed.
+- **Tests.** `ci/test_h44_pagegz.py`.
+
+## 0.1.64 (2026-11-17)
+
+Build Save and Build Snapshot replace the whole-file save of 0.1.63. This is a release: new files, new actions and one new route, with the 0.1.63 card removed.
+
+- **Two small JSON files, not copies of config files.** A Build Save holds everything entered in the Preflight, passwords included. A Build Snapshot holds the same without the passwords. The Allmon3 admin password (set once, then forgotten) and the USB card pick are in neither. They are written to `/etc/44helper/saves/` (folder root-only, files mode 0600), the newest 5 of each kept.
+- **When they are written.** At the end of the build: when the Reboot test shows done, both files are written once, and before the saved passwords are wiped from the Preflight, so the passwords are never lost. "Save now" on the new "Build Save and Build Snapshot" card writes them any time. If the values have not changed since the newest file, nothing new is written.
+- **Loading.** The card lists the files on the node (Load, Download), and a button loads a JSON file from your computer. Loading fills in the Preflight fields, whole, for either file, so you can change anything; nothing changes on the node until you Save the form and run the steps. A Build Snapshot leaves the password fields as they are. Fields the tab does not have (a Magic Box file on the Travel Node tab) are left out with a note, keys this version does not know are ignored with a note, and a wrong file, an over-size file or an invalid value is refused with the names of the fields.
+- **Download.** `GET /api/build/save?name=` serves only files in that folder whose names match the fixed pattern, and never a symbolic link. Downloading a Build Save asks you to confirm that it holds passwords in plain text.
+- **Config tab names.** The whole-file copies are now called Config Saves (menu "Config Saves", "Create Config Save", "automatic Config Save") so they are not confused with the Build files. They work as before, as do the Restore point and automatic copies. The "Save the full config" card, the confgetter call and the whole-file save at the end of the build from 0.1.63 are gone; `confgetter` and `confputter` stay as diagnostic tools.
+- **Tests.** `ci/test_h44_buildsave.py`; the identity test follows the new Config Save wording.
+
+## 0.1.63 (2026-11-17)
+
+A full config save at the end of the build, and the Config tab stops saving presets. This is a release: new actions and a changed Config tab.
+
+- **Build finished card.** When the Reboot test shows done, both Build tabs show "Build finished: save the full config". "Save the full config" makes a save point named "Finished <callsign> <date>" (once; pressing again keeps the existing one) and then asks whether to also copy the configs for another node.
+- **Two different things.** The card says it plainly: a save point is a full copy of this node's config files, passwords included, kept on this node, and Restore puts it back here. A snapshot is the same files as one text file with the passwords left out, made by `confgetter` into the instmon snapshots folder, for building another node with `confputter` or for reading. If `confgetter` is not installed the card says so and still makes the save point.
+- **Config tab.** The Travel Node and Magic Box preset cards (Preview, Save, "Use the built-in default") are replaced by one "Save the full config" card with the same two buttons and the same note, available any time. The built-in default presets still feed the Build tabs' wiring step. A preset saved earlier is still read and can be applied from the Restore list; the save and reset actions stay for older callers. The unused preset page functions are removed.
+- **Passwords.** The card text and the logs never show a password. The Preflight password wipe at done does not affect the save point, which is taken from the files.
+- **Tests.** `ci/test_h44_fullsave.py`; the preset tests follow the Config tab change.
+
+## 0.1.62 (2026-11-17)
+
+STFU and EchoLink on both Build tabs. This is a release: new Preflight fields, one new action, three new steps and a changed ports rule.
+
+- **STFU (optional).** A Preflight group with the master server (a dropdown with "Other" and a text box; it starts on "not set"), the master port, the start talkgroup and the log level, plus an "Install STFU (apt)" button. The button needs the DVSwitch step done first, runs the same background apt job and package-health gate as the other installs, and is never required. STFU is a digital mode that Node Controller starts and stops, so the build neither enables the service nor stops MMDVM_Bridge.
+- **New steps "STFU (optional)" and "Set up STFU".** The first shows installed or not. The second writes BMAddress, BMPort, StartTG and LogLevel into `DVSwitch.ini` [STFU] (Preview and Run, automatic copy first, every other key left as it is); the ID, password and talker alias come from the existing steps. Both only warn, never block.
+- **EchoLink (optional).** A Preflight group: Use EchoLink (off by default), Runs in (automatic, ASL3 or SvxLink), the EchoLink callsign (with -L or -R), name, QTH and e-mail, and a fold for power, height, gain, direction, frequency and tone. The node number, password, latitude and longitude, sysop and location come from the fields already there.
+- **One owner.** EchoLink runs in the one service that has the radio. Automatic means ASL3. SvxLink owns it only when you pick it, on Magic Box with SvxLink using its own radio. The other service is switched off: ASL3 owning it loads `chan_echolink` and removes `ModuleEchoLink` from SvxLink's MODULES; SvxLink owning it writes `ModuleEchoLink.conf`, adds `ModuleEchoLink` to MODULES and sets `chan_echolink` to noload. The two are never on together.
+- **New step "Set up EchoLink"** after "Set up STFU". It writes `echolink.conf` ([el0]) or `ModuleEchoLink.conf` and the module switches. Preview and Run, automatic copy first, other keys left as they are. It shows a warning when EchoLink is on but the callsign, node number or password is still blank.
+- **Ports.** The Open the ports step opens the EchoLink ports (5198-5199/udp, 5200/tcp) only when EchoLink is on in the Preflight or already loaded, and lists them as ports to close otherwise.
+- **Tests.** `ci/test_h44_stfu_el.py`; the build, preset and ports tests follow the new order and rule.
+
+## 0.1.61 (2026-11-17)
+
+Every per-node value is entered once, in the Preflight, and filled in for you. This is a release: new form fields, two new steps, a changed step, new actions and a wipe.
+
+- **Preflight groups.** Besides the callsign, node number, DMR ID and NXDN ID, the form on both Build tabs now has a Location group (sysop name, location, QTH name, latitude and longitude; the locator is worked out from the coordinates) and a Passwords group: ASL node password, BrandMeister password, AMI secret, Allmon3 admin password, EchoLink node number and password, TGIF password, and on Magic Box the SvxLink reflector password. A "More" fold holds the ircDDB passwords, the IAX client secret and the DMR talker alias. Only the callsign, node number and DMR ID are required.
+- **Shown in the clear.** The passwords are plain text in the form, like the Identity card. The form file `/etc/44helper/build.json` stays root-only (0600).
+- **New step "Set the location"** after "Set the callsign, node number and IDs". It writes the SvxLink node info (location, QTH, latitude, longitude, locator, sysop) and the EchoLink sysop and location. Preview and Run.
+- **"Passwords to enter" becomes "Set the passwords"** and moves up, right after the location step, so registration finds the password in place. It writes the ASL node, BrandMeister (also the DMR network password) and AMI passwords with the Identity setters, and the EchoLink, TGIF, ircDDB, IAX, talker alias and reflector values row by row. Preview and Run. Values are hidden in the output. Blank fields change nothing, and a section the node does not have yet is named and skipped.
+- **AMI secret.** If the AMI secret is blank and the node has none, a strong one is generated and kept in the form.
+- **Allmon3 admin password.** Set once with `allmon3-passwd` (no shell, user `admin`), then removed from the form. The Preflight never shows it again.
+- **Removed when the build is done.** When the Reboot test shows done, every saved password is wiped from `build.json`; the callsign, node number, IDs and location stay. A "Remove the saved passwords" button does it earlier (`clear_saved`).
+- **Other tabs fill themselves in.** The ASL3, DVSwitch, SVXLink and M17 tabs fill their empty step inputs from the Preflight: the callsign, DMR ID, BrandMeister password, reflector host, port, talkgroups and password, the Allmon3 admin password and the M17 node number. The test reflector's password is not filled with the real one.
+- **Reports and logs.** The build report names no password; step output shows `<hidden>` in place of a value.
+- **Tests.** `ci/test_h44_values.py`; the build, finish and preset tests follow the new order.
+
+## 0.1.60 (2026-11-17)
+
+The Build tabs stop using the standard config bundle and gain the steps the review found missing. This is a release: steps removed, steps added, a new order.
+
+- **No bundle in the Build tabs.** "Apply the ASL3 config", "Apply the DVSwitch config" and "Apply the M17 config" are gone, along with the bundle fetch they ran. The Config tab's Full config replacement card is unchanged.
+- **Set the callsign, node number and IDs.** New step after the installs. It uses the same setters as the Config tab's Identity card: the callsign everywhere, the node number (renames the one public node in `rpt.conf`), the DMR ID and the optional NXDN ID. Preview and Run; Run saves an automatic copy first. It changes identity values only, never whole files, and shows done when the files match the form.
+- **Order.** Set the IAX port now follows ASL3 directly. The identity step and then the preset come right after the installs (after the SvxLink steps on Magic Box), before Half tunnel, Ports, Boot order and the checks, so the checks see the final files.
+- **Restart the services.** New step after Radio and Node Talker. It restarts the services of every installed system (Asterisk, DVSwitch, SvxLink) and records the time. It is open until a restart newer than the last config change.
+- **AllStarLink registration.** New check: done when the node is registered with AllStarLink, a warning (never blocking) with what to do when it is not. A node that stays private needs none.
+- **Passwords to enter.** New check that lists which passwords are still empty (ASL node password, BrandMeister password, and on Magic Box the SvxLink reflector password). It shows names only, never values.
+- **Ready to reboot.** New gate before Restore point: no restart pending, IAX answers on its port (the IAX POKE test), and, with a tunnel, a fresh handshake.
+- **IAX port on a fresh node.** Before `iax.conf` exists, the port from the Preflight form is used wherever 44helper asks for the IAX port, so the tunnel's firewall step and the Ports step open the right port from the start.
+- **Tests.** `ci/test_h44_finish.py`; the build, run, magic, preset and IAX tests follow the new order.
 
 ## 0.1.59 (2026-11-17)
 

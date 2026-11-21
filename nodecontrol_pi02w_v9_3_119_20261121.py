@@ -41,8 +41,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.118.1-pi02w"
-BUILD_DATE   = "2026-11-13"
+VERSION      = "9.3.119-pi02w"
+BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -14346,7 +14346,7 @@ function _initQuickLinks() {
   const host = window.location.hostname;
   document.querySelectorAll('.ql[data-ql-path],.ql[data-ql-port]').forEach(a => {
     a.href = a.dataset.qlPath ? `http://${host}${a.dataset.qlPath}`
-                              : `http://${host}:${a.dataset.qlPort}/`;
+                              : `${a.dataset.qlPort === '7777' ? 'https' : 'http'}://${host}:${a.dataset.qlPort}/`;
   });
 }
 
