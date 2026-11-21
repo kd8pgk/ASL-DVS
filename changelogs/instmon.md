@@ -1,6 +1,17 @@
 # instmon changelog
 
-Current file: `instmon_v2_111_0_20261116.py`.
+Current file: `instmon_v2_112_0_20261121.py`.
+
+## 2.112.0 (2026-11-21)
+
+An Update button on each library card for the tools that come from GitHub. This is a release: the server has a new action (`gh_update_group`).
+
+- **Where.** On the Tools tab, in each GitHub-backed component card (Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Terminal Monitor, Node Monitor, instmon, Config getter, Config putter, and Scripts, which also come from GitHub). The button sits on the right of the row that holds "Upload & stage". Configuration has no GitHub source and no button.
+- **What it does.** It takes the newest file for that card on the channel the node is set to (Testing reads `main`, Stable reads the stable list), downloads it again even when the same version is already in the library, and saves it under its name. The old library copy of that file (the same tool and build) is deleted once the new copy is saved, so one copy remains. The same version with different content (for example a file a Full Update damaged) is replaced this way.
+- **Safety.** The new file is checked before anything is replaced. A failed download leaves the library as it was. A locked copy is never deleted. The button is refused while a GitHub check is running, while a Full Update or a recording runs, or before the first check; it asks for confirmation first.
+- **Refused on purpose.** When the library copy is newer than the file on the channel (for example a testing build on a node set to Stable), nothing is replaced. Use Get stable on the row to put an older stable file in the library.
+- **Logs.** One line: which file was updated, and which old copy was deleted.
+- Nothing else changes.
 
 ## 2.111.0 (2026-11-16)
 
