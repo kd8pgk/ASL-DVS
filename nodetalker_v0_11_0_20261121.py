@@ -3230,8 +3230,20 @@ def svc_table():
             ("ab", "Analog Bridge", ("analog_bridge", "Analog_Bridge")),
             ("mmdvm", "MMDVM Bridge", ("mmdvm_bridge",)),
             ("stfu", "STFU", ("stfu",)),
-            ("m17", "USRP2M17", ("usrp2m17",)),
-            ("svxlink", "SvxLink", ("svxlink-usrp",)))
+            ("m17", "USRP2M17", ("usrp2m17",)))
+
+
+def svc_table_nt():
+    return svc_table() + (("svxlink", "SvxLink", ("svxlink-usrp",)),)
+
+
+def svc_svxlink_row():
+    unit = "svxlink-usrp.service"
+    st = service_states([unit]).get(unit, "unknown")
+    installed = st != "missing"
+    return {"key": "svxlink", "label": "SvxLink", "unit": unit, "light": "on" if st == "active" else "off",
+            "detail": {"active": "Running", "missing": "Not installed"}.get(st, "Stopped"),
+            "installed": installed, "restartable": installed}
 
 
 def svc_uptime_text(sec):
@@ -3296,7 +3308,7 @@ def svc_classify(kv, now_mono):
 
 
 def svc_rows(run, now_mono, stfu_probe=None):
-    table = svc_table()
+    table = svc_table_nt()
     info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
     rows = []
     for key, label, units in table:
@@ -3428,6 +3440,8 @@ def svc_from_nc(now_epoch=None):
             return None
         out.append({"key": key, "label": label, "unit": r["unit"], "light": r["light"], "detail": _svc_text(r.get("detail")),
                     "installed": r["installed"], "restartable": r["restartable"]})
+    if "svxlink" not in got:
+        out.append(svc_svxlink_row())
     since = reg.get("since")
     since = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) and 0 < since <= now + 10 else None
     node = reg.get("node")
@@ -3454,12 +3468,12 @@ def svc_status(_body=None):
 
 
 def svc_label(key):
-    return next((label for k, label, _u in svc_table() if k == key), "the service")
+    return next((label for k, label, _u in svc_table_nt() if k == key), "the service")
 
 
 def svc_restart(body):
     key = str((body or {}).get("key", ""))
-    row = next((x for x in svc_table() if x[0] == key), None)
+    row = next((x for x in svc_table_nt() if x[0] == key), None)
     if row is None:
         return {"ok": False, "error": "Unknown service."}
     if os.geteuid() != 0:
