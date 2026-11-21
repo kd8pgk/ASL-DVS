@@ -1,6 +1,16 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_7_0_20261121.py`.
+Current file: `piper_dashboard_v0_8_0_20261121.py`.
+
+## 0.8.0 (2026-11-21)
+
+Progress bar, legacy installs, and a longer log. This is a release: the Run card has a progress bar, the engine card can hide, and the installer reuses an existing Piper.
+
+- **Progress bar.** The Run card shows how many sentences of the run are done. It counts sentences, so it is an estimate, and it fills completely when the run finishes. Run and Stream both report it (`/api/progress`).
+- **Existing installs.** Before installing, the engine looks in the usual places (`/root/piper/venv`, `/home/*/piper/venv`, `/opt/piper/venv` and others) for a venv that already has `piper-tts`, and uses it instead of reinstalling. The same check runs at startup. An old `piper` command-line program alone is not enough, because this dashboard needs the Python package, so the engine card stays visible in that case.
+- **Engine card.** The Engine card is hidden once the engine is installed or found in an existing install.
+- **Terminal output.** The install log keeps 180 lines (was 60) and its box is three times as tall.
+- **Tests.** The export test's expected size follows the run's output (the engine's streaming output, not the one-second fixture).
 
 ## 0.7.0 (2026-11-21)
 
