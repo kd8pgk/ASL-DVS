@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_74_20261118.py`. Newest entries first.
+Current file: `44helper_v0_1_75_20261122.py`. Newest entries first.
+
+## 0.1.75 (2026-11-22)
+
+The Overview tab loads faster and asks the node for less. This is a release: how the status is gathered changed.
+
+- **Checks run side by side.** The WireGuard, firewall, installed-products, Asterisk registration, endpoint and health checks used to run one after another, each starting its own program. They now run together, so the first load takes about as long as the slowest one.
+- **Asterisk registrations are kept for 15 seconds.** `asterisk -rx "rpt show registrations"` was the slowest call and ran on every refresh. Re-check still asks again at once.
+- **One answer for every asker.** The page's refresh and the live-update watcher shared nothing and each built the status. They now share one result that is at most 4 seconds old, and requests that arrive together wait for it instead of repeating the work. Any change you make (a button that posts) clears it, so the next refresh is fresh.
+- **Warm start.** The first status is built when 44helper starts, so the first page after a login or a restart does not wait for every check to run cold.
+- Nothing on the page itself changes.
 
 ## 0.1.74 (2026-11-18)
 

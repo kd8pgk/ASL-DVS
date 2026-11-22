@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import configparser
 import difflib
 import fcntl
@@ -44,7 +45,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.74"
+APP_VERSION = "0.1.75"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1464,18 +1465,47 @@ def _detect_installed_products(force: bool = False) -> list[dict]:
         _INSTALLED_CACHE["data"] = results
     return results
 
-def build_overview_data(cfg: configparser.ConfigParser) -> dict:
+_ASL_REG_CACHE: dict = {"data": None, "at": 0.0}
+_ASL_REG_TTL = 15.0
+_OV_SHARED: dict = {"data": None, "at": 0.0}
+_OV_SHARED_LOCK = threading.Lock()
+_OV_SHARED_MAX_AGE = 4.0
+
+def _asl_reg_cached(force: bool = False) -> dict | None:
+    if not shutil.which("asterisk"):
+        return None
+    now = time.monotonic()
+    cached = _ASL_REG_CACHE["data"]
+    if not force and cached is not None and now - _ASL_REG_CACHE["at"] < _ASL_REG_TTL:
+        return cached
+    data = asl_registration_info()
+    _ASL_REG_CACHE.update(data=data, at=time.monotonic())
+    return data
+
+def build_overview_data(cfg: configparser.ConfigParser, force: bool = False) -> dict:
     my_port = cfg.getint("server", "port", fallback=9997)
 
-    wg0_present = _wg0_interface_present()
-    wg0_conf = _parse_wg0_conf()
-    wg0_perms_ok = _wg0_conf_perms_ok()
-    wg_status = _wg_show_wg0()
-    fw_zone = _firewalld_zone_info_cached()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        f_wg_conf = pool.submit(_parse_wg0_conf)
+        f_perms = pool.submit(_wg0_conf_perms_ok)
+        f_wg = pool.submit(_wg_show_wg0)
+        f_fw = pool.submit(_firewalld_zone_info_cached)
+        f_installed = pool.submit(_detect_installed_products)
+        f_reg = pool.submit(_asl_reg_cached, force)
+        f_ep = pool.submit(_ov_endpoint_findings_cached)
+        f_health = pool.submit(_ov_health_findings)
+        wg0_present = _wg0_interface_present()
+        wg0_conf = f_wg_conf.result()
+        wg0_perms_ok = f_perms.result()
+        wg_status = f_wg.result()
+        fw_zone = f_fw.result()
+        installed = f_installed.result()
+        asl_reg = f_reg.result()
+        f_ep.result()
+        f_health.result()
     tunnel_names = _configured_tunnel_names(cfg)
 
     self_check = _run_self_check(my_port, fw_zone, wg0_perms_ok)
-    installed = _detect_installed_products()
 
     return {
         "installed": installed,
@@ -1487,10 +1517,19 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
         "tunnel_names": tunnel_names,
         "self_check": self_check,
         "tunnel_kind": cfg.get("tunnels", "tunnel.pi.kind", fallback=""),
-        "asl_reg": asl_registration_info() if shutil.which("asterisk") else None,
+        "asl_reg": asl_reg,
         "system": _system_text(),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+def overview_shared(cfg: configparser.ConfigParser, force: bool = False, max_age: float = _OV_SHARED_MAX_AGE) -> dict:
+    with _OV_SHARED_LOCK:
+        data = _OV_SHARED["data"]
+        if not force and data is not None and time.monotonic() - _OV_SHARED["at"] < max_age:
+            return data
+        data = build_overview_data(cfg, force)
+        _OV_SHARED.update(data=data, at=time.monotonic())
+        return data
 
 def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | None) -> list[dict]:
     findings: list[dict] = []
@@ -2728,7 +2767,7 @@ def _ev_watch_step(now: float) -> bool:
     if now - _EV_WATCH["ov_at"] >= _EV_OV_EVERY:
         _EV_WATCH["ov_at"] = now
         try:
-            data = build_overview_data(_cfg)
+            data = overview_shared(_cfg)
             fp = json.dumps({k: v for k, v in data.items() if k != "checked_at"}, sort_keys=True, default=str)
             if fp != _EV_WATCH["ov_fp"]:
                 with _EV_WATCH_LOCK:
@@ -31245,7 +31284,9 @@ def _route_overview(query: dict) -> tuple[int, str, bytes]:
     if (query.get("force") or [""])[0] == "1":
         _detect_installed_products(force=True)
         _OV_HEALTH_CACHE["at"] = 0.0
-    return 200, "application/json", json.dumps(build_overview_data(_cfg)).encode("utf-8")
+        _ASL_REG_CACHE["at"] = 0.0
+        return 200, "application/json", json.dumps(overview_shared(_cfg, force=True)).encode("utf-8")
+    return 200, "application/json", json.dumps(overview_shared(_cfg)).encode("utf-8")
 
 def _route_pi_install_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_pi_install_status(_cfg)).encode("utf-8")
@@ -34350,6 +34391,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, "application/json", b'{"success": false, "output": "Missing or invalid X-Requested-With header"}')
             return
 
+        _OV_SHARED["at"] = 0.0
+
         if path == "/api/logout":
             self._do_logout()
             return
@@ -36212,6 +36255,7 @@ def main() -> None:
     _qm_startup_sweep()
     _sessions_load()
     threading.Thread(target=_bt_snapshot_loop, name="boot-snapshot", daemon=True).start()
+    threading.Thread(target=lambda: overview_shared(_cfg), name="overview-warm", daemon=True).start()
 
     server = _QuietThreadingHTTPServer((host, port), Handler)
 
