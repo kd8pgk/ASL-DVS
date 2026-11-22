@@ -1,6 +1,44 @@
 # instmon changelog
 
-Current file: `instmon_v2_111_0_20261116.py`.
+Current file: `instmon_v2_115_0_20261121.py`.
+
+## 2.115.0 (2026-11-21)
+
+Progress bars and a Skip manuals option. This is a release: the Tools tab shows each component's download and install, and Full Update can leave the manuals alone.
+
+- **Download bar.** Under each component on the Tools tab, a bar fills while a library file for that component downloads from GitHub (Update, Check GitHub's missing-file downloads, and Full Update). It shows the size, the total when GitHub gives one, and the speed (the average of the last few seconds). When GitHub gives no size, the bar moves without a fill and shows the bytes received.
+- **Install bar.** While a tool installs (Install, and Full Update's install step), the bar moves without a fill and reads "Installing:" with the latest line the install printed, cut to 120 characters and shown as plain text.
+- **Failures.** A download or install that does not finish keeps its bar as "Not finished" with the reason for two minutes, then clears.
+- **Skip manuals.** A checkbox under Check GitHub skips the manuals in Full Update, every time, until it is turned off. Check GitHub only lists the manuals and does not download them. The Manuals card's own Get from GitHub button still works, and the first-time manuals download still runs once on a new node.
+- Nothing else changes.
+
+## 2.114.0 (2026-11-21)
+
+The Update button stays disabled while its download runs. This is a release: the card now renders its state from the server.
+
+- **Downloading.** While a file for that card is downloading (or still being checked by the server), the button reads "Downloading…" and is disabled, so a second click cannot start another download. It comes back when the download ends, on the next refresh.
+- **Why.** The button used to be enabled again as soon as the request returned, while the download was still running in the background.
+- Nothing else changes.
+
+## 2.113.0 (2026-11-21)
+
+An Update button on each library card for the tools that come from GitHub. This is a release: the server has a new action (`gh_update_group`).
+
+- **Where.** On the Tools tab, in each GitHub-backed component card (Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder, Pibrary, Terminal Monitor, Node Monitor, instmon, Config getter, Config putter, and Scripts, which also come from GitHub). The button sits on the right of the row that holds "Upload & stage". Configuration has no GitHub source and no button.
+- **What it does.** It takes the newest file for that card on the channel the node is set to (Testing reads `main`, Stable reads the stable list), downloads it again even when the same version is already in the library, and saves it under its name. The old library copy of that file (the same tool and build) is deleted once the new copy is saved, so one copy remains. The same version with different content (for example a file a Full Update damaged) is replaced this way.
+- **Safety.** The new file is checked before anything is replaced. A failed download leaves the library as it was. A locked copy is never deleted. The button is refused while a GitHub check is running, while a Full Update or a recording runs, or before the first check; it asks for confirmation first.
+- **Refused on purpose.** When the library copy is newer than the file on the channel (for example a testing build on a node set to Stable), nothing is replaced. Use Get stable on the row to put an older stable file in the library.
+- **Logs.** One line: which file was updated, and which old copy was deleted.
+
+## 2.112.0 (2026-11-21)
+
+Pi-Piper TTS is a managed tool.
+
+- **Pi-Piper TTS card.** The Components list shows it with Install, Uninstall, Start and Stop like the other tools. It opens at `http://<node>:8765`.
+- **Library and updates.** Its files (`piper_dashboard*.py`) have their own folder in the library, in the upload and import lists and in GitHub updates. A Full Update updates it after Node Monitor and before the Dashboard, SysMon and instmon.
+- **Logs.** Its unit is part of the suite log.
+- **Login cookie.** A Full Update also asks the browser to drop Pi-Piper's login cookie (`piper_session`), like the other tools'.
+- Nothing else changes.
 
 ## 2.111.0 (2026-11-16)
 

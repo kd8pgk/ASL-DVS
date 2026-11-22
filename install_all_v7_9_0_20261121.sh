@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.8.0  (2026-11-16)
+# install_all.sh  v7.9.0  (2026-11-21)
 
 set -euo pipefail
 
@@ -70,8 +70,9 @@ if [[ -n "${TOOLS_LIST}" ]]; then
             noderecorder) INSTALL_NODERECORDER=1 ;;
             pibrary) INSTALL_PIBRARY=1 ;;
             nodemon) INSTALL_NODEMON=1 ;;
+            piper_dashboard) INSTALL_PIPER_DASHBOARD=1 ;;
             termon) INSTALL_TERMON=1 ;;
-            *) echo "--tools: unknown item '${_t}' (use instmon, dashboard, sysmon, wifimon, 44helper, nodetalker, noderecorder, pibrary, nodemon, termon, manuals)" >&2; exit 1 ;;
+            *) echo "--tools: unknown item '${_t}' (use instmon, dashboard, sysmon, wifimon, 44helper, nodetalker, noderecorder, pibrary, nodemon, piper_dashboard, termon, manuals)" >&2; exit 1 ;;
         esac
     done
     [[ -z "${ACTION}" ]] && ACTION="components"
@@ -900,18 +901,19 @@ hold_end() {
     return 0
 }
 
-OPT_KEYS=(noderecorder pibrary nodemon termon)
-declare -A OPT_LABEL=([noderecorder]="Node Recorder" [pibrary]="Pibrary" [nodemon]="Node Monitor" [termon]="Terminal Monitor")
-declare -A OPT_BIN=([noderecorder]="/usr/local/bin/noderecorder.py" [pibrary]="/usr/local/bin/pibrary.py" [nodemon]="/usr/local/bin/nodemon.py" [termon]="/usr/local/bin/termon.py")
-declare -A OPT_SERVICE=([noderecorder]="noderecorder" [pibrary]="pibrary" [nodemon]="nodemon" [termon]="termon")
-declare -A OPT_PORT=([noderecorder]=8995 [pibrary]=9000 [nodemon]=7777 [termon]=7878)
-declare -A OPT_SCHEME=([noderecorder]="https" [pibrary]="http" [nodemon]="http" [termon]="https")
-declare -A OPT_PATTERN=([noderecorder]="noderecorder*.py" [pibrary]="pibrary*.py" [nodemon]="nodemon*.py" [termon]="termon*.py")
-declare -A OPT_LIB=([noderecorder]="${INSTMON_LIBRARY_DIR}/noderecorder" [pibrary]="${INSTMON_LIBRARY_DIR}/pibrary" [nodemon]="${INSTMON_LIBRARY_DIR}/nodemon" [termon]="${INSTMON_LIBRARY_DIR}/termon")
+OPT_KEYS=(noderecorder pibrary nodemon piper_dashboard termon)
+declare -A OPT_LABEL=([noderecorder]="Node Recorder" [pibrary]="Pibrary" [nodemon]="Node Monitor" [piper_dashboard]="Pi-Piper TTS" [termon]="Terminal Monitor")
+declare -A OPT_BIN=([noderecorder]="/usr/local/bin/noderecorder.py" [pibrary]="/usr/local/bin/pibrary.py" [nodemon]="/usr/local/bin/nodemon.py" [piper_dashboard]="/usr/local/bin/piper_dashboard.py" [termon]="/usr/local/bin/termon.py")
+declare -A OPT_SERVICE=([noderecorder]="noderecorder" [pibrary]="pibrary" [nodemon]="nodemon" [piper_dashboard]="piper_dashboard" [termon]="termon")
+declare -A OPT_PORT=([noderecorder]=8995 [pibrary]=9000 [nodemon]=7777 [piper_dashboard]=8765 [termon]=7878)
+declare -A OPT_SCHEME=([noderecorder]="https" [pibrary]="http" [nodemon]="http" [piper_dashboard]="http" [termon]="https")
+declare -A OPT_PATTERN=([noderecorder]="noderecorder*.py" [pibrary]="pibrary*.py" [nodemon]="nodemon*.py" [piper_dashboard]="piper_dashboard*.py" [termon]="termon*.py")
+declare -A OPT_LIB=([noderecorder]="${INSTMON_LIBRARY_DIR}/noderecorder" [pibrary]="${INSTMON_LIBRARY_DIR}/pibrary" [nodemon]="${INSTMON_LIBRARY_DIR}/nodemon" [piper_dashboard]="${INSTMON_LIBRARY_DIR}/piper_dashboard" [termon]="${INSTMON_LIBRARY_DIR}/termon")
 declare -A OPT_ASK=(
     [noderecorder]="Node Recorder is optional: it records this node's audio on a schedule (port 8995)."
     [pibrary]="Pibrary is optional: a media library for a USB or SD drive (port 9000)."
     [nodemon]="Node Monitor is optional: the node's registration and links on one page, with link commands (port 7777). Anyone on your LAN who knows the root password can link and unlink the node."
+    [piper_dashboard]="Pi-Piper TTS is on by default: text-to-speech in the browser (port 8765). It needs the root password to sign in."
     [termon]="Terminal Monitor is optional: top, htop or btop and a shell in the browser (port 7878). It gives a root shell to anyone on your LAN who knows the password."
 )
 declare -A OPT_EXISTS=() OPT_CHOSEN=()
@@ -957,6 +959,16 @@ discover_optional() {
     if [[ "${exists}" != "true" ]]; then
         if opt_wanted "${key}"; then
             info "${label} was asked for (INSTALL_${key^^}=1, --suite or --with-termon)"
+        elif [[ "${key}" == "piper_dashboard" && "${CORE}" == "true" ]]; then
+            want=false
+            info "${label} is not part of --core: skipped"
+        elif [[ "${key}" == "piper_dashboard" ]]; then
+            if [[ "${INSTALL_PIPER_DASHBOARD:-}" =~ ^(0|n|no|false)$ ]]; then
+                want=false
+                info "${label} is off (INSTALL_PIPER_DASHBOARD=0): skipped"
+            else
+                info "${label} is on by default: installing (set INSTALL_PIPER_DASHBOARD=0 to skip it)"
+            fi
         elif [[ "${DOWNLOAD}" != "true" ]] && ! any_file "${OPT_PATTERN[${key}]}" "${OPT_LIB[${key}]}"; then
             want=false
             info "No ${OPT_PATTERN[${key}]} file found — ${label} (optional) skipped"
@@ -1019,7 +1031,7 @@ reg_label() {
         44helper) echo "44helper" ;;
         nodetalker) echo "Node Talker" ;;
         instmon) echo "instmon" ;;
-        noderecorder|pibrary|nodemon|termon) echo "${OPT_LABEL[$1]}" ;;
+        noderecorder|pibrary|nodemon|piper_dashboard|termon) echo "${OPT_LABEL[$1]}" ;;
     esac
 }
 
@@ -1038,7 +1050,7 @@ reg_svc() {
             fi
             ;;
         instmon) echo "${INSTMON_SERVICE}" ;;
-        noderecorder|pibrary|nodemon|termon) echo "${OPT_SERVICE[$1]}" ;;
+        noderecorder|pibrary|nodemon|piper_dashboard|termon) echo "${OPT_SERVICE[$1]}" ;;
     esac
 }
 
@@ -1050,7 +1062,7 @@ reg_bin() {
         44helper) echo "${HELPER_BIN}" ;;
         nodetalker) echo "${NODELISTEN_BIN}" ;;
         instmon) echo "${INSTMON_BIN}" ;;
-        noderecorder|pibrary|nodemon|termon) echo "${OPT_BIN[$1]}" ;;
+        noderecorder|pibrary|nodemon|piper_dashboard|termon) echo "${OPT_BIN[$1]}" ;;
     esac
 }
 
@@ -1077,6 +1089,10 @@ reg_port() {
         nodemon)
             p="$(conf_port "${ASL_DVS_ETC}/nodemon.conf")"
             echo "${p:-${OPT_PORT[nodemon]}}"
+            ;;
+        piper_dashboard)
+            p="$(conf_port "${ASL_DVS_ETC}/piper_dashboard.conf")"
+            echo "${p:-${OPT_PORT[piper_dashboard]}}"
             ;;
         noderecorder|pibrary) echo "${OPT_PORT[$1]}" ;;
     esac
@@ -1106,7 +1122,7 @@ reg_chosen() {
         44helper) echo "${HELPER_CHOSEN:-}" ;;
         nodetalker) echo "${NODELISTEN_CHOSEN:-}" ;;
         instmon) echo "${INSTMON_CHOSEN:-}" ;;
-        noderecorder|pibrary|nodemon|termon) echo "${OPT_CHOSEN[$1]:-}" ;;
+        noderecorder|pibrary|nodemon|piper_dashboard|termon) echo "${OPT_CHOSEN[$1]:-}" ;;
     esac
 }
 
@@ -1118,7 +1134,7 @@ reg_unchoose() {
         44helper) HELPER_CHOSEN="" ;;
         nodetalker) NODELISTEN_CHOSEN="" ;;
         instmon) INSTMON_CHOSEN="" ;;
-        noderecorder|pibrary|nodemon|termon) OPT_CHOSEN["$1"]="" ;;
+        noderecorder|pibrary|nodemon|piper_dashboard|termon) OPT_CHOSEN["$1"]="" ;;
     esac
 }
 
@@ -2509,6 +2525,10 @@ for _k in "${OPT_KEYS[@]}"; do
     if [[ "${_k}" == "termon" ]]; then
         _tm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/termon.conf" 2>/dev/null | head -1 || true)"
         OPT_PORT["termon"]="${_tm_port:-${OPT_PORT[termon]}}"
+    fi
+    if [[ "${_k}" == "piper_dashboard" ]]; then
+        _pd_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/piper_dashboard.conf" 2>/dev/null | head -1 || true)"
+        OPT_PORT["piper_dashboard"]="${_pd_port:-${OPT_PORT[piper_dashboard]}}"
     fi
     if [[ "${_k}" == "nodemon" ]]; then
         _nm_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${ASL_DVS_ETC}/nodemon.conf" 2>/dev/null | head -1 || true)"

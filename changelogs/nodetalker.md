@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_51_20261117.py`. Newest entries first.
+Current file: `nodetalker_v0_11_0_20261121.py`. Newest entries first.
+
+## 0.11.0 (2026-11-21)
+
+Node Talker tunes SvxLink, the same way Node Controller does. This is a release: there is a new tune mode and new service actions.
+
+- **SVX tune mode.** Pick a talkgroup (1 to 999999999), connect it and disconnect it, as for the other modes. Saved SvxLink talkgroups from the `[SVX]` section of `/etc/asl_dvs/asl_dvs.conf` are listed, the same list Node Controller uses. A favourite is stored as `SVX|<talkgroup>`.
+- **Connect and release** send the same commands to SvxLink's control device as Node Controller: `91<talkgroup>#` to tune, and `910#` then `9#` to release. Anything else is refused, and no command is sent if the control device is missing.
+- **Services tab.** SvxLink (`svxlink-usrp`) has Start and Stop buttons, with a confirmation. Restart works as for the other services.
+- **Nothing else changes.** The SvxLink bridge and its status are as before.
+- The code is copied from Node Controller, not shared, so the two can be changed separately.
 
 ## 0.10.51 (2026-11-17)
 

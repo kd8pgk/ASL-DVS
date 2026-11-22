@@ -21,11 +21,12 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 | Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
 | Node Monitor (nodemon) | `nodemon_v*.py` | 7777 | Allmon3-style status page for the node: an Overview of every node and links to the node's other tools, its ASL3 registration, every link on the main public node and on each private node (state, mode, direction, time connected), and what the DVSwitch, M17 and SvxLink gateways are tuned to, each read from the service's own status. Link state is polled from Asterisk's manager interface (AMI). Link commands (every ilink operation) from drop-down menus. Installed by the installer or instmon. |
+| Pi-Piper TTS | `piper_dashboard_v*.py` | 8765 | Text-to-speech dashboard for a Piper TTS install: pick a voice, run a file or pasted text, stream or save WAV, export 8 kHz audio, and optionally play on the node or store output in a Pibrary drive. Installs its own engine and voices from the Config tab. Stands alone. |
 | Terminal Monitor (termon) | `termon_v*.py` | 7878 | LAN-only web terminal and process monitor: top, htop or btop, and a root bash shell in the browser (xterm.js). HTTPS with a self-signed certificate, audit lines in the journal and syslog. The web page runs as an unprivileged user and asks a small root helper for terminals; the shell can run as a normal user with sudo instead of root (Setup card). Installs its own two services with `--install`; not yet managed by instmon or the installer. |
 
 Scripts:
 
-- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker, Node Recorder, Pibrary, Node Monitor and Terminal Monitor when you ask for them (`INSTALL_NODETALKER=1`, `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, `INSTALL_NODEMON=1`, `INSTALL_TERMON=1` or `--with-termon`; `--suite` asks for all of them except Terminal Monitor, which is a root shell and always needs its own yes). On a node with none of these tools installed (7.6.0 and later) the whole suite is the default: one question, Enter for yes, and `--core` keeps it to the Dashboard, SysMon, wifimon and 44helper. From 7.7.0 an interactive run starts with a menu: [1] full first install (the whole suite and the manuals), [2] full upgrade (default on an installed node: installed tools to the newest build, never older, nothing added), [3] full replace (reinstall every tool, complete the suite, refresh the manuals; the reset is required), [4] component install, [5] reset only. It shows the Pi it runs on and installs the Pi Zero 2 W builds on a Pi Zero 2 W. Each run shows its plan as steps [A] back up, [B] install, [C] manuals, [D] reset (stop the tools, clear failed marks and sign-ins), [E] check (file, port and config before each start) and [F] start, and prints the line that repeats it without questions (`--non-interactive --action=first|upgrade|replace|components`, `--tools=`, `--build=pi02w|full`, `--reset`/`--no-reset`, `--no-manuals`). `--reset-only` restarts the services and signs everyone out without installing anything. Without a terminal and without these flags it runs as 7.6.0 did. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi. `--download-only` fetches the files of tools that are not installed into the library and installs nothing. A service you stopped yourself (Stop in instmon, or disabled) is updated but left stopped.
+- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker, Node Recorder, Pibrary, Node Monitor and Terminal Monitor when you ask for them, and Pi-Piper TTS (on by default; set `INSTALL_PIPER_DASHBOARD=0` to skip it) (`INSTALL_NODETALKER=1`, `INSTALL_NODERECORDER=1`, `INSTALL_PIBRARY=1`, `INSTALL_NODEMON=1`, `INSTALL_TERMON=1` or `--with-termon`; `--suite` asks for all of them except Terminal Monitor, which is a root shell and always needs its own yes). On a node with none of these tools installed (7.6.0 and later) the whole suite is the default: one question, Enter for yes, and `--core` keeps it to the Dashboard, SysMon, wifimon and 44helper. From 7.7.0 an interactive run starts with a menu: [1] full first install (the whole suite and the manuals), [2] full upgrade (default on an installed node: installed tools to the newest build, never older, nothing added), [3] full replace (reinstall every tool, complete the suite, refresh the manuals; the reset is required), [4] component install, [5] reset only. It shows the Pi it runs on and installs the Pi Zero 2 W builds on a Pi Zero 2 W. Each run shows its plan as steps [A] back up, [B] install, [C] manuals, [D] reset (stop the tools, clear failed marks and sign-ins), [E] check (file, port and config before each start) and [F] start, and prints the line that repeats it without questions (`--non-interactive --action=first|upgrade|replace|components`, `--tools=`, `--build=pi02w|full`, `--reset`/`--no-reset`, `--no-manuals`). `--reset-only` restarts the services and signs everyone out without installing anything. Without a terminal and without these flags it runs as 7.6.0 did. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi. `--download-only` fetches the files of tools that are not installed into the library and installs nothing. A service you stopped yourself (Stop in instmon, or disabled) is updated but left stopped.
 - `bootstrap.sh`: the one-line install. It downloads the installer (the stable one, or the newest when the stable one is older than 7.6.0 or `ASL_DVS_CHANNEL=testing` is set), checks it and runs it. Its file name never changes, so the line below always works.
 - `uninstall_all_v*.sh`: removes the Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Monitor and Terminal Monitor (and the Config getter and putter links), and leaves instmon and configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
@@ -49,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_101_20261116.py` | `sysmon_pi02w_v6_13_89_20261116.py` | `instmon_v2_111_0_20261116.py` |
+| File name | `sysmon_v6_13_102_20261121.py` | `sysmon_pi02w_v6_13_90_20261121.py` | `instmon_v2_115_0_20261121.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -103,12 +104,12 @@ This downloads the installer and runs it. On a node with nothing installed, the 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_111_0_20261116.py --install
+   sudo python3 instmon_v2_115_0_20261121.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_8_0_20261116.sh
+   sudo bash install_all_v7_9_0_20261121.sh
    ```
    - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`). It also installs instmon when it isn't installed.
    - **Menu (7.7.0 and later):** an interactive run asks `Choose [1-5/q]`: 1 full first install, 2 full upgrade, 3 full replace, 4 component install, 5 reset only. Enter is 1 on a fresh node and 2 on an installed one; the old keys `c`, `i` and `u` still work. Before anything changes it shows the plan and asks `Go ahead?`; type `C` or `D` there to leave out the manuals or the reset (a replace needs `skip` typed to drop the reset). `--reset-only` is the quick repair. Without a terminal and without `--action` or `--reset-only` the run is the same as 7.6.0.
@@ -155,7 +156,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_10_51_20261117.py --install
+  sudo python3 nodetalker_v0_11_0_20261121.py --install
   ```
 
 Then:
@@ -524,20 +525,21 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_113_20261116.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_118_20261116.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_101_20261116.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_89_20261116.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_111_0_20261116.py` | common |
+| `nodecontrol_v9_3_114_20261121.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_119_20261121.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_102_20261121.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_90_20261121.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_115_0_20261121.py` | common |
 | `wifimon_v5_57_0_20261115.py` | common |
 | `44helper_v0_1_74_20261118.py` | common |
-| `nodetalker_v0_10_51_20261117.py` | common |
+| `nodetalker_v0_11_0_20261121.py` | common |
 | `noderecorder_v0_17_8_20261116.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_3_20261115.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
 | `nodemon_v0_8_0_20261118.py` | common |
-| `install_all_v7_8_0_20261116.sh` | common |
+| `piper_dashboard_v0_8_1_20261121.py` | common |
+| `install_all_v7_9_0_20261121.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |

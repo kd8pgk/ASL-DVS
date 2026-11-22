@@ -41,7 +41,7 @@ def block(unit, load="loaded", active="active", sub="running", result="success",
 def shown(**per_unit):
     out = []
     for key, unit in (("asterisk", "asterisk"), ("ab", "analog_bridge"), ("mmdvm", "mmdvm_bridge"), ("stfu", "stfu"),
-                      ("m17", "usrp2m17")):
+                      ("m17", "usrp2m17"), ("svxlink", "svxlink-usrp")):
         kw = per_unit.get(key, {})
         out.append(block(unit, **kw))
     return "\n".join(out)
@@ -152,11 +152,11 @@ class Status(unittest.TestCase):
                 mock.patch.object(nt, "ast_cli", lambda cmd, timeout=0: reg_out):
             return nt.svc_status()
 
-    def test_five_services_in_order(self):
+    def test_six_services_in_order(self):
         d = self.status(shown())
-        self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17"])
+        self.assertEqual([r["key"] for r in d["services"]], ["asterisk", "ab", "mmdvm", "stfu", "m17", "svxlink"])
         self.assertEqual([r["unit"] for r in d["services"]],
-                         ["asterisk.service", "analog_bridge.service", "mmdvm_bridge.service", "stfu.service", "usrp2m17.service"])
+                         ["asterisk.service", "analog_bridge.service", "mmdvm_bridge.service", "stfu.service", "usrp2m17.service", "svxlink-usrp.service"])
         self.assertTrue(all(r["light"] == "on" and r["restartable"] for r in d["services"]))
         self.assertEqual(d["reg"]["state"], "registered")
         self.assertEqual(d["source"], "nodetalker")
@@ -305,7 +305,7 @@ class FromNodeController(unittest.TestCase):
         d = self.read(self.doc())
         self.assertEqual(d["source"], "nodecontrol")
         self.assertEqual(d["age_s"], 8.0)
-        self.assertEqual(len(d["services"]), 5)
+        self.assertEqual(len(d["services"]), 6)
         self.assertEqual(d["reg"]["state"], "registered")
 
     def test_no_file_gives_none(self):

@@ -514,5 +514,171 @@ class CookiePurgeAfterFullUpdate(unittest.TestCase):
         self.assertIsNone(self.refuse(token)["extra"])
 
 
+class GroupUpdate(unittest.TestCase):
+    NEW = "wifimon_v5_58_0_20261121.py"
+    OLD = "wifimon_v5_57_0_20261115.py"
+
+    def setUp(self):
+        self.dir = im.LIB_SUBDIRS["wifimon"]
+        os.makedirs(self.dir, exist_ok=True)
+        self.old_path = os.path.join(self.dir, self.OLD)
+        with open(self.old_path, "wb") as fh:
+            fh.write(b"old copy")
+        self.entry = {"name": self.NEW, "category": "wifimon", "glob": "wifimon_v*.py",
+                      "version": "5.58.0", "blob": "b", "status": "update"}
+        self.entry["glob"] = im._gh_kind_for_name(self.NEW)[1]
+        with im._gh_lock:
+            self.saved = dict(im._gh_state)
+            im._gh_state.update(phase="done", checked_at="2026-11-21 10:00", busy=set(),
+                                entries=[dict(self.entry)])
+
+    def tearDown(self):
+        for n in (self.NEW, self.OLD):
+            try:
+                os.unlink(os.path.join(self.dir, n))
+            except OSError:
+                pass
+        with im._gh_lock:
+            im._gh_state.clear()
+            im._gh_state.update(self.saved)
+
+    def test_refused_outside_github_groups_and_before_a_check(self):
+        self.assertEqual(im.gh_start_group_update("config")[0], 400)
+        with im._gh_lock:
+            im._gh_state.update(phase="idle", entries=[])
+        self.assertEqual(im.gh_start_group_update("wifimon")[0], 404)
+
+    def test_refused_when_the_library_copy_is_newer(self):
+        with mock.patch.object(im, "full_update_running", return_value=False), \
+                mock.patch.object(im, "_gh_compare", return_value={"status": "newer_local", "local_version": "5.60.0"}), \
+                mock.patch.object(im, "_gh_fetch_impl") as fetch:
+            code, msg, _level = im.gh_start_group_update("wifimon")
+        self.assertEqual(code, 409)
+        self.assertIn("nothing was replaced", msg)
+        fetch.assert_not_called()
+        self.assertTrue(os.path.isfile(self.old_path))
+
+    def test_redownload_replaces_the_old_copy(self):
+        new_path = os.path.join(self.dir, self.NEW)
+        with mock.patch.object(im, "_gh_fetch_impl", return_value=b"new file"), \
+                mock.patch.object(im, "_gh_verify_content"), \
+                mock.patch.object(im, "_gh_compare", return_value={"status": "up_to_date"}), \
+                mock.patch.object(im, "_fetched_record"), mock.patch.object(im, "_gh_event") as ev:
+            im._gh_group_update_bg(dict(self.entry))
+        with open(new_path, "rb") as fh:
+            self.assertEqual(fh.read(), b"new file")
+        self.assertFalse(os.path.exists(self.old_path))
+        self.assertEqual(ev.call_args[0][1], "ok")
+        with im._gh_lock:
+            self.assertNotIn(self.NEW, im._gh_state["busy"])
+
+    def test_the_button_shows_downloading_while_a_download_runs(self):
+        with im._gh_lock:
+            im._gh_state["busy"].add(self.NEW)
+        try:
+            busy = im.render_library_group_html("Test", "wifimon", [], "Install")
+        finally:
+            with im._gh_lock:
+                im._gh_state["busy"].discard(self.NEW)
+        idle = im.render_library_group_html("Test", "wifimon", [], "Install")
+        self.assertIn("Downloading", busy)
+        self.assertIn("disabled", busy)
+        self.assertNotIn('data-action="gh_update_group"', busy)
+        self.assertIn('data-action="gh_update_group"', idle)
+
+    def test_a_failed_download_keeps_the_old_copy(self):
+        with mock.patch.object(im, "_gh_fetch_impl", side_effect=im.GhRejected("network")), \
+                mock.patch.object(im, "_gh_compare", return_value={"status": "update"}), \
+                mock.patch.object(im, "_gh_event") as ev:
+            im._gh_group_update_bg(dict(self.entry))
+        self.assertTrue(os.path.isfile(self.old_path))
+        self.assertEqual(ev.call_args[0][1], "err")
+
+
+class Transfers(unittest.TestCase):
+    def setUp(self):
+        with im._xfer_lock:
+            im._xfer.clear()
+
+    def tearDown(self):
+        with im._xfer_lock:
+            im._xfer.clear()
+
+    def test_speed_and_bytes_come_from_the_thread_context(self):
+        im._xfer_begin("sysmon", "sysmon_v1.py", "downloading")
+        with im._xfer_for("sysmon", "sysmon_v1.py"):
+            im._xfer_bytes(500, 1000, now=10.0)
+            im._xfer_bytes(1000, 1000, now=11.0)
+        snap = im._xfer_snapshot(now=11.0)["sysmon"]
+        self.assertEqual((snap["done"], snap["total"], snap["phase"]), (1000, 1000, "downloading"))
+        self.assertAlmostEqual(snap["speed"], 500.0)
+
+    def test_bytes_outside_a_download_are_ignored(self):
+        im._xfer_bytes(500, 1000, now=10.0)
+        self.assertEqual(im._xfer_snapshot(now=10.0), {})
+
+    def test_download_bar_shows_percent_and_speed(self):
+        rec = {"name": "wifimon_v5.py", "phase": "downloading", "done": 512 * 1024, "total": 1024 * 1024,
+               "speed": 2048.0, "line": "", "error": ""}
+        html = im._xfer_bar_html(rec)
+        self.assertIn("width:50%", html)
+        self.assertIn("512 KB of 1.0 MB", html)
+        self.assertIn("2 KB/s", html)
+
+    def test_download_without_a_size_is_an_animated_bar(self):
+        rec = {"name": "x.py", "phase": "downloading", "done": 4096, "total": 0, "speed": 0.0, "line": "", "error": ""}
+        html = im._xfer_bar_html(rec)
+        self.assertIn("xfer-indet", html)
+        self.assertNotIn("KB/s", html)
+
+    def test_install_shows_the_latest_line_and_is_escaped(self):
+        im._xfer_begin("sysmon", "sysmon.py", "installing")
+        im._xfer_line("sysmon", "<b>step 2</b>" + "x" * 300)
+        snap = im._xfer_snapshot()["sysmon"]
+        self.assertLessEqual(len(snap["line"]), im.XFER_LINE_MAX)
+        html = im._xfer_bar_html(snap)
+        self.assertIn("xfer-indet", html)
+        self.assertIn("Installing: &lt;b&gt;step 2", html)
+        self.assertNotIn("<b>step", html)
+
+    def test_a_failed_install_stays_visible_until_it_ages_out(self):
+        im._xfer_begin("sysmon", "sysmon.py", "installing")
+        im._xfer_finish("sysmon", False, "install exited 2", now=100.0)
+        im._xfer_finish("sysmon", False, "install did not finish", now=101.0)
+        self.assertEqual(im._xfer_snapshot(now=110.0)["sysmon"]["error"], "install exited 2")
+        self.assertIn("Not finished: install exited 2", im._xfer_bar_html(im._xfer_snapshot(now=110.0)["sysmon"]))
+        self.assertEqual(im._xfer_snapshot(now=100.0 + im.XFER_FAILED_KEEP_SEC + 1), {})
+
+    def test_a_finished_download_clears_its_bar(self):
+        im._xfer_begin("sysmon", "sysmon.py", "downloading")
+        im._xfer_finish("sysmon", True)
+        self.assertEqual(im._xfer_snapshot(), {})
+
+
+class SkipManuals(unittest.TestCase):
+    def tearDown(self):
+        im.skip_manuals_set(False)
+
+    def test_the_setting_is_stored_and_checked(self):
+        self.assertEqual(im.skip_manuals_set(True)[1]["on"], True)
+        self.assertTrue(im.skip_manuals_get()["on"])
+        self.assertEqual(im.skip_manuals_set("yes")[0], 400)
+
+    def test_full_update_leaves_the_manuals_alone_when_on(self):
+        im.skip_manuals_set(True)
+        with mock.patch.object(im, "_docs_fetch_bg") as fetch, mock.patch.object(im, "_fu_set"):
+            skipped = []
+            im._fu_manuals(skipped)
+        fetch.assert_not_called()
+        self.assertEqual(skipped, [])
+
+    def test_full_update_checks_the_manuals_when_off(self):
+        im.skip_manuals_set(False)
+        with mock.patch.object(im, "_docs_fetch_bg", return_value=None) as fetch, \
+                mock.patch.object(im, "_docs_claim", return_value=True), mock.patch.object(im, "_fu_set"):
+            im._fu_manuals([])
+        fetch.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

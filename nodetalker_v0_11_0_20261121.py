@@ -34,8 +34,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.51"
-DATE_STR = "2026-11-16"
+VERSION = "0.11.0"
+DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -3233,6 +3233,19 @@ def svc_table():
             ("m17", "USRP2M17", ("usrp2m17",)))
 
 
+def svc_table_nt():
+    return svc_table() + (("svxlink", "SvxLink", ("svxlink-usrp",)),)
+
+
+def svc_svxlink_row():
+    unit = "svxlink-usrp.service"
+    st = service_states([unit]).get(unit, "unknown")
+    installed = st != "missing"
+    return {"key": "svxlink", "label": "SvxLink", "unit": unit, "light": "on" if st == "active" else "off",
+            "detail": {"active": "Running", "missing": "Not installed"}.get(st, "Stopped"),
+            "installed": installed, "restartable": installed}
+
+
 def svc_uptime_text(sec):
     sec = int(max(0, sec))
     if sec < 60:
@@ -3296,6 +3309,23 @@ def svc_classify(kv, now_mono):
 
 def svc_rows(run, now_mono, stfu_probe=None):
     table = svc_table()
+    info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
+    rows = []
+    for key, label, units in table:
+        unit = next((u for u in units if (info.get(u + ".service") or {}).get("LoadState") not in (None, "not-found")), units[0])
+        light, detail, installed = svc_classify(info.get(unit + ".service"), now_mono)
+        restartable = installed and light != "off"
+        if key == "stfu" and not installed and stfu_probe is not None:
+            by_hand = stfu_probe()
+            if by_hand is not None:
+                light, detail = ("on", "Running, started by hand (no service)") if by_hand else ("fail", "Not running (no service)")
+        rows.append({"key": key, "label": label, "unit": unit + ".service", "light": light, "detail": detail,
+                     "installed": installed, "restartable": restartable})
+    return rows
+
+
+def svc_rows_nt(run, now_mono, stfu_probe=None):
+    table = svc_table_nt()
     info = svc_unit_info([u + ".service" for _k, _l, units in table for u in units], run)
     rows = []
     for key, label, units in table:
@@ -3427,6 +3457,8 @@ def svc_from_nc(now_epoch=None):
             return None
         out.append({"key": key, "label": label, "unit": r["unit"], "light": r["light"], "detail": _svc_text(r.get("detail")),
                     "installed": r["installed"], "restartable": r["restartable"]})
+    if "svxlink" not in got:
+        out.append(svc_svxlink_row())
     since = reg.get("since")
     since = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) and 0 < since <= now + 10 else None
     node = reg.get("node")
@@ -3444,7 +3476,7 @@ def svc_status(_body=None):
         own_only = now < _svc_own_until["t"]
     v = None if own_only else svc_from_nc()
     if v is None:
-        rows = svc_rows(_svc_run, now, svc_stfu_by_hand)
+        rows = svc_rows_nt(_svc_run, now, svc_stfu_by_hand)
         reg = svc_registration(rows[0]["light"] == "on")
         v = {"ok": True, "source": "nodetalker", "checked_at": time.time(), "reg": reg, "services": rows}
     with _svc_lock:
@@ -3453,12 +3485,12 @@ def svc_status(_body=None):
 
 
 def svc_label(key):
-    return next((label for k, label, _u in svc_table() if k == key), "the service")
+    return next((label for k, label, _u in svc_table_nt() if k == key), "the service")
 
 
 def svc_restart(body):
     key = str((body or {}).get("key", ""))
-    row = next((x for x in svc_table() if x[0] == key), None)
+    row = next((x for x in svc_table_nt() if x[0] == key), None)
     if row is None:
         return {"ok": False, "error": "Unknown service."}
     if os.geteuid() != 0:
@@ -3494,6 +3526,40 @@ def svc_restart(body):
     if key == "asterisk":
         _lstats_invalidate()
         _links_cache["t"] = -1e9
+    return result
+
+
+def svc_control(body):
+    action = str((body or {}).get("action", ""))
+    key = str((body or {}).get("key", ""))
+    if action not in SVC_ACTIONS:
+        return {"ok": False, "error": "Pick start, stop or restart."}
+    if action == "restart":
+        return svc_restart(body)
+    if key != "svxlink":
+        return {"ok": False, "error": "Only SvxLink can be started or stopped from here."}
+    if os.geteuid() != 0:
+        return {"ok": False, "error": "root required to start or stop SvxLink"}
+    unit = "svxlink-usrp.service"
+    if service_states([unit]).get(unit) == "missing":
+        return {"ok": False, "error": "SvxLink is not installed."}
+    with _svc_lock:
+        if key in _svc_busy:
+            return {"ok": False, "error": "SvxLink is busy. Try again in a moment."}
+        _svc_busy[key] = time.monotonic()
+    try:
+        r = _systemctl(action, unit, timeout=SVC_RESTART_SEC)
+        if r.returncode == 0:
+            log_event(f"SvxLink {action} from Node Talker", "ok")
+            result = {"ok": True, "message": f"SvxLink {action} done."}
+        else:
+            why = (r.stderr or r.stdout).strip() or f"exit {r.returncode}"
+            log_event(f"SvxLink {action} failed: {why}", "err")
+            result = {"ok": False, "error": why}
+    finally:
+        with _svc_lock:
+            _svc_busy.pop(key, None)
+            _svc_cache["t"] = -1e9
     return result
 
 
@@ -3775,7 +3841,7 @@ _RECORDING_BLOCKED = frozenset((
     "/api/digital"))
 _RECORDING_CFG_KEYS = frozenset(("port", "udp_port", "https", "node"))
 _RECORDING_POWER = frozenset(("/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/setup/apply",
-                              "/api/services/restart"))
+                              "/api/services/restart", "/api/services/control"))
 _RECORDING_BRIDGE = frozenset(("/api/tune", "/api/tune/disconnect"))
 _RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
@@ -3928,7 +3994,7 @@ FAV_MAX = 15
 FAV_JSON_MAX = 10
 DMR_NET_MAX = 10
 DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
-FAV_MODES = ("ASL", "EchoLink") + DVS_MODES + ("M17",)
+FAV_MODES = ("ASL", "EchoLink", "SVX") + DVS_MODES + ("M17",)
 DVS_SEARCH_PATHS = tuple(p for p in (os.environ.get("NODETALKER_DVSWITCH", ""), "/opt/MMDVM_Bridge/dvswitch.sh",
                                      "/usr/local/sbin/dvswitch.sh", "/var/lib/dvswitch/dvswitch.sh") if p)
 DVS_TIMEOUT = {"mode": 40, "tune": 40}
@@ -3955,6 +4021,10 @@ SVX_SERVICE = "svxlink-usrp"
 SVX_LOG = os.environ.get("NODETALKER_SVX_LOG", "/var/log/svxlink")
 SVX_LOG_TAIL = 262144
 SVX_TTL_SEC = 3.0
+SVX_CTRL_PTY = "/var/lib/svxlink/dtmf_ctrl"
+ASL_DVS_CONF = os.environ.get("NODETALKER_ASL_DVS_CONF", "/etc/asl_dvs/asl_dvs.conf")
+SVX_TG_MAX = 10 ** 9
+SVC_ACTIONS = ("start", "stop", "restart")
 BLANK_NAME, BLANK_ADDR = "blank", "000000"
 _DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
 _CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9/-]{2,9}$")
@@ -4114,7 +4184,7 @@ def _mode_of(value):
     m = str(value or "").strip().upper().replace("-", "")
     if m.startswith("ECHO"):
         return "EchoLink"
-    if m in ("ASL", "M17") or m in DVS_MODES:
+    if m in ("ASL", "M17", "SVX") or m in DVS_MODES:
         return m
     raise ValueError(f"Unknown mode {str(value)[:20]!r}")
 
@@ -4189,6 +4259,11 @@ def _norm_fav_core(f, nets=None):
     mode = _mode_of(f.get("mode", "ASL") or "ASL")
     if mode == "M17":
         return _norm_m17_fav(f)
+    if mode == "SVX":
+        num = str(f.get("num", "")).strip()
+        if not num.isdigit() or not 0 < int(num) < SVX_TG_MAX:
+            raise ValueError("SVX talkgroup must be digits, 1 to 999999999")
+        return {"mode": "SVX", "num": str(int(num)), "label": _label(f.get("label"), f"SVX TG {int(num)}")}
     if mode in DVS_MODES:
         tg = _clean_tg(f.get("num"), mode)
         if mode == "DSTAR":
@@ -4241,6 +4316,8 @@ def nets_public(nets):
 def fav_target(f):
     if f["mode"] == "M17":
         return f"{f['num']}|{f['module']}"
+    if f["mode"] == "SVX":
+        return f"SVX|{f['num']}"
     if f["mode"] in DVS_MODES:
         return f"{f['mode']}|{f.get('net', '')}|{f['num']}"
     return f["num"] if f["mode"] == "ASL" else "3" + f["num"].zfill(6)
@@ -5983,6 +6060,10 @@ def tune_list(mode):
         mode = _mode_of(mode)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    if mode == "SVX":
+        rows = [[tg, f"{tg} · {name}", ""] for name, tg in _svx_saved_rows()]
+        found = os.path.isfile(ASL_DVS_CONF)
+        return {"ok": True, "mode": mode, "found": found, "rows": rows, "files": [ASL_DVS_CONF] if found else []}
     if mode not in TUNE_LIST_FILES and mode != "M17":
         return {"ok": True, "mode": mode, "found": False, "rows": [], "files": []}
     paths = _tune_paths(mode)
@@ -6112,6 +6193,8 @@ def _tune_connect_impl(b):
         f = _tune_fav(b)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    if f["mode"] == "SVX":
+        return svx_connect(f)
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -6161,6 +6244,8 @@ def tune_disconnect(b=None):
 
 
 def _tune_disconnect_impl(b=None):
+    if isinstance(b, dict) and _mode_safe(b) == "SVX":
+        return svx_release()
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -6259,6 +6344,74 @@ def svx_events(lines):
                 if ml:
                     link = not ml.group(1)
     return {"state": state, "tg": tg, "link": link}
+
+
+def _svx_ready():
+    try:
+        return os.path.lexists(SVX_CTRL_PTY) and os.path.realpath(SVX_CTRL_PTY).startswith("/dev/pts/")
+    except OSError:
+        return False
+
+
+def _svx_send(cmd):
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        log_event(f"SVX: refused command {cmd!r}", "warn")
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            log_event(f"SVX: {SVX_CTRL_PTY} is not a SvxLink control device", "warn")
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        return True
+    except OSError as exc:
+        log_event(f"SVX: {cmd}: {exc}", "warn")
+        return False
+
+
+def _svx_saved_rows():
+    try:
+        text = open(ASL_DVS_CONF, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return []
+    rows, section = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and "]" in line:
+            section = line[1:line.index("]")].strip().upper()
+            continue
+        if section != "SVX" or ("=" in line and "|" not in line):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 2:
+            name, tg = parts[0].strip(), parts[1].strip()
+            if name and tg.isdigit() and 0 < int(tg) < SVX_TG_MAX:
+                rows.append((name[:24], str(int(tg))))
+    return rows[:50]
+
+
+def svx_connect(f):
+    tg = str(f.get("num", ""))
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY}). Start SvxLink from the Services tab."}
+    if not _svx_send(f"91{tg}#"):
+        return {"ok": False, "error": "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."}
+    log_event(f"SVX: tuned talkgroup {tg}", "ok")
+    return {"ok": True, "message": f"SvxLink tuned to talkgroup {tg}."}
+
+
+def svx_release():
+    if _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    log_event("SVX: released the talkgroup", "info")
+    return {"ok": True, "message": "SvxLink talkgroup released."}
 
 
 def svx_text():
@@ -10841,7 +10994,7 @@ async function netAnswer(action) {
   await connectFlow(Object.assign({}, a.body, {net_action: action}), a.label, text, a.url, a.box);
 }
 
-const TN_MODES = ['ASL', 'EchoLink', 'DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17'];
+const TN_MODES = ['ASL', 'EchoLink', 'DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17', 'SVX'];
 const TN_SEARCH = ['ASL', 'EchoLink'];
 const TN_HINT = {ASL: 'Node #, call or place', EchoLink: 'Node # or call', DMR: 'TG number', STFU: 'TG, ID or name', YSF: 'Name, # or IP:port', P25: 'TG # or host',
   NXDN: 'TG # or host', DSTAR: 'REF001 C or callsign', M17: 'M17-USA A'};
@@ -11312,6 +11465,17 @@ function svcRender(d) {
       btn.addEventListener('click', () => svcRestart(s.key, s.label));
       row.appendChild(btn);
     }
+    if (s.key === 'svxlink') {
+      ['start', 'stop'].forEach((act) => {
+        const sb = document.createElement('button');
+        sb.type = 'button';
+        sb.className = 'btn';
+        sb.textContent = act === 'start' ? 'Start' : 'Stop';
+        sb.disabled = !!svcRestarting[s.key];
+        sb.addEventListener('click', () => svcControl(s.key, s.label, act));
+        row.appendChild(sb);
+      });
+    }
     box.appendChild(row);
   });
   sum('svc', bad ? bad + ' need attention' : warn ? warn + ' to check' : 'all good');
@@ -11325,6 +11489,18 @@ async function svcRestart(key, label) {
   svcRender(svcLast);
   note('sv-msg', '', 'Restarting ' + label + '...');
   const d = await post('/api/services/restart', {key: key});
+  delete svcRestarting[key];
+  setMsg('sv-msg', d);
+  svcPoll();
+  setTimeout(svcPoll, 4000);
+}
+
+async function svcControl(key, label, action) {
+  if (!confirm((action === 'start' ? 'Start ' : 'Stop ') + label + '?')) return;
+  svcRestarting[key] = true;
+  svcRender(svcLast);
+  note('sv-msg', '', (action === 'start' ? 'Starting ' : 'Stopping ') + label + '...');
+  const d = await post('/api/services/control', {key: key, action: action});
   delete svcRestarting[key];
   setMsg('sv-msg', d);
   svcPoll();
@@ -12478,6 +12654,7 @@ _POST_ACTIONS = {
     "/api/tune/disconnect": (tune_disconnect, ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
     "/api/services/restart": (svc_restart, ()),
+    "/api/services/control": (svc_control, ()),
     "/api/disconnect-all": (disconnect_all, ()),
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),

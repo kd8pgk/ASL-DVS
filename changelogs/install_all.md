@@ -1,6 +1,15 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_8_0_20261116.sh`. Newest entries first.
+Current file: `install_all_v7_9_0_20261121.sh`. Newest entries first.
+
+## 7.9.0 (2026-11-21)
+
+Pi-Piper TTS is on by default in the suite installer. This is a release: a new optional tool and a changed default.
+
+- **On by default.** Pi-Piper TTS is installed without a question, interactive or not. Set `INSTALL_PIPER_DASHBOARD=0` to skip it.
+- **Not in `--core`.** `--core` still installs only the Dashboard, SysMon, wifimon and 44helper.
+- **Options.** `--tools=piper_dashboard` and `INSTALL_PIPER_DASHBOARD=1` select it as before. Its port (8765) is read from `/etc/asl_dvs/piper_dashboard.conf` when present.
+- **Nothing else changes.** Terminal Monitor is still asked about on its own.
 
 ## 7.8.0 (2026-11-16)
 
