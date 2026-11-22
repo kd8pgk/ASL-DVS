@@ -595,5 +595,90 @@ class GroupUpdate(unittest.TestCase):
         self.assertEqual(ev.call_args[0][1], "err")
 
 
+class Transfers(unittest.TestCase):
+    def setUp(self):
+        with im._xfer_lock:
+            im._xfer.clear()
+
+    def tearDown(self):
+        with im._xfer_lock:
+            im._xfer.clear()
+
+    def test_speed_and_bytes_come_from_the_thread_context(self):
+        im._xfer_begin("sysmon", "sysmon_v1.py", "downloading")
+        with im._xfer_for("sysmon", "sysmon_v1.py"):
+            im._xfer_bytes(500, 1000, now=10.0)
+            im._xfer_bytes(1000, 1000, now=11.0)
+        snap = im._xfer_snapshot(now=11.0)["sysmon"]
+        self.assertEqual((snap["done"], snap["total"], snap["phase"]), (1000, 1000, "downloading"))
+        self.assertAlmostEqual(snap["speed"], 500.0)
+
+    def test_bytes_outside_a_download_are_ignored(self):
+        im._xfer_bytes(500, 1000, now=10.0)
+        self.assertEqual(im._xfer_snapshot(now=10.0), {})
+
+    def test_download_bar_shows_percent_and_speed(self):
+        rec = {"name": "wifimon_v5.py", "phase": "downloading", "done": 512 * 1024, "total": 1024 * 1024,
+               "speed": 2048.0, "line": "", "error": ""}
+        html = im._xfer_bar_html(rec)
+        self.assertIn("width:50%", html)
+        self.assertIn("512 KB of 1.0 MB", html)
+        self.assertIn("2 KB/s", html)
+
+    def test_download_without_a_size_is_an_animated_bar(self):
+        rec = {"name": "x.py", "phase": "downloading", "done": 4096, "total": 0, "speed": 0.0, "line": "", "error": ""}
+        html = im._xfer_bar_html(rec)
+        self.assertIn("xfer-indet", html)
+        self.assertNotIn("KB/s", html)
+
+    def test_install_shows_the_latest_line_and_is_escaped(self):
+        im._xfer_begin("sysmon", "sysmon.py", "installing")
+        im._xfer_line("sysmon", "<b>step 2</b>" + "x" * 300)
+        snap = im._xfer_snapshot()["sysmon"]
+        self.assertLessEqual(len(snap["line"]), im.XFER_LINE_MAX)
+        html = im._xfer_bar_html(snap)
+        self.assertIn("xfer-indet", html)
+        self.assertIn("Installing: &lt;b&gt;step 2", html)
+        self.assertNotIn("<b>step", html)
+
+    def test_a_failed_install_stays_visible_until_it_ages_out(self):
+        im._xfer_begin("sysmon", "sysmon.py", "installing")
+        im._xfer_finish("sysmon", False, "install exited 2", now=100.0)
+        im._xfer_finish("sysmon", False, "install did not finish", now=101.0)
+        self.assertEqual(im._xfer_snapshot(now=110.0)["sysmon"]["error"], "install exited 2")
+        self.assertIn("Not finished: install exited 2", im._xfer_bar_html(im._xfer_snapshot(now=110.0)["sysmon"]))
+        self.assertEqual(im._xfer_snapshot(now=100.0 + im.XFER_FAILED_KEEP_SEC + 1), {})
+
+    def test_a_finished_download_clears_its_bar(self):
+        im._xfer_begin("sysmon", "sysmon.py", "downloading")
+        im._xfer_finish("sysmon", True)
+        self.assertEqual(im._xfer_snapshot(), {})
+
+
+class SkipManuals(unittest.TestCase):
+    def tearDown(self):
+        im.skip_manuals_set(False)
+
+    def test_the_setting_is_stored_and_checked(self):
+        self.assertEqual(im.skip_manuals_set(True)[1]["on"], True)
+        self.assertTrue(im.skip_manuals_get()["on"])
+        self.assertEqual(im.skip_manuals_set("yes")[0], 400)
+
+    def test_full_update_leaves_the_manuals_alone_when_on(self):
+        im.skip_manuals_set(True)
+        with mock.patch.object(im, "_docs_fetch_bg") as fetch, mock.patch.object(im, "_fu_set"):
+            skipped = []
+            im._fu_manuals(skipped)
+        fetch.assert_not_called()
+        self.assertEqual(skipped, [])
+
+    def test_full_update_checks_the_manuals_when_off(self):
+        im.skip_manuals_set(False)
+        with mock.patch.object(im, "_docs_fetch_bg", return_value=None) as fetch, \
+                mock.patch.object(im, "_docs_claim", return_value=True), mock.patch.object(im, "_fu_set"):
+            im._fu_manuals([])
+        fetch.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

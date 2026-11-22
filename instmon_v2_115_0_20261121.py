@@ -2,6 +2,7 @@
 
 import argparse
 import collections
+import contextlib
 import fcntl
 import fnmatch
 import glob
@@ -40,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.114.0"
+VERSION ="2.115.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4795,6 +4796,7 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
         enc["coding"] = coding
         length = resp.headers.get("Content-Length")
         expect = int(length) if length and length.isdigit() else None
+        xfer_total = total + expect if expect is not None and not head else 0
         if expect is not None and not head and not coding and total + expect > max_bytes:
             raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
         if expect is not None and not head:
@@ -4813,6 +4815,8 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
                 break
             got += len(chunk)
             total += len(chunk)
+            if not head:
+                _xfer_bytes(total, xfer_total)
             if not head and total > max_bytes:
                 raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
             chunks.append(chunk)
@@ -4823,7 +4827,7 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
     _gh_rate_note(got, time.monotonic() - started)
     return total
 
-def _gh_fetch_https(url, max_bytes, head=None):
+def _gh_fetch_https_core(url, max_bytes, head=None):
     if not url.lower().startswith("https://"):
         raise GhRejected("the GitHub address must start with https://")
     if not _GH_REPO_RE.match(GITHUB_REPO):
@@ -4899,6 +4903,19 @@ def _gh_fetch_https(url, max_bytes, head=None):
             raise GhRejected(f"download of {shown} failed: {exc}")
         total = sum(len(c) for c in chunks)
     raise GhRejected(f"{last} (tried {tries} times)")
+
+def _gh_fetch_https(url, max_bytes, head=None):
+    key =None if head else getattr (_xfer_local ,"category",None )
+    if not key :
+        return _gh_fetch_https_core (url ,max_bytes ,head )
+    _xfer_begin (key ,getattr (_xfer_local ,"name",""),"downloading")
+    try :
+        data =_gh_fetch_https_core (url ,max_bytes ,head )
+    except BaseException as exc :
+        _xfer_finish (key ,False ,str (exc ))
+        raise
+    _xfer_finish (key ,True )
+    return data
 
 _gh_fetch_impl =_gh_fetch_https 
 
@@ -5477,6 +5494,86 @@ def _build_other (category ,version ,name =""):
         variant =BUILD_PI02W_SUFFIX
     return variant !=wanted
 
+_xfer_lock =threading .Lock ()
+_xfer ={}
+_xfer_local =threading .local ()
+XFER_WINDOW_SEC =5.0
+XFER_FAILED_KEEP_SEC =120.0
+XFER_LINE_MAX =120
+
+def _xfer_begin (cat ,name ,phase ):
+    with _xfer_lock :
+        _xfer [cat ]={"name":name ,"phase":phase ,"done":0 ,"total":0 ,"samples":[],"line":"","error":"","ended":None }
+
+def _xfer_bytes (done ,total ,now =None ):
+    cat =getattr (_xfer_local ,"category",None )
+    if not cat :
+        return
+    now =time .monotonic ()if now is None else now
+    with _xfer_lock :
+        rec =_xfer .get (cat )
+        if rec is None or rec ["phase"]!="downloading":
+            return
+        rec ["done"]=done
+        if total :
+            rec ["total"]=total
+        rec ["samples"].append ((now ,done ))
+        while len (rec ["samples"])>2 and rec ["samples"][1 ][0 ]<now -XFER_WINDOW_SEC :
+            rec ["samples"].pop (0 )
+
+def _xfer_line (cat ,text ):
+    text =(text or "").strip ()
+    if not cat or not text :
+        return
+    with _xfer_lock :
+        rec =_xfer .get (cat )
+        if rec is not None and rec ["phase"]=="installing":
+            rec ["line"]=text [:XFER_LINE_MAX ]
+
+def _xfer_finish (cat ,ok ,error ="",now =None ):
+    now =time .monotonic ()if now is None else now
+    with _xfer_lock :
+        rec =_xfer .get (cat )
+        if rec is None or rec ["phase"]=="failed":
+            return
+        if ok :
+            del _xfer [cat ]
+            return
+        rec ["phase"]="failed"
+        rec ["error"]=error [:XFER_LINE_MAX ]
+        rec ["ended"]=now
+
+def _xfer_speed (rec ,now ):
+    s =rec ["samples"]
+    if len (s )<2 or now -s [-1 ][0 ]>3.0 :
+        return 0.0
+    dt =s [-1 ][0 ]-s [0 ][0 ]
+    db =s [-1 ][1 ]-s [0 ][1 ]
+    if dt <=0.5 or db <0 :
+        return 0.0
+    return db /dt
+
+def _xfer_snapshot (now =None ):
+    now =time .monotonic ()if now is None else now
+    out ={}
+    with _xfer_lock :
+        for cat ,rec in list (_xfer .items ()):
+            if rec ["ended"]is not None and now -rec ["ended"]>XFER_FAILED_KEEP_SEC :
+                del _xfer [cat ]
+                continue
+            out [cat ]={"name":rec ["name"],"phase":rec ["phase"],"done":rec ["done"],"total":rec ["total"],
+            "speed":_xfer_speed (rec ,now ),"line":rec ["line"],"error":rec ["error"]}
+    return out
+
+@contextlib .contextmanager
+def _xfer_for (cat ,name =""):
+    prev =(getattr (_xfer_local ,"category",None ),getattr (_xfer_local ,"name",None ))
+    _xfer_local .category ,_xfer_local .name =cat ,name
+    try :
+        yield
+    finally :
+        _xfer_local .category ,_xfer_local .name =prev
+
 def _gh_other_build (entry ):
     return _build_other (entry .get ("category"),entry .get ("version"),entry .get ("name",""))
 
@@ -5733,7 +5830,8 @@ def _gh_fetch_missing(entries):
                 continue
             _gh_state["busy"].add(entry["name"])
         try:
-            _gh_apply(dict(entry, allow_older=bool(allow_older)))
+            with _xfer_for(entry["category"], entry["name"]):
+                _gh_apply(dict(entry, allow_older=bool(allow_older)))
             dest = safe_join(LIB_SUBDIRS[entry["category"]], entry["name"])
             if dest and _gh_local_blob_id(dest) == entry["blob"]:
                 _fetched_record(entry)
@@ -5802,6 +5900,27 @@ def autocheck_set(on):
     log_event("Daily GitHub check turned " + ("on (versions only, no downloads)" if on else "off"), "ok")
     return 200, {"on": on, "level": "ok",
                  "message": "instmon checks GitHub once a day (versions only)." if on else "The daily GitHub check is off."}
+
+_SKIP_MANUALS_PATH = os.path.join(CONFIG_DIR, "instmon_skip_manuals.json")
+
+def skip_manuals_get():
+    try:
+        with open(_SKIP_MANUALS_PATH, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        d = {}
+    return {"on": isinstance(d, dict) and d.get("on") is True}
+
+def skip_manuals_set(on):
+    if not isinstance(on, bool):
+        return _fail(400, "on must be true or false")
+    ensure_dirs()
+    compare_before_write(_SKIP_MANUALS_PATH, json.dumps({"on": on}, indent=2).encode("utf-8"))
+    log_event("Skip manuals turned " + ("on (Full Update leaves the manuals alone)" if on
+              else "off (Full Update checks the manuals again)"), "ok")
+    return 200, {"on": on, "level": "ok",
+                 "message": "Full Update will leave the manuals alone." if on
+                 else "Full Update checks the manuals again."}
 
 def autocheck_tick(now=None):
     now = time.time() if now is None else now
@@ -5938,7 +6057,8 @@ def _gh_apply (entry ):
 def _gh_update_bg (entry ):
     name =entry ["name"]
     try :
-        msg ,level =_gh_apply (entry )
+        with _xfer_for (entry ["category"],entry ["name"]):
+            msg ,level =_gh_apply (entry )
     except GhRejected as exc :
         msg ,level =f"GitHub update of {name } refused: {exc }","err"
     except Exception as exc :
@@ -6006,7 +6126,8 @@ def _gh_group_update_bg (entry ):
     name =entry ["name"]
     category =entry ["category"]
     try :
-        data =_gh_fetch_impl (_gh_entry_url (entry ),GITHUB_FILE_MAX_BYTES )
+        with _xfer_for (category ,name ):
+            data =_gh_fetch_impl (_gh_entry_url (entry ),GITHUB_FILE_MAX_BYTES )
         _gh_verify_content (entry ,data )
         ensure_dirs ()
         dest =safe_join (LIB_SUBDIRS [category ],name )
@@ -7629,7 +7750,8 @@ def _fu_publish_plan(rows, scripts):
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 def _fu_stage(entry):
-    data = _gh_fetch_impl(_gh_entry_url(entry), GITHUB_FILE_MAX_BYTES)
+    with _xfer_for(entry["category"], entry["name"]):
+        data = _gh_fetch_impl(_gh_entry_url(entry), GITHUB_FILE_MAX_BYTES)
     _gh_verify_content(entry, data)
     ensure_dirs()
     dest = safe_join(LIB_SUBDIRS[entry["category"]], entry["name"])
@@ -7656,6 +7778,7 @@ def _fu_job_log_drain(pos, final=False):
         data = data[:data.rfind(b"\n") + 1]
     for line in data.decode("utf-8", "replace").splitlines():
         log_event(line, "info")
+        _xfer_line(getattr(_xfer_local, "category", None), line)
     return pos + len(data)
 
 def _fu_job_stop():
@@ -7715,6 +7838,7 @@ def _fu_run_cli_direct(script_path, flag):
     try:
         for line in proc.stdout:
             log_event(line.rstrip("\n"), "info")
+            _xfer_line(getattr(_xfer_local, "category", None), line.rstrip("\n"))
         proc.wait(timeout=SCRIPT_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
         proc.kill()
@@ -7863,7 +7987,10 @@ def _fu_try_new(comp, row, new_path, keep_stopped=False, was_enabled=True):
     _fu_set(current=f"{name}: installing v{new_ver}")
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
     prepare_install(comp, new_path)
-    rc = _fu_run_cli(new_path, "--install")
+    _xfer_begin(comp["category"], name, "installing")
+    with _xfer_for(comp["category"], name):
+        rc = _fu_run_cli(new_path, "--install")
+    _xfer_finish(comp["category"], rc == 0, f"install exited {rc}")
     if _fu_stop_ev.is_set():
         return False, "stopped by you"
     if keep_stopped:
@@ -7954,6 +8081,9 @@ def _fu_finish(error=""):
     _fu_refresh_plan()
 
 def _fu_manuals(skipped):
+    if skip_manuals_get()["on"]:
+        log_event("Full Update: manuals skipped (Skip manuals is on)", "info")
+        return
     _fu_set(phase="manuals", current="checking the manuals")
     if not _docs_claim():
         skipped.append({"name": "Manuals", "note": "a Get from GitHub was already running -- left to finish"})
@@ -8825,6 +8955,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
 
     log_event (f"Installing {script_name } ({comp ['name']}) -- running its own --install...","info")
     prepare_install (comp ,script_path )
+    _xfer_begin (comp ["category"],script_name ,"installing")
     try :
         proc =subprocess .Popen (
         [_interp_for (script_path ),script_path ,"--install"],
@@ -8833,14 +8964,17 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         )
         for line in proc .stdout :
             log_event (line .rstrip ("\n"),"info")
+            _xfer_line (comp ["category"],line .rstrip ("\n"))
         proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
         if proc .returncode ==0 :
+            _xfer_finish (comp ["category"],True )
             log_event (f"Install finished OK: {script_name } ({comp ['name']})","ok")
             quiet_forget (comp ["service"])
             user_stopped_clear (comp ["service"])
             if comp ["category"]!="instmon"and FU_STABLE_SEC >0 :
                 threading .Thread (target =_post_install_watch ,args =(comp ,),daemon =True ).start ()
         else :
+            _xfer_finish (comp ["category"],False ,f"install exited {proc .returncode }")
             log_event (f"Install exited {proc .returncode }: {script_name } ({comp ['name']})","err")
     except subprocess .TimeoutExpired :
         proc .kill ()
@@ -8848,6 +8982,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
     except Exception as exc :
         log_event (f"Install failed to run: {script_name } ({comp ['name']}): {exc }","err")
     finally :
+        _xfer_finish (comp ["category"],False ,"install did not finish")
         with _running_installs_lock :
             _running_installs .discard (comp ["service"])
 
@@ -9154,8 +9289,36 @@ def render_components_section(status):
     return (render_available_card_html(status["components"], status["library"])
             + render_components_html(status["components"], status["library"], status["app"], status["confgetter"]))
 
+def _xfer_size (n ):
+    return f"{n /1024 :.0f} KB"if n <1048576 else f"{n /1048576 :.1f} MB"
+
+def _xfer_bar_html (rec ):
+    if not rec :
+        return ""
+    phase =rec ["phase"]
+    if phase =="downloading":
+        total =rec ["total"]
+        pct =min (100 ,int (rec ["done"]*100 /total ))if total else None
+        text =f"Downloading {rec ['name']}: {_xfer_size (rec ['done'])}"
+        if total :
+            text +=f" of {_xfer_size (total )}"
+        if rec ["speed"]>=1 :
+            text +=f" · {_xfer_size (rec ['speed'])}/s"
+        fill =f' style="width:{pct }%"'if pct is not None else ""
+        cls ="" if pct is not None else " xfer-indet"
+    elif phase =="installing":
+        line =rec ["line"]
+        text ="Installing: "+line if line else "Installing..."
+        fill =""
+        cls =" xfer-indet"
+    else :
+        return f'<div class="xfer xfer-failed small"><span>Not finished: {esc (rec ["error"])}</span></div>'
+    return (f'<div class="xfer xfer-{phase }{cls }"><div class="xfer-bar"><div class="xfer-fill"{fill }></div></div>'
+    f'<div class="xfer-text small">{esc (text )}</div></div>')
+
 def render_components_html (components ,library =None ,app =None ,cg =None ):
     cards =[]
+    xfer =_xfer_snapshot ()
     app_html =render_app_card_html (app )
     for c in components :
         if c ["category"]in NO_CARD_CATEGORIES :
@@ -9215,6 +9378,7 @@ def render_components_html (components ,library =None ,app =None ,cg =None ):
       <span class="small" style="color:var(--grn)">{port_note }</span>
       <span class="muted small">{c ['service']}</span>
     </div>
+    {_xfer_bar_html (xfer .get (c ['category']))}
     <div class="row btn-row">
       <button class="b-start{' b-self-locked'if is_self else ''}" data-action="start" data-service="{c ['service']}" data-name="{esc (c ['name'])}"{' disabled title="instmon cannot start/restart itself from its own panel"'if is_self else ''}>Start</button>
       <button{' class="b-self-locked" disabled title="instmon cannot stop itself"'if is_self else ''} data-action="stop" data-service="{c ['service']}" data-name="{esc (c ['name'])}">Stop</button>
@@ -9958,6 +10122,16 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
   margin:.9rem 0 .3rem;padding-top:.5rem;border-top:1px solid var(--border2)}
 """
 
+_CSS_XFER = """
+.xfer{margin:.3rem 0 .1rem}
+.xfer-bar{position:relative;height:.45rem;border-radius:3px;background:var(--border2);overflow:hidden}
+.xfer-fill{position:absolute;left:0;top:0;bottom:0;background:var(--cyn);transition:width .4s linear}
+.xfer-indet .xfer-fill{width:35%;animation:xfer-slide 1.2s ease-in-out infinite}
+@keyframes xfer-slide{0%{left:-35%}100%{left:100%}}
+.xfer-text{color:var(--muted);margin-top:.15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xfer-failed{color:var(--red)}
+"""
+
 _CSS = (
     _CSS_BASE
     + _CSS_LAYOUT
@@ -9966,6 +10140,7 @@ _CSS = (
     + _CSS_LOG
     + _CSS_TABS
     + _CSS_TOOLS
+    + _CSS_XFER
     + _CSS_EDITOR
     + _CSS_LOGIN
     + _CSS_DISKIMG
@@ -12978,6 +13153,15 @@ function toolsInit() {
     if (!d || d.on !== want) ac.checked = !want;
     ac.disabled = false;
   });
+  const sm = document.getElementById('skipman-cb');
+  if (sm) sm.addEventListener('change', async function () {
+    const want = sm.checked;
+    sm.disabled = true;
+    let d = null;
+    try { d = await postAction({action: 'gh_skip_manuals', on: want}); } catch (e) {}
+    if (!d || d.on !== want) sm.checked = !want;
+    sm.disabled = false;
+  });
   const rb = document.getElementById('bk-restore-btn');
   if (rb) rb.addEventListener('click', bkRestore);
 }
@@ -13119,6 +13303,7 @@ def render_page (lite =False ):
     github_html =_gh_summary_html (),
     updates_html =gh_updates_html (),
     autocheck_checked =" checked"if autocheck_get ()["on"]else "",
+    skip_manuals_checked =" checked"if skip_manuals_get ()["on"]else "",
     disk_html =disk_html (),
     log_html =log_html ,
     ),"login-pw")
@@ -13212,6 +13397,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
   <label class="small" id="autocheck-row" style="display:block;margin-top:.35rem;cursor:pointer">
     <input type="checkbox" id="autocheck-cb"{autocheck_checked}> Check GitHub once a day (versions only, nothing is downloaded)</label>
+  <label class="small" style="display:block;margin-top:.35rem;cursor:pointer">
+    <input type="checkbox" id="skipman-cb"{skip_manuals_checked}> Skip manuals (Full Update leaves the manuals alone)</label>
   <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress" style="font-size:1.15rem"></div>
   <div class="row" style="margin-top:.6rem">
@@ -13763,6 +13950,7 @@ _ACTION_HANDLERS ={
 "start":lambda self ,body :self ._action_start (body ),
 "stop":lambda self ,body :self ._action_stop (body ),
 "gh_autocheck":lambda self ,body :self ._send_json (*autocheck_set (body .get ("on"))),
+"gh_skip_manuals":lambda self ,body :self ._send_json (*skip_manuals_set (body .get ("on"))),
 "set_boot":lambda self ,body :self ._send_json (*set_boot (body .get ("service",""),body .get ("enable"))),
 "install_config":lambda self ,body :self ._action_install_config (body ),
 "delete":lambda self ,body :self ._action_delete (body ),
