@@ -49,6 +49,11 @@ class Table(unittest.TestCase):
         mine = {e["pkg"] for e in h44._BLD_APT}
         self.assertEqual(wifimon - mine, set())
 
+    def test_avahi_is_listed_for_node_talker(self):
+        row = {e["pkg"]: e for e in h44._BLD_APT}["avahi-daemon"]
+        self.assertIn("Node Talker", row["by"])
+        self.assertEqual(row["group"], "recommended")
+
     def test_sysmon_and_44helper_hints_are_in_the_list(self):
         pk = {e["pkg"] for e in h44._BLD_APT}
         for needed in ("mtr-tiny", "avahi-daemon", "libnss-mdns", "fail2ban", "usbutils", "alsa-utils", "psmisc", "traceroute",

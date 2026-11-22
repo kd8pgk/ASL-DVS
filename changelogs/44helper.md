@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_74_20261118.py`. Newest entries first.
+Current file: `44helper_v0_1_75_20261122.py`. Newest entries first.
+
+## 0.1.75 (2026-11-22)
+
+The suite install brings avahi with Node Talker. This is a release: the install command changes.
+
+- **avahi-daemon comes with Node Talker.** When the Build tab's "Install the missing suite tools" installs Node Talker, it first installs `avahi-daemon` if it is not there. Node Talker 0.11.2 announces the node on the LAN through avahi, so the phone app can find it when its saved name and address fail. The step runs before the suite install, and a failure does not stop the suite install.
+- **The package table says so.** The `avahi-daemon` row is listed for Node Talker as well as SysMon, in the recommended group as before.
+- **Not changed.** A Node Talker that is already installed, without avahi, is not fixed by this: the suite install only runs for missing tools. Use "Install the missing packages" with "Required and recommended" for that. The installer (`install_all`) does not install avahi either.
+- Tests: `ci/test_h44_suite.py` (avahi comes first only with Node Talker, a failure does not stop the install, the step runs only when avahi is missing) and `ci/test_h44_apt.py` (the row names Node Talker).
 
 ## 0.1.74 (2026-11-18)
 

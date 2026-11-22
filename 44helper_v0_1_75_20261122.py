@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.74"
+APP_VERSION = "0.1.75"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -33678,7 +33678,11 @@ def _bld_suite_cmd(form: dict, tools: list[str]) -> str:
         env += [f"AUTO_CALLSIGN={form['callsign']}", f"AUTO_NODE={form['node']}"]
     args = f"--non-interactive --action=components --tools={','.join(tools)} --build={_bld_suite_build(form)}"
     u = _BLD_BOOTSTRAP_URL
-    script = (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
+    avahi = ""
+    if "nodetalker" in tools:
+        avahi = ("dpkg -s avahi-daemon >/dev/null 2>&1 || { DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
+                 "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq avahi-daemon; }; ")
+    script = (f"set -o pipefail; {avahi}if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
               f" | env {' '.join(env)} bash -s -- {args}")
     return "bash -c " + shlex.quote(script)
 
@@ -33731,7 +33735,8 @@ _BLD_APT = (
     {"pkg": "usbutils", "group": "recommended", "by": "SysMon", "why": "listing USB devices (lsusb)"},
     {"pkg": "alsa-utils", "group": "recommended", "by": "SysMon", "why": "sound card tests (aplay, arecord)"},
     {"pkg": "psmisc", "group": "recommended", "by": "SysMon", "why": "finding what holds a port or device (fuser)"},
-    {"pkg": "avahi-daemon", "group": "recommended", "by": "SysMon", "why": "reaching the node as name.local"},
+    {"pkg": "avahi-daemon", "group": "recommended", "by": "SysMon, Node Talker",
+     "why": "reaching the node as name.local, and the phone app finding Node Talker on the LAN"},
     {"pkg": "libnss-mdns", "group": "recommended", "by": "SysMon", "why": "resolving name.local on the node"},
     {"pkg": "openssh-server", "group": "recommended", "by": "this build", "why": "ssh, whose port the ports step opens"},
     {"pkg": "dnsmasq-base", "group": "optional", "by": "wifimon", "why": "the emergency hotspot"},

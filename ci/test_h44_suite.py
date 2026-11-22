@@ -126,6 +126,39 @@ class Command(unittest.TestCase):
         self.assertEqual(subprocess.run(["bash", "-n", "-c", self.cmd()], capture_output=True).returncode, 0)
         self.assertEqual(subprocess.run(["sh", "-n", "-c", self.cmd()], capture_output=True).returncode, 0)
 
+    def test_node_talker_brings_avahi_first_and_a_failure_does_not_stop_the_suite(self):
+        c = self.script(tools=("nodetalker",))
+        self.assertTrue(c.startswith("set -o pipefail; dpkg -s avahi-daemon"))
+        self.assertIn("apt-get install -y -qq avahi-daemon; }; if command -v curl", c)
+        self.assertNotIn("avahi-daemon; } &&", c)
+        self.assertLess(c.index("avahi-daemon"), c.index("curl -fsSL"))
+
+    def test_without_node_talker_no_avahi_is_installed(self):
+        self.assertNotIn("avahi", self.script(tools=("sysmon", "wifimon")))
+
+    def test_the_avahi_step_is_valid_shell_and_runs_only_when_missing(self):
+        import subprocess
+        import tempfile
+        c = self.script(tools=("nodetalker",))
+        head = c.split("; if command -v curl")[0]
+        with tempfile.TemporaryDirectory() as d:
+            stub = os.path.join(d, "bin")
+            os.makedirs(stub)
+            log = os.path.join(d, "log")
+            for name, body in (("dpkg", "exit 1"), ("apt-get", 'echo "apt-get $*" >> %s' % log)):
+                with open(os.path.join(stub, name), "w") as f:
+                    f.write("#!/bin/sh\n" + body + "\n")
+                os.chmod(os.path.join(stub, name), 0o755)
+            env = dict(os.environ, PATH=stub + os.pathsep + os.environ.get("PATH", ""))
+            subprocess.run(["bash", "-c", head], env=env, capture_output=True, check=True)
+            with open(log) as f:
+                self.assertIn("apt-get install -y -qq avahi-daemon", f.read())
+            with open(os.path.join(stub, "dpkg"), "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.remove(log)
+            subprocess.run(["bash", "-c", head], env=env, capture_output=True, check=True)
+            self.assertFalse(os.path.exists(log))
+
 
 class Action(Tmp):
     def go(self, installed_units=(), form=None, running="", conf=True, profile="travel"):
