@@ -66,8 +66,8 @@ class Net:
         self.responses = list(responses)
         self.requests = []
 
-    def __call__(self, req, timeout=None, context=None):
-        self.requests.append({k.lower(): v for k, v in req.header_items()})
+    def __call__(self, url, headers, ctx=None, timeout=None):
+        self.requests.append({k.lower(): v for k, v in headers.items()})
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -75,7 +75,7 @@ class Net:
 
 
 def fetch(net, limit=10 * 1024 * 1024, head=None):
-    with mock.patch.object(im.urllib.request, "urlopen", net), mock.patch.object(im.time, "sleep", lambda s: None):
+    with mock.patch.object(im, "_gh_open", net), mock.patch.object(im.time, "sleep", lambda s: None):
         return im._gh_fetch_https(URL, limit, head=head)
 
 
@@ -395,6 +395,153 @@ class MissingTools(unittest.TestCase):
             got, same, failed = im._docs_fetch(lambda m, level: said.append(m), auto=True)
         self.assertEqual((got, failed), ([], []))
         self.assertTrue(any("slow" in m for m in said))
+
+
+
+class Dialup(unittest.TestCase):
+    def setUp(self):
+        im._gh_conn_pool().clear()
+        if os.path.isdir(im.PARTIAL_DIR):
+            for name in os.listdir(im.PARTIAL_DIR):
+                os.unlink(os.path.join(im.PARTIAL_DIR, name))
+
+    def test_a_dropped_download_resumes_where_it_stopped(self):
+        full = SOURCE
+        first = Resp(full, headers={"Content-Length": str(len(full)), "ETag": "\"abc\""}, drop_after=3000)
+        rest = Resp(full[3000:], code=206, headers={"Content-Length": str(len(full) - 3000), "ETag": "\"abc\""})
+        net = Net(first, rest)
+        self.assertEqual(fetch(net), full)
+        self.assertEqual(net.requests[1]["range"], "bytes=3000-")
+        self.assertEqual(net.requests[1]["if-range"], "\"abc\"")
+        self.assertFalse(os.path.exists(im._gh_part_key(URL)[0]))
+
+    def test_a_restart_resumes_from_the_partial_on_disk(self):
+        full = SOURCE
+        im._gh_part_drop(URL)
+        im._gh_part_meta(URL, "", "\"abc\"")
+        im._gh_part_append(URL, full[:5000])
+        net = Net(Resp(full[5000:], code=206, headers={"Content-Length": str(len(full) - 5000), "ETag": "\"abc\""}))
+        self.assertEqual(fetch(net), full)
+        self.assertEqual(net.requests[0]["range"], "bytes=5000-")
+        self.assertFalse(os.path.exists(im._gh_part_key(URL)[0]))
+
+    def test_a_changed_file_is_not_spliced_onto_the_old_partial(self):
+        full = SOURCE
+        im._gh_part_drop(URL)
+        im._gh_part_meta(URL, "", "\"old\"")
+        im._gh_part_append(URL, b"stale bytes" * 100)
+        net = Net(Resp(full, headers={"Content-Length": str(len(full))}))
+        self.assertEqual(fetch(net), full)
+        self.assertEqual(net.requests[0]["if-range"], "\"old\"")
+
+    def test_old_partials_are_pruned(self):
+        im._gh_part_drop(URL)
+        im._gh_part_meta(URL, "", "")
+        im._gh_part_append(URL, b"x" * 100)
+        part = im._gh_part_key(URL)[0]
+        old = os.path.getmtime(part) - im.PARTIAL_KEEP_SEC - 10
+        os.utime(part, (old, old))
+        im._gh_part_prune()
+        self.assertFalse(os.path.exists(part))
+
+    def test_one_connection_serves_several_files(self):
+        made = []
+
+        class Http:
+            def __init__(self):
+                self.status, self.reason = 200, "OK"
+                self.headers, self.will_close, self._pos = {"Content-Length": "3"}, False, 0
+
+            def read(self, n=-1):
+                out = b"abc"[self._pos:] if n < 0 else b"abc"[self._pos:self._pos + n]
+                self._pos += len(out)
+                return out
+
+            def isclosed(self):
+                return self._pos >= 3
+
+        class Conn:
+            def __init__(self, host, timeout=None, context=None):
+                made.append(host)
+                self.sock = None
+                self.timeout = timeout
+
+            def request(self, method, path, headers=None):
+                pass
+
+            def getresponse(self):
+                return Http()
+
+            def close(self):
+                pass
+
+        im._gh_conn_pool().clear()
+        with mock.patch.object(im.http.client, "HTTPSConnection", Conn):
+            for _ in range(3):
+                with im._gh_open(URL, {}, None, 5) as reply:
+                    self.assertEqual(reply.read(), b"abc")
+        self.assertEqual(len(made), 1)
+
+    def test_no_version_in_the_first_64k_means_no_whole_file_download(self):
+        data = b"#!/usr/bin/env python3\n" + b"x = 1\n" * 20000 + b'VERSION = "9.9.9"\n'
+        calls = []
+
+        def impl(url, limit, head=None):
+            calls.append(head)
+            return data[:head] if head else data
+
+        with mock.patch.object(im, "_gh_fetch_impl", impl), mock.patch.dict(im._gh_version_cache, clear=True):
+            cand = {"name": "t.py", "blob": im._git_blob_id(data), "category": "termon", "glob": "termon_v*.py"}
+            with self.assertRaises(im.GhRejected):
+                im._gh_version_of(cand, [])
+        self.assertEqual(calls, [4096, 65536])
+
+    def test_versions_survive_a_restart(self):
+        data = b'VERSION = "7.7.7"\n' + b"x = 1\n" * 10
+        cand = {"name": "t.py", "blob": im._git_blob_id(data), "category": "termon", "glob": "termon_v*.py"}
+        with mock.patch.object(im, "_gh_fetch_impl", lambda url, limit, head=None: data[:head] if head else data), \
+                mock.patch.dict(im._gh_version_cache, clear=True):
+            self.assertEqual(im._gh_version_of(cand, []), "7.7.7")
+        with mock.patch.dict(im._gh_version_cache, clear=True), \
+                mock.patch.object(im, "_gh_fetch_impl", side_effect=AssertionError("no download expected")):
+            im._gh_versions_state["loaded"] = False
+            self.assertEqual(im._gh_version_of(cand, []), "7.7.7")
+
+    def test_the_check_limit_grows_with_the_number_of_files(self):
+        with mock.patch.object(im, "_gh_last_cands", [1] * 18):
+            self.assertEqual(im._gh_check_cap(), im.GH_CHECK_MAX_SEC + 120 * 18)
+        with mock.patch.object(im, "_gh_last_cands", [1] * 500):
+            self.assertEqual(im._gh_check_cap(), 7200)
+
+    def test_time_left_shows_only_once_the_speed_is_steady(self):
+        steady = {"name": "x.py", "phase": "downloading", "done": 500, "total": 1000, "speed": 100.0,
+                  "steady": True, "line": "", "error": ""}
+        self.assertIn("about 5 s left", im._xfer_bar_html(steady))
+        steady["steady"] = False
+        self.assertNotIn("left", im._xfer_bar_html(steady))
+
+    def test_manuals_in_the_background_leave_the_install_phase_alone(self):
+        with mock.patch.object(im, "skip_manuals_get", return_value={"on": False}), \
+                mock.patch.object(im, "_docs_claim", return_value=True), \
+                mock.patch.object(im, "_docs_fetch_bg", return_value=([], 0, [])), \
+                mock.patch.object(im, "_fu_set") as fu_set:
+            im._fu_manuals([], background=True)
+        for call in fu_set.call_args_list:
+            self.assertNotIn("phase", call.kwargs)
+            self.assertNotIn("current", call.kwargs)
+
+    def test_joining_the_manuals_keeps_their_skips(self):
+        class Done:
+            def join(self):
+                pass
+
+        with mock.patch.object(im, "_fu_set") as fu_set, \
+                mock.patch.dict(im._fu_state, {"skipped": [{"name": "a", "note": "b"}]}):
+            im._fu_bg["thread"] = Done()
+            im._fu_bg["skipped"] = [{"name": "Manuals", "note": "not checked"}]
+            im._fu_manuals_join()
+        skipped = fu_set.call_args.kwargs["skipped"]
+        self.assertEqual([s["name"] for s in skipped], ["a", "Manuals"])
 
 
 if __name__ == "__main__":
