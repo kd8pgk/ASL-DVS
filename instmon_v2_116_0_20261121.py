@@ -41,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.115.0"
+VERSION ="2.116.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4771,13 +4771,151 @@ def _gh_gunzip(data, max_bytes, shown):
         raise _GhBadGzip(f"{shown} arrived incomplete")
     return out
 
+GITHUB_MAX_REDIRECTS = 5
+GITHUB_REDIRECT_CODES = (301, 302, 303, 307, 308)
+PARTIAL_KEEP_SEC = 7 * 24 * 3600
+PARTIAL_DIR = os.path.join(CONFIG_DIR, "instmon_partial")
+_gh_conns = threading.local()
+
+def _gh_conn_pool():
+    pool = getattr(_gh_conns, "pool", None)
+    if pool is None:
+        pool = _gh_conns.pool = {}
+    return pool
+
+class _GhReply:
+    def __init__(self, host, conn, resp, url):
+        self._host = host
+        self._conn = conn
+        self._resp = resp
+        self._url = url
+        self._closed = False
+        self.status = resp.status
+        self.headers = resp.headers
+
+    def read(self, n=-1):
+        return self._resp.read(n)
+
+    def getcode(self):
+        return self.status
+
+    def geturl(self):
+        return self._url
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._resp.isclosed() and not self._resp.will_close:
+            _gh_conn_pool()[self._host] = self._conn
+        else:
+            self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+def _gh_open(url, headers, ctx, timeout):
+    for _hop in range(GITHUB_MAX_REDIRECTS + 1):
+        parts = urllib.parse.urlsplit(url)
+        host = parts.netloc
+        path = (parts.path or "/") + (("?" + parts.query) if parts.query else "")
+        conn = _gh_conn_pool().pop(host, None)
+        if conn is None:
+            conn = http.client.HTTPSConnection(host, timeout=timeout, context=ctx)
+        else:
+            conn.timeout = timeout
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout)
+        try:
+            conn.request("GET", path, headers=headers)
+            resp = conn.getresponse()
+        except BaseException:
+            conn.close()
+            raise
+        if resp.status in GITHUB_REDIRECT_CODES:
+            location = resp.headers.get("Location")
+            resp.read()
+            if resp.isclosed() and not resp.will_close:
+                _gh_conn_pool()[host] = conn
+            else:
+                conn.close()
+            if not location:
+                raise urllib.error.HTTPError(url, resp.status, "redirect without a location", resp.headers, None)
+            url = urllib.parse.urljoin(url, location)
+            continue
+        if resp.status >= 400:
+            conn.close()
+            raise urllib.error.HTTPError(url, resp.status, resp.reason, resp.headers, None)
+        return _GhReply(host, conn, resp, url)
+    raise urllib.error.URLError("GitHub redirected too many times")
+
+def _gh_part_key(url):
+    base = os.path.join(PARTIAL_DIR, hashlib.sha1(url.encode("utf-8")).hexdigest())
+    return base + ".part", base + ".json"
+
+def _gh_part_drop(url):
+    for path in _gh_part_key(url):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+def _gh_part_meta(url, coding, etag):
+    _part, meta_path = _gh_part_key(url)
+    try:
+        os.makedirs(PARTIAL_DIR, exist_ok=True)
+        tmp = meta_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"coding": coding, "etag": etag or ""}, fh)
+        os.replace(tmp, meta_path)
+    except OSError:
+        _gh_part_drop(url)
+
+def _gh_part_load(url):
+    part, meta_path = _gh_part_key(url)
+    try:
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        with open(part, "rb") as fh:
+            data = fh.read()
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(meta, dict) or not data:
+        return None, None
+    return data, meta
+
+def _gh_part_append(url, chunk):
+    part, _meta = _gh_part_key(url)
+    try:
+        with open(part, "ab") as fh:
+            fh.write(chunk)
+    except OSError:
+        _gh_part_drop(url)
+
+def _gh_part_prune():
+    try:
+        names = os.listdir(PARTIAL_DIR)
+    except OSError:
+        return
+    now = time.time()
+    for name in names:
+        path = os.path.join(PARTIAL_DIR, name)
+        try:
+            if now - os.path.getmtime(path) > PARTIAL_KEEP_SEC:
+                os.unlink(path)
+        except OSError:
+            pass
+
 def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc=None):
     if enc is None:
         enc = {}
     head = enc.get("head")
-    req = urllib.request.Request(url, headers=headers)
     started = time.monotonic()
-    with urllib.request.urlopen(req, timeout=enc.get("timeout", GITHUB_TIMEOUT_SEC), context=ctx) as resp:
+    with _gh_open(url, headers, ctx, enc.get("timeout", GITHUB_TIMEOUT_SEC)) as resp:
         if not resp.geturl().lower().startswith("https://"):
             raise GhRejected("GitHub redirected the download off HTTPS")
         coding = (resp.headers.get("Content-Encoding") or "").strip().lower()
@@ -4787,13 +4925,20 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
         if total and resp.getcode() != 206:
             chunks.clear()
             total = 0
+            if not head:
+                _gh_part_drop(url)
         if total and enc.get("coding") != coding:
             chunks.clear()
+            if not head:
+                _gh_part_drop(url)
             enc.clear()
             if head:
                 enc["head"] = head
             raise _GhRetry(f"GitHub changed how it sends {shown}; starting that file again")
         enc["coding"] = coding
+        if not head:
+            enc["etag"] = resp.headers.get("ETag") or enc.get("etag") or ""
+            _gh_part_meta(url, coding, enc["etag"])
         length = resp.headers.get("Content-Length")
         expect = int(length) if length and length.isdigit() else None
         xfer_total = total + expect if expect is not None and not head else 0
@@ -4815,10 +4960,12 @@ def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total,
                 break
             got += len(chunk)
             total += len(chunk)
-            if not head:
-                _xfer_bytes(total, xfer_total)
             if not head and total > max_bytes:
                 raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+            if not head:
+                _gh_part_append(url, chunk)
+                _xfer_bytes(total, xfer_total)
+                _gh_progress()
             chunks.append(chunk)
             if head and total >= head:
                 break
@@ -4834,13 +4981,24 @@ def _gh_fetch_https_core(url, max_bytes, head=None):
         raise GhRejected(f"'{GITHUB_REPO}' is not an owner/repo name")
     shown = url.split("?", 1)[0].rsplit("/", 1)[-1] or url
     ctx = ssl.create_default_context()
-    deadline = time.monotonic() + GITHUB_MAX_DOWNLOAD_SEC
     chunks, total, last = [], 0, ""
     enc = {"head": head} if head else {}
+    if not head:
+        _gh_part_prune()
+        data, meta = _gh_part_load(url)
+        if data:
+            chunks.append(data)
+            total = len(data)
+            enc["coding"] = meta.get("coding") or ""
+            enc["etag"] = meta.get("etag") or ""
+            enc["resumed"] = True
+        else:
+            _gh_part_drop(url)
     tries = GITHUB_RETRIES + 1
     for attempt in range(tries):
         if attempt:
             time.sleep(2 * attempt)
+        deadline = time.monotonic() + GITHUB_MAX_DOWNLOAD_SEC
         headers = {
             "User-Agent": f"instmon/{VERSION}",
             "Accept": "application/vnd.github+json" if "api.github.com" in url else "*/*",
@@ -4853,21 +5011,29 @@ def _gh_fetch_https_core(url, max_bytes, head=None):
         elif total:
             headers["Range"] = f"bytes={total}-"
             enc["resumed"] = True
+            if enc.get("etag"):
+                headers["If-Range"] = enc["etag"]
         try:
             _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total, enc)
             data = b"".join(chunks)
             if head:
                 return data[:head]
+            _gh_part_drop(url)
             if enc.get("coding") == "gzip":
                 data = _gh_gunzip(data, max_bytes, shown)
             return data
         except GhRejected:
+            if not head:
+                _gh_part_drop(url)
             raise
         except _GhBadGzip as exc:
             if not enc.get("resumed"):
+                _gh_part_drop(url)
                 raise GhRejected(str(exc))
             chunks.clear()
             enc.clear()
+            if not head:
+                _gh_part_drop(url)
             last = f"{exc}; starting that file again"
         except _GhRetry as exc:
             last = str(exc)
@@ -4877,15 +5043,23 @@ def _gh_fetch_https_core(url, max_bytes, head=None):
                 enc.clear()
                 if head:
                     enc["head"] = head
+                if not head:
+                    _gh_part_drop(url)
                 last = f"GitHub refused to resume {shown}"
             elif exc.code == 404:
+                if not head:
+                    _gh_part_drop(url)
                 raise GhRejected(f"{shown} was not found on GitHub (HTTP 404) -- check the repo name and branch")
             elif exc.code in (403, 429):
+                if not head:
+                    _gh_part_drop(url)
                 raise GhRejected("GitHub's hourly limit for this node was reached -- try again later "
                                  f"(HTTP {exc.code})")
             elif exc.code >= 500:
                 last = f"GitHub answered HTTP {exc.code} for {shown}"
             else:
+                if not head:
+                    _gh_part_drop(url)
                 raise GhRejected(f"GitHub answered HTTP {exc.code} for {shown}")
         except urllib.error.URLError as exc:
             reason = getattr(exc, "reason", exc)
@@ -4900,24 +5074,30 @@ def _gh_fetch_https_core(url, max_bytes, head=None):
         except (OSError, http.client.HTTPException) as exc:
             last = f"the connection to GitHub dropped during {shown} ({exc})"
         except ValueError as exc:
+            if not head:
+                _gh_part_drop(url)
             raise GhRejected(f"download of {shown} failed: {exc}")
         total = sum(len(c) for c in chunks)
+        if not total:
+            chunks.clear()
+            if not head:
+                _gh_part_drop(url)
     raise GhRejected(f"{last} (tried {tries} times)")
 
 def _gh_fetch_https(url, max_bytes, head=None):
-    key =None if head else getattr (_xfer_local ,"category",None )
-    if not key :
-        return _gh_fetch_https_core (url ,max_bytes ,head )
-    _xfer_begin (key ,getattr (_xfer_local ,"name",""),"downloading")
-    try :
-        data =_gh_fetch_https_core (url ,max_bytes ,head )
-    except BaseException as exc :
-        _xfer_finish (key ,False ,str (exc ))
+    key = None if head else getattr(_xfer_local, "category", None)
+    if not key:
+        return _gh_fetch_https_core(url, max_bytes, head)
+    _xfer_begin(key, getattr(_xfer_local, "name", ""), "downloading")
+    try:
+        data = _gh_fetch_https_core(url, max_bytes, head)
+    except BaseException as exc:
+        _xfer_finish(key, False, str(exc))
         raise
-    _xfer_finish (key ,True )
+    _xfer_finish(key, True)
     return data
 
-_gh_fetch_impl =_gh_fetch_https 
+_gh_fetch_impl =_gh_fetch_https
 
 def _gh_file_url (name ):
     return GITHUB_RAW_BASE +"/"+urllib .parse .quote (name )
@@ -5448,22 +5628,50 @@ def _gh_local_files (category ,glob ):
         out .append ((n ,ver ,_version_sort_key (ver ),full ))
     return out 
 
+_GH_VERSION_PATH = os.path.join(CONFIG_DIR, "instmon_versions.json")
+_gh_versions_state = {"loaded": False}
+
+def _gh_versions_load():
+    if _gh_versions_state["loaded"]:
+        return
+    _gh_versions_state["loaded"] = True
+    try:
+        with open(_GH_VERSION_PATH, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if isinstance(saved, dict):
+        for blob, ver in list(saved.items())[-_GH_VERSION_CACHE_MAX:]:
+            if isinstance(blob, str) and (ver is None or isinstance(ver, str)):
+                _gh_version_cache.setdefault(blob, ver)
+
+def _gh_version_store(blob, ver):
+    if len(_gh_version_cache) >= _GH_VERSION_CACHE_MAX:
+        _gh_version_cache.clear()
+    _gh_version_cache[blob] = ver
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        tmp = _GH_VERSION_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(dict(_gh_version_cache), fh)
+        os.replace(tmp, _GH_VERSION_PATH)
+    except OSError:
+        pass
+
 def _gh_version_of (cand ,local ):
     for _n ,ver ,_key ,full in local :
         if ver and _gh_local_blob_id (full )==cand ["blob"]:
             return ver 
+    _gh_versions_load ()
     if cand ["blob"]in _gh_version_cache :
         cached =_gh_version_cache [cand ["blob"]]
         if cached is None :
-            raise GhRejected ("no version line found in the file")
+            raise GhRejected ("no version line in the first 64 KB of the file")
         return cached 
     ver =None 
-    for step in GITHUB_HEAD_STEPS +(None ,):
-        if step is None :
-            data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
-        else :
-            data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =step )
-        whole =step is None or len (data )<step 
+    for step in GITHUB_HEAD_STEPS :
+        data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES ,head =step )
+        whole =len (data )<step 
         if whole and _git_blob_id (data )!=cand ["blob"]:
             raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
         try :
@@ -5473,11 +5681,9 @@ def _gh_version_of (cand ,local ):
         ver ,_si ,_su =_scan_header_text (text )
         if ver or whole :
             break 
-    if len (_gh_version_cache )>=_GH_VERSION_CACHE_MAX :
-        _gh_version_cache .clear ()
-    _gh_version_cache [cand ["blob"]]=ver or None 
+    _gh_version_store (cand ["blob"],ver or None )
     if not ver :
-        raise GhRejected ("no version line found in the file")
+        raise GhRejected ("no version line in the first 64 KB of the file")
     return ver 
 
 def _gh_version_known (cand ,local ):
@@ -5561,8 +5767,9 @@ def _xfer_snapshot (now =None ):
             if rec ["ended"]is not None and now -rec ["ended"]>XFER_FAILED_KEEP_SEC :
                 del _xfer [cat ]
                 continue
+            span =rec ["samples"][-1 ][0 ]-rec ["samples"][0 ][0 ]if len (rec ["samples"])>=2 else 0.0 
             out [cat ]={"name":rec ["name"],"phase":rec ["phase"],"done":rec ["done"],"total":rec ["total"],
-            "speed":_xfer_speed (rec ,now ),"line":rec ["line"],"error":rec ["error"]}
+            "speed":_xfer_speed (rec ,now ),"steady":span >=3.0 ,"line":rec ["line"],"error":rec ["error"]}
     return out
 
 @contextlib .contextmanager
@@ -5851,13 +6058,16 @@ def _gh_fetch_missing(entries):
                   "Download only: nothing was installed or started.", "ok")
     return got
 
+def _gh_check_cap ():
+    return min (7200 ,GH_CHECK_MAX_SEC +120 *len (_gh_last_cands ))
+
 def _gh_check_timeout (gen ):
     with _gh_lock :
         if not _gh_check_current (gen ):
             return 
         now =time .monotonic ()
         last =_gh_state .get ("progress_at")or _gh_state .get ("started_at")or now 
-        if now -last <GH_CHECK_LIMIT_SEC and now -(_gh_state .get ("started_at")or now )<GH_CHECK_MAX_SEC :
+        if now -last <GH_CHECK_LIMIT_SEC and now -(_gh_state .get ("started_at")or now )<_gh_check_cap ():
             timer =threading .Timer (max (1 ,GH_CHECK_LIMIT_SEC -(now -last )),_gh_check_timeout ,args =(gen ,))
             timer .daemon =True 
             timer .start ()
@@ -8053,6 +8263,7 @@ def _fu_arm_instmon_guard(old_path):
     return r.returncode == 0, (r.stderr or "").strip()[:200]
 
 def _fu_finish(error=""):
+    _fu_manuals_join()
     if not error and _fu_stop_ev.is_set():
         error = "stopped by you"
     _fu_set(running=False, phase="done", current="", error=error, banner=True, stopping=False, in_progress=None)
@@ -8080,14 +8291,45 @@ def _fu_finish(error=""):
         log_event("Full Update finished: everyone is signed out and each browser is asked to drop the other tools' login cookies; sign in again to see the result", "info")
     _fu_refresh_plan()
 
-def _fu_manuals(skipped):
+_fu_bg = {"thread": None, "skipped": []}
+
+def _fu_manuals_start():
+    if _fu_stop_ev.is_set() or skip_manuals_get()["on"]:
+        if skip_manuals_get()["on"]:
+            log_event("Full Update: manuals skipped (Skip manuals is on)", "info")
+        return
+    bg_skipped = []
+    _fu_bg["skipped"] = bg_skipped
+    t = threading.Thread(target=_fu_manuals_bg, args=(bg_skipped,), daemon=True)
+    _fu_bg["thread"] = t
+    t.start()
+
+def _fu_manuals_bg(bg_skipped):
+    try:
+        _fu_manuals(bg_skipped, background=True)
+    except Exception as exc:
+        log_event(f"Full Update: manuals failed: {exc}", "warn")
+
+def _fu_manuals_join():
+    t = _fu_bg.get("thread")
+    if t is not None:
+        t.join()
+    _fu_bg["thread"] = None
+    extra = _fu_bg.get("skipped") or []
+    _fu_bg["skipped"] = []
+    if extra:
+        _fu_set(skipped=list(_fu_state.get("skipped") or []) + extra)
+
+def _fu_manuals(skipped, background=False):
     if skip_manuals_get()["on"]:
         log_event("Full Update: manuals skipped (Skip manuals is on)", "info")
         return
-    _fu_set(phase="manuals", current="checking the manuals")
+    if not background:
+        _fu_set(phase="manuals", current="checking the manuals")
     if not _docs_claim():
         skipped.append({"name": "Manuals", "note": "a Get from GitHub was already running -- left to finish"})
-        _fu_set(skipped=list(skipped))
+        if not background:
+            _fu_set(skipped=list(skipped))
         return
     result = _docs_fetch_bg(skip_deleted=True)
     if result is None:
@@ -8100,7 +8342,8 @@ def _fu_manuals(skipped):
             skipped.append({"name": "Manuals", "note": f"{', '.join(failed)} not saved (see log)"})
         _fu_set(manuals=[{"name": n, "note": "new or changed on GitHub"} for n in got])
         log_event(f"Full Update: manuals: {_docs_summary(got, _same, failed)}", "warn" if failed else "ok")
-    _fu_set(skipped=list(skipped))
+    if not background:
+        _fu_set(skipped=list(skipped))
 
 def _wifi_menu_homes():
     if WIFI_MENU_HOME_DIR:
@@ -8257,11 +8500,11 @@ def _fu_run():
         _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
     _fu_set(skipped=list(skipped), scripts=done_scripts)
     _fu_wifi_menu_home(entries)
-    if not _fu_stop_ev.is_set():
-        _fu_manuals(skipped)
     if not staged or _fu_stop_ev.is_set():
+        _fu_manuals(skipped)
         _fu_finish()
         return
+    _fu_manuals_start()
 
     already_quiet = quiet_status()["on"]
     if not already_quiet:
@@ -9304,6 +9547,9 @@ def _xfer_bar_html (rec ):
             text +=f" of {_xfer_size (total )}"
         if rec ["speed"]>=1 :
             text +=f" · {_xfer_size (rec ['speed'])}/s"
+            if rec .get ("steady")and total >rec ["done"]:
+                left =(total -rec ["done"])/rec ["speed"]
+                text +=(f" · about {max (1 ,round (left ))} s left"if left <90 else f" · about {round (left /60 )} min left")
         fill =f' style="width:{pct }%"'if pct is not None else ""
         cls ="" if pct is not None else " xfer-indet"
     elif phase =="installing":

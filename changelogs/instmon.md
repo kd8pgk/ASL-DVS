@@ -1,6 +1,19 @@
 # instmon changelog
 
-Current file: `instmon_v2_115_0_20261121.py`.
+Current file: `instmon_v2_116_0_20261121.py`.
+
+## 2.116.0 (2026-11-22)
+
+Slow-link release (dialup and similar). This is a release: downloads resume after a drop or restart, version checks read less and keep their results, and manuals download while the components install.
+
+- **Resume on disk.** A download in progress is written to a partial file in the config folder (`instmon_partial`). After a dropped connection, or after instmon restarts, it resumes where it stopped (a Range request, with If-Range so a changed file starts again). The partial is removed when the file is saved, and any left unused for 7 days are deleted.
+- **One connection.** The updater keeps one HTTPS connection open and reuses it for the files that follow. Redirects are still followed.
+- **Versions.** Each file's version is kept on disk by its content ID (`instmon_versions.json`), so an unchanged file costs nothing on the next check or after a restart. A file with no version line in its first 64 KB is reported as such; instmon no longer downloads the whole file to look for one.
+- **Check time.** The check's total limit grows with the number of files (2 minutes each, up to 2 hours). Each chunk counts as progress, so a slow but moving download is not cut off.
+- **Full Update.** Every component is still downloaded and checked before anything is installed. The manuals now download in the background while the components install, and Full Update waits for them before it finishes.
+- **Bars.** Once the speed has been steady for a few seconds, a download bar shows the time left.
+- **Retries.** Each try gets its own time budget, so a retry after a drop is not cut short by the time the first try used.
+- Nothing else changes.
 
 ## 2.115.0 (2026-11-21)
 

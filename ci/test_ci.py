@@ -4112,7 +4112,7 @@ class InstmonSuiteInstallTests(unittest.TestCase):
                 mock.patch.object(m, "_fu_publish_plan", lambda rows, scripts: None), \
                 mock.patch.object(m, "_gh_fetch_missing", lambda e: seen.append(e) or ["termon_v1.py"]), \
                 mock.patch.object(m, "_fu_wifi_menu_home", lambda e: None), \
-                mock.patch.object(m, "_fu_manuals", lambda s: None), \
+                mock.patch.object(m, "_fu_manuals", lambda s, **kw: None), \
                 mock.patch.object(m, "_fu_finish", lambda error="": seen.append("finished")):
             m._fu_run()
         self.assertEqual(seen, [entries, "finished"])
