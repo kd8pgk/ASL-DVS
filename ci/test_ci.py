@@ -1299,7 +1299,7 @@ class ConfgetterTests(unittest.TestCase):
 
 class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
-        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "setup-save"],
+        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "setup-save", "avahi-install", "avahi-state"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
                   "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
@@ -5739,6 +5739,126 @@ class NodeTalkerAvahiTests(unittest.TestCase):
         with mock.patch.object(self.nt, "_atomic_write", side_effect=OSError("read-only")):
             self.assertFalse(self.nt.avahi_publish(8993, self.tls))
         self.assertIn("read-only", self.nt._AVAHI_NOTE)
+
+
+class NodeTalkerAvahiInstallTests(unittest.TestCase):
+    def setUp(self):
+        self.nt = load_nodetalker()
+        self.nt._AVAHI_TLS_ON = True
+
+    def run_job(self, results):
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append(cmd)
+            rc, err = results.pop(0) if results else (0, "")
+            return subprocess.CompletedProcess(cmd, rc, "", err)
+
+        self.nt._AVAHI_JOB.update(state="running", message="Installing")
+        with mock.patch.object(self.nt.subprocess, "run", side_effect=fake), \
+                mock.patch.object(self.nt, "avahi_publish", return_value=True) as pub:
+            self.nt._avahi_job()
+        return calls, pub
+
+    def test_status_before_any_install(self):
+        with mock.patch.object(self.nt, "avahi_installed", return_value=False):
+            d = self.nt.avahi_action({"action": "status"})
+        self.assertTrue(d["ok"])
+        self.assertFalse(d["installed"])
+        self.assertEqual(d["state"], "idle")
+        self.assertIn("not installed", d["message"])
+
+    def test_install_needs_root(self):
+        with mock.patch.object(self.nt.os, "geteuid", return_value=1000):
+            d = self.nt.avahi_action({"action": "install"})
+        self.assertFalse(d["ok"])
+        self.assertIn("root", d["message"])
+        self.assertEqual(d["error"], d["message"])
+
+    def test_unknown_action_is_refused(self):
+        self.assertFalse(self.nt.avahi_action({"action": "remove"})["ok"])
+        self.assertFalse(self.nt.avahi_action({})["ok"])
+
+    def test_install_starts_one_job_and_refuses_a_second(self):
+        with mock.patch.object(self.nt.os, "geteuid", return_value=0), \
+                mock.patch.object(self.nt, "avahi_installed", return_value=False), \
+                mock.patch.object(self.nt.threading, "Thread") as thread:
+            first = self.nt.avahi_action({"action": "install"})
+            second = self.nt.avahi_action({"action": "install"})
+        self.assertEqual(thread.call_count, 1)
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["state"], "running")
+        self.assertEqual(second["state"], "running")
+
+    def test_already_installed_publishes_without_running_apt(self):
+        with mock.patch.object(self.nt.os, "geteuid", return_value=0), \
+                mock.patch.object(self.nt, "avahi_publish", return_value=True) as pub, \
+                mock.patch.object(self.nt.subprocess, "run", side_effect=AssertionError("apt ran")):
+            d = self.nt.avahi_action({"action": "install"})
+        pub.assert_called_once()
+        self.assertEqual(d["state"], "ok")
+        self.assertTrue(d["installed"])
+        self.assertIn("already installed", d["message"])
+
+    def test_the_job_updates_then_installs_then_enables_and_publishes(self):
+        calls, pub = self.run_job([(0, ""), (0, ""), (0, "")])
+        self.assertEqual(calls[0], ["apt-get", "-q", "update"])
+        self.assertIn("avahi-daemon", calls[1])
+        self.assertEqual(calls[2], ["systemctl", "enable", "--now", "avahi-daemon"])
+        pub.assert_called_once()
+        d = self.nt.avahi_status()
+        self.assertEqual(d["state"], "ok")
+        self.assertTrue(d["ok"])
+        self.assertIn("installed", d["message"])
+
+    def test_a_failed_install_is_reported_with_the_apt_error(self):
+        calls, pub = self.run_job([(0, ""), (100, "E: Unable to locate package avahi-daemon")])
+        pub.assert_not_called()
+        d = self.nt.avahi_status()
+        self.assertEqual(d["state"], "failed")
+        self.assertFalse(d["ok"])
+        self.assertIn("Unable to locate package avahi-daemon", d["error"])
+        self.assertEqual(d["message"], d["error"])
+
+    def test_a_failed_update_stops_before_the_install(self):
+        calls, _ = self.run_job([(100, "E: Could not resolve")])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.nt.avahi_status()["state"], "failed")
+
+    def test_a_timeout_is_a_failure_not_a_crash(self):
+        def boom(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, 600)
+        self.nt._AVAHI_JOB.update(state="running", message="Installing")
+        with mock.patch.object(self.nt.subprocess, "run", side_effect=boom):
+            self.nt._avahi_job()
+        self.assertEqual(self.nt.avahi_status()["state"], "failed")
+
+    def test_a_failed_enable_does_not_fail_the_install(self):
+        calls, pub = self.run_job([(0, ""), (0, ""), (1, "no systemd")])
+        pub.assert_called_once()
+        self.assertEqual(self.nt.avahi_status()["state"], "ok")
+
+    def test_plain_http_is_installed_but_not_published(self):
+        self.nt._AVAHI_TLS_ON = False
+        with mock.patch.object(self.nt, "avahi_publish", side_effect=AssertionError("published")):
+            self.assertIn("plain http", self.nt._avahi_publish_now())
+
+    def test_setup_card_has_the_button_and_a_valid_script(self):
+        html = self.nt.render_page().decode("utf-8")
+        self.assertIn('id="avahi-install"', html)
+        self.assertIn('id="avahi-state"', html)
+        self.assertIn("async function avahiInstall()", html)
+        self.assertIn("avahiStatus();", html)
+        scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+        self.assertTrue(scripts)
+        if not shutil.which("node"):
+            self.skipTest("node not installed")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "page.js")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n;\n".join(scripts))
+            r = subprocess.run(["node", "--check", path], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":

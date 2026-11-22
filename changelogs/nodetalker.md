@@ -1,6 +1,18 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_11_2_20261122.py`. Newest entries first.
+Current file: `nodetalker_v0_11_3_20261122.py`. Newest entries first.
+
+## 0.11.3 (2026-11-22)
+
+The Setup tab can install avahi-daemon. This is a release: a new server action and a new block on the Setup tab.
+
+- **An Install avahi-daemon button.** The Setup tab has a Phone app discovery (avahi) block. It shows whether avahi-daemon is installed on the node. Pressing the button asks for confirmation, then installs `avahi-daemon` with apt in the background (`apt-get update`, then install, then `systemctl enable --now avahi-daemon`). The page checks the state every 4 s until the install ends, and the button says Installed when it is done.
+- **The advert starts at once.** When the install works, Node Talker writes the LAN service file straight away, so the phone app can find the node without a restart. If avahi-daemon is already installed, the button only writes the file.
+- **Errors show in the block.** A failed update or install reports the last lines of apt's output. A failure leaves the node as it was.
+- **Root and login.** The action needs a login and root, as the other Setup actions do. Only one install runs at a time.
+- **Nothing else changes.** Node Talker still works without avahi, and the installer still does not install it.
+- **New route:** `POST /api/avahi` with `action` set to `install` or `status`.
+- Tests: `NodeTalkerAvahiInstallTests` in `ci/test_ci.py` (status, root, one job at a time, already installed, apt success and failure, timeout, enable failure, plain http, the button and a `node --check` of the page script). Checked in headless Chromium on a stubbed node: the button, the poll and the Installed state.
 
 ## 0.11.2 (2026-11-22)
 

@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.2"
+VERSION = "0.11.3"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -3207,6 +3207,79 @@ def restart_asterisk():
         return {"ok": False, "error": (r.stderr or r.stdout).strip() or f"exit {r.returncode}"}
     log_event("Asterisk restarted from Node Talker", "ok")
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
+
+
+_AVAHI_JOB = {"state": "idle", "message": ""}
+_avahi_lock = threading.RLock()
+
+
+def avahi_status():
+    with _avahi_lock:
+        state = _AVAHI_JOB["state"]
+        message = _AVAHI_JOB["message"]
+    installed = avahi_installed()
+    if not message:
+        message = "avahi-daemon is installed." if installed else "avahi-daemon is not installed."
+    failed = state == "failed"
+    d = {"ok": not failed, "installed": installed, "state": state, "note": _AVAHI_NOTE, "message": message}
+    if failed:
+        d["error"] = message
+    return d
+
+
+def _avahi_publish_now():
+    if not _AVAHI_TLS_ON:
+        return "plain http, not advertised (phones need HTTPS to check the node)"
+    avahi_publish(_cfg_get("port"), TLS_DIR)
+    return _AVAHI_NOTE
+
+
+def _avahi_job():
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    opts = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+    steps = (
+        ("update", ["apt-get", "-q", "update"], 600),
+        ("install", ["apt-get", "-y", "-q"] + opts + ["install", "avahi-daemon"], 1200),
+    )
+    try:
+        for label, cmd, limit in steps:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=limit, env=env)
+            if r.returncode != 0:
+                tail = " ".join((r.stderr or r.stdout).strip().splitlines()[-3:])
+                raise RuntimeError("apt-get %s failed: %s" % (label, tail or "exit %d" % r.returncode))
+        try:
+            subprocess.run(["systemctl", "enable", "--now", "avahi-daemon"], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        result = ("ok", "avahi-daemon is installed. " + _avahi_publish_now())
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        result = ("failed", "avahi-daemon was not installed: %s" % exc)
+    with _avahi_lock:
+        _AVAHI_JOB.update(state=result[0], message=result[1])
+    log_event(result[1], "ok" if result[0] == "ok" else "err")
+
+
+def avahi_action(body):
+    action = str((body or {}).get("action", ""))
+    if action == "status":
+        return avahi_status()
+    if action != "install":
+        return {"ok": False, "error": "Pick install or status.", "message": "Pick install or status."}
+    if os.geteuid() != 0:
+        text = "root required to install avahi-daemon"
+        return {"ok": False, "error": text, "message": text}
+    with _avahi_lock:
+        if _AVAHI_JOB["state"] == "running":
+            return avahi_status()
+        if avahi_installed():
+            note = _avahi_publish_now()
+            _AVAHI_JOB.update(state="ok", message="avahi-daemon is already installed. " + note)
+            return avahi_status()
+        _AVAHI_JOB.update(state="running",
+                          message="Installing avahi-daemon in the background. This can take a few minutes on a Pi Zero 2 W.")
+    log_event("Installing avahi-daemon from Node Talker", "info")
+    threading.Thread(target=_avahi_job, name="avahi-install", daemon=True).start()
+    return avahi_status()
 
 
 SVC_CACHE_SEC = 4.0
@@ -6794,7 +6867,8 @@ def avahi_publish(port, tls_dir):
 
 
 def avahi_start(port, tls_dir, tls_on):
-    global _AVAHI_NOTE
+    global _AVAHI_NOTE, _AVAHI_TLS_ON
+    _AVAHI_TLS_ON = bool(tls_on)
     if not tls_on:
         _AVAHI_NOTE = "plain http, not advertised (phones need HTTPS to check the node)"
         log_event("LAN discovery: " + _AVAHI_NOTE, "info")
@@ -8484,7 +8558,7 @@ function showTab(name) {
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); avahiStatus(); }
   if (name === 'listen') openTalk();
   if (name === 'setup') { loadDashFavs(); loadDigital(); svcPoll(); }
   if (name === 'connect') connectTabEnter();
@@ -11592,6 +11666,36 @@ async function svcControl(key, label, action) {
   setTimeout(svcPoll, 4000);
 }
 
+let avahiTimer = null;
+function avahiShow(d) {
+  if (d.installed === undefined) { setMsg('avahi-msg', d); return; }
+  $('avahi-state').textContent = d.installed ? 'avahi-daemon is installed on this node.' : 'avahi-daemon is not installed on this node.';
+  $('avahi-install').disabled = !!d.installed || d.state === 'running';
+  $('avahi-install').textContent = d.state === 'running' ? 'Installing...' : d.installed ? 'Installed' : 'Install avahi-daemon';
+}
+async function avahiStatus() {
+  const d = await post('/api/avahi', {action: 'status'});
+  avahiShow(d);
+  if (d.installed !== undefined) setMsg('avahi-msg', d);
+}
+function avahiWatch(on) {
+  clearTimeout(avahiTimer);
+  if (!on) return;
+  avahiTimer = setTimeout(async () => {
+    const d = await post('/api/avahi', {action: 'status'});
+    avahiShow(d);
+    setMsg('avahi-msg', d);
+    avahiWatch(d.state === 'running');
+  }, 4000);
+}
+async function avahiInstall() {
+  if (!confirm('Install avahi-daemon from the internet with apt? It can take a few minutes on a Pi Zero 2 W.')) return;
+  const d = await post('/api/avahi', {action: 'install'});
+  avahiShow(d);
+  setMsg('avahi-msg', d);
+  avahiWatch(!!d.ok && d.state === 'running');
+}
+
 async function astRestart(msgId) {
   if (!confirm('Restart Asterisk now? Every link on this node drops and reconnects.')) return;
   note(msgId, '', 'Restarting Asterisk...');
@@ -11975,6 +12079,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('ff-up').addEventListener('change', ffUpload);
   $('setup-save').addEventListener('click', setupSave);
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
+  $('avahi-install').addEventListener('click', avahiInstall);
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
   ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch', 'rx-notch-auto'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-on-rx').addEventListener('input', () => { $('tune-on').checked = $('tune-on-rx').checked; tuneUi(); });
@@ -12298,6 +12403,11 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><button id="setup-save" class="btn primary" type="button">Save</button>
 <button id="setup-restart" class="btn danger" type="button">Restart Asterisk</button></div>
 <div id="setup-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Phone app discovery (avahi)</h3>
+<p class="muted small">The Node Talker phone app finds this node on the LAN through avahi-daemon when its saved name and address fail. The install comes from the internet through apt, and can take a few minutes on a Pi Zero 2 W. HTTPS must be on for the phone to check the node.</p>
+<div id="avahi-state" class="small mono"></div>
+<div class="row"><button id="avahi-install" class="btn primary" type="button">Install avahi-daemon</button></div>
+<div id="avahi-msg" class="msg"></div>
 </div>
 </div>
 <div class="card fold" id="cd-fav">
@@ -12621,6 +12731,7 @@ mic volume, so the gain here is applied in the page.</p>
 _page = None
 _TLS_NOTE = ""
 _AVAHI_NOTE = ""
+_AVAHI_TLS_ON = False
 
 
 _FONT_FACE_RE = re.compile(rb"@font-face\{[^}]*\}\n?")
@@ -12730,6 +12841,7 @@ _POST_ACTIONS = {
     "/api/node/disable": (lambda b: hook_disable(), (OSError,)),
     "/api/tx/enable": (lambda b: tx_enable(), (OSError,)),
     "/api/setup/apply": (lambda b: setup_apply(), (OSError,)),
+    "/api/avahi": (avahi_action, ()),
     "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
