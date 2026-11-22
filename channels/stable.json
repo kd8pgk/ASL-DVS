@@ -74,13 +74,13 @@
    "version": "9.3.115-pi02w"
   },
   "nodemon": {
-   "blob": "b73519f3e7ab5c2645bc225f95b316fd2f37ac98",
-   "commit": "c121c36236b59fde9f7e24a8a03a985a1fbae9e6",
-   "file": "nodemon_v0_4_0_20261116.py",
-   "landed": "2026-11-16T14:21:27Z",
-   "promoted": "2026-11-19T14:21:27Z",
+   "blob": "16469e3795458521f9578588760127c09a7c0f50",
+   "commit": "8eadafff963dc6769bddc90cc319223d379f2af7",
+   "file": "nodemon_v0_5_0_20261116.py",
+   "landed": "2026-11-16T14:47:41Z",
+   "promoted": "2026-11-22T22:59:24Z",
    "reason": "count",
-   "version": "0.4.0"
+   "version": "0.5.0"
   },
   "noderecorder": {
    "blob": "d17b463d6539fe04f18fc9252dfe4273ea85e184",
