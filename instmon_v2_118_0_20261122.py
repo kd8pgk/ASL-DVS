@@ -41,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.117.0"
+VERSION ="2.118.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4137,6 +4137,36 @@ def port_open (port ,host ="127.0.0.1",timeout =0.5 ):
     except OSError :
         return False 
 
+_scheme_cache ={}
+_scheme_lock =threading .Lock ()
+SCHEME_TTL_SEC =15.0
+
+def port_scheme (port ,default ="http",host ="127.0.0.1"):
+    if port is None :
+        return default 
+    now =time .monotonic ()
+    with _scheme_lock :
+        hit =_scheme_cache .get (port )
+        if hit and now -hit [0 ]<SCHEME_TTL_SEC :
+            return hit [1 ]
+    scheme =default 
+    try :
+        with socket .create_connection ((host ,port ),timeout =1.0 )as raw :
+            ctx =ssl .SSLContext (ssl .PROTOCOL_TLS_CLIENT )
+            ctx .check_hostname =False 
+            ctx .verify_mode =ssl .CERT_NONE 
+            raw .settimeout (2.0 )
+            try :
+                with ctx .wrap_socket (raw ,server_hostname =None ):
+                    scheme ="https"
+            except (ssl .SSLError ,OSError ):
+                scheme ="http"
+    except OSError :
+        return default 
+    with _scheme_lock :
+        _scheme_cache [port ]=(now ,scheme )
+    return scheme 
+
 def attempt_rollback (dest_path ,backup_path ,comp ):
 
     if not os .path .isfile (backup_path ):
@@ -4527,7 +4557,7 @@ def build_status ():
         "name":comp ["name"],
         "service":comp ["service"],
         "port":comp ["port"],
-        "scheme":comp .get ("scheme","http"),
+        "scheme":port_scheme (comp ["port"],comp .get ("scheme","http"))if listening else comp .get ("scheme","http"),
         "user_stopped":comp ["service"]in stopped_by_user ,
         "boot":boot_states .get (unit_of (comp ),""),
         "category":comp ["category"],

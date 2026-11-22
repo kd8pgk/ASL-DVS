@@ -1,6 +1,15 @@
 # instmon changelog
 
-Current file: `instmon_v2_117_0_20261122.py`.
+Current file: `instmon_v2_118_0_20261122.py`.
+
+## 2.118.0 (2026-11-22)
+
+The Go buttons on the Tools tab open each tool the way it is really served. This is a release: the status reply's `scheme` now comes from a check of the running port.
+
+- **Probe.** For a tool that is running, instmon tries a TLS handshake on its port (127.0.0.1). A handshake that works means `https`; anything else means `http`. The answer is kept for 15 seconds.
+- **Why.** The fixed table said `http` for the Dashboard, so its button opened plain http. The Pi Zero 2 W Dashboard serves TLS, the full build does not, and any tool can have HTTPS switched off in its own Setup. The button now follows what is true on this node.
+- **Not running.** A tool that is stopped keeps the table value (the button is disabled anyway).
+- Nothing else changes.
 
 ## 2.117.0 (2026-11-22)
 
