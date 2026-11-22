@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.39`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.11.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.11.2 (2026-11-22)
+
+The **Node Controller** and **InstMon** buttons in the page's title bar open the node's own page again, instead of the browser's about page.
+
+- **The cause.** Those buttons call `window.open('', name)` first and set the address afterwards. The app had multiple windows switched off, so that blank window loaded `about:blank` in the page itself; the app treated it as a link to another site and handed it to the browser, which showed its own about page (Opera, in the report).
+- **The fix.** The app now accepts a window the page opens on a tap or click, waits for the address the page gives it, and opens that address in the browser. The window is dropped at once, or after 15 seconds if it never gets one. A window the page opens without a tap is refused. The same path serves every `target=_blank` link in the page (Node Mon, DVSwitch, Cockpit, the SysMon link).
+- **Only web addresses leave the app.** An address that is not http or https (such as `about:blank`) is ignored and no longer sent to the browser.
+- The version takes the next Node Talker number, as an app-only change.
 
 ## 0.10.39 (2026-11-11)
 

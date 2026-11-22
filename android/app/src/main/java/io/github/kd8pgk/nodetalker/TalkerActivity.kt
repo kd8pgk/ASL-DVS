@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
+import android.os.Message
 import android.view.View
 import android.view.WindowManager
 import android.os.Build
@@ -42,6 +43,7 @@ class TalkerActivity : Activity() {
     private var pendingDownload: String? = null
     private var pendingText: String? = null
     private var certDialog: AlertDialog? = null
+    private var popup: WebView? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
     private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
     private val pushStats: (String) -> Unit = { json ->
@@ -337,6 +339,7 @@ class TalkerActivity : Activity() {
 
     override fun onDestroy() {
         certDialog?.dismiss()
+        dropPopup()
         if (isFinishing && ::node.isInitialized && Talk.nodeId == node.id) Talk.close(this)
         if (::web.isInitialized) {
             web.stopLoading()
@@ -370,7 +373,7 @@ class TalkerActivity : Activity() {
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
             allowContentAccess = false
-            setSupportMultipleWindows(false)
+            setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             userAgentString = "$userAgentString NodeTalkerApp/${BuildConfig.VERSION_NAME}"
@@ -384,6 +387,7 @@ class TalkerActivity : Activity() {
                     NodeStore.put(this@TalkerActivity, node)
                     return false
                 }
+                if (!isWeb(request.url)) return true
                 openExternal(request.url)
                 return true
             }
@@ -407,6 +411,31 @@ class TalkerActivity : Activity() {
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                if (!isUserGesture) return false
+                dropPopup()
+                val child = WebView(this@TalkerActivity)
+                child.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                        if (isWeb(request.url)) {
+                            openExternal(request.url)
+                            web.post { dropPopup() }
+                        }
+                        return true
+                    }
+                }
+                popup = child
+                val transport = resultMsg.obj as WebView.WebViewTransport
+                transport.webView = child
+                resultMsg.sendToTarget()
+                web.postDelayed({ if (popup === child) dropPopup() }, 15000)
+                return true
+            }
+
+            override fun onCloseWindow(window: WebView) {
+                if (popup === window) dropPopup()
+            }
+
             override fun onPermissionRequest(request: PermissionRequest) {
                 runOnUiThread { askMic(request) }
             }
@@ -473,6 +502,18 @@ class TalkerActivity : Activity() {
                 showError(getString(R.string.cert_refused))
             }
             .show()
+    }
+
+    private fun isWeb(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase()
+        return scheme == "http" || scheme == "https"
+    }
+
+    private fun dropPopup() {
+        val old = popup ?: return
+        popup = null
+        old.stopLoading()
+        old.destroy()
     }
 
     private fun openExternal(uri: Uri) {
