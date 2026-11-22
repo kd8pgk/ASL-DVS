@@ -14,6 +14,7 @@ import ipaddress
 import json
 import logging
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -41,7 +42,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.119-pi02w"
+VERSION      = "9.3.120-pi02w"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -1015,6 +1016,13 @@ _PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider", "node": "Through
                         "sound": "As sound (tone recordings)"}
 PHONE_DIALING    = ("phone", "ext")
 PHONE_INCOMING   = ("pin", "open", "off")
+_PHONE_PTT_OPEN_DEF  = "*99"
+_PHONE_PTT_CLOSE_DEF = "#"
+_PHONE_PTT_CODE_RE   = re.compile(r"^[0-9*#]{1,8}$")
+
+def _phone_ptt_code(v, default: str) -> str:
+    s = str(v if v is not None else "").strip()
+    return s if _PHONE_PTT_CODE_RE.match(s) else default
 _PHONE_TYPE_LBL  = {"sip": "SIP with login", "sip_ip": "SIP by IP address",
                     "hoip": "Hams Over IP", "awire": "AmateurWire", "iax2": "IAX2"}
 _PHONE_DIALTIME_MIN, _PHONE_DIALTIME_MAX, _PHONE_DIALTIME_DEF = 5000, 90000, 20000
@@ -1036,6 +1044,9 @@ def _phone_default() -> dict:
         "tot_phone_off": True,
         "tot_cap_min":   15,
         "listen_only":   False,
+        "ptt_tones":     False,
+        "ptt_open":      _PHONE_PTT_OPEN_DEF,
+        "ptt_close":     _PHONE_PTT_CLOSE_DEF,
         "activated":     False,
     }
 
@@ -1052,7 +1063,7 @@ def _phone_load() -> dict:
         return _phone_default()
     doc = _phone_default()
     for k in ("networks", "active", "patch_enabled", "dialtime", "signin_mode",
-              "tot_phone_off", "tot_cap_min", "listen_only"):
+              "tot_phone_off", "tot_cap_min", "listen_only", "ptt_tones", "ptt_open", "ptt_close"):
         if k in raw:
             doc[k] = raw[k]
     if "activated" in raw:
@@ -1061,6 +1072,9 @@ def _phone_load() -> dict:
         doc["activated"] = os.path.isfile(_ph_path(_PH_OWNED["ext"]))
     if raw.get("tone_path_user") and raw.get("tone_path") in PHONE_TONE_PATHS:
         doc["tone_path"], doc["tone_path_user"] = raw["tone_path"], True
+    doc["ptt_tones"] = doc["ptt_tones"] is True
+    doc["ptt_open"]  = _phone_ptt_code(doc["ptt_open"], _PHONE_PTT_OPEN_DEF)
+    doc["ptt_close"] = _phone_ptt_code(doc["ptt_close"], _PHONE_PTT_CLOSE_DEF)
     doc["signin_mode"] = "picked"
     nets = [n for n in doc["networks"] if isinstance(n, dict)][:PHONE_MAX_NETS] \
         if isinstance(doc["networks"], list) else []
@@ -1278,6 +1292,9 @@ def _phone_public(doc: dict) -> dict:
         "tot_phone_off": doc.get("tot_phone_off", True) is not False,
         "tot_cap_min":   doc.get("tot_cap_min", 15),
         "listen_only":   doc.get("listen_only") is True,
+        "ptt_tones":     doc.get("ptt_tones") is True,
+        "ptt_open":      doc.get("ptt_open", _PHONE_PTT_OPEN_DEF),
+        "ptt_close":     doc.get("ptt_close", _PHONE_PTT_CLOSE_DEF),
         "tone_path":     doc.get("tone_path", _PHONE_TONE_PATH_DEF),
         "node":          _cfg.bridge_nodes[BRIDGE_SLOT_PHONE],
         "live_node":     _phone_live_node(doc),
@@ -1560,6 +1577,10 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         return None, "Safety cap must be a number of minutes"
     if not 5 <= tot_cap <= 60:
         return None, "Safety cap must be 5–60 minutes"
+    ptt_open = str(raw.get("ptt_open", cur.get("ptt_open", _PHONE_PTT_OPEN_DEF))).strip()
+    ptt_close = str(raw.get("ptt_close", cur.get("ptt_close", _PHONE_PTT_CLOSE_DEF))).strip()
+    if not (_PHONE_PTT_CODE_RE.match(ptt_open) and _PHONE_PTT_CODE_RE.match(ptt_close)):
+        return None, "Radio tones can only use 0-9, * and # (up to 8 characters)"
     out = {
         "networks":      nets,
         "active":        active,
@@ -1571,6 +1592,9 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         "tot_phone_off": tot_off,
         "tot_cap_min":   tot_cap,
         "listen_only":   bool(raw.get("listen_only", cur.get("listen_only") is True)),
+        "ptt_tones":     raw.get("ptt_tones", cur.get("ptt_tones") is True) is True,
+        "ptt_open":      ptt_open,
+        "ptt_close":     ptt_close,
         "activated":     bool(cur.get("activated")),
     }
     if legacy:
@@ -3063,7 +3087,83 @@ def action_phone_send_tones(tones: str) -> Tuple[bool, str]:
     if not t:
         return False, "Type the tones to send"
     ok, msg = _phone_send_tones(t)
+    if ok:
+        _ptt_note_tones(t)
     return (True, f"Sent {t}") if ok else (False, msg)
+
+_RXKEYED_RE = re.compile(r"RPT_RXKEYED[ \t]*=[ \t]*1", re.IGNORECASE)
+_ptt_state_lock = threading.Lock()
+_ptt_state = {"open": False, "by_radio": False}
+_ptt_edge_lock = threading.Lock()
+_ptt_last: list = [None]
+_ptt_queue: "queue.Queue[bool]" = queue.Queue()
+_ptt_thread: list = [None]
+
+def _ptt_codes() -> Tuple[str, str]:
+    doc = _phone_doc()
+    return (doc.get("ptt_open") or _PHONE_PTT_OPEN_DEF, doc.get("ptt_close") or _PHONE_PTT_CLOSE_DEF)
+
+def _ptt_wanted() -> bool:
+    doc = _phone_doc()
+    return doc.get("ptt_tones") is True and doc.get("listen_only") is not True and _phone_on()
+
+def _ptt_note_tones(tones: str) -> None:
+    open_code, close_code = _ptt_codes()
+    with _ptt_state_lock:
+        if tones == open_code:
+            _ptt_state.update(open=True, by_radio=False)
+        elif tones == close_code:
+            _ptt_state.update(open=False, by_radio=False)
+
+def _ptt_handle(down: bool) -> None:
+    if not _ptt_wanted():
+        with _ptt_state_lock:
+            _ptt_state.update(open=False, by_radio=False)
+        return
+    open_code, close_code = _ptt_codes()
+    in_call = _phone_call_state(0.0).get("state") == "in_call"
+    with _ptt_state_lock:
+        if not in_call:
+            _ptt_state.update(open=False, by_radio=False)
+            return
+        if down:
+            if _ptt_state["open"]:
+                return
+            _ptt_state.update(open=True, by_radio=True)
+            code = open_code
+        else:
+            if not (_ptt_state["open"] and _ptt_state["by_radio"]):
+                return
+            _ptt_state.update(open=False, by_radio=False)
+            code = close_code
+    ok, msg = _phone_send_tones(code)
+    if ok:
+        log.info("radio PTT: sent %s on the call", code)
+        return
+    with _ptt_state_lock:
+        _ptt_state.update(open=False, by_radio=False)
+    log.warning("radio PTT: could not send %s (%s)", code, msg)
+    _phone_set_notice(f"Radio tones: could not send {code} ({msg})", 20.0)
+
+def _ptt_worker() -> None:
+    while True:
+        down = _ptt_queue.get()
+        try:
+            _ptt_handle(down)
+        except Exception as e:
+            log.warning("radio PTT tones: %s", e)
+            with _ptt_state_lock:
+                _ptt_state.update(open=False, by_radio=False)
+
+def _ptt_radio_seen(rx: bool) -> None:
+    with _ptt_edge_lock:
+        prev, _ptt_last[0] = _ptt_last[0], rx
+        if prev is None or prev == rx or not _ptt_wanted():
+            return
+        if _ptt_thread[0] is None or not _ptt_thread[0].is_alive():
+            _ptt_thread[0] = threading.Thread(target=_ptt_worker, name="radio-tones", daemon=True)
+            _ptt_thread[0].start()
+        _ptt_queue.put(rx)
 
 def _phone_net_id_of(chan: str) -> str:
     m = re.match(r"^PJSIP/(dvs[a-z0-9]+)-[0-9a-fA-F]+$", chan or "")
@@ -6572,6 +6672,7 @@ def _poll_asl_state():
     if not _poll_ok:
         return None
     keyed = bool(_KEYED_RE.search(out))
+    _ptt_radio_seen(bool(_RXKEYED_RE.search(out)))
     linked_node: Optional[str] = None
 
     bridge_set = _bridge_set()
@@ -10250,6 +10351,14 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
                   <select id="ph-tonepath" class="cfg-inp" onchange="ptTonePathSet(this.value)"></select></div>
               </div>
               <div class="ph-hint">Send keypad tones is saved as soon as you pick it. From the radio during a call: *980 sends *, *981 sends # and *982 sends *99.</div>
+              <div class="cfg-grid">
+                <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-ptt">Send tones when I key the radio on a call</label></div>
+                <div class="cfg-field"><label class="cfg-lbl" for="ph-ptt-open">Key up sends</label>
+                  <input id="ph-ptt-open" class="cfg-inp" type="text" maxlength="8" placeholder="*99" autocapitalize="off" spellcheck="false"></div>
+                <div class="cfg-field"><label class="cfg-lbl" for="ph-ptt-close">Unkey sends</label>
+                  <input id="ph-ptt-close" class="cfg-inp" type="text" maxlength="8" placeholder="#" autocapitalize="off" spellcheck="false"></div>
+              </div>
+              <div class="ph-hint">Radio tones: during a phone call, keying the radio sends the key-up code and unkeying sends the unkey code. These are separate from Node Talker's tones and don't change them. Nothing is sent again while the call is already open (for example, after Node Talker has sent its open code). Takes effect when you Save Phone.</div>
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
@@ -13631,6 +13740,9 @@ async function phLoad(){
     byId('ph-totoff').checked=d.tot_phone_off!==false;
     byId('ph-totcap').value=d.tot_cap_min||15;
     byId('ph-listen').checked=d.listen_only===true;
+    byId('ph-ptt').checked=d.ptt_tones===true;
+    byId('ph-ptt-open').value=d.ptt_open||'*99';
+    byId('ph-ptt-close').value=d.ptt_close||'#';
     _ph.dirty=false;
     phRender();_ph.loaded=true;_ph.dirty=false;phMsg('');
   }catch(e){console.error('phLoad() error:',e);phMsg('Could not load phone settings',false)}
@@ -13648,6 +13760,7 @@ async function phSave(quiet){
     tot_phone_off:byId('ph-totoff').checked,
     tot_cap_min:byId('ph-totcap').value.trim(),
     listen_only:byId('ph-listen').checked,
+    ptt_tones:byId('ph-ptt').checked,ptt_open:byId('ph-ptt-open').value.trim(),ptt_close:byId('ph-ptt-close').value.trim(),
     networks:_ph.nets.map(n=>{const o=Object.assign({},n,{trusted:String(n.trusted||''),favorites:phFavsOut(n.favs)});
       delete o.favs;delete o._favOpen;delete o._auto;delete o.tone_mode;delete o.register;return o})};
   const d=await api({action:'save-phone',phone});

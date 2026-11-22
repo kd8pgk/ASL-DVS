@@ -1,6 +1,16 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_119_20261121.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_120_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.120-pi02w (2026-11-22)
+
+The Phone tab can send the phone tones from the radio's PTT. This is a release: a new setting and a new action on a call.
+
+- **Send tones when I key the radio on a call** (Phone tab, under Send keypad tones) is off by default. When it is on and a phone call is up, keying the radio sends the **key-up code** (default `*99`), and unkeying sends the **unkey code** (default `#`). Both codes are set on the Phone tab, are saved with Save Phone, and can use 0-9, `*` and `#` (up to 8 characters).
+- It is independent of Node Talker: it has its own switch and codes, and Node Talker's settings and tones are not changed.
+- Nothing is sent twice. The open state is shared by every send: a key-up sends nothing while the call is already open (for example, after Node Talker has sent its open code), and an unkey closes only what the radio opened.
+- Nothing is sent when Listen only is on, when the radio is keyed outside a phone call, or when the setting is off.
+- A tone that can't be sent shows as a notice on the Phone tab.
 
 ## 9.3.119-pi02w (2026-11-21)
 
