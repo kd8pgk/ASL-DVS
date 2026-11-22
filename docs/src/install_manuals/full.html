@@ -28,7 +28,7 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_111_0_20261116.py</td><td>2.111.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_115_0_20261121.py</td><td>2.115.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_8_0_20261116.sh</td><td>7.8.0</td></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_v9_3_113_20261116.py</td><td>9.3.113</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_v6_13_101_20261116.py</td><td>6.13.101</td></tr>
@@ -134,7 +134,7 @@ sudo systemctl status sysmon</pre>
 <pre><span class="c"># files from the main branch on GitHub</span>
 cd ~
 B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
-wget $B/instmon_v2_111_0_20261116.py
+wget $B/instmon_v2_115_0_20261121.py
 wget $B/install_all_v7_8_0_20261116.sh
 wget $B/nodecontrol_v9_3_113_20261116.py
 wget $B/sysmon_v6_13_101_20261116.py
@@ -151,7 +151,7 @@ wget $B/termon_v0_2_5_20261113.py</pre>
   <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
     updates itself.</p>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
-<pre>sudo python3 instmon_v2_111_0_20261116.py --install</pre>
+<pre>sudo python3 instmon_v2_115_0_20261121.py --install</pre>
     <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
   <h2>What --install does</h2>
   <ul>
@@ -383,7 +383,7 @@ ss -tlnp | grep 9999</pre>
   <h1 class="ch">Quick reference</h1>
   <table>
     <tr><th>Task</th><th>Command</th></tr>
-    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_111_0_20261116.py --install</td></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_115_0_20261121.py --install</td></tr>
     <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_8_0_20261116.sh</td></tr>
     <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
     <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>
