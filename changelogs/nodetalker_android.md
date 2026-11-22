@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.39`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.11.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.11.1 (2026-11-22)
+
+- **The app finds a node again when its name fails.** A saved node now remembers the address that last passed its certificate check. Each connection (listen, talk, the stats report and the Node Talker page) tries the saved name first, then that address. While the name works, nothing changes: the page and its login stay on the name. Only when the address is used does the page work on that address, so you log in on the page once for it, as on any new address.
+- **Only the pinned certificate is trusted.** An address counts only when the node there shows the certificate the app already trusts. A different device at an old address, or at a name that moved, is skipped. Without a trusted certificate (first connection, or plain http) the app connects as before and nothing is looked up.
+- **The page and the native connections agree.** When the address is used, the Node Talker page loads from that address, so its cookie and login are for the same origin as the audio connection.
+- **Saved address.** The app stores the address separately from the name you typed. Editing a node's address or port clears it.
+- **Not yet.** Finding a node after its address has changed and its name does not resolve needs the phone's own discovery (the next steps: the service announced by Node Talker, then a subnet scan).
+- Tests: `NodeLinkTest` (order of name and address, pinned certificate match, skipping a different certificate, the fingerprint format).
 
 ## 0.10.39 (2026-11-11)
 

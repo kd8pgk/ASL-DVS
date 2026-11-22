@@ -347,7 +347,15 @@ class TalkerActivity : Activity() {
 
     private fun load() {
         error.visibility = View.GONE
-        web.loadUrl(node.origin + "/")
+        val start = node
+        Thread {
+            val s = NodeStore.session(this, start)
+            runOnUiThread {
+                if (isDestroyed || node.id != start.id) return@runOnUiThread
+                node = node.copy(host = s.host, addr = s.addr)
+                web.loadUrl(node.origin + "/")
+            }
+        }.start()
     }
 
     private fun reopen() {
@@ -380,8 +388,9 @@ class TalkerActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame || node.sameOrigin(request.url)) return false
                 if (node.httpsUpgrade(request.url)) {
-                    node = (NodeStore.get(this@TalkerActivity, node.id) ?: node).copy(https = true, pin = "")
-                    NodeStore.put(this@TalkerActivity, node)
+                    val stored = (NodeStore.get(this@TalkerActivity, node.id) ?: node).copy(https = true, pin = "")
+                    NodeStore.put(this@TalkerActivity, stored)
+                    node = stored.copy(host = node.host, addr = node.addr)
                     return false
                 }
                 openExternal(request.url)
@@ -464,8 +473,9 @@ class TalkerActivity : Activity() {
             .setMessage(getString(if (first) R.string.cert_first_body else R.string.cert_changed_body, node.title, Certs.pretty(fp)))
             .setCancelable(false)
             .setPositiveButton(if (first) R.string.trust else R.string.trust_new) { _, _ ->
-                node = current.copy(pin = fp)
-                NodeStore.put(this, node)
+                val stored = current.copy(pin = fp)
+                NodeStore.put(this, stored)
+                node = stored.copy(host = node.host, addr = node.addr)
                 handler.proceed()
             }
             .setNegativeButton(R.string.cancel) { _, _ ->

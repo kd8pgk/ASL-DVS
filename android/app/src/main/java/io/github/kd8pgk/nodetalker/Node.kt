@@ -6,7 +6,6 @@ import android.net.http.SslCertificate
 import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
-import java.security.MessageDigest
 import java.util.UUID
 
 data class Node(
@@ -16,6 +15,7 @@ data class Node(
     val port: Int,
     val https: Boolean,
     val pin: String = "",
+    val addr: String = "",
 ) {
     val origin: String
         get() = (if (https) "https" else "http") + "://" + (if (host.contains(':')) "[$host]" else host) + ":" + port
@@ -39,7 +39,7 @@ data class Node(
 
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("host", host)
-        .put("port", port).put("https", https).put("pin", pin)
+        .put("port", port).put("https", https).put("pin", pin).put("addr", addr)
 
     companion object {
         const val DEFAULT_PORT = 8993
@@ -52,6 +52,7 @@ data class Node(
             o.optInt("port", DEFAULT_PORT),
             o.optBoolean("https"),
             o.optString("pin"),
+            o.optString("addr").let { if (validHost(it)) it else "" },
         )
 
         fun validHost(h: String) = HOST_RE.matches(h)
@@ -126,6 +127,7 @@ object NodeStore {
 
     fun get(c: Context, id: String?) = all(c).firstOrNull { it.id == id }
 
+    @Synchronized
     fun put(c: Context, node: Node) {
         val list = all(c).toMutableList()
         val i = list.indexOfFirst { it.id == node.id }
@@ -133,7 +135,27 @@ object NodeStore {
         write(c, list)
     }
 
+    @Synchronized
     fun delete(c: Context, id: String) = write(c, all(c).filter { it.id != id })
+
+    @Synchronized
+    fun setAddr(c: Context, id: String, addr: String) {
+        val n = get(c, id) ?: return
+        if (n.addr != addr) put(c, n.copy(addr = addr))
+    }
+
+    fun session(c: Context, n: Node): Node {
+        if (!NodeLink.needsIdentity(n.https, n.pin)) return n
+        val f = NodeLink.locate(
+            n.host, n.addr, n.port, n.pin,
+            { NodeLink.addressesOf(it) },
+            { ip, port -> NodeHttp.fingerprintAt(ip, port, PROBE_MS) },
+        ) ?: return n
+        if (f.ip != n.addr) setAddr(c, n.id, f.ip)
+        return n.copy(host = f.host, addr = f.ip)
+    }
+
+    private const val PROBE_MS = 3000
 
     fun keepScreenOn(c: Context) = prefs(c).getBoolean(KEY_KEEP_ON, false)
 
@@ -169,8 +191,7 @@ object NodeStore {
 }
 
 object Certs {
-    fun fingerprint(der: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(der).joinToString(":") { "%02X".format(it) }
+    fun fingerprint(der: ByteArray): String = NodeLink.fingerprint(der)
 
     fun der(cert: SslCertificate?): ByteArray? {
         if (cert == null) return null

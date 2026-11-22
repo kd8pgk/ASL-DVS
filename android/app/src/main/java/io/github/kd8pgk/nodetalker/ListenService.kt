@@ -314,7 +314,8 @@ class ListenService : Service() {
         val backoff = Backoff(2000L)
         while (talkWanted && g == talkGen) {
             var upMs = 0L
-            val c = WsClient(n, CookieManager.getInstance().getCookie(n.origin))
+            val s = NodeStore.session(this, n)
+            val c = WsClient(s, CookieManager.getInstance().getCookie(s.origin))
             try {
                 c.connect()
                 if (!(talkWanted && g == talkGen)) {
@@ -540,9 +541,10 @@ class ListenService : Service() {
         while (live(g)) {
             var upMs = 0L
             try {
-                val cookie = CookieManager.getInstance().getCookie(n.origin)
+                val s = NodeStore.session(this, n)
+                val cookie = CookieManager.getInstance().getCookie(s.origin)
                 connectAt = SystemClock.elapsedRealtime()
-                val c = NodeHttp.open(n, "/api/listen?fmt=s16&client=android", cookie)
+                val c = NodeHttp.open(s, "/api/listen?fmt=s16&client=android", cookie)
                 c.readTimeout = 6000
                 c.useCaches = false
                 val code = c.responseCode
@@ -644,9 +646,10 @@ class ListenService : Service() {
                 val beat = beats % STATS_BEAT_EVERY == 0
                 ListenLog.flush(this)
                 val snap = stats.take(beat, netInfo?.take().orEmpty()) ?: continue
-                val cookie = CookieManager.getInstance().getCookie(n.origin)
+                val s = NodeStore.session(this, n)
+                val cookie = CookieManager.getInstance().getCookie(s.origin)
                 val t0 = SystemClock.elapsedRealtime()
-                when (RxReport.send(n, cookie, snap)) {
+                when (RxReport.send(s, cookie, snap)) {
                     RxReport.SENT -> stats.probe(SystemClock.elapsedRealtime() - t0)
                     RxReport.UNSUPPORTED -> return
                     else -> stats.put(snap)
