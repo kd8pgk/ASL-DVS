@@ -680,5 +680,55 @@ class SkipManuals(unittest.TestCase):
         fetch.assert_called_once()
 
 
+class GoButtonScheme(unittest.TestCase):
+    def serve(self, tls):
+        import socketserver
+        import ssl
+        import subprocess
+
+        class H(socketserver.BaseRequestHandler):
+            def handle(self):
+                try:
+                    self.request.recv(1024)
+                    self.request.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                except OSError:
+                    pass
+
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), H)
+        srv.daemon_threads = True
+        if tls:
+            d = tempfile.mkdtemp(prefix="instmon_tls_")
+            cert, key = os.path.join(d, "c.pem"), os.path.join(d, "k.pem")
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+                            "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=t"], check=True, capture_output=True)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key)
+            srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv.server_address[1]
+
+    def setUp(self):
+        im._scheme_cache.clear()
+
+    def test_a_tls_port_is_https(self):
+        self.assertEqual(im.port_scheme(self.serve(True), "http"), "https")
+
+    def test_a_plain_port_is_http_even_when_the_table_says_https(self):
+        self.assertEqual(im.port_scheme(self.serve(False), "https"), "http")
+
+    def test_a_closed_port_keeps_the_table_value(self):
+        self.assertEqual(im.port_scheme(1, "https"), "https")
+        self.assertEqual(im.port_scheme(None, "http"), "http")
+
+    def test_the_status_reports_the_probed_scheme(self):
+        port = self.serve(True)
+        comp = dict(im.COMPONENTS[0], port=port)
+        with mock.patch.object(im, "COMPONENTS", [comp]):
+            c = im.build_status()["components"][0]
+        self.assertEqual(c["scheme"], "https")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
