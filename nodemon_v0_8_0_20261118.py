@@ -25,8 +25,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.7.0"
-DATE_STR = "2026-11-17"
+VERSION = "0.8.0"
+DATE_STR = "2026-11-18"
 APP_NAME = "Node Monitor"
 PORT = 7777
 
@@ -1699,7 +1699,7 @@ def node_discon(node, who="?"):
         {"ok": False, "error": f"Node {node}: {text}."}
 
 
-_CSS = r""":root{--bg:#0d1117;--surface:#161e2e;--surface2:#1e2a3f;--border:#2e4060;--border2:#3a5278;--amber:#ffd040;--green:#00ffb0;--red:#ff3d5a;--blue:#22d4ff;--teal:#00ffe5;--lime:#d4ff00;--orange:#ffaa22;--text:#ffffff;--text-bright:#f0f8ff;--sans:"Readex Pro",Arial,Helvetica,sans-serif;--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem}
+_CSS = r""":root{--bg:#0d1117;--surface:#161e2e;--surface2:#1e2a3f;--border:#2e4060;--border2:#3a5278;--amber:#ffd040;--amber-dim:#6b4800;--green:#00ffb0;--green-dim:#005538;--red:#ff3d5a;--red-dim:#6b0e20;--blue:#22d4ff;--blue-dim:#083a58;--purple:#d466ff;--purple-dim:#52087a;--teal:#00ffe5;--teal-dim:#004840;--orange:#ffaa22;--orange-dim:#703800;--lime:#d4ff00;--lime-dim:#425200;--pink:#ff44cc;--pink-dim:#700050;--fcs:#00c4a0;--fcs-dim:#004840;--text:#ffffff;--text-bright:#f0f8ff;--muted:#ffffff;--sans:"Readex Pro",Arial,Helvetica,sans-serif;--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:var(--fs-base);min-height:100vh;padding-bottom:3rem}
 button,input,select{font-family:var(--sans)}
@@ -1719,6 +1719,7 @@ main{padding:.6rem 1rem;max-width:1100px;margin:0 auto}
 .t-ov{--mc:var(--orange);--mc-rgb:255,170,34}
 .t-main{--mc:var(--teal);--mc-rgb:0,255,229}
 .t-priv{--mc:var(--lime);--mc-rgb:212,255,0}
+.t-linked{--mc:var(--pink);--mc-rgb:255,68,204}
 .t-log{--mc:var(--blue);--mc-rgb:34,212,255}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.7rem .8rem;margin-top:.7rem}
 .card h2{font-size:var(--fs-md);color:var(--amber);letter-spacing:.06em;margin-bottom:.45rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
@@ -1747,7 +1748,7 @@ details.others summary{cursor:pointer;color:var(--blue);font-size:var(--fs-xs);l
 .keyed{color:var(--lime)}
 .r{text-align:right}
 .btn.discon{padding:.3rem .8rem;font-size:var(--fs-sm)}
-@media (max-width:600px) and (orientation:portrait){.nodes-tbl{min-width:0;width:100%}.nodes-tbl th,.nodes-tbl td{padding:.35rem .3rem}.nodes-tbl td:nth-child(2){white-space:normal}.nodes-tbl .btn.discon{padding:.3rem .5rem;font-size:.7rem}.nodes-tbl th:nth-child(4),.nodes-tbl td:nth-child(4),.nodes-tbl th:nth-child(5),.nodes-tbl td:nth-child(5){display:none}}
+@media (max-width:600px) and (orientation:portrait){.nodes-tbl{min-width:0;width:100%}.nodes-tbl th,.nodes-tbl td{padding:.35rem .3rem}.nodes-tbl td:nth-child(2){white-space:normal}.nodes-tbl .btn.discon{padding:.3rem .5rem;font-size:.7rem}.nodes-tbl th:nth-child(3),.nodes-tbl td:nth-child(3),.nodes-tbl th:nth-child(5),.nodes-tbl td:nth-child(5){display:none}}
 .sec-lbl{font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:#fff;margin:1rem 0 .3rem}
 .btn{padding:.48rem 1rem;border-radius:4px;border:1px solid;background:transparent;cursor:pointer;transition:all .14s;white-space:nowrap;font-size:var(--fs-base)}
 .btn:hover{filter:brightness(1.6);box-shadow:0 0 12px currentColor}
@@ -1822,12 +1823,14 @@ __CSS__</style>
 <div class="tabs" id="tabs" role="tablist">
 <div class="tab t-ov active" id="tab-ov" data-tab="ov" role="tab">Overview</div>
 <div class="tab t-main" id="tab-main" data-tab="main" role="tab">Main node</div>
+<div class="tab t-linked" id="tab-linked" data-tab="linked" role="tab">Linked Nodes</div>
 <div class="tab t-priv" id="tab-priv" data-tab="priv" role="tab">Private nodes</div>
 <div class="tab t-log" id="tab-log" data-tab="log" role="tab">Log</div>
 </div>
 <div id="status-banner"></div>
 <section id="pg-ov"></section>
 <section id="pg-main" class="hidden"></section>
+<section id="pg-linked" class="hidden"></section>
 <section id="pg-priv" class="hidden"></section>
 <section id="pg-log" class="hidden"><div class="card"><h2>Node Monitor log</h2><div class="logbox" id="logbox"></div></div></section>
 <div id="sysbar">
@@ -1891,7 +1894,7 @@ async function logout() { await api('/api/logout', {method: 'POST', body: {}}); 
 function showTab(name) {
   current = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  ['ov', 'main', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
+  ['ov', 'main', 'linked', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
   if (name === 'log') pollLog();
 }
 function kv(label, node) {
@@ -2169,6 +2172,28 @@ function gatewayTable(d) {
   });
   return table(['Gateway', 'State', 'Tuned to', 'Detail', 'Source'], rows, 'No gateways.');
 }
+function renderLinked(d) {
+  const root = $('pg-linked');
+  root.textContent = '';
+  if (!d.main) { root.appendChild(el('div', 'banner warn', 'No node was found in rpt.conf.')); return; }
+  const n = d.main;
+  const card = el('div', 'card');
+  const h = el('h2');
+  h.appendChild(el('span', '', 'Linked Nodes from node ' + n.node));
+  const st = stateOf(n);
+  h.appendChild(badge(st[0], st[1]));
+  card.appendChild(h);
+  if (!n.ok && n.error) card.appendChild(el('div', 'banner warn', n.error));
+  const privNodes = (d.private || []).map((p) => p.node);
+  const rows = linkRows(n).map((r, i) => {
+    const l = n.links[i];
+    const local = privNodes.indexOf(l.node) !== -1;
+    r[0] = {text: l.node + (local ? ' (local)' : ''), mono: true};
+    return r;
+  });
+  card.appendChild(table(LINK_COLS, rows, 'No links.'));
+  root.appendChild(card);
+}
 function renderPriv(d) {
   const root = $('pg-priv');
   root.textContent = '';
@@ -2192,6 +2217,7 @@ function renderAll(d) {
   if (busy) return;
   renderOv(d);
   renderMain(d);
+  renderLinked(d);
   renderPriv(d);
 }
 async function poll() {
