@@ -80,7 +80,7 @@ def make_case(key, pattern):
             self.mod._links_cache.update(t=-1e9, v={})
 
         def test_the_page_shows_a_link_by_port_when_the_reply_says_it_answers(self):
-            self.assertIn("q.dataset.qlPath ? base + q.dataset.qlPath : base + ':' + q.dataset.qlPort + '/'", self.src)
+            self.assertIn("q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/'", self.src)
             self.assertIn("const on = !!L[q.dataset.ql];", self.src)
 
     QuickLinkCase.__name__ = f"QuickLinks_{key}"
@@ -110,7 +110,7 @@ def make_bar_case(key, pattern):
             m = re.search(r'<a id="lnk-nodemon" class="ql-btn" href="([^"]+)" target="_blank" rel="noopener"\s+title="([^"]+)">([^<]+)</a>', self.bar)
             self.assertIsNotNone(m)
             self.assertEqual(m.groups(), ("https://localhost:7777/", "Node Monitor", LABELS[key]))
-            self.assertIn('id === "lnk-nodemon" ? "https" : "http"', self.src)
+            self.assertIn('(id === "lnk-nodemon" || id === "lnk-cockpit") ? "https" : "http"', self.src)
 
         def test_the_page_points_it_at_this_nodes_port_7777(self):
             self.assertIn('const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};', self.src)

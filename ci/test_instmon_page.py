@@ -95,7 +95,7 @@ class Page(unittest.TestCase):
         card = home[home.index("Quick Links"):home.index("GitHub Updates")]
         rows = re.findall(r'<div class="row"[^>]*>(.*?)</div>', card, re.S)
         self.assertEqual(len(rows), 2)
-        for label in ("Allmon3", "DVSwitch", "Cockpit", "USRP2M17"):
+        for label in ("Node Mon", "DVSwitch", "Cockpit", "USRP2M17"):
             self.assertIn(label, rows[0])
             self.assertNotIn(label, rows[1])
         self.assertEqual(re.findall(r"<a [^>]*>(.*?)</a>", rows[1]), ["GitHub"])

@@ -1,6 +1,14 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_7_0_20261117.py`. Newest entries first.
+Current file: `nodemon_v0_7_1_20261122.py`. Newest entries first.
+
+## 0.7.1 (2026-11-22)
+
+The Links card opens **https** for the tools that serve TLS. This is a release: the address a link opens changed.
+
+- SysMon, Node Talker and Node Recorder open `https://<host>:<port>/`. Terminal Monitor and Cockpit already did. Node Controller, instmon, wifimon, 44helper and Pibrary stay on http.
+- The console message after `--install` says `https://`.
+- Nothing else changes.
 
 ## 0.7.0 (2026-11-17)
 

@@ -41,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.116.0"
+VERSION ="2.117.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3050,6 +3050,7 @@ COMPONENTS =[
 "name":"SysMon",
 "service":"sysmon",
 "port":9999 ,
+"scheme":"https",
 "install_link":"/usr/local/bin/sysmon.py",
 "category":"sysmon",
 },
@@ -3073,6 +3074,7 @@ COMPONENTS =[
 "service":"nodetalker",
 "legacy_services":("nodelisten",),
 "port":8993 ,
+"scheme":"https",
 "install_link":"/usr/local/bin/nodetalker.py",
 "legacy_links":("/usr/local/bin/nodelisten.py",),
 "unit_paths":{"nodetalker":("/usr/local/bin/nodetalker.py","/usr/local/lib/asl_dvs/nodetalker")},
@@ -3082,6 +3084,7 @@ COMPONENTS =[
 "name":"Node Recorder",
 "service":"noderecorder",
 "port":8995 ,
+"scheme":"https",
 "install_link":"/usr/local/bin/noderecorder.py",
 "unit_paths":{"noderecorder":("/usr/local/bin/noderecorder.py","/usr/local/lib/asl_dvs/noderecorder")},
 "category":"noderecorder",
@@ -3107,6 +3110,7 @@ COMPONENTS =[
 "name":"Node Monitor",
 "service":"nodemon",
 "port":7777 ,
+"scheme":"https",
 "install_link":"/usr/local/bin/nodemon.py",
 "unit_paths":{"nodemon":("/usr/local/bin/nodemon.py","/usr/local/lib/asl_dvs/nodemon")},
 "category":"nodemon",
@@ -9900,7 +9904,7 @@ def cached_router_probe(ip, ttl=ROUTER_PROBE_TTL, prober=probe_router_ui, clock=
 ROUTER_LINK ="@router"
 
 QUICKLINKS =[
-("Allmon3","/allmon3",True ),
+("Node Mon",7777 ,True ),
 ("DVSwitch","/dvswitch",True ),
 ("Cockpit",9090 ,True ),
 ("USRP2M17","/m17",True ),
@@ -9918,8 +9922,9 @@ def render_quicklinks_html ():
         cls =" class=\"b-go\""if enabled else ""
         disabled =""if enabled else " disabled"
         attr ="data-port"if isinstance (target ,int )else "data-path"
+        scheme =' data-scheme="https"'if target in (7777 ,9090 )else ""
         btns .append (
-        f'<button data-action="go" {attr }="{target }"{cls}{disabled}>{esc (label )}</button>'
+        f'<button data-action="go" {attr }="{target }"{scheme }{cls}{disabled}>{esc (label )}</button>'
         )
     return "".join (btns )
 

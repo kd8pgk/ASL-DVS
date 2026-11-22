@@ -50,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_102_20261121.py` | `sysmon_pi02w_v6_13_90_20261121.py` | `instmon_v2_116_0_20261121.py` |
+| File name | `sysmon_v6_13_103_20261122.py` | `sysmon_pi02w_v6_13_91_20261122.py` | `instmon_v2_117_0_20261122.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -104,7 +104,7 @@ This downloads the installer and runs it. On a node with nothing installed, the 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_116_0_20261121.py --install
+   sudo python3 instmon_v2_117_0_20261122.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -156,7 +156,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_11_0_20261121.py --install
+  sudo python3 nodetalker_v0_11_1_20261122.py --install
   ```
 
 Then:
@@ -525,19 +525,19 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_114_20261121.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_119_20261121.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_102_20261121.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_90_20261121.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_116_0_20261121.py` | common |
+| `nodecontrol_v9_3_115_20261122.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_120_20261122.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_103_20261122.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_91_20261122.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_117_0_20261122.py` | common |
 | `wifimon_v5_57_0_20261115.py` | common |
 | `44helper_v0_1_74_20261118.py` | common |
-| `nodetalker_v0_11_0_20261121.py` | common |
-| `noderecorder_v0_17_8_20261116.py` | common |
+| `nodetalker_v0_11_1_20261122.py` | common |
+| `noderecorder_v0_17_9_20261122.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_3_20261115.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
-| `nodemon_v0_7_0_20261117.py` | common |
+| `nodemon_v0_7_1_20261122.py` | common |
 | `piper_dashboard_v0_8_1_20261121.py` | common |
 | `install_all_v7_9_0_20261121.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |

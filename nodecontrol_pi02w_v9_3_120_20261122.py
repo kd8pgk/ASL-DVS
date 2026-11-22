@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.119-pi02w"
+VERSION      = "9.3.120-pi02w"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -14346,7 +14346,7 @@ function _initQuickLinks() {
   const host = window.location.hostname;
   document.querySelectorAll('.ql[data-ql-path],.ql[data-ql-port]').forEach(a => {
     a.href = a.dataset.qlPath ? `http://${host}${a.dataset.qlPath}`
-                              : `${a.dataset.qlPort === '7777' ? 'https' : 'http'}://${host}:${a.dataset.qlPort}/`;
+                              : `${(a.dataset.qlPort === '7777' || a.dataset.qlPort === '9090') ? 'https' : 'http'}://${host}:${a.dataset.qlPort}/`;
   });
 }
 
@@ -14359,7 +14359,7 @@ async function _probeSysMon() {
     if (!r.ok) return;
     const d = await r.json();
     if (d.running) {
-      btn.href = `http://${window.location.hostname}:${d.port}/`;
+      btn.href = `https://${window.location.hostname}:${d.port}/`;
       btn.classList.remove('ql-off');
       btn.removeAttribute('aria-disabled');
       btn.removeAttribute('title');
@@ -14388,7 +14388,7 @@ async function _probeNodeListen() {
     if (!r.ok) return;
     const d = await r.json();
     if (d.running) {
-      a.href = `http://${window.location.hostname}:${d.port}/`;
+      a.href = `https://${window.location.hostname}:${d.port}/`;
       a.classList.remove('ql-off');
       a.removeAttribute('aria-disabled');
       a.title = 'Listen to this node in the browser (Node Talker)';

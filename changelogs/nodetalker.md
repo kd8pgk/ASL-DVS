@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_11_0_20261121.py`. Newest entries first.
+Current file: `nodetalker_v0_11_1_20261122.py`. Newest entries first.
+
+## 0.11.1 (2026-11-22)
+
+The **Node Mon** quick link works again: it opens **https**, because Node Monitor serves TLS only. This is a release: the address a link opens changed.
+
+- **Node Mon** and **Cockpit** open `https://<host>:<port>/`; before, Node Mon opened `http://` and got no answer. The SysMon link on the tune card opens https too.
+- The console message after `--install` says `https://`.
+- Node Controller and InstMon links stay on http (the full-build Node Controller has no TLS; the Pi Zero 2 W one sends http on to https).
+- Nothing else changes.
 
 ## 0.11.0 (2026-11-21)
 
