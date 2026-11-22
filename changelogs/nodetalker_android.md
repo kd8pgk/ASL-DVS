@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.11.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.11.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.11.2 (2026-11-22)
+
+- **A node on the LAN is found when its name and last address both fail.** Node Talker 0.11.2 announces the node on the LAN as `_asl-dvs._tcp` with its certificate fingerprint, when avahi-daemon is installed on the node. If the saved name and the saved address don't reach the node, the app listens for these announcements for up to 3 s and connects to an announcing node only when its certificate is the pinned one.
+- **An announcement only suggests an address.** The connection is still checked against the pinned certificate, so a fake announcement cannot send the app to another node.
+- **Needs Node Talker 0.11.2 and avahi-daemon on the node.** The installer does not install avahi-daemon. Without it the search finds nothing and the connection ends as before.
+- Tests: `NodeLinkTest` (the announcement is asked for only after the earlier steps, a different certificate is refused, the fingerprint is compared without regard to case). The Android app compiles against the Android 16 framework; the discovery itself runs only on a phone.
 
 ## 0.11.1 (2026-11-22)
 

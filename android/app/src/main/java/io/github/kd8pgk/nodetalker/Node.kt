@@ -150,12 +150,14 @@ object NodeStore {
             n.host, n.addr, n.port, n.pin,
             { NodeLink.addressesOf(it) },
             { ip, port -> NodeHttp.fingerprintAt(ip, port, PROBE_MS) },
+            { Discovery.advertised(c, n.pin, DISCOVER_MS) },
         ) ?: return n
         if (f.ip != n.addr) setAddr(c, n.id, f.ip)
         return n.copy(host = f.host, addr = f.ip)
     }
 
     private const val PROBE_MS = 3000
+    private const val DISCOVER_MS = 3000L
 
     fun keepScreenOn(c: Context) = prefs(c).getBoolean(KEY_KEEP_ON, false)
 

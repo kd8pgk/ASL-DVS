@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.0"
+VERSION = "0.11.2"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -4029,6 +4029,9 @@ BLANK_NAME, BLANK_ADDR = "blank", "000000"
 _DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
 _CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9/-]{2,9}$")
 TLS_DIR = os.path.join(CONFIG_DIR, "nodetalker_tls")
+AVAHI_SERVICE_DIR = "/etc/avahi/services"
+AVAHI_SERVICE_PATH = os.path.join(AVAHI_SERVICE_DIR, "asl-dvs-nodetalker.service")
+AVAHI_TYPE = "_asl-dvs._tcp"
 TX_NODE = "1921"
 TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
@@ -6729,6 +6732,88 @@ def tls_start(server, enabled, tls_dir, fallback_name, log=None):
         return ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
                 "is sent in plain text. See the log.")
     return ""
+
+
+def tls_fingerprint(tls_dir):
+    import hashlib
+    import ssl
+    try:
+        with open(os.path.join(tls_dir, "cert.pem"), "r", encoding="ascii") as fh:
+            der = ssl.PEM_cert_to_DER_cert(fh.read())
+    except (OSError, ValueError):
+        return ""
+    return ":".join("%02X" % b for b in hashlib.sha256(der).digest())
+
+
+def avahi_service_xml(port, fingerprint):
+    from xml.sax.saxutils import escape
+    txt = ["fp=" + fingerprint, "https=1", "ver=" + VERSION]
+    lines = [
+        '<?xml version="1.0" standalone="no"?>',
+        '<!DOCTYPE service-group SYSTEM "avahi-service.dtd">',
+        "<service-group>",
+        '  <name replace-wildcards="yes">%h Node Talker</name>',
+        "  <service>",
+        "    <type>%s</type>" % AVAHI_TYPE,
+        "    <port>%d</port>" % port,
+    ]
+    lines += ["    <txt-record>%s</txt-record>" % escape(t) for t in txt]
+    lines += ["  </service>", "</service-group>", ""]
+    return "\n".join(lines)
+
+
+def avahi_installed():
+    return os.path.isdir(AVAHI_SERVICE_DIR) and (
+        os.path.exists("/usr/sbin/avahi-daemon") or shutil.which("avahi-daemon") is not None)
+
+
+def avahi_reload():
+    try:
+        subprocess.run(["avahi-daemon", "-r"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def avahi_publish(port, tls_dir):
+    global _AVAHI_NOTE
+    if not avahi_installed():
+        _AVAHI_NOTE = "avahi-daemon is not installed, so phones find this node by its name or typed address"
+        return False
+    fp = tls_fingerprint(tls_dir)
+    if not fp:
+        _AVAHI_NOTE = "no HTTPS certificate to advertise"
+        return False
+    try:
+        _atomic_write(AVAHI_SERVICE_PATH, avahi_service_xml(port, fp), 0o644)
+    except OSError as exc:
+        _AVAHI_NOTE = "could not write %s: %s" % (AVAHI_SERVICE_PATH, exc)
+        return False
+    avahi_reload()
+    _AVAHI_NOTE = "advertised on the LAN as %s on port %d" % (AVAHI_TYPE, port)
+    return True
+
+
+def avahi_start(port, tls_dir, tls_on):
+    global _AVAHI_NOTE
+    if not tls_on:
+        _AVAHI_NOTE = "plain http, not advertised (phones need HTTPS to check the node)"
+        log_event("LAN discovery: " + _AVAHI_NOTE, "info")
+        return False
+    ok = avahi_publish(port, tls_dir)
+    log_event("LAN discovery: " + _AVAHI_NOTE, "ok" if ok else "info")
+    return ok
+
+
+def avahi_withdraw():
+    try:
+        os.remove(AVAHI_SERVICE_PATH)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log_event("Could not remove %s: %s" % (AVAHI_SERVICE_PATH, exc), "warn")
+        return False
+    avahi_reload()
+    return True
 
 
 def tls_secure(connection, headers=None, proxied=False):
@@ -12535,6 +12620,7 @@ mic volume, so the gain here is applied in the page.</p>
 
 _page = None
 _TLS_NOTE = ""
+_AVAHI_NOTE = ""
 
 
 _FONT_FACE_RE = re.compile(rb"@font-face\{[^}]*\}\n?")
@@ -13121,6 +13207,7 @@ def run_server():
         log_event(f"Cannot listen on port {port}: {exc}", "err")
         return 1
     _TLS_NOTE = tls_start(httpd, _cfg_get("https"), TLS_DIR, "nodetalker", log_event)
+    avahi_start(port, TLS_DIR, httpd.ssl_ctx is not None)
     _solo_load()
     fav_doc()
     _kc_init()
@@ -13152,6 +13239,7 @@ def run_server():
         pass
     finally:
         _sd_notify("STOPPING=1")
+        avahi_withdraw()
         if TALKER.owner is not None:
             TALKER.drop(TALKER.owner)
         try:
@@ -13605,6 +13693,8 @@ def uninstall_service():
         sys.exit(1)
     print(f"Removing {APP_NAME}...")
     load_config()
+    if avahi_withdraw():
+        print(f"  [-] Removed the LAN advert {AVAHI_SERVICE_PATH}")
     try:
         hook_node = _hook_node_now()
         r = hook_disable()

@@ -5654,5 +5654,92 @@ class Helper44TunnelHousekeepingTests(unittest.TestCase):
         self.assertIn("convert_current", h._PI_INSTALL_SIMPLE_ACTIONS)
 
 
+class NodeTalkerAvahiTests(unittest.TestCase):
+    def setUp(self):
+        self.nt = load_nodetalker()
+        self.tmp = tempfile.mkdtemp()
+        self.svc_dir = os.path.join(self.tmp, "services")
+        os.makedirs(self.svc_dir)
+        self.svc = os.path.join(self.svc_dir, "asl-dvs-nodetalker.service")
+        self.tls = os.path.join(self.tmp, "tls")
+        os.makedirs(self.tls)
+        self.patch = mock.patch.multiple(
+            self.nt, AVAHI_SERVICE_DIR=self.svc_dir, AVAHI_SERVICE_PATH=self.svc,
+            avahi_installed=mock.Mock(return_value=True), avahi_reload=mock.Mock(),
+        )
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def make_cert(self):
+        if not shutil.which("openssl"):
+            self.skipTest("openssl not installed")
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+             "-keyout", os.path.join(self.tls, "key.pem"), "-out", os.path.join(self.tls, "cert.pem"),
+             "-days", "2", "-subj", "/CN=test-node"],
+            check=True, capture_output=True,
+        )
+        import hashlib
+        import ssl
+        with open(os.path.join(self.tls, "cert.pem"), "r", encoding="ascii") as fh:
+            der = ssl.PEM_cert_to_DER_cert(fh.read())
+        return ":".join("%02X" % b for b in hashlib.sha256(der).digest())
+
+    def test_service_xml_is_valid_and_names_the_node(self):
+        import xml.etree.ElementTree as ET
+        text = self.nt.avahi_service_xml(8993, "AA:BB:CC")
+        root = ET.fromstring(text)
+        self.assertEqual(root.tag, "service-group")
+        svc = root.find("service")
+        self.assertEqual(svc.find("type").text, "_asl-dvs._tcp")
+        self.assertEqual(svc.find("port").text, "8993")
+        txt = [t.text for t in svc.findall("txt-record")]
+        self.assertIn("fp=AA:BB:CC", txt)
+        self.assertIn("https=1", txt)
+        self.assertIn("ver=" + self.nt.VERSION, txt)
+        self.assertIn("%h Node Talker", root.find("name").text)
+
+    def test_fingerprint_matches_the_certificate_sha256(self):
+        fp = self.make_cert()
+        self.assertEqual(self.nt.tls_fingerprint(self.tls), fp)
+        self.assertRegex(fp, r"^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
+
+    def test_missing_certificate_gives_no_fingerprint(self):
+        self.assertEqual(self.nt.tls_fingerprint(self.tls), "")
+
+    def test_publish_writes_the_file_and_withdraw_removes_it(self):
+        fp = self.make_cert()
+        self.assertTrue(self.nt.avahi_publish(8993, self.tls))
+        with open(self.svc, encoding="utf-8") as fh:
+            self.assertIn("fp=" + fp, fh.read())
+        self.nt.avahi_reload.assert_called()
+        self.assertIn("advertised", self.nt._AVAHI_NOTE)
+        self.assertTrue(self.nt.avahi_withdraw())
+        self.assertFalse(os.path.exists(self.svc))
+        self.assertFalse(self.nt.avahi_withdraw())
+
+    def test_no_avahi_writes_nothing_and_says_so(self):
+        self.make_cert()
+        with mock.patch.object(self.nt, "avahi_installed", return_value=False):
+            self.assertFalse(self.nt.avahi_publish(8993, self.tls))
+        self.assertFalse(os.path.exists(self.svc))
+        self.assertIn("not installed", self.nt._AVAHI_NOTE)
+
+    def test_plain_http_is_not_advertised(self):
+        self.make_cert()
+        self.assertFalse(self.nt.avahi_start(8993, self.tls, False))
+        self.assertFalse(os.path.exists(self.svc))
+        self.assertIn("plain http", self.nt._AVAHI_NOTE)
+
+    def test_a_failed_write_is_reported_not_raised(self):
+        self.make_cert()
+        with mock.patch.object(self.nt, "_atomic_write", side_effect=OSError("read-only")):
+            self.assertFalse(self.nt.avahi_publish(8993, self.tls))
+        self.assertIn("read-only", self.nt._AVAHI_NOTE)
+
+
 if __name__ == "__main__":
     unittest.main()

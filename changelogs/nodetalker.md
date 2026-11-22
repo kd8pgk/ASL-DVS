@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_11_0_20261121.py`. Newest entries first.
+Current file: `nodetalker_v0_11_2_20261122.py`. Newest entries first.
+
+## 0.11.2 (2026-11-22)
+
+Node Talker tells phones on the LAN where it is. This is a release: the server writes a service file for avahi on start.
+
+- **The node is announced.** When avahi-daemon is installed, Node Talker writes `/etc/avahi/services/asl-dvs-nodetalker.service` and reloads avahi. It announces `_asl-dvs._tcp` on the Node Talker port, with the HTTPS certificate's SHA-256 fingerprint (`fp`), `https=1` and the version (`ver`). The app matches the fingerprint against the certificate it trusts. Nothing secret is announced.
+- **Only with HTTPS.** Plain http is not announced, because the app checks the certificate before it connects.
+- **Gone when Node Talker stops or is uninstalled.** The file is removed on stop and by `--uninstall`, and avahi is reloaded.
+- **Without avahi nothing changes.** Node Talker logs that avahi-daemon is not installed and carries on. The installer does not install avahi-daemon.
+- Tests: `NodeTalkerAvahiTests` in `ci/test_ci.py` (the XML, the fingerprint against the certificate, publish and withdraw, no avahi, plain http, a failed write). Checked on a real avahi-daemon: the service was browsed with the certificate's fingerprint, it went away on withdraw, and it came back when avahi restarted.
 
 ## 0.11.0 (2026-11-21)
 

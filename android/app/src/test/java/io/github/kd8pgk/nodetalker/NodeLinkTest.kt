@@ -110,6 +110,49 @@ class NodeLinkTest {
     }
 
     @Test
+    fun an_advertised_node_is_found_when_the_name_and_address_fail() {
+        val f = NodeLink.locate(
+            "pi.local", "10.0.0.5", 8993, pin,
+            fakes("pi.local" to listOf("10.0.0.7")),
+            certs("10.0.0.20" to pin),
+            browse = { listOf("10.0.0.20") },
+        )
+        assertEquals("10.0.0.20", f!!.host)
+        assertEquals("10.0.0.20", f.ip)
+    }
+
+    @Test
+    fun the_advert_is_not_asked_for_when_an_earlier_step_works() {
+        val f = NodeLink.locate(
+            "pi.local", "10.0.0.5", 8993, pin,
+            fakes("pi.local" to listOf("10.0.0.7")),
+            certs("10.0.0.7" to pin),
+            browse = { throw AssertionError("browse should not run") },
+        )
+        assertEquals("10.0.0.7", f!!.ip)
+    }
+
+    @Test
+    fun an_advertised_node_with_another_certificate_is_not_trusted() {
+        val f = NodeLink.locate(
+            "pi.local", "10.0.0.5", 8993, pin,
+            fakes(),
+            certs("10.0.0.21" to other),
+            browse = { listOf("10.0.0.21") },
+        )
+        assertNull(f)
+    }
+
+    @Test
+    fun the_advertised_fingerprint_is_compared_without_regard_to_case() {
+        assertTrue(NodeLink.sameFingerprint("aa:bb", pin.uppercase()))
+        assertTrue(NodeLink.sameFingerprint("AA:BB", pin))
+        assertFalse(NodeLink.sameFingerprint("CC:DD", pin))
+        assertFalse(NodeLink.sameFingerprint("", ""))
+        assertFalse(NodeLink.sameFingerprint(pin, ""))
+    }
+
+    @Test
     fun the_fingerprint_is_the_sha256_of_the_certificate_as_upper_hex_pairs() {
         assertEquals(
             "E3:B0:C4:42:98:FC:1C:14:9A:FB:F4:C8:99:6F:B9:24:27:AE:41:E4:64:9B:93:4C:A4:95:99:1B:78:52:B8:55",

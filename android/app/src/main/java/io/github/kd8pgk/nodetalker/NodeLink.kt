@@ -27,6 +27,7 @@ object NodeLink {
         pin: String,
         resolve: (String) -> List<String>,
         presented: (String, Int) -> String?,
+        browse: () -> List<String> = { emptyList() },
     ): Found? {
         for (cand in candidates(host, addr)) {
             for (ip in resolve(cand)) {
@@ -34,8 +35,15 @@ object NodeLink {
                 if (fp == pin) return Found(cand, ip)
             }
         }
+        for (ip in browse()) {
+            val fp = presented(ip, port) ?: continue
+            if (fp == pin) return Found(ip, ip)
+        }
         return null
     }
+
+    fun sameFingerprint(advertised: String, pin: String): Boolean =
+        pin.isNotEmpty() && advertised.equals(pin, ignoreCase = true)
 
     fun fingerprint(der: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(der).joinToString(":") { "%02X".format(it) }
