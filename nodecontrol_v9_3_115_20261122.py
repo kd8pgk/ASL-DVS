@@ -7,14 +7,12 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
-import io
 import hashlib
 import hmac
 import ipaddress
 import json
 import logging
 import os
-import queue
 import re
 import secrets
 import shutil
@@ -42,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.120-pi02w"
+VERSION      = "9.3.115"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -67,11 +65,17 @@ M17_NODE      = "1917"
 M17_INI_PATH  = "/opt/USRP2M17/USRP2M17.ini"
 M17_SERVICE   = "usrp2m17"
 
+SVX_NODE      = "1900"
+SVX_CONF      = "/usr/local/etc/svxlink/svxlink.conf"
+SVX_SERVICE   = "svxlink-usrp"
+SVX_CTRL_PTY  = "/var/lib/svxlink/dtmf_ctrl"
+
 BRIDGE_SLOT_DIGITAL    = 0
 BRIDGE_SLOT_M17        = 1
 BRIDGE_SLOT_PHONE      = 2
+BRIDGE_SLOT_SVX        = 3
 BRIDGE_SLOT_COUNT      = 4
-BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Phone Bridge", "Reserved")
+BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Phone Bridge", "SvxLink Bridge")
 PHONE_NODE             = "1001"
 DEFAULT_BRIDGE_NODES   = [ASL_BRIDGE_NODE, M17_NODE, PHONE_NODE, ""]
 
@@ -262,7 +266,7 @@ def _sd_notify(state: str) -> None:
         log.warning("_sd_notify: failed to notify systemd (%s): %s", state, e)
 
 DIGITAL_MODES    = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
-ALL_PAGES        = ("ASL", "ECHO") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHONE")
+ALL_PAGES        = ("ASL", "ECHO", "SVX") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHONE")
 VALID_CONF_MODES = {"DMR", "STFU", "YSF", "FCS", "P25", "NXDN", "DSTAR"}
 TUNE_MODES       = set(DIGITAL_MODES) | {"FCS"}
 
@@ -270,6 +274,7 @@ BRIDGE_SLOT_PAGES = {
     BRIDGE_SLOT_DIGITAL: TUNE_MODES | {"XLX"},
     BRIDGE_SLOT_M17:     {"M17"},
     BRIDGE_SLOT_PHONE:   {"PHONE"},
+    BRIDGE_SLOT_SVX:     {"SVX"},
 }
 
 @dataclass
@@ -281,7 +286,6 @@ class Config:
     enabled_tabs:        Set[str] = field(default_factory=lambda: set(ALL_PAGES))
     enabled_tabs_sorted: list     = field(default_factory=lambda: list(ALL_PAGES))
     cpuweight_enabled:   bool     = False
-    https:               bool     = True
 
 _cfg = Config()
 
@@ -326,9 +330,6 @@ def _apply_config(cfg: dict) -> None:
             _cfg.enabled_tabs = {str(t).strip().upper() for t in items
                                  if str(t).strip().upper() in ALL_PAGES}
             _refresh_tabs_cache()
-        if "https" in cfg:
-            v = cfg["https"]
-            _cfg.https = v if isinstance(v, bool) else str(v).strip().lower() not in ("0", "false", "no", "off")
         if "cpuweight_enabled" in cfg:
             v = cfg["cpuweight_enabled"]
             new_val = v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
@@ -373,6 +374,9 @@ class AppState:
     conf_warnings:      list                = field(default_factory=list)
     m17_reflectors:     list                = field(default_factory=list)
     has_m17:            bool                = False
+    has_svx:            bool                = False
+    svx_nodes:          list                = field(default_factory=list)
+    svx_tg:             Optional[str]       = None
 
 _lock        = threading.Lock()
 _cfg_lock    = threading.Lock()
@@ -953,6 +957,7 @@ _DEFAULT_DMR_SERVERS = [
 _MODE_NET_URL_DEFAULTS: Dict[str, str] = {
     "ASL":   "https://stats.allstarlink.org/",
     "ECHO":  "",
+    "SVX":   "",
     "STFU":  "https://hose.brandmeister.network/",
     "FCS":   "http://xreflector.net/",
 }
@@ -1018,11 +1023,6 @@ PHONE_DIALING    = ("phone", "ext")
 PHONE_INCOMING   = ("pin", "open", "off")
 _PHONE_PTT_OPEN_DEF  = "*99"
 _PHONE_PTT_CLOSE_DEF = "#"
-_PHONE_PTT_CODE_RE   = re.compile(r"^[0-9*#]{1,8}$")
-
-def _phone_ptt_code(v, default: str) -> str:
-    s = str(v if v is not None else "").strip()
-    return s if _PHONE_PTT_CODE_RE.match(s) else default
 _PHONE_TYPE_LBL  = {"sip": "SIP with login", "sip_ip": "SIP by IP address",
                     "hoip": "Hams Over IP", "awire": "AmateurWire", "iax2": "IAX2"}
 _PHONE_DIALTIME_MIN, _PHONE_DIALTIME_MAX, _PHONE_DIALTIME_DEF = 5000, 90000, 20000
@@ -1073,8 +1073,8 @@ def _phone_load() -> dict:
     if raw.get("tone_path_user") and raw.get("tone_path") in PHONE_TONE_PATHS:
         doc["tone_path"], doc["tone_path_user"] = raw["tone_path"], True
     doc["ptt_tones"] = doc["ptt_tones"] is True
-    doc["ptt_open"]  = _phone_ptt_code(doc["ptt_open"], _PHONE_PTT_OPEN_DEF)
-    doc["ptt_close"] = _phone_ptt_code(doc["ptt_close"], _PHONE_PTT_CLOSE_DEF)
+    doc["ptt_open"] = str(doc["ptt_open"]).strip() if phone_tone_code_ok(doc["ptt_open"]) else _PHONE_PTT_OPEN_DEF
+    doc["ptt_close"] = str(doc["ptt_close"]).strip() if phone_tone_code_ok(doc["ptt_close"]) else _PHONE_PTT_CLOSE_DEF
     doc["signin_mode"] = "picked"
     nets = [n for n in doc["networks"] if isinstance(n, dict)][:PHONE_MAX_NETS] \
         if isinstance(doc["networks"], list) else []
@@ -1214,6 +1214,8 @@ def _phone_reserved_nodes() -> Set[str]:
     for i, nd in enumerate(_cfg.bridge_nodes):
         if nd and i != BRIDGE_SLOT_PHONE:
             r.add(nd)
+    if not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        r.add(SVX_NODE)
     return r
 
 def _phone_hand_nodes() -> Set[str]:
@@ -1579,7 +1581,7 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         return None, "Safety cap must be 5–60 minutes"
     ptt_open = str(raw.get("ptt_open", cur.get("ptt_open", _PHONE_PTT_OPEN_DEF))).strip()
     ptt_close = str(raw.get("ptt_close", cur.get("ptt_close", _PHONE_PTT_CLOSE_DEF))).strip()
-    if not (_PHONE_PTT_CODE_RE.match(ptt_open) and _PHONE_PTT_CODE_RE.match(ptt_close)):
+    if not (phone_tone_code_ok(ptt_open) and phone_tone_code_ok(ptt_close)):
         return None, "Radio tones can only use 0-9, * and # (up to 8 characters)"
     out = {
         "networks":      nets,
@@ -3080,90 +3082,125 @@ def action_phone_vm_pin() -> Tuple[bool, str]:
     ok, msg = _phone_send_tones(pin + "#")
     return (True, "Sent the voicemail PIN") if ok else (False, msg)
 
-def action_phone_send_tones(tones: str) -> Tuple[bool, str]:
+def phone_tone_code_ok(v):
+    import re
+    return bool(re.fullmatch(r"[0-9*#]{1,8}", str(v if v is not None else "").strip()))
+
+
+def phone_tone_step(state, who, down, in_call, open_code, close_code):
+    state = state if isinstance(state, dict) else {}
+    is_open = state.get("open") is True
+    owner = str(state.get("owner", "")) if is_open else ""
+    if not in_call:
+        return None, {"open": False, "owner": ""}
+    if down:
+        if is_open:
+            return None, {"open": True, "owner": owner}
+        return open_code, {"open": True, "owner": who}
+    if is_open and owner == who:
+        return close_code, {"open": False, "owner": ""}
+    return None, {"open": is_open, "owner": owner}
+
+
+def phone_tone_note(state, who, tones, open_code, close_code, ok):
+    if tones == close_code:
+        return {"open": False, "owner": ""}
+    if tones == open_code and ok:
+        return {"open": True, "owner": who}
+    state = state if isinstance(state, dict) else {}
+    return {"open": state.get("open") is True, "owner": str(state.get("owner", ""))}
+
+
+def radio_tone_codes(doc):
+    return (str(doc.get("ptt_open") or "*99"), str(doc.get("ptt_close") or "#"))
+
+
+def radio_tone_wanted(doc, phone_on):
+    return doc.get("ptt_tones") is True and doc.get("listen_only") is not True and bool(phone_on)
+
+
+def radio_tone_new():
+    import queue
+    import threading
+    return {"last": None, "state": {"open": False, "owner": ""}, "state_lock": threading.Lock(),
+            "edge_lock": threading.Lock(), "queue": queue.Queue(), "thread": None}
+
+
+def radio_tone_note(box, deps, tones, owner, ok):
+    open_code, close_code = radio_tone_codes(deps["doc"]())
+    with box["state_lock"]:
+        box["state"] = phone_tone_note(box["state"], owner, tones, open_code, close_code, ok)
+
+
+def radio_tone_status(box, in_call, wanted):
+    with box["state_lock"]:
+        if not (in_call and wanted):
+            box["state"] = {"open": False, "owner": ""}
+        return {"open": box["state"]["open"] is True, "owner": str(box["state"]["owner"])}
+
+
+def radio_tone_handle(box, deps, down):
+    doc = deps["doc"]()
+    if not radio_tone_wanted(doc, deps["on"]()):
+        with box["state_lock"]:
+            box["state"] = {"open": False, "owner": ""}
+        return
+    open_code, close_code = radio_tone_codes(doc)
+    in_call = deps["call"](0.0).get("state") == "in_call"
+    with box["state_lock"]:
+        code, box["state"] = phone_tone_step(box["state"], "radio", down, in_call, open_code, close_code)
+    if code is None:
+        return
+    ok, msg = deps["send"](code)
+    if ok:
+        deps["log"].info("radio PTT: sent %s on the call", code)
+        return
+    with box["state_lock"]:
+        box["state"] = {"open": False, "owner": ""}
+    deps["log"].warning("radio PTT: could not send %s (%s)", code, msg)
+    deps["notice"]("Radio tones: could not send %s (%s)" % (code, msg), 20.0)
+
+
+def radio_tone_worker(box, deps):
+    while True:
+        down = box["queue"].get()
+        try:
+            radio_tone_handle(box, deps, down)
+        except Exception as exc:
+            deps["log"].warning("radio PTT tones: %s", exc)
+            with box["state_lock"]:
+                box["state"] = {"open": False, "owner": ""}
+
+
+def radio_tone_seen(box, deps, text):
+    import re
+    import threading
+    rx = bool(re.search(r"RPT_RXKEYED[ \t]*=[ \t]*1", text or "", re.IGNORECASE))
+    with box["edge_lock"]:
+        prev, box["last"] = box["last"], rx
+        if prev is None or prev == rx:
+            return
+        if not radio_tone_wanted(deps["doc"](), deps["on"]()):
+            return
+        if box["thread"] is None or not box["thread"].is_alive():
+            box["thread"] = threading.Thread(target=radio_tone_worker, args=(box, deps), name="radio-tones", daemon=True)
+            box["thread"].start()
+        box["queue"].put(rx)
+
+
+def action_phone_send_tones(tones: str, owner: str = "other") -> Tuple[bool, str]:
     t = _phone_clean_tones(tones)
     if t is None:
         return False, "Tones can only use 0-9, * and # (a comma waits 1 second), up to 32"
     if not t:
         return False, "Type the tones to send"
     ok, msg = _phone_send_tones(t)
-    if ok:
-        _ptt_note_tones(t)
+    radio_tone_note(_RADIO, _RADIO_DEPS, t, owner, ok)
     return (True, f"Sent {t}") if ok else (False, msg)
 
-_RXKEYED_RE = re.compile(r"RPT_RXKEYED[ \t]*=[ \t]*1", re.IGNORECASE)
-_ptt_state_lock = threading.Lock()
-_ptt_state = {"open": False, "by_radio": False}
-_ptt_edge_lock = threading.Lock()
-_ptt_last: list = [None]
-_ptt_queue: "queue.Queue[bool]" = queue.Queue()
-_ptt_thread: list = [None]
-
-def _ptt_codes() -> Tuple[str, str]:
-    doc = _phone_doc()
-    return (doc.get("ptt_open") or _PHONE_PTT_OPEN_DEF, doc.get("ptt_close") or _PHONE_PTT_CLOSE_DEF)
-
-def _ptt_wanted() -> bool:
-    doc = _phone_doc()
-    return doc.get("ptt_tones") is True and doc.get("listen_only") is not True and _phone_on()
-
-def _ptt_note_tones(tones: str) -> None:
-    open_code, close_code = _ptt_codes()
-    with _ptt_state_lock:
-        if tones == open_code:
-            _ptt_state.update(open=True, by_radio=False)
-        elif tones == close_code:
-            _ptt_state.update(open=False, by_radio=False)
-
-def _ptt_handle(down: bool) -> None:
-    if not _ptt_wanted():
-        with _ptt_state_lock:
-            _ptt_state.update(open=False, by_radio=False)
-        return
-    open_code, close_code = _ptt_codes()
-    in_call = _phone_call_state(0.0).get("state") == "in_call"
-    with _ptt_state_lock:
-        if not in_call:
-            _ptt_state.update(open=False, by_radio=False)
-            return
-        if down:
-            if _ptt_state["open"]:
-                return
-            _ptt_state.update(open=True, by_radio=True)
-            code = open_code
-        else:
-            if not (_ptt_state["open"] and _ptt_state["by_radio"]):
-                return
-            _ptt_state.update(open=False, by_radio=False)
-            code = close_code
-    ok, msg = _phone_send_tones(code)
-    if ok:
-        log.info("radio PTT: sent %s on the call", code)
-        return
-    with _ptt_state_lock:
-        _ptt_state.update(open=False, by_radio=False)
-    log.warning("radio PTT: could not send %s (%s)", code, msg)
-    _phone_set_notice(f"Radio tones: could not send {code} ({msg})", 20.0)
-
-def _ptt_worker() -> None:
-    while True:
-        down = _ptt_queue.get()
-        try:
-            _ptt_handle(down)
-        except Exception as e:
-            log.warning("radio PTT tones: %s", e)
-            with _ptt_state_lock:
-                _ptt_state.update(open=False, by_radio=False)
-
-def _ptt_radio_seen(rx: bool) -> None:
-    with _ptt_edge_lock:
-        prev, _ptt_last[0] = _ptt_last[0], rx
-        if prev is None or prev == rx or not _ptt_wanted():
-            return
-        if _ptt_thread[0] is None or not _ptt_thread[0].is_alive():
-            _ptt_thread[0] = threading.Thread(target=_ptt_worker, name="radio-tones", daemon=True)
-            _ptt_thread[0].start()
-        _ptt_queue.put(rx)
+_RADIO = radio_tone_new()
+_RADIO_DEPS = {"doc": _phone_doc, "on": _phone_on, "call": _phone_call_state,
+               "send": _phone_send_tones, "notice": _phone_set_notice, "log": log}
 
 def _phone_net_id_of(chan: str) -> str:
     m = re.match(r"^PJSIP/(dvs[a-z0-9]+)-[0-9a-fA-F]+$", chan or "")
@@ -3772,8 +3809,7 @@ def _generate_default_conf() -> None:
             f"port={_cfg.port}\n",
             f"callsign={_cfg.callsign}\n",
             f"enabled_tabs={chr(44).join(_cfg.enabled_tabs_sorted)}\n",
-            f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n",
-            f"https={str(_cfg.https).lower()}\n\n",
+            f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n\n",
             "[ASL]\n",
         ]
         lines.append(f"network_url={_MODE_NET_URL_DEFAULTS['ASL']}\n")
@@ -3861,8 +3897,13 @@ def _try_load_conf_from(path: Path) -> Optional[tuple]:
                       dmr_server_tgs=srv_tgs)
         merged_urls = dict(_MODE_NET_URL_DEFAULTS)
         merged_urls.update(net_urls)
+        svx_rows, svx_url = _svx_parse(str(path))
+        if svx_url is not None:
+            merged_urls["SVX"] = svx_url
+        if str(cfg.get("svx_tab", "on")).strip().lower() != "off":
+            _apply_config({"enabled_tabs": sorted(_cfg.enabled_tabs | {"SVX"})})
         set_state(xlx_reflectors=xlx_refs, mode_net_urls=merged_urls,
-                  m17_reflectors=m17_refs)
+                  m17_reflectors=m17_refs, svx_nodes=svx_rows)
         return nodes, tgs, echo_nodes, xlx_skipped, legacy_sec_url
     except Exception as exc:
         log.warning("load_conf: could not load %s: %s", path, exc)
@@ -4043,8 +4084,8 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
             f"port={_cfg.port}\n",
             f"callsign={_cfg.callsign}\n",
             f"enabled_tabs={','.join(_cfg.enabled_tabs_sorted)}\n",
-            f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n",
-            f"https={str(_cfg.https).lower()}\n\n",
+            f"svx_tab={'on' if 'SVX' in _cfg.enabled_tabs else 'off'}\n",
+            f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n\n",
             "[ASL]\n",
         ]
         _st_urls = get_state().mode_net_urls
@@ -4055,6 +4096,11 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
         lines.append(f"network_url={_st_urls.get('ECHO', _MODE_NET_URL_DEFAULTS['ECHO'])}\n")
         for name, node, *_rest in echo_entries:
             lines.append(f"{name}|{node}\n")
+        lines.append("\n[SVX]\n")
+        lines.append("# name|talkgroup  (SvxReflector talkgroups, picked through the SvxLink bridge node)\n")
+        lines.append(f"network_url={_st_urls.get('SVX', _MODE_NET_URL_DEFAULTS['SVX'])}\n")
+        for sname, stg in get_state().svx_nodes:
+            lines.append(f"{sname}|{stg}\n")
         for m in DIGITAL_MODES:
             mode_tgs = [(n, t, u) for mode, n, t, u in tg_entries if mode == m]
             if mode_tgs:
@@ -4087,7 +4133,7 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
                          else f"{mname}|{mbase}|{mmodule}|{mip}\n")
         for _ in range(max(0, 10 - len(m17_refs))):
             lines.append(f"{bn}|{bn}|@ALL|{ba}\n")
-        _REGENERATED = {"CONFIG", "ASL", "ECHO", "XLX", "M17", "FCS"} | set(DIGITAL_MODES)
+        _REGENERATED = {"CONFIG", "ASL", "ECHO", "SVX", "XLX", "M17", "FCS"} | set(DIGITAL_MODES)
         if conf_path.is_file():
             try:
                 existing = conf_path.read_text(errors="replace")
@@ -4123,7 +4169,6 @@ def action_get_config() -> dict:
         "mode_net_urls":        merged_mode_urls,
         "row_net_url_defaults": _ROW_NET_URL_DEFAULTS,
         "cpuweight_enabled":    _cfg.cpuweight_enabled,
-        "https":                _cfg.https,
     }
 
 def _validate_bridge_nodes(raw) -> Tuple[Optional[List[str]], Optional[str]]:
@@ -4184,15 +4229,12 @@ def action_save_config(cfg: dict) -> Tuple[bool, str]:
 
     with _cfg_lock:
         prev_port = _cfg.port
-        prev_https = _cfg.https
     apply_cfg = {"asl_node": asl_node, "bridge_node": bridge_node,
                  "port": port_str, "callsign": callsign}
     if bridge_nodes is not None:
         apply_cfg["bridge_nodes"] = bridge_nodes
     if "cpuweight_enabled" in cfg:
         apply_cfg["cpuweight_enabled"] = bool(cfg["cpuweight_enabled"])
-    if "https" in cfg:
-        apply_cfg["https"] = bool(cfg["https"])
     _apply_config(apply_cfg)
     _write_event_script()
 
@@ -4207,8 +4249,6 @@ def action_save_config(cfg: dict) -> Tuple[bool, str]:
     ok, msg = _write_conf(nodes, tgs, echo_nodes)
     if ok and port != prev_port:
         msg += f" (port {port} takes effect after restart)"
-    if ok and _cfg.https != prev_https:
-        msg += " (the https setting takes effect after restart)"
     return ok, msg
 
 @_conf_locked
@@ -4408,6 +4448,8 @@ def _disconnect_perm(node: str) -> None:
 
 def _bridge_set() -> Set[str]:
     s = set(filter(None, _cfg.bridge_nodes))
+    if not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        s.add(SVX_NODE)
     try:
         s.update(_phone_all_nodes())
     except Exception as e:
@@ -4424,7 +4466,10 @@ def _slot_node(slot: Optional[int]) -> str:
             return _phone_live_node()
         except Exception as e:
             log.warning("bridge slot: phone node unreadable: %s", e)
-    return _cfg.bridge_nodes[slot] if slot < len(_cfg.bridge_nodes) else ""
+    node = _cfg.bridge_nodes[slot] if slot < len(_cfg.bridge_nodes) else ""
+    if slot == BRIDGE_SLOT_SVX and not node:
+        return SVX_NODE
+    return node
 
 def _bridge_slot_of(node: str) -> Optional[int]:
     node = str(node).strip()
@@ -4433,6 +4478,8 @@ def _bridge_slot_of(node: str) -> Optional[int]:
     for slot, nd in enumerate(_cfg.bridge_nodes):
         if nd and nd == node:
             return slot
+    if node == SVX_NODE and not _cfg.bridge_nodes[BRIDGE_SLOT_SVX] and _detect_svx():
+        return BRIDGE_SLOT_SVX
     try:
         if node in _phone_all_nodes():
             return BRIDGE_SLOT_PHONE
@@ -4509,6 +4556,7 @@ _detection_cache: Dict[str, Tuple[Optional[bool], float]] = {
     "echo":   (None, 0.0),
     "sysmon": (None, 0.0),
     "m17":    (None, 0.0),
+    "svx":    (None, 0.0),
     "nodelisten": (None, 0.0),
 }
 _STFU_CACHE_TTL   = 60.0
@@ -4519,6 +4567,7 @@ _NODELISTEN_CONFS     = ("/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodeliste
 _NODELISTEN_PORT      = 8993
 _NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
+_SVX_CACHE_TTL    = 60.0
 _detection_lock = threading.Lock()
 
 class _ListCache:
@@ -4660,6 +4709,69 @@ def _detect_m17() -> bool:
             return True
         return False
     return _cached_detect("m17", _M17_CACHE_TTL, _probe_m17)
+
+def _detect_svx() -> bool:
+
+    def _probe_svx() -> bool:
+        if Path(SVX_CONF).is_file():
+            return True
+        return bool(shutil.which("systemctl")) and run(["systemctl", "status", SVX_SERVICE], timeout=3)[1] in (0, 3)
+    return _cached_detect("svx", _SVX_CACHE_TTL, _probe_svx)
+
+def _svx_ready() -> bool:
+    try:
+        return Path(os.path.realpath(SVX_CTRL_PTY)).exists() and os.path.lexists(SVX_CTRL_PTY)
+    except OSError:
+        return False
+
+def _svx_send(cmd: str) -> bool:
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        log.warning("_svx_send: refused %r", cmd)
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            log.warning("_svx_send: %s is not a SvxLink control device", SVX_CTRL_PTY)
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        log.info("SVX: sent %s to SvxLink", cmd)
+        return True
+    except OSError as e:
+        log.warning("_svx_send: %s: %s", cmd, e)
+        return False
+
+def _svx_parse(path: str) -> Tuple[list, Optional[str]]:
+    rows: list = []
+    url: Optional[str] = None
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return rows, url
+    section = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and "]" in line:
+            section = line[1:line.index("]")].strip().upper()
+            continue
+        if section != "SVX":
+            continue
+        if "=" in line and "|" not in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "network_url":
+                url = v.strip()
+            continue
+        parts = line.split("|")
+        if len(parts) >= 2:
+            name, tg = parts[0].strip(), parts[1].strip()
+            if name and tg.isdigit() and 0 < int(tg) < 10 ** 9:
+                rows.append((_clip_label(name), str(int(tg))))
+    return rows[:50], url
 
 def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
@@ -5976,154 +6088,75 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
+_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
+def _parse_astdb(f) -> dict:
+    rows, by_node = [], {}
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
+        node = parts[0]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node in by_node:
+            continue
+        call = parts[1] if len(parts) > 1 else ""
+        desc = parts[2] if len(parts) > 2 else ""
+        loc  = parts[3] if len(parts) > 3 else ""
+        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+        rows.append(row)
+        by_node[node] = row
+    return {"rows": rows, "by_node": by_node}
 
-class _LineDB:
+def _build_astdb(prev):
+    try:
+        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
+    except OSError:
+        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+    if prev and prev.get("found") and prev["mtime"] == mtime:
+        return prev, False
+    try:
+        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
+            part = _parse_astdb(f)
+    except OSError as e:
+        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
+        part = {"rows": [], "by_node": {}}
+    return {"found": True, "mtime": mtime, **part}, False
 
-    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
-        self._path_fn     = path_fn
-        self._node_of     = node_of
-        self._parse       = parse
-        self._missing_msg = missing_msg
-        self._warned      = False
-        self._lock        = threading.Lock()
-        self._index_key   = None
-        self._index       = (0, True, frozenset())
+_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
+                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
+                                                 "node menu will be empty (turn on "
+                                                 "asl3-update-astdb)", _ASTDB_PATH))
 
-    @property
-    def path(self) -> str:
-        return self._path_fn()
+def _load_astdb() -> dict:
+    return _astdb_cache.get()
 
-    def stat(self) -> "tuple[bool, int, int]":
-        try:
-            st = os.stat(self.path)
-        except OSError:
-            if self._missing_msg and not self._warned:
-                self._warned = True
-                log.warning(self._missing_msg, self.path)
-            return False, 0, 0
-        self._warned = False
-        return True, int(st.st_mtime), st.st_size
-
-    def index(self) -> "tuple[int, bool, frozenset]":
-        found, mtime, size = self.stat()
-        if not found:
-            return 0, True, frozenset()
-        key = (mtime, size)
-        with self._lock:
-            if self._index_key == key:
-                return self._index
-        seen: "set[str]" = set()
-        repeats = False
-        ctrl: "set[int]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                for i, raw in enumerate(f):
-                    if _CTRL_IN_RE.search(raw.strip()):
-                        ctrl.add(i)
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if node in seen:
-                        repeats = True
-                    else:
-                        seen.add(node)
-        except OSError:
-            return 0, True, frozenset()
-        result = (len(seen), repeats, frozenset(ctrl))
-        with self._lock:
-            self._index_key, self._index = key, result
-        return result
-
-    def total(self) -> int:
-        return self.index()[0]
-
-    def rows(self, raw_ok=None, node_ok=None):
-        _total, repeats, ctrl = self.index()
-        seen: "set[str]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                st = os.fstat(f.fileno())
-                with self._lock:
-                    same = self._index_key == (int(st.st_mtime), st.st_size)
-                if not same:
-                    repeats, raw_ok, ctrl = True, None, frozenset()
-                for i, raw in enumerate(f):
-                    quick = raw_ok is not None and i not in ctrl
-                    if not repeats and quick and not raw_ok(raw):
-                        continue
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if repeats:
-                        if node in seen:
-                            continue
-                        seen.add(node)
-                        if quick and not raw_ok(raw):
-                            continue
-                    if node_ok is not None and not node_ok(node):
-                        continue
-                    yield self._parse(raw, node)
-        except OSError as e:
-            log.warning("Could not read %s: %s", self.path, e)
-
-    def find(self, node: str):
-        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
-                             node_ok=lambda n: n == node):
-            return row
-        return None
-
-def _astdb_node_of(raw: str):
-    line = raw.strip()
-    if not line or line.startswith(("#", ";")):
-        return None
-    node = _strip_ctrl(line.split("|", 1)[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    return str(int(node))
-
-def _astdb_parse(raw: str, node: str):
-    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
-    call = parts[1] if len(parts) > 1 else ""
-    desc = parts[2] if len(parts) > 2 else ""
-    loc  = parts[3] if len(parts) > 3 else ""
-    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-
-_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
-                 "AllStar node list not found at %s — the ASL node menu will be empty "
-                 "(turn on asl3-update-astdb)")
-
-def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
+def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    found, mtime, _size = db.stat()
-    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
-           "total": db.total() if found else 0, "min": min_q,
+    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
+           "total": len(db["rows"]), "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not found or len(q) < min_q:
+    if not db["found"] or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
-        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
-        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
-        def raw_ok(raw):
-            low = raw.lower()
-            return all(w in low for w in words)
-        node_ok = None
     count, matches = 0, []
-    for r in db.rows(raw_ok, node_ok):
+    for r in db["rows"]:
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -6146,11 +6179,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _astdb.find(node)
+    row = _load_astdb()["by_node"].get(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -6173,72 +6206,44 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
-
-_echodb_refresh_lock = threading.Lock()
-_echodb_next_try     = 0.0
-_echodb_warned       = False
-
-def _echodb_node_of(raw: str):
-    parts = raw.split("|", 2)
-    if len(parts) < 2:
-        return None
-    node = _strip_ctrl(parts[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    node = str(int(node))
-    return None if node == "0" else node
-
-def _echodb_parse(raw: str, node: str):
-    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
-    return (node, call, f"{node} {call}".lower())
-
-def _echodb_write(text: str) -> None:
-    seen: "set[str]" = set()
-    rows = []
-    for raw in io.StringIO(text):
-        node = _echodb_node_of(raw)
-        if node is None or node in seen:
+def _parse_echodb(text: str) -> dict:
+    rows, by_node = [], {}
+    for raw in text.splitlines():
+        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
+        if len(parts) < 2:
             continue
-        seen.add(node)
-        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
-    rows.sort()
-    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
-    tmp = _ECHODB_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for _n, node, call in rows:
-            f.write(f"{node}|{call}\n")
-    os.replace(tmp, _ECHODB_FILE)
+        node, call = parts[0], parts[1]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node == "0" or node in by_node:
+            continue
+        call = call[:24]
+        row = (node, call, f"{node} {call}".lower())
+        rows.append(row)
+        by_node[node] = row
+    rows.sort(key=lambda r: int(r[0]))
+    return {"rows": rows, "by_node": by_node}
 
-def _echodb_refresh() -> None:
-    global _echodb_next_try, _echodb_warned
-    with _echodb_refresh_lock:
-        now = time.time()
-        try:
-            age = now - os.stat(_ECHODB_FILE).st_mtime
-        except OSError:
-            age = None
-        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
-            return
-        out, ok = ami_command(_ECHODB_CMD, timeout=8)
-        if ok and "no such command" not in out.lower():
-            try:
-                _echodb_write(out)
-                _echodb_warned = False
-                return
-            except OSError as e:
-                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
-        _echodb_next_try = now + _ECHODB_TTL
-        if age is None and not _echodb_warned:
-            _echodb_warned = True
-            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
-                        _ECHODB_CMD)
+def _build_echodb(prev):
+    out, ok = ami_command(_ECHODB_CMD, timeout=8)
+    if ok and "no such command" not in out.lower():
+        part = _parse_echodb(out)
+        return {"found": True, "mtime": int(time.time()), **part}, False
+    if prev and prev.get("found"):
+        return prev, False
+    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
 
-_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
+_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
+                           lambda _r: log.warning("EchoLink station list not available "
+                                                  "(%s failed -- is chan_echolink loaded?)",
+                                                  _ECHODB_CMD))
+
+def _load_echodb() -> dict:
+    return _echodb_cache.get()
 
 def action_echo_directory(path: str) -> dict:
-    _echodb_refresh()
-    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -6250,8 +6255,7 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    _echodb_refresh()
-    row = _echodb.find(node)
+    row = _load_echodb()["by_node"].get(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6672,7 +6676,7 @@ def _poll_asl_state():
     if not _poll_ok:
         return None
     keyed = bool(_KEYED_RE.search(out))
-    _ptt_radio_seen(bool(_RXKEYED_RE.search(out)))
+    radio_tone_seen(_RADIO, _RADIO_DEPS, out)
     linked_node: Optional[str] = None
 
     bridge_set = _bridge_set()
@@ -6728,14 +6732,14 @@ def _dvs_settle() -> None:
     global _dvs_settle_until
     _dvs_settle_until = time.monotonic() + _DVS_SETTLE_MS / 1000.0
 
-_bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
-_bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
+_bridge_slot_last_reconnect = {slot: 0.0 for slot in BRIDGE_SLOT_PAGES}
+_bridge_slot_down_polls     = {slot: 0 for slot in BRIDGE_SLOT_PAGES}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 2
+_BRIDGE_DOWN_THRESHOLD     = 3
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 2
+_BRIDGE_UP_THRESHOLD    = 3
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6780,7 +6784,7 @@ def _bridge_reaper(page: str, active_slot: Optional[int],
 
 def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
 
-    st = get_state_fields("page", "has_asl", "has_m17")
+    st = get_state_fields("page", "has_asl", "has_m17", "has_svx")
     page = st["page"]
 
     active_slot = None
@@ -6798,6 +6802,8 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
     if active_slot is None or not st["has_asl"]:
         return
     if active_slot == BRIDGE_SLOT_M17 and not st["has_m17"]:
+        return
+    if active_slot == BRIDGE_SLOT_SVX and not st["has_svx"]:
         return
 
     node = _slot_node(active_slot)
@@ -6850,7 +6856,7 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
     finally:
         _link_exit()
 
-_ASL_REG_FAST_SEC  = 60.0
+_ASL_REG_FAST_SEC  = 30.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
 _asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
@@ -7277,7 +7283,7 @@ _POLL_FAILS_UNKNOWN = 3
 
 def _link_poll_loop() -> None:
     global _poll_beat
-    INTERVAL     = 2.0
+    INTERVAL     = 1.0
     fails        = 0
     last_detect  = time.monotonic()
     busy_noted   = False
@@ -7331,7 +7337,7 @@ def _link_poll_loop() -> None:
         if time.monotonic() - last_detect >= 60.0:
             last_detect = time.monotonic()
             try:
-                set_state(has_stfu=_detect_stfu(), has_echo=_detect_echo())
+                set_state(has_stfu=_detect_stfu(), has_echo=_detect_echo(), has_svx=_detect_svx())
             except Exception as e:
                 log.warning("_link_poll_loop: capability re-detect error: %s", e)
 
@@ -7349,6 +7355,8 @@ _PAGE_ENTER = {
               "msg": "ASL | Ready"},
     "ECHO":  {"dvs_mode": None,    "settle": 1.0, "status": "Echo | Ready",
               "msg": "Echo | Ready"},
+    "SVX":   {"dvs_mode": None,    "settle": 1.0, "status": "SVX | Ready — pick a talkgroup",
+              "msg": "SVX ready — pick a talkgroup"},
     "DMR":   {"dvs_mode": "DMR",   "settle": 0.0, "status": "DMR | Ready — pick a TG",
               "msg": "DMR ready — pick a TG"},
     "STFU":  {"dvs_mode": "STFU",  "settle": 0.0, "status": "STFU | Ready — pick a TG",
@@ -7383,6 +7391,8 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
             ok, err = _m17_disconnect_core()
             if not ok:
                 log.warning("_leave_page: M17 disconnect: %s", err)
+        elif prev_page == "SVX" and prev_page != next_page:
+            _svx_release()
     except Exception as e:
         log.warning("_leave_page: %s -> %s teardown error: %s", prev_page, next_page, e)
     _gateway_svc_leave(prev_page, next_page)
@@ -7425,7 +7435,7 @@ def _enter_page(page: str, retune: bool = False) -> str:
                 log.warning("_enter_page: mode switch to %s failed — the next tune will "
                             "try it again", dvs_mode)
 
-        if keep and st.has_asl and (page != "M17" or st.has_m17):
+        if keep and st.has_asl and (page != "M17" or st.has_m17) and (page != "SVX" or st.has_svx):
             _connect(keep)
 
         set_state(page=page, current_fav=None, current_fav_node=None, echo_fav=None,
@@ -7509,6 +7519,7 @@ def action_switch_tab(page: str) -> Tuple[bool, str]:
 _PAGE_RETUNE_MSG = {
     "ASL":   "ASL re-tuned",
     "ECHO":  "Echo re-tuned",
+    "SVX":   "SVX re-tuned",
     "M17":   "M17 re-tuned",
     "XLX":   "XLX re-tuned",
     "FCS":   "FCS re-tuned",
@@ -7998,6 +8009,88 @@ def action_echo_disconnect(drop_all: bool = False) -> Tuple[bool, str]:
     set_state(echo_fav=None, linked_node=None, linked_nodes=frozenset(),
               status="Echo | Ready")
     return True, "Echo disconnected"
+
+def _svx_release() -> None:
+    if get_state().svx_tg and _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    set_state(svx_tg=None)
+
+@_link_locked
+def action_svx_connect(tg: str, name: str) -> Tuple[bool, str]:
+    tg = str(tg).strip()
+    if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+        return False, f"Invalid talkgroup: {tg or '(empty)'} — use a number from 1 to 999999999"
+    tg = str(int(tg))
+    name = name or f"TG {tg}"
+    st = get_state()
+    if not st.has_svx:
+        return False, "SvxLink USRP is not installed on this node. Install it from 44helper's SvxLink tab."
+    if not st.has_asl:
+        return False, "ASL3 is not installed on this node."
+    if st.page != "SVX":
+        err = _enter_page("SVX")
+        if err:
+            return False, err
+    if not _svx_ready():
+        set_state(page="SVX", svx_tg=None, status="SVX | Bridge linked — reflector not set up")
+        return False, ("The SvxLink bridge is linked, but no talkgroup was picked: SvxLink has no control device "
+                       f"({SVX_CTRL_PTY}). Run Connect to an SvxReflector on 44helper's SvxLink tab first.")
+    if not _svx_send(f"91{tg}#"):
+        return False, "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."
+    set_state(page="SVX", svx_tg=tg, status=f"SVX | {name} | TG {tg}")
+    return True, f"SVX talkgroup {tg} ({name}) picked"
+
+@_link_locked
+def action_svx_disconnect() -> Tuple[bool, str]:
+    st = get_state()
+    had = st.svx_tg
+    if _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    set_state(svx_tg=None, status="SVX | Ready — pick a talkgroup" if st.page == "SVX" else st.status)
+    return True, (f"SVX talkgroup {had} left — the bridge stays linked while this tab is open" if had
+                  else "SVX: no talkgroup was picked")
+
+def _svx_rows_sanitized(rows: list) -> list:
+    out = []
+    for e in rows if isinstance(rows, list) else []:
+        if not isinstance(e, dict):
+            continue
+        name = _clip_label(str(e.get("name", "")).strip().replace("|", " "))
+        tg = str(e.get("tg", "")).strip()
+        if not name and not tg:
+            continue
+        if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+            raise ValueError(f"SVX talkgroup '{tg}' is not a number from 1 to 999999999")
+        out.append((name or f"TG {int(tg)}", str(int(tg))))
+    return out[:50]
+
+def action_save_svx(rows: list) -> Tuple[bool, str]:
+    try:
+        clean = _svx_rows_sanitized(rows)
+    except ValueError as e:
+        return False, str(e)
+    set_state(svx_nodes=clean)
+    st = get_state()
+    ok, msg = _write_conf(list(st.asl_nodes), list(st.talkgroups), list(st.echo_nodes))
+    return (True, f"Saved {len(clean)} SVX talkgroups") if ok else (False, msg)
+
+def action_save_svx_favorite(tg: str, name: str) -> Tuple[bool, str]:
+    tg = str(tg).strip()
+    if not tg.isdigit() or not 0 < int(tg) < 10 ** 9:
+        return False, f"Invalid talkgroup: {tg or '(empty)'}"
+    tg = str(int(tg))
+    rows = list(get_state().svx_nodes)
+    if any(t == tg for _n, t in rows):
+        return False, f"TG {tg} is already in the SVX favorites"
+    if len(rows) >= 50:
+        return False, "The SVX favorites list is full (50)"
+    rows.append((_clip_label((name or f"TG {tg}").replace("|", " ")), tg))
+    set_state(svx_nodes=rows)
+    st = get_state()
+    ok, msg = _write_conf(list(st.asl_nodes), list(st.talkgroups), list(st.echo_nodes))
+    return (True, f"TG {tg} saved to the SVX favorites") if ok else (False, msg)
 
 def _svc_restart(name: str) -> None:
     rc = run(["systemctl", "restart", name], timeout=15)[1]
@@ -8507,7 +8600,7 @@ def build_status() -> dict:
         "has_echo", "echo_fav", "linked_node", "linked_nodes", "link_known", "tune_state",
         "asl_nodes", "echo_nodes",
         "callsign", "stfu_server", "dmr_servers", "active_dmr_server",
-        "conf_warnings", "has_m17",
+        "conf_warnings", "has_m17", "has_svx", "svx_nodes", "svx_tg",
     )
 
     return {
@@ -8524,6 +8617,10 @@ def build_status() -> dict:
         "has_stfu":          st["has_stfu"],
         "has_echo":          st["has_echo"],
         "has_m17":           st["has_m17"],
+        "has_svx":           st["has_svx"],
+        "svx":               [{"name": n, "tg": t} for n, t in st["svx_nodes"]],
+        "svx_tg":            st["svx_tg"],
+        "svx_ready":         _svx_ready() if st["has_svx"] else False,
         "echo_fav":          _shown_echo(st) if st["page"] == "ECHO" else st["echo_fav"],
         "asl_node":          _cfg.asl_node,
         "enabled_tabs":      _cfg.enabled_tabs_sorted,
@@ -8858,9 +8955,10 @@ body.offline.perm-linked #perm-link-bar {
 .tab:hover { color: var(--text-bright); border-color: #5a7898; background: #253550; }
 /* v8.9.0: tabs go grey and ignore taps while a card menu or search box is in use */
 .tabs.tabs-locked .tab { opacity: .3; filter: grayscale(1); pointer-events: none; cursor: default; }
-.tab.t-asl,.tab.t-echo,.tab.t-dmr,.tab.t-stfu,.tab.t-ysf,.tab.t-fcs,.tab.t-p25,.tab.t-nxdn,.tab.t-dstar,.tab.t-xlx,.tab.t-m17,.tab.t-phone,.tab.t-edit{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
+.tab.t-asl,.tab.t-echo,.tab.t-svx,.tab.t-dmr,.tab.t-stfu,.tab.t-ysf,.tab.t-fcs,.tab.t-p25,.tab.t-nxdn,.tab.t-dstar,.tab.t-xlx,.tab.t-m17,.tab.t-phone,.tab.t-edit{color:var(--mc);border-color:var(--mc);background:rgba(var(--mc-rgb),.18);box-shadow:0 -2px 18px rgba(var(--mc-rgb),.35);text-shadow:0 0 14px rgba(var(--mc-rgb),1)}
 .tab.t-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 .tab.t-echo{--mc:var(--amber);--mc-rgb:255,208,64}
+.tab.t-svx{--mc:var(--lime);--mc-rgb:212,255,0}
 .tab.t-dmr{--mc:var(--blue);--mc-rgb:34,212,255}
 .tab.t-stfu{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ysf{--mc:var(--purple);--mc-rgb:212,102,255}
@@ -8905,9 +9003,10 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .row-grid:hover      { background: var(--surface2); }
 
 /* ── Active states ── */
-.row-grid.active-asl,.row-grid.active-echo,.row-grid.active-dmr,.row-grid.active-stfu,.row-grid.active-ysf,.row-grid.active-fcs,.row-grid.active-p25,.row-grid.active-nxdn,.row-grid.active-dstar,.row-grid.active-xlx{background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
+.row-grid.active-asl,.row-grid.active-echo,.row-grid.active-svx,.row-grid.active-dmr,.row-grid.active-stfu,.row-grid.active-ysf,.row-grid.active-fcs,.row-grid.active-p25,.row-grid.active-nxdn,.row-grid.active-dstar,.row-grid.active-xlx{background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
 .row-grid.active-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 .row-grid.active-echo{--mc:var(--amber);--mc-rgb:255,208,64}
+.row-grid.active-svx{--mc:var(--lime);--mc-rgb:212,255,0}
 .row-grid.active-dmr{--mc:var(--blue);--mc-rgb:34,212,255}
 .row-grid.active-phone{--mc:var(--green);--mc-rgb:0,255,176;background:rgba(var(--mc-rgb),.1);border-left:3px solid var(--mc);padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 12px rgba(var(--mc-rgb),.1)}
 .pt-call{font-family:var(--sans);font-size:.858rem;color:var(--muted);padding:.45rem .9rem;min-height:1.4em;border-bottom:1px solid var(--border)}
@@ -9014,7 +9113,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
 .btn-conn-fcs  { color: var(--fcs);  border-color: var(--fcs-dim);  }
 
 /* ── Keyed states ── */
-body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
+body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-svx,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow:0 0 8px rgba(255,215,0,.7)}
 
 .row-num  { font-family: var(--sans); font-size: .902rem; color: #ffffff; text-align: right; }
@@ -9437,7 +9536,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
 .tgc-card.tgc-nxdn { --tc: var(--lime); --tc-dim: var(--lime-dim); --tc-rgb: 212,255,0; }
 .tgc-card.tgc-stfu { --tc: var(--green); --tc-dim: var(--green-dim); --tc-rgb: 0,255,176; }
 .tgc-card.tgc-asl  { --tc: var(--teal); --tc-dim: var(--teal-dim); --tc-rgb: 0,255,229; }
-.tgc-card.tgc-echo { --tc: var(--amber); --tc-dim: var(--amber-dim); --tc-rgb: 255,208,64; }   /* v9.3.60 */
+.tgc-card.tgc-echo { --tc: var(--amber); --tc-dim: var(--amber-dim); --tc-rgb: 255,208,64; }
+.tgc-card.tgc-svx { --tc: var(--lime); --tc-dim: var(--lime-dim); --tc-rgb: 212,255,0; }   /* v9.3.60 */
 .tgc-card.grid-busy { opacity: .25; pointer-events: none; }
 .tgc-input, .tgc-select {
   font-family: var(--sans);
@@ -9909,7 +10009,6 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
       <button class="lg-btn" id="login-btn" type="submit">Log in</button>
     </form>
     <div id="login-err" class="lg-msg"></div>
-    <div id="login-tls" class="lg-note">__TLS_NOTE__</div>
   </div>
   <div class="lg-license">Node Controller · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
 </div>
@@ -9948,6 +10047,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
       <div class="tabs">
         <div class="tab" id="tab-asl"   onclick="clickTab('ASL')">ASL</div>
         <div class="tab" id="tab-echo"  onclick="clickTab('ECHO')">Echo</div>
+        <div class="tab" id="tab-svx"   onclick="clickTab('SVX')">SVX</div>
         <div class="tab" id="tab-dmr"   onclick="clickTab('DMR')">DMR</div>
         <div class="tab" id="tab-stfu"  onclick="clickTab('STFU')">STFU</div>
         <div class="tab" id="tab-ysf"   onclick="clickTab('YSF')">YSF</div>
@@ -10005,6 +10105,26 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
           <div id="echo-grid"></div>
           <div class="act-bar">
             <button class="btn btn-red" onclick="doEchoDisc()">Disconnect</button>
+          </div>
+        </div>
+        <!-- SVX -->
+        <div id="pg-SVX" class="hidden">
+          <div id="svx-card" class="tgc-card tgc-svx">
+            <input id="svx-tg" class="tgc-input" type="text" inputmode="numeric" maxlength="9"
+              placeholder="Talkgroup #" aria-label="SvxReflector talkgroup"
+              autocomplete="off" spellcheck="false" oninput="svxButtons()"
+              onkeydown="if(event.key==='Enter')svxConnectTyped()">
+            <button id="svx-connect-btn" class="btn btn-lime" onclick="svxConnectTyped()" disabled>Connect</button>
+            <button id="lh-btn-SVX" class="btn-last lh-off" onclick="openModeLast('SVX')"
+              aria-label="Open the SvxReflector dashboard set on the Edit tab">LH</button>
+            <button id="svx-save-btn" class="btn btn-muted" onclick="svxSave()" disabled
+              aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
+            <div id="svx-card-msg" class="tgc-card-msg" role="status" hidden></div>
+          </div>
+          <div class="net-sel-hdr svx-fav-hdr">Favorites</div>
+          <div id="svx-grid"></div>
+          <div class="act-bar">
+            <button class="btn btn-red" onclick="doSvxDisc()">Disconnect</button>
           </div>
         </div>
         <div id="pg-DMR" class="hidden">
@@ -10290,8 +10410,8 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
                 <input id="cfg-bridge-node-2" type="hidden">
               </div>
               <div class="cfg-field">
-                <label class="cfg-lbl cfg-lbl-reserved" for="cfg-bridge-node-3">Reserved</label>
-                <input id="cfg-bridge-node-3" class="cfg-inp" type="text" inputmode="numeric" placeholder="—" maxlength="10" disabled title="Reserved for future use">
+                <label class="cfg-lbl" for="cfg-bridge-node-3">SvxLink Bridge</label>
+                <input id="cfg-bridge-node-3" class="cfg-inp" type="text" inputmode="numeric" placeholder="e.g. 1900" maxlength="10" title="The private node SvxLink USRP is wired to (blank = 1900)">
               </div>
               <div class="cfg-field">
                 <label class="cfg-lbl" for="cfg-port">Web UI Port</label>
@@ -10299,9 +10419,6 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               </div>
               <div class="cfg-field">
                 <label class="tab-chk-lbl"><input type="checkbox" id="cfg-cpuweight">CPUWeight</label>
-              </div>
-              <div class="cfg-field">
-                <label class="tab-chk-lbl"><input type="checkbox" id="cfg-https">Use https (restart to apply)</label>
               </div>
             </div>
             <div class="ed-sec-hdr" style="margin-top:.6rem;padding-left:0">
@@ -10311,6 +10428,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
             <div id="eds-tabs" class="tab-enable-row" style="border-top:none;padding-top:0;margin-top:.3rem">
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-ASL"   value="ASL">ASL</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-ECHO"  value="ECHO">Echo</label>
+              <label class="tab-chk-lbl"><input type="checkbox" id="chk-SVX"   value="SVX">SVX</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-DMR"   value="DMR">DMR</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-STFU"  value="STFU">STFU</label>
               <label class="tab-chk-lbl"><input type="checkbox" id="chk-YSF"   value="YSF">YSF</label>
@@ -10362,7 +10480,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -10383,7 +10501,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
             <button class="btn btn-teal"  onclick="edSave()">Save</button>
             <button class="btn btn-muted" onclick="edReload()">Reload</button>
           </div>
-          <div class="theme-row"><span id="net-note" class="theme-lbl"></span><span class="theme-lbl">Slow link</span><span class="theme-sw" role="group" aria-label="Slow link mode"><button type="button" class="theme-opt" data-net-set="auto" aria-pressed="true">Auto</button><button type="button" class="theme-opt" data-net-set="on" aria-pressed="false">On</button><button type="button" class="theme-opt" data-net-set="off" aria-pressed="false">Off</button></span><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
+          <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
         </div>
       </div>
     </div>
@@ -10443,8 +10561,8 @@ const byId=id=>document.getElementById(id);
 // applyTabVisibility() on first load anyway. Keep this list in sync with
 // MODE_CAPS' keys below if a mode is ever added/removed at the Object.keys
 // level; applyTabVisibility() itself no longer needs this list at all.
-const PAGES=['ASL','ECHO','DMR','STFU','YSF','FCS','P25','NXDN','DSTAR','XLX','M17'];
-let TAB_LABELS={ASL:'ASL',ECHO:'ECHO',DMR:'DMR',STFU:'STFU',YSF:'YSF',FCS:'FCS',P25:'P25',NXDN:'NXDN',DSTAR:'DSTAR',XLX:'XLX'};
+const PAGES=['ASL','ECHO','SVX','DMR','STFU','YSF','FCS','P25','NXDN','DSTAR','XLX','M17'];
+let TAB_LABELS={ASL:'ASL',ECHO:'ECHO',SVX:'SVX',DMR:'DMR',STFU:'STFU',YSF:'YSF',FCS:'FCS',P25:'P25',NXDN:'NXDN',DSTAR:'DSTAR',XLX:'XLX'};
 const TG_BLANK_NAME='blank';
 const TG_BLANK_ADDR='000000';
 const TG_DISCONNECT='disconnect';
@@ -10464,7 +10582,7 @@ function _saveTabState(){try{sessionStorage.setItem('dashLastTab',curPage);}catc
 // torn down (Edit-page round-trips).  Used by clickTab to restore the
 // correct indicator immediately on tab entry without waiting for a tune event.
 const _curTgPerMode = {};
-let _hasAsl=true,_hasDvs=true,_hasStfu=false,_hasEcho=false,_hasM17=false,_lastHash='',_firstPoll=true,_failCount=0,_lastKeyed=false;
+let _hasAsl=true,_hasDvs=true,_hasStfu=false,_hasEcho=false,_hasM17=false,_hasSvx=false,_lastHash='',_firstPoll=true,_failCount=0,_lastKeyed=false;
 let _uptimeBase=0,_uptimeAt=0;
 let _tuneState='';   // server verdict for the tuned talkgroup: '', pending, confirmed, unconfirmed, sent
 let _abTimer=0;
@@ -10483,54 +10601,6 @@ let _pendingTune=null; // {tg,mode,name,at} while awaiting ABInfo confirmation; 
 // Never touched by Edit → Back navigation (showPage preserves the flag as-is).
 let _dmrNetSelectMode=false;
 let _lastEtag='';  // ETag from last /api/status 200 — sent as If-None-Match on next poll
-const NET={mult:1,avg:0,forced:'',active:Date.now(),next:{}};
-['pointerdown','keydown','touchstart'].forEach(function(name){
-  document.addEventListener(name,function(){NET.active=Date.now()},true);
-});
-NET.read=function(){
-  let v='';
-  try{const m=document.cookie.match(/(?:^|;\s*)asl_slow=(on|off)(?:;|$)/);if(m)v=m[1];}catch(e){}
-  NET.forced=v;
-};
-NET.read();
-NET.show=function(){
-  const el=document.getElementById('net-note');
-  if(el)el.textContent=NET.mult>1?'polling '+NET.mult+'x slower':'';
-  document.querySelectorAll('[data-net-set]').forEach(function(b){
-    const v=b.getAttribute('data-net-set');
-    b.setAttribute('aria-pressed',String((v==='auto'?'':v)===NET.forced));
-  });
-};
-NET.sample=function(ms){
-  NET.read();
-  NET.avg=NET.avg?NET.avg*0.7+ms*0.3:ms;
-  let m=Math.max(1,Math.min(8,Math.ceil(NET.avg/400)));
-  if(NET.forced==='on')m=Math.max(m,6);
-  if(NET.forced==='off')m=1;
-  NET.mult=m;
-  NET.show();
-};
-NET.set=function(value){
-  NET.forced=value==='auto'?'':value;
-  document.cookie='asl_slow='+NET.forced+'; path=/; max-age='+(NET.forced?31536000:0)+'; SameSite=Strict';
-  if(NET.forced==='on')NET.mult=Math.max(NET.mult,6);
-  if(NET.forced==='off'){NET.mult=1;NET.avg=0;}
-  NET.show();
-};
-NET.idle=function(){return NET.mult>1&&Date.now()-NET.active>120000?2:1};
-NET.delay=function(ms){return ms*NET.mult*NET.idle()};
-NET.gate=function(key,ms){
-  if(document.hidden)return true;
-  const now=Date.now();
-  if(now<(NET.next[key]||0))return true;
-  NET.next[key]=now+ms*(NET.mult*NET.idle()-1);
-  return false;
-};
-document.addEventListener('click',function(ev){
-  const b=ev.target&&ev.target.closest?ev.target.closest('[data-net-set]'):null;
-  if(b)NET.set(b.getAttribute('data-net-set'));
-});
-document.addEventListener('DOMContentLoaded',function(){NET.show()});
 let _tgDataLoaded=false; // true once loadTgData() has completed at least one successful fetch
 // FCS browse card state (v8.4.2) — see the fcsCard* block near openLast().
 let _fcs={loaded:false,loading:false,saving:false,at:0,tried:0,byId:{},sig:'',tuned:'',applied:null};
@@ -10626,19 +10696,11 @@ function recBanner(){
   b.textContent=recBusy.override?'Recording in progress: override is on, so changes go through. It ends with the recording.'
     :'Recording in progress: '+(recBusy.entry||'Node Recorder')+'. Links, settings and restarts are locked until it ends.';
 }
-let _recEtag='',_recData=null;
 async function recPoll(){
-  if(NET.gate('rec',3000))return;
   try{
-    const r=await fetch('/api/recording',{headers:_recEtag?{'If-None-Match':_recEtag}:{}});
-    let d;
-    if(r.status===304&&_recData)d=_recData;
-    else{
-      if(!r.ok)return;
-      d=await r.json();
-      _recData=d;
-      _recEtag=r.headers.get('ETag')||'';
-    }
+    const r=await fetch('/api/recording');
+    if(!r.ok)return;
+    const d=await r.json();
     recBusy=d.recording||null;
     recInfo=d||{};
     recBanner();
@@ -10772,6 +10834,7 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'
 const MODE_CAPS={
   ASL:   {requires:['hasAsl'],            isDigital:false, reflectorGrid:false, tgRefresh:false},
   ECHO:  {requires:['hasAsl','hasEcho'],  isDigital:false, reflectorGrid:false, tgRefresh:false},
+  SVX:   {requires:['hasAsl','hasSvx'],   isDigital:false, reflectorGrid:false, tgRefresh:false},
   DMR:   {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
   STFU:  {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
   YSF:   {requires:['hasDvs'],            isDigital:true,  reflectorGrid:false, tgRefresh:true},
@@ -10784,8 +10847,8 @@ const MODE_CAPS={
   PHONE: {requires:['hasAsl'],            isDigital:false, reflectorGrid:false, tgRefresh:false},
 };
 const STATIC_PAGES=Object.keys(MODE_CAPS);
-function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17){
-  const flags={hasAsl,hasDvs,hasStfu,hasEcho,hasM17};
+function applyTabVisibility(enabled,hasAsl,hasDvs,hasStfu,hasEcho,hasM17,hasSvx){
+  const flags={hasAsl,hasDvs,hasStfu,hasEcho,hasM17,hasSvx};
   const before=PAGES.slice().sort().join();
   PAGES.length=0;
   STATIC_PAGES.forEach(p=>{
@@ -11065,6 +11128,9 @@ function _gridClick(e){
     case 'echo-row':
       echoConnect(row.dataset.node,row.dataset.name);
       break;
+    case 'svx-row':
+      svxConnect(row.dataset.tg,row.dataset.name);
+      break;
     case 'dmr-net-row':
       switchDmrServer(row.dataset.name);
       break;
@@ -11171,6 +11237,68 @@ function renderEchoGrid(nodes,fav){
       <span class="row-name">${esc(nd.name)}</span></div>`;
   }).join('');
   if(!n)el.innerHTML='<div style="padding:1rem;color:var(--muted);font-family:var(--sans);font-size:.858rem">No Echo nodes saved</div>';
+}
+let _lastSvx=[],_lastSvxTg=null,_svxReady=false;
+function renderSvxGrid(list,tg){
+  const el=byId('svx-grid');if(!el)return;_wireGridClicks(el);let n=0;
+  el.innerHTML=(list||[]).map(r=>{
+    n++;
+    const active=tg!==null&&String(tg)===String(r.tg);
+    return `<div class="${active?'row-grid active-svx':'row-grid'}" data-role="svx-row" data-tg="${esc(r.tg)}" data-name="${esc(r.name)}" title="${esc(r.name)} (TG ${esc(r.tg)})">
+      <span class="row-num">${n}</span>
+      <div class="dot ${active?'dot-on':'dot-off'}"></div>
+      <span class="row-name">${esc(r.name)}</span></div>`;
+  }).join('');
+  if(!n)el.innerHTML='<div style="padding:1rem;color:var(--muted);font-family:var(--sans);font-size:.858rem">No SVX talkgroups saved</div>';
+}
+function svxTyped(){
+  const v=((byId('svx-tg')||{}).value||'').trim();
+  return /^[0-9]{1,9}$/.test(v)&&Number(v)>0?String(Number(v)):'';
+}
+function svxButtons(){
+  const ok=!!svxTyped();
+  const c=byId('svx-connect-btn'),s=byId('svx-save-btn');
+  if(c)c.disabled=!ok;if(s)s.disabled=!ok;
+}
+function svxMsg(){
+  const el=byId('svx-card-msg');if(!el)return;
+  if(!_svxReady){
+    el.hidden=false;
+    el.textContent='SvxLink is not connected to a reflector yet, so Connect only links the bridge. Run Connect to an SvxReflector on 44helper\'s SvxLink tab.';
+  }else if(_lastSvxTg){
+    el.hidden=false;el.textContent='Talkgroup '+_lastSvxTg+' picked.';
+  }else{el.hidden=true;el.textContent='';}
+}
+async function svxConnect(tg,name){
+  if(busy)return;
+  dimGrid('SVX');
+  try{await apiAction(
+    {action:'svx-connect',tg,name},
+    `SVX picking TG ${tg}…`,
+    d=>{_lastSvxTg=String(Number(tg));renderSvxGrid(_lastSvx,_lastSvxTg);svxMsg();showReady(`SVX READY — ${name}`);},
+    30000
+  );}finally{undimGrid('SVX');}
+}
+function svxConnectTyped(){
+  const tg=svxTyped();if(!tg)return;
+  const fav=(_lastSvx||[]).find(r=>String(r.tg)===tg);
+  svxConnect(tg,fav?fav.name:'TG '+tg);
+}
+async function svxSave(){
+  const tg=svxTyped()||(_lastSvxTg||'');if(!tg)return;
+  await apiAction(
+    {action:'save-svx-favorite',tg,name:'TG '+tg},
+    'Saving…',
+    d=>{toast(d.message,'ok');const i=byId('svx-tg');if(i)i.value='';svxButtons();setTimeout(refresh,300);}
+  );
+}
+async function doSvxDisc(){
+  await apiAction(
+    {action:'svx-disc'},
+    'SVX disconnecting…',
+    ()=>{_lastSvxTg=null;renderSvxGrid(_lastSvx,null);svxMsg();showReady('SVX — no talkgroup');},
+    30000
+  );
 }
 function buildModuleOptions(selected,includeAll){
   // Returns <option> HTML for modules A–Z, optionally prefixed with the
@@ -11345,6 +11473,7 @@ function _refreshLhBtns(){
   _updateLhBtn('lh-btn-DMR', activeSrv?activeSrv.net_url||'':'');
   _updateLhBtn('lh-btn-ASL',  modeNetUrls.ASL||'');
   _updateLhBtn('lh-btn-ECHO', modeNetUrls.ECHO||'');
+  _updateLhBtn('lh-btn-SVX',  modeNetUrls.SVX||'');
   _updateLhBtn('lh-btn-STFU', modeNetUrls.STFU||'');
   fcsCardButtons();   // v9.3.82: card LH falls back to the FCS network LH
   dmrSaveSync();   // v8.9.6: DMR Save follows the network dropdown
@@ -12715,14 +12844,14 @@ async function doReboot(){if(!await confirm1('Reboot the system?'))return;const 
 async function doShutdown(){if(!await confirm1('Shut down the system?'))return;const d=await api({action:'shutdown'});if(!d||!d.ok){toast(d?.message||'Shutdown failed','err');return}toast(d.message||'Shutting down…','info')}
 function applyTabState(d){
   if(_firstPoll){
-    _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
+    _hasAsl=!!d.has_asl;_hasDvs=!!d.has_dvs;_hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;_hasSvx=!!d.has_svx;
     if(!d.has_asl&&!d.has_dvs){
       byId('tabs-strip').style.display='none';
       PAGES.length=0;inEdit=true;syncPageDisplay();edReload();
       document.body.classList.add('tabs-ready');
       _firstPoll=false;return;
     }
-    applyTabVisibility(d.enabled_tabs||[],_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    applyTabVisibility(d.enabled_tabs||[],_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);
     // X2 — one-shot startup warnings from the backend (e.g. legacy XLX rows
     // dropped during conf parse). Gated on _firstPoll so it surfaces exactly
     // once per page load, never repeats on subsequent poll cycles.
@@ -12771,8 +12900,8 @@ function applyTabState(d){
     document.body.classList.add('tabs-ready');
     _firstPoll=false;
   }else if(Array.isArray(d.enabled_tabs)){
-    _hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;
-    const pc=applyTabVisibility(d.enabled_tabs,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);
+    _hasStfu=!!d.has_stfu;_hasEcho=!!d.has_echo;_hasM17=!!d.has_m17;_hasSvx=!!d.has_svx;
+    const pc=applyTabVisibility(d.enabled_tabs,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);
     if(pc){
       if(curPage&&!PAGES.includes(curPage)){curPage=PAGES.length?PAGES[0]:null;if(!inEdit)inEdit=!curPage}
       syncPageDisplay();_lastHash='';
@@ -12902,6 +13031,8 @@ function applyGridState(d,changed){
     // it draws at boot/tab-switch instead of only after a connect/disconnect
     // action (which was the only place this used to be called from).
     renderEchoGrid(_lastEchoNodes,_lastEchoFav);
+    _lastSvx=d.svx||[];_lastSvxTg=d.svx_tg||null;_svxReady=!!d.svx_ready;
+    renderSvxGrid(_lastSvx,_lastSvxTg);svxMsg();
     // T2 guard: only render TG grids once loadTgData() has successfully fetched
     // real data.  Before that, _lastTgs is {} and every renderTGGrid call would
     // render "No X entries", permanently blanking the grids if loadTgData()
@@ -12936,10 +13067,8 @@ async function refresh(){
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),5000);
     const hdrs=_lastEtag?{'If-None-Match':_lastEtag}:{};
-    const t0=performance.now();
     const r=await fetch('/api/status',{headers:hdrs,signal:ctrl.signal});
     clearTimeout(tid);
-    if(!document.hidden)NET.sample(performance.now()-t0);
     if(r.status===304){
       _failCount=0;document.body.classList.remove('offline');
       return;
@@ -12951,9 +13080,11 @@ async function refresh(){
     if(d.wifimon_shutdown&&d.wifimon_shutdown.active)showWfmShutdown(d.wifimon_shutdown);
     const aslFP=(d.asl||[]).map(n=>n.name+n.node).join('|');
     const echoFP=(d.echo||[]).map(n=>n.name+n.node).join('|');
+    const svxFP=(d.svx||[]).map(n=>n.name+n.tg).join('|');
     const hash=JSON.stringify([d.page,d.current_fav,d.echo_fav,
                                d.has_asl,d.has_dvs,d.has_stfu,d.has_echo,
-                               aslFP,echoFP,(d.enabled_tabs||[]).join()]);
+                               aslFP,echoFP,(d.enabled_tabs||[]).join(),
+                               d.has_svx,d.svx_tg,d.svx_ready,svxFP]);
     const changed=hash!==_lastHash;_lastHash=hash;
     applyTabState(d);
     applyServerState(d);
@@ -12969,7 +13100,7 @@ async function refresh(){
     }
   }
 }
-let edRows=[],ndRows=[],ecRows=[],xlxEdRows=[],m17EdRows=[],modeNetUrls={},rowNetUrlDefaults={};
+let edRows=[],ndRows=[],ecRows=[],svRows=[],xlxEdRows=[],m17EdRows=[],modeNetUrls={},rowNetUrlDefaults={};
 async function cfgLoad(){
   try{
     const d=await(await fetch('/api/config')).json();
@@ -12982,7 +13113,6 @@ async function cfgLoad(){
     }
     byId('cfg-port').value=d.port||'';
     byId('cfg-cpuweight').checked=!!d.cpuweight_enabled;
-    byId('cfg-https').checked=d.https!==false;
     const enabled=Array.isArray(d.enabled_tabs)?d.enabled_tabs:[];
     STATIC_PAGES.forEach(m=>{
       const el=byId('chk-'+m);if(el)el.checked=enabled.includes(m);
@@ -13008,8 +13138,7 @@ async function cfgSave(){
   const enabled_tabs=STATIC_PAGES
     .filter(m=>{const el=byId('chk-'+m);return el&&el.checked});
   const cpuweight_enabled=byId('cfg-cpuweight').checked;
-  const https=byId('cfg-https').checked;
-  const d=await api({action:'save-config',asl_node,bridge_node,bridge_nodes,port,callsign,enabled_tabs,cpuweight_enabled,https,mode_net_urls:modeNetUrls});
+  const d=await api({action:'save-config',asl_node,bridge_node,bridge_nodes,port,callsign,enabled_tabs,cpuweight_enabled,mode_net_urls:modeNetUrls});
   if(!d.ok){toast('Config: '+d.message,'err');return false}return true;
 }
 async function loadTgData(){
@@ -13800,6 +13929,8 @@ async function edReload(){
     m17EdRows=await m17Res.json();
     while(ndRows.length<10)ndRows.push({name:TG_BLANK_NAME,node:TG_BLANK_ADDR});
     while(ecRows.length<10)ecRows.push({name:TG_BLANK_NAME,node:TG_BLANK_ADDR});
+    svRows=(_lastSvx||[]).map(r=>({name:r.name,tg:String(r.tg)}));
+    while(svRows.length<10)svRows.push({name:'',tg:''});
     while(xlxEdRows.length<10)xlxEdRows.push({name:TG_BLANK_NAME,tg:TG_BLANK_ADDR,url:''});
     while(m17EdRows.length<10)m17EdRows.push({name:TG_BLANK_NAME,base:TG_BLANK_NAME,module:'@ALL',ip:TG_BLANK_ADDR,url:''});
     const DM=['DMR','STFU','YSF','FCS','P25','NXDN','DSTAR'];edRows=[];
@@ -13900,6 +14031,13 @@ function ecSyncFromDOM(){
   });
 }
 function ecFieldChanged(i,f,v){if(ecRows[i])ecRows[i][f]=v}
+function svSyncFromDOM(){
+  syncEdRowsFromDOM('.sv-row',svRows,(row,entry)=>{
+    const n=row.querySelector('.sv-inp-name');const t=row.querySelector('.sv-inp-tg');
+    if(n)entry.name=n.value;if(t)entry.tg=t.value;
+  });
+}
+function svFieldChanged(i,f,v){if(svRows[i])svRows[i][f]=v}
 function modeNetUrlChanged(m,v){modeNetUrls[m]=v;}
 function xlxUrlChanged(i,v){if(xlxEdRows[i])xlxEdRows[i].url=v;}
 function m17UrlChanged(i,v){if(m17EdRows[i])m17EdRows[i].url=v;}
@@ -13968,7 +14106,7 @@ function edRender(){
   // Default all sections to collapsed on first entry to the edit tab.
   // _edCollapsed persists for the session, so sections the user has explicitly
   // opened stay open on subsequent edReload() calls.
-  const allSids=['eds-tabs','eds-phone','eds-ASL','eds-ECHO','eds-DSTAR','eds-XLX','eds-M17',
+  const allSids=['eds-tabs','eds-phone','eds-ASL','eds-ECHO','eds-SVX','eds-DSTAR','eds-XLX','eds-M17',
                  'eds-DMR-NET','eds-FCS',
                  ...DM.map(m=>`eds-${m}`),
                  ...Object.keys(dmrSrvRows||{}).map(k=>`eds-TGS-${k}`)];
@@ -13993,6 +14131,17 @@ function edRender(){
     h+=ecRows.map((r,i)=>`<div class="ec-row ed-row" data-idx="${i}">
     <input class="ed-inp ec-inp-name" value="${esc(r.name)}" placeholder="Name" oninput="ecFieldChanged(${i},'name',this.value)">
     <input class="ed-inp ec-inp-node" value="${esc(r.node)}" placeholder="Node #" inputmode="numeric" oninput="ecFieldChanged(${i},'node',this.value)">
+    </div>`).join('');
+    h+='</div></div>';
+  }
+  if(PAGES.includes('SVX')){
+    h+=`<div class="ed-sec-hdr"><span>SVX</span><button onclick="toggleEdSection('eds-SVX')">Hide</button></div>`;
+    h+=`<div id="eds-SVX">`;
+    h+=edUrlRow('SVX');
+    h+=`<div class="ed-list-grid">`;
+    h+=svRows.map((r,i)=>`<div class="sv-row ed-row" data-idx="${i}">
+    <input class="ed-inp sv-inp-name" value="${esc(r.name)}" placeholder="Name" oninput="svFieldChanged(${i},'name',this.value)">
+    <input class="ed-inp sv-inp-tg" value="${esc(r.tg)}" placeholder="Talkgroup #" inputmode="numeric" maxlength="9" oninput="svFieldChanged(${i},'tg',this.value)">
     </div>`).join('');
     h+='</div></div>';
   }
@@ -14172,7 +14321,7 @@ function edRender(){
 async function edSave(){
   if(busy)return;busy=true;
   if(document.activeElement?.closest('.ed-row'))document.activeElement.blur();
-  edSyncFromDOM();ndSyncFromDOM();ecSyncFromDOM();xlxSyncFromDOM();m17SyncFromDOM();showWorking('Saving…');
+  edSyncFromDOM();ndSyncFromDOM();ecSyncFromDOM();svSyncFromDOM();xlxSyncFromDOM();m17SyncFromDOM();showWorking('Saving…');
   try{
     if(!await cfgSave())return;
     if(_ph.loaded&&_ph.dirty)await phSave(true);
@@ -14198,36 +14347,32 @@ async function edSave(){
         const dm=await api({action:'save-m17',rows:m17EdRows});
         if(!dm.ok)toast(dm.message,'err');
       }
+      if(PAGES.includes('SVX')){
+        const dv=await api({action:'save-svx',rows:svRows.filter(r=>String(r.name||'').trim()||String(r.tg||'').trim())});
+        if(!dv.ok)toast(dv.message,'err');
+        else{_lastSvx=svRows.filter(r=>String(r.tg||'').trim()).map(r=>({name:String(r.name||'').trim()||'TG '+Number(r.tg),tg:String(Number(r.tg))}));}
+      }
       edRender();
       loadTgData();
       _refreshLhBtns();
       const en=STATIC_PAGES.filter(m=>byId('chk-'+m)?.checked);
-      applyTabVisibility(en,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17);syncPageDisplay();setTimeout(refresh,400);
+      applyTabVisibility(en,_hasAsl,_hasDvs,_hasStfu,_hasEcho,_hasM17,_hasSvx);syncPageDisplay();setTimeout(refresh,400);
     }
   }finally{hideWorking();busy=false}
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{if(!document.hidden)await refresh()}finally{schedulePoll()}},busy?1000:NET.delay(5000));  // Pi02w: idle was 3000
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
 }
-let _keyedTimer=null,_keyedBusy=false,_keyedEtag='',_keyedData=null;
+let _keyedTimer=null;
 let _lastLinkKnown=true;
 async function pollKeyed(){
-  if(_keyedBusy)return;
-  if(document.hidden){_keyedTimer=setTimeout(pollKeyed,2000);return}
-  _keyedBusy=true;
   try{
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),2000);
-    const r=await fetch('/api/keyed',{headers:_keyedEtag?{'If-None-Match':_keyedEtag}:{},signal:ctrl.signal});
+    const r=await fetch('/api/keyed',{signal:ctrl.signal});
     clearTimeout(tid);
-    let d;
-    if(r.status===304&&_keyedData)d=_keyedData;
-    else{
-      d=await r.json();
-      _keyedData=d;
-      _keyedEtag=r.headers.get('ETag')||'';
-    }
+    const d=await r.json();
     const keyed      =!!d.keyed;
     const linkedNode =d.linked_node||null;
     const onPermLink  =!!d.on_perm_link;
@@ -14300,16 +14445,8 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedBusy=false;
-  _keyedTimer=setTimeout(pollKeyed,(_lastKeyed||busy)?1000:1000*Math.min(NET.mult,4));  // Pi02w: was 500 (the server updates every 2 s)
+  _keyedTimer=setTimeout(pollKeyed,500);
 }
-document.addEventListener('visibilitychange',function(){
-  if(document.hidden||!_appStarted)return;
-  clearTimeout(_pollTimer);
-  refresh().finally(schedulePoll);
-  if(!_keyedBusy){clearTimeout(_keyedTimer);pollKeyed();}
-  recPoll();
-});
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 // The server compares the tuned talkgroup with what Analog_Bridge reports and
 // sends the verdict (tune_state) in /api/status and /api/abinfo.  While a tune
@@ -14620,25 +14757,10 @@ def login_ui_inject(html, input_id, nonce=""):
 
 
 _HTML_BYTES = login_ui_inject(HTML
-                            .replace("__VERSION__",    VERSION)
-                            .replace("__BUILD_DATE__", BUILD_DATE)
-                            .replace("__TLS_NOTE__",   ""),
-                            "login-pw").encode()
+                              .replace("__VERSION__",    VERSION)
+                              .replace("__BUILD_DATE__", BUILD_DATE),
+                              "login-pw").encode()
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
-_HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
-_HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
-
-def _set_tls_note(note: str) -> None:
-    global _HTML_BYTES, _HTML_GZIP, _HTML_LITE_BYTES, _HTML_LITE_GZIP
-    if not note:
-        return
-    import html as _html
-    old = b'<div id="login-tls" class="lg-note"></div>'
-    new = ('<div id="login-tls" class="lg-note">' + _html.escape(note) + '</div>').encode("utf-8")
-    _HTML_BYTES = _HTML_BYTES.replace(old, new)
-    _HTML_GZIP = gzip.compress(_HTML_BYTES, compresslevel=6)
-    _HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
-    _HTML_LITE_GZIP = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
 
 _AUTH_ACCOUNT        = "root"
 
@@ -15002,220 +15124,11 @@ def _login_record_success(ip: str) -> None:
         d["locked"].pop(ip, None)
     _shared_auth_mutate(_mut)
 
-def tls_lan_ips():
-    import re
-    import socket
-    import subprocess
-    ips = set()
-    try:
-        r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
-        ips.update(x for x in r.stdout.split() if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", x))
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("192.0.2.1", 9))
-        ips.add(s.getsockname()[0])
-        s.close()
-    except OSError:
-        pass
-    ips.add("127.0.0.1")
-    return sorted(ips)
+def _session_cookie_header(token: str, max_age: int) -> str:
+    return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, False)
 
-def tls_ensure_cert(tls_dir, fallback_name, log=None):
-    import os
-    import re
-    import shutil
-    import socket
-    import subprocess
-    say = log or (lambda msg, level="info": None)
-    cert, key = os.path.join(tls_dir, "cert.pem"), os.path.join(tls_dir, "key.pem")
-    if os.path.exists(cert) and os.path.exists(key):
-        return True
-    openssl = shutil.which("openssl")
-    if not openssl:
-        say("openssl not found: can't create the HTTPS certificate", "err")
-        return False
-    host = socket.gethostname().split(".")[0]
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
-        host = fallback_name
-    try:
-        os.makedirs(tls_dir, mode=0o700, exist_ok=True)
-        os.chmod(tls_dir, 0o700)
-    except OSError as exc:
-        say("Can't create %s: %s" % (tls_dir, exc), "err")
-        return False
-    san = ",".join(["DNS:%s" % host, "DNS:%s.local" % host] + ["IP:%s" % ip for ip in tls_lan_ips()])
-    key_tmp, cert_tmp = key + ".tmp", cert + ".tmp"
-    cmd = [openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-           "-keyout", key_tmp, "-out", cert_tmp, "-days", "3650", "-subj", "/CN=%s" % host,
-           "-addext", "subjectAltName=%s" % san]
-    old_umask = os.umask(0o077)
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (subprocess.SubprocessError, OSError) as exc:
-        say("openssl failed: %s" % exc, "err")
-        return False
-    finally:
-        os.umask(old_umask)
-    if r.returncode != 0 or not (os.path.exists(key_tmp) and os.path.exists(cert_tmp)):
-        say("openssl failed: %s" % r.stderr.strip()[:300], "err")
-        for p in (key_tmp, cert_tmp):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-        return False
-    os.chmod(key_tmp, 0o600)
-    os.chmod(cert_tmp, 0o644)
-    os.replace(key_tmp, key)
-    os.replace(cert_tmp, cert)
-    say("Created a self-signed HTTPS certificate for %s (%s)" % (host, san), "ok")
-    return True
-
-def tls_set_aside(tls_dir, log=None):
-    import os
-    import time
-    say = log or (lambda msg, level="info": None)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    for name in ("cert.pem", "key.pem"):
-        p = os.path.join(tls_dir, name)
-        if os.path.exists(p):
-            try:
-                os.replace(p, "%s.%s.bad" % (p, stamp))
-            except OSError as exc:
-                say("Can't move %s aside: %s" % (p, exc), "err")
-                return False
-    return True
-
-def tls_context(tls_dir):
-    import os
-    import ssl
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_cert_chain(os.path.join(tls_dir, "cert.pem"), os.path.join(tls_dir, "key.pem"))
-    return ctx
-
-def tls_redirect(sock, port):
-    import re
-    data = b""
-    try:
-        sock.settimeout(5)
-        while b"\r\n\r\n" not in data and len(data) < 8192:
-            chunk = sock.recv(2048)
-            if not chunk:
-                break
-            data += chunk
-    except OSError:
-        return
-    lines = data.decode("latin-1", "replace").split("\r\n")
-    parts = lines[0].split(" ") if lines else []
-    path = parts[1] if len(parts) >= 2 and parts[1].startswith("/") else "/"
-    if any(c in path for c in "\r\n ") or path.startswith("//"):
-        path = "/"
-    host = ""
-    for ln in lines[1:]:
-        k, _, v = ln.partition(":")
-        if k.strip().lower() == "host":
-            host = v.strip()
-            break
-    if not re.match(r"^[A-Za-z0-9.\-]{1,253}(?::\d{1,5})?$|^\[[0-9A-Fa-f:.]{2,45}\](?::\d{1,5})?$", host):
-        ips = [ip for ip in tls_lan_ips() if not ip.startswith("127.")] or ["127.0.0.1"]
-        host = "%s:%d" % (ips[0], port)
-    body = b"This page is served over HTTPS.\r\n"
-    resp = ("HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s%s\r\n"
-            "Content-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
-            % (host, path, len(body))).encode("latin-1") + body
-    try:
-        sock.sendall(resp)
-    except OSError:
-        pass
-
-def tls_finish_request(server, request, client_address, port, plain_loopback=True):
-    import ipaddress
-    import socket
-    import ssl
-    if getattr(server, "ssl_ctx", None) is None:
-        server.RequestHandlerClass(request, client_address, server)
-        return
-    try:
-        request.settimeout(10)
-        first = request.recv(1, socket.MSG_PEEK)
-    except OSError:
-        return
-    if not first:
-        return
-    if first[0] != 0x16:
-        local = False
-        if plain_loopback and client_address:
-            try:
-                ip = ipaddress.ip_address(str(client_address[0]).split("%")[0])
-                local = (ip.ipv4_mapped or ip).is_loopback if ip.version == 6 else ip.is_loopback
-            except ValueError:
-                local = False
-        if not local:
-            tls_redirect(request, port)
-            return
-        request.settimeout(None)
-        server.RequestHandlerClass(request, client_address, server)
-        return
-    try:
-        tls = server.ssl_ctx.wrap_socket(request, server_side=True)
-    except (ssl.SSLError, OSError):
-        return
-    try:
-        tls.settimeout(None)
-        server.RequestHandlerClass(tls, client_address, server)
-    finally:
-        try:
-            tls.close()
-        except OSError:
-            pass
-
-def tls_start(server, enabled, tls_dir, fallback_name, log=None):
-    import ssl
-    say = log or (lambda msg, level="info": None)
-    server.ssl_ctx = None
-    if not enabled:
-        return ""
-    if tls_ensure_cert(tls_dir, fallback_name, log):
-        try:
-            server.ssl_ctx = tls_context(tls_dir)
-        except (ssl.SSLError, OSError) as exc:
-            say("HTTPS certificate could not be loaded (%s); making a new one" % exc, "err")
-            if tls_set_aside(tls_dir, log) and tls_ensure_cert(tls_dir, fallback_name, log):
-                try:
-                    server.ssl_ctx = tls_context(tls_dir)
-                except (ssl.SSLError, OSError) as exc2:
-                    say("The new HTTPS certificate could not be loaded either (%s); serving plain HTTP" % exc2, "err")
-            else:
-                say("No new HTTPS certificate; serving plain HTTP", "err")
-    else:
-        say("No HTTPS certificate; serving plain HTTP", "err")
-    if server.ssl_ctx is None:
-        return ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
-                "is sent in plain text. See the log.")
-    return ""
-
-def tls_secure(connection, headers=None, proxied=False):
-    import ssl
-    if isinstance(connection, ssl.SSLSocket):
-        return True
-    return bool(proxied and headers is not None and headers.get("X-Forwarded-Proto", "").strip().lower() == "https")
-
-_TLS_DIR = "/etc/asl_dvs/nodecontrol_tls"
-
-def _tls_log(msg: str, level: str = "info") -> None:
-    if level in ("err", "warn"):
-        log.warning("%s", msg)
-    else:
-        log.info("%s", msg)
-
-def _session_cookie_header(token: str, max_age: int, secure: bool = False) -> str:
-    return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, secure)
-
-def _clear_session_cookie_header(secure: bool = False) -> str:
-    return sess_cookie_clear(_SESSION_COOKIE_NAME, secure)
+def _clear_session_cookie_header() -> str:
+    return sess_cookie_clear(_SESSION_COOKIE_NAME, False)
 
 _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
@@ -15226,84 +15139,24 @@ _PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X
                   "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
 
 class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
     timeout = 30
 
     def log_message(self, fmt, *args):
         pass
-
-    def handle_one_request(self) -> None:
-        self._body_taken = False
-        super().handle_one_request()
-        if self.close_connection and not self._body_taken:
-            self._drain_unread_body()
-
-    def _drain_unread_body(self) -> None:
-        try:
-            left = int(self.headers.get("Content-Length", 0) or 0)
-        except (AttributeError, ValueError):
-            return
-        if left <= 0 or left > 524_288:
-            return
-        try:
-            self.connection.settimeout(2)
-            while left > 0:
-                chunk = self.rfile.read(min(left, 65536))
-                if not chunk:
-                    break
-                left -= len(chunk)
-        except OSError:
-            pass
-
-    def send_response(self, code, message=None):
-        self._sent_length = code in (204, 304)
-        super().send_response(code, message)
-
-    def send_header(self, keyword, value):
-        if keyword.lower() in ("content-length", "transfer-encoding"):
-            self._sent_length = True
-        super().send_header(keyword, value)
-
-    def _keep_alive_ok(self) -> bool:
-        try:
-            with self.server._per_ip_lock:
-                held = self.server._per_ip_count.get(self.client_address[0], 0)
-        except AttributeError:
-            return True
-        return held <= _MAX_CONCURRENT_CONNECTIONS_PER_IP // 2
-
-    def end_headers(self):
-        if not (getattr(self, "_sent_length", False) and self.command == "GET" and self._keep_alive_ok()):
-            self.send_header("Connection", "close")
-        super().end_headers()
 
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")
 
     def send_json(self, data: dict, status: int = 200,
                   extra_headers: Optional[Dict[str, str]] = None) -> None:
-        self._send_raw_json(json.dumps(data, separators=(",", ":")).encode(), status, extra_headers)
-
-    def send_json_tagged(self, data: dict) -> None:
         raw = json.dumps(data, separators=(",", ":")).encode()
-        etag = '"' + hashlib.md5(raw).hexdigest() + '"'
-        if self.headers.get("If-None-Match", "") == etag:
-            self.send_response(304)
-            self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return
-        self._send_raw_json(raw, 200, {"ETag": etag})
-
-    def _send_raw_json(self, raw: bytes, status: int,
-                       extra_headers: Optional[Dict[str, str]]) -> None:
         self.send_response(status)
         self.send_header("Content-Type",          "application/json")
         self.send_header("Cache-Control",          "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         renew = self.__dict__.pop("_renew_cookie", None)
         if renew and not (extra_headers and "Set-Cookie" in extra_headers):
-            self.send_header("Set-Cookie", _session_cookie_header(renew[0], renew[1], self._secure()))
+            self.send_header("Set-Cookie", _session_cookie_header(renew[0], renew[1]))
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
@@ -15326,14 +15179,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _wants_lite_page(self) -> bool:
-        if self.headers.get("Save-Data", "").strip().lower() == "on":
-            return True
-        for part in self.headers.get("Cookie", "").split(";"):
-            if part.strip() == "asl_slow=on":
-                return True
-        return False
-
     def send_html(self) -> None:
         self.send_response(200)
         self.send_header("Content-Type",          "text/html; charset=utf-8")
@@ -15344,12 +15189,11 @@ class Handler(BaseHTTPRequestHandler):
                          "script-src 'unsafe-inline'; connect-src 'self'; "
                          "frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
-        lite = self._wants_lite_page()
         if self._accepts_gzip():
-            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
+            body = _HTML_GZIP
             self.send_header("Content-Encoding", "gzip")
         else:
-            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
+            body = _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -15405,7 +15249,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self) -> bytes:
-        self._body_taken = True
         length = int(self.headers.get("Content-Length", 0))
         if length > 524_288:
             self.send_json({"ok": False, "message": "Request body too large"}, 413)
@@ -15414,10 +15257,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def _via_proxy(self) -> bool:
         return any(self.headers.get(h) is not None for h in _PROXY_HEADERS)
-
-    def _secure(self) -> bool:
-        local = self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
-        return tls_secure(self.connection, self.headers, local and self._via_proxy())
 
     def _client_ip(self) -> str:
         try:
@@ -15497,7 +15336,7 @@ class Handler(BaseHTTPRequestHandler):
             token, age = _issue_session()
             log.info("login: successful root-password login from %s", ip)
             self.send_json({"ok": True}, 200,
-                            extra_headers={"Set-Cookie": _session_cookie_header(token, age, self._secure())})
+                            extra_headers={"Set-Cookie": _session_cookie_header(token, age)})
         else:
             _login_record_failure(ip)
             log.warning("login: failed attempt from %s", ip)
@@ -15554,7 +15393,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             log.exception("Unhandled error in action dispatch")
             self.send_json({"ok": False, "message": "Internal server error"}, 500); return
-        extra = {"Set-Cookie": _clear_session_cookie_header(self._secure())} if data.get("action") == "logout" else None
+        extra = {"Set-Cookie": _clear_session_cookie_header()} if data.get("action") == "logout" else None
         try:
             self.send_json({"ok": ok, "message": msg}, 200 if ok else 400, extra_headers=extra)
         except (BrokenPipeError, ConnectionResetError):
@@ -15615,11 +15454,12 @@ _REC_BLOCKED_ACTIONS = frozenset((
     "switch-tab", "retune-tab", "tune", "quick-tune", "asl-connect", "asl-disc-current", "disc-perm-link",
     "connect-by-number", "echo-connect", "echo-connect-by-number", "echo-disc", "dstar-connect", "xlx-connect",
     "dstar-disconnect", "xlx-disconnect", "m17-connect", "m17-disconnect", "disc-all", "switch-dmr-server",
+    "svx-connect", "svx-disc", "save-svx", "save-svx-favorite",
     "save-all", "save-dmr-server-tgs", "save-xlx", "save-m17", "save-config", "save-phone", "phone-select",
     "phone-apply", "phone-activate", "phone-revert", "phone-dial", "phone-test", "phone-patch"))
 _REC_BRIDGE_ACTIONS = frozenset((
     "switch-tab", "retune-tab", "tune", "quick-tune", "dstar-connect", "xlx-connect", "dstar-disconnect", "xlx-disconnect",
-    "m17-connect", "m17-disconnect", "switch-dmr-server"))
+    "m17-connect", "m17-disconnect", "svx-connect", "svx-disc", "switch-dmr-server"))
 _REC_POWER_ACTIONS = frozenset(("reboot", "shutdown"))
 _REC_RESTART_ACTIONS = frozenset(("phone-apply", "phone-activate", "phone-revert"))
 _REC_DIGITAL_MODES = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
@@ -15814,8 +15654,6 @@ def _act_save_config(h, d):
         cfg_data["bridge_nodes"] = list(d["bridge_nodes"])
     if "cpuweight_enabled" in d:
         cfg_data["cpuweight_enabled"] = bool(d["cpuweight_enabled"])
-    if "https" in d:
-        cfg_data["https"] = bool(d["https"])
     return action_save_config(cfg_data)
 
 _LOCAL_API_KEY_PATH = "/etc/asl_dvs/local_api.key"
@@ -15911,11 +15749,12 @@ def action_local(data: dict) -> Tuple[bool, str]:
         typ = str((net or {}).get("type", ""))
         return True, json.dumps({"state": st.get("state", "idle"), "net": str((net or {}).get("name", "")),
                                  "type": typ, "type_label": _PHONE_TYPE_LBL.get(typ, ""),
-                                 "node": _phone_live_node(doc)})
+                                 "node": _phone_live_node(doc),
+                                 "tone": radio_tone_status(_RADIO, st.get("state") == "in_call", radio_tone_wanted(doc, _phone_on()))})
     if act == "phone-tones":
         tones = str(data.get("tones", ""))
         log.info("local API: Node Talker asks to send phone tones %s", tones[:32])
-        return action_phone_send_tones(tones)
+        return action_phone_send_tones(tones, "talker")
     if act == "dmr-server-add":
         return _local_dmr_server_add(data)
     return False, f"Unknown local action '{act}'"
@@ -16080,6 +15919,9 @@ _POST_ACTIONS: dict = {
     "echo-connect":      lambda h, d: action_echo_connect(_arg(d, "node"), _clip_label(_arg(d, "name"))),
     "echo-connect-by-number": lambda h, d: action_echo_connect_by_number(_arg(d, "node")),
     "echo-disc":         lambda h, d: action_echo_disconnect(drop_all=True),
+    "svx-connect":       lambda h, d: action_svx_connect(_arg(d, "tg"), _clip_label(_arg(d, "name"))),
+    "svx-disc":          lambda h, d: action_svx_disconnect(),
+    "save-svx-favorite": lambda h, d: action_save_svx_favorite(_arg(d, "tg"), _clip_label(_arg(d, "name"))),
     "dstar-connect":     lambda h, d: action_dstar_connect(
         _arg_s(d, "base"), _arg_s(d, "module"),
         _clip_label(_arg_s(d, "name") or f"DSTAR {_arg_s(d, 'base')}{_arg_s(d, 'module')}")),
@@ -16108,6 +15950,7 @@ _POST_ACTIONS: dict = {
     "save-xlx-favorite": lambda h, d: action_save_xlx_favorite(_arg(d, "base"), _arg(d, "module")),
     "save-xlx":          _act_rows(lambda rows: action_save_xlx(rows)),
     "save-m17":          _act_rows(lambda rows: action_save_m17(rows)),
+    "save-svx":          _act_rows(lambda rows: action_save_svx(rows)),
     "save-config":       _act_save_config,
     "save-phone":        lambda h, d: action_save_phone(d.get("phone", {})),
     "phone-select":      lambda h, d: action_phone_select(_arg_s(d, "network")),
@@ -16147,8 +15990,8 @@ _GET_ROUTES: dict = {
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
-    "/api/recording":  lambda h: h.send_json_tagged(recording_view()),
-    "/api/keyed":      lambda h: h.send_json_tagged(action_get_keyed()),
+    "/api/recording":  lambda h: h.send_json(recording_view()),
+    "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
     "/api/asl-nodes":      lambda h: h.send_json(action_get_asl_nodes()),
     "/api/echo-nodes":     lambda h: h.send_json(action_get_echo_nodes()),
@@ -16505,9 +16348,12 @@ def startup() -> None:
     has_asl = _detect_asl()
     has_dvs = _detect_dvs()
     has_m17 = _detect_m17()
-    set_state(has_asl=has_asl, has_dvs=has_dvs, has_m17=has_m17)
+    has_svx = _detect_svx()
+    set_state(has_asl=has_asl, has_dvs=has_dvs, has_m17=has_m17, has_svx=has_svx)
     if has_m17:
         log.info("M17 bridge detected — tab enabled")
+    if has_svx:
+        log.info("SvxLink USRP detected — SVX tab enabled")
 
     cs = _read_callsign()
     set_state(callsign=cs)
@@ -16596,11 +16442,6 @@ def _lan_ip() -> str:
         return "your-pi-ip"
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
-    ssl_ctx = None
-
-    def finish_request(self, request, client_address):
-        tls_finish_request(self, request, client_address, self.server_address[1])
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._conn_semaphore = threading.BoundedSemaphore(_MAX_CONCURRENT_CONNECTIONS)
@@ -16940,11 +16781,6 @@ def uninstall_service() -> None:
             pass
     _remove_launcher_if_unused()
 
-    echodb_dir = os.path.dirname(_ECHODB_FILE)
-    if os.path.isdir(echodb_dir):
-        shutil.rmtree(echodb_dir, ignore_errors=True)
-        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
-
     mark, msg = close_firewall_port(_listen_port())
     print(f"  [{mark}] {msg}")
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
@@ -16958,8 +16794,6 @@ def main() -> None:
         log.warning("local API: could not create %s", _LOCAL_API_KEY_PATH)
     Handler.allow_reuse_address = True
     server = _QuietThreadingHTTPServer(("0.0.0.0", _cfg.port), Handler)
-    _set_tls_note(tls_start(server, _cfg.https, _TLS_DIR, "nodecontrol", _tls_log))
-    scheme = "https" if server.ssl_ctx is not None else "http"
 
     def _sigterm(signum, frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -16967,11 +16801,9 @@ def main() -> None:
 
     ip = _lan_ip()
     pad = " " * max(0, 32 - len(_cfg.asl_node))
-    local_url = f"{scheme}://localhost:{_cfg.port}"
-    net_url = f"{scheme}://{ip}:{_cfg.port}"
-    lpad = " " * max(0, 32 - len(local_url))
-    npad = " " * max(0, 32 - len(net_url))
-    _bridge_short_labels = ("Digital", "M17", "Phone", "Reserved")
+    lpad = " " * max(0, 15 - len(str(_cfg.port)))
+    npad = " " * max(0, 24 - len(ip) - len(str(_cfg.port)))
+    _bridge_short_labels = ("Digital", "M17", "Phone", "SvxLink")
     _bridge_lines = []
     for _i in range(BRIDGE_SLOT_COUNT):
         _val = _cfg.bridge_nodes[_i] or "—"
@@ -16986,8 +16818,8 @@ def main() -> None:
 ╠══════════════════════════════════════════════╣
 {_bridge_block}
 ╠══════════════════════════════════════════════╣
-║  Local     : {local_url}{lpad}║
-║  Network   : {net_url}{npad}║
+║  Local     : http://localhost:{_cfg.port}{lpad}║
+║  Network   : http://{ip}:{_cfg.port}{npad}║
 ╚══════════════════════════════════════════════╝
 """)
     global _http_ok_at

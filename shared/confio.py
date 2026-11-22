@@ -53,6 +53,17 @@ USED_BY = {
     "tls_finish_request": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
     "tls_start": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
     "tls_secure": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "phone_tone_code_ok": ("nodecontrol", "nodecontrol_pi02w", "nodetalker"),
+    "phone_tone_step": ("nodecontrol", "nodecontrol_pi02w", "nodetalker"),
+    "phone_tone_note": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_codes": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_wanted": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_new": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_note": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_status": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_handle": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_worker": ("nodecontrol", "nodecontrol_pi02w"),
+    "radio_tone_seen": ("nodecontrol", "nodecontrol_pi02w"),
 }
 
 
@@ -1211,3 +1222,109 @@ def tls_secure(connection, headers=None, proxied=False):
     if isinstance(connection, ssl.SSLSocket):
         return True
     return bool(proxied and headers is not None and headers.get("X-Forwarded-Proto", "").strip().lower() == "https")
+
+
+def phone_tone_code_ok(v):
+    import re
+    return bool(re.fullmatch(r"[0-9*#]{1,8}", str(v if v is not None else "").strip()))
+
+
+def phone_tone_step(state, who, down, in_call, open_code, close_code):
+    state = state if isinstance(state, dict) else {}
+    is_open = state.get("open") is True
+    owner = str(state.get("owner", "")) if is_open else ""
+    if not in_call:
+        return None, {"open": False, "owner": ""}
+    if down:
+        if is_open:
+            return None, {"open": True, "owner": owner}
+        return open_code, {"open": True, "owner": who}
+    if is_open and owner == who:
+        return close_code, {"open": False, "owner": ""}
+    return None, {"open": is_open, "owner": owner}
+
+
+def phone_tone_note(state, who, tones, open_code, close_code, ok):
+    if tones == close_code:
+        return {"open": False, "owner": ""}
+    if tones == open_code and ok:
+        return {"open": True, "owner": who}
+    state = state if isinstance(state, dict) else {}
+    return {"open": state.get("open") is True, "owner": str(state.get("owner", ""))}
+
+
+def radio_tone_codes(doc):
+    return (str(doc.get("ptt_open") or "*99"), str(doc.get("ptt_close") or "#"))
+
+
+def radio_tone_wanted(doc, phone_on):
+    return doc.get("ptt_tones") is True and doc.get("listen_only") is not True and bool(phone_on)
+
+
+def radio_tone_new():
+    import queue
+    import threading
+    return {"last": None, "state": {"open": False, "owner": ""}, "state_lock": threading.Lock(),
+            "edge_lock": threading.Lock(), "queue": queue.Queue(), "thread": None}
+
+
+def radio_tone_note(box, deps, tones, owner, ok):
+    open_code, close_code = radio_tone_codes(deps["doc"]())
+    with box["state_lock"]:
+        box["state"] = phone_tone_note(box["state"], owner, tones, open_code, close_code, ok)
+
+
+def radio_tone_status(box, in_call, wanted):
+    with box["state_lock"]:
+        if not (in_call and wanted):
+            box["state"] = {"open": False, "owner": ""}
+        return {"open": box["state"]["open"] is True, "owner": str(box["state"]["owner"])}
+
+
+def radio_tone_handle(box, deps, down):
+    doc = deps["doc"]()
+    if not radio_tone_wanted(doc, deps["on"]()):
+        with box["state_lock"]:
+            box["state"] = {"open": False, "owner": ""}
+        return
+    open_code, close_code = radio_tone_codes(doc)
+    in_call = deps["call"](0.0).get("state") == "in_call"
+    with box["state_lock"]:
+        code, box["state"] = phone_tone_step(box["state"], "radio", down, in_call, open_code, close_code)
+    if code is None:
+        return
+    ok, msg = deps["send"](code)
+    if ok:
+        deps["log"].info("radio PTT: sent %s on the call", code)
+        return
+    with box["state_lock"]:
+        box["state"] = {"open": False, "owner": ""}
+    deps["log"].warning("radio PTT: could not send %s (%s)", code, msg)
+    deps["notice"]("Radio tones: could not send %s (%s)" % (code, msg), 20.0)
+
+
+def radio_tone_worker(box, deps):
+    while True:
+        down = box["queue"].get()
+        try:
+            radio_tone_handle(box, deps, down)
+        except Exception as exc:
+            deps["log"].warning("radio PTT tones: %s", exc)
+            with box["state_lock"]:
+                box["state"] = {"open": False, "owner": ""}
+
+
+def radio_tone_seen(box, deps, text):
+    import re
+    import threading
+    rx = bool(re.search(r"RPT_RXKEYED[ \t]*=[ \t]*1", text or "", re.IGNORECASE))
+    with box["edge_lock"]:
+        prev, box["last"] = box["last"], rx
+        if prev is None or prev == rx:
+            return
+        if not radio_tone_wanted(deps["doc"](), deps["on"]()):
+            return
+        if box["thread"] is None or not box["thread"].is_alive():
+            box["thread"] = threading.Thread(target=radio_tone_worker, args=(box, deps), name="radio-tones", daemon=True)
+            box["thread"].start()
+        box["queue"].put(rx)

@@ -156,7 +156,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_11_0_20261121.py --install
+  sudo python3 nodetalker_v0_12_0_20261122.py --install
   ```
 
 Then:
@@ -525,14 +525,14 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_114_20261121.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_120_20261122.py` | Dashboard, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_115_20261122.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_121_20261122.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_102_20261121.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_90_20261121.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_115_0_20261121.py` | common |
 | `wifimon_v5_57_0_20261115.py` | common |
 | `44helper_v0_1_74_20261118.py` | common |
-| `nodetalker_v0_11_0_20261121.py` | common |
+| `nodetalker_v0_12_0_20261122.py` | common |
 | `noderecorder_v0_17_8_20261116.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_3_20261115.py` | common |

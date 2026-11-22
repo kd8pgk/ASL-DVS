@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -317,7 +317,7 @@ def _norm_ptt_guard(value):
 
 def _norm_phone_code(value):
     v = str(value).strip()
-    if not re.fullmatch(r"[0-9*#]{1,8}", v):
+    if not phone_tone_code_ok(v):
         raise ValueError("phone tones must be 1-8 of 0-9, * and #")
     return v
 
@@ -6824,7 +6824,8 @@ _phone_cache_lock = threading.Lock()
 
 def _phone_fetch():
     r = dash_call({"action": "phone-status"}, timeout=3)
-    v = {"supported": None, "state": "", "net": "", "type": "", "type_label": "", "node": "", "active": False, "error": ""}
+    v = {"supported": None, "state": "", "net": "", "type": "", "type_label": "", "node": "", "active": False, "error": "",
+         "tone_open": False, "tone_owner": ""}
     if r is None:
         v["error"] = "Node Controller is not running"
     elif not r["ok"]:
@@ -6843,6 +6844,9 @@ def _phone_fetch():
             for k in ("state", "net", "type", "type_label", "node"):
                 v[k] = _CALL_TRIM.sub(" ", str(d.get(k, "")))[:40]
             v["active"] = v["state"] == "in_call" and v["type"] in PHONE_TONE_TYPES
+            tone = d.get("tone") if isinstance(d.get("tone"), dict) else {}
+            v["tone_open"] = tone.get("open") is True
+            v["tone_owner"] = str(tone.get("owner", ""))[:20]
         else:
             v["error"] = "Node Controller sent a phone status Node Talker can't read"
     with _phone_cache_lock:
@@ -6864,6 +6868,26 @@ def phone_status_cached():
     if start:
         threading.Thread(target=_phone_fetch, name="phone-status", daemon=True).start()
     return dict(v) if v else None
+
+
+def phone_tone_code_ok(v):
+    import re
+    return bool(re.fullmatch(r"[0-9*#]{1,8}", str(v if v is not None else "").strip()))
+
+
+def phone_tone_step(state, who, down, in_call, open_code, close_code):
+    state = state if isinstance(state, dict) else {}
+    is_open = state.get("open") is True
+    owner = str(state.get("owner", "")) if is_open else ""
+    if not in_call:
+        return None, {"open": False, "owner": ""}
+    if down:
+        if is_open:
+            return None, {"open": True, "owner": owner}
+        return open_code, {"open": True, "owner": who}
+    if is_open and owner == who:
+        return close_code, {"open": False, "owner": ""}
+    return None, {"open": is_open, "owner": owner}
 
 
 class PhonePatch:
@@ -6912,9 +6936,16 @@ class PhonePatch:
             TALKER.phone_release(sid, False)
             return
         code = _cfg_get("phone_open")
+        name = st["net"] or st["type_label"] or "the phone network"
+        plan, _ = phone_tone_step({"open": st["tone_open"], "owner": st["tone_owner"]}, "talker", True, True, code, _cfg_get("phone_close"))
+        if plan is None:
+            self.opened[sid] = False
+            TALKER.phone_release(sid, False)
+            log_event(f"Phone: {code} is already open on the call ({st['tone_owner'] or 'another tool'}), not sent again", "info")
+            self._tell(owner, True, f"Phone call on {name}: {code} was already open, so it was not sent again.")
+            return
         r = dash_call({"action": "phone-tones", "tones": code}, timeout=12)
         ok = bool(r and r["ok"])
-        name = st["net"] or st["type_label"] or "the phone network"
         self.opened[sid] = ok
         while len(self.opened) > 20:
             self.opened.pop(next(iter(self.opened)))

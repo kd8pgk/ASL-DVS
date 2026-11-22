@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_11_0_20261121.py`. Newest entries first.
+Current file: `nodetalker_v0_12_0_20261122.py`. Newest entries first.
+
+## 0.12.0 (2026-11-22)
+
+Node Talker sends its open tone only when the call is not already open. This is a release: it reads the open state from Node Controller, so the radio's PTT tones and Node Talker's tones are not sent twice.
+
+- Before it sends the open code, Node Talker asks Node Controller whether the call is already open. If the radio (or another send) has opened it, Node Talker doesn't send it again and transmits straight away.
+- Node Talker's close code is still sent when Node Talker unkeys, and only for a call that Node Talker opened.
+- An older Node Controller doesn't report the open state, so Node Talker sends the open code as it did before.
+- The open/close decision and the code check are the shared functions in `shared/confio.py`, the same code Node Controller uses.
 
 ## 0.11.0 (2026-11-21)
 

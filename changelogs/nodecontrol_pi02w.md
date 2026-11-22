@@ -1,6 +1,15 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_120_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_121_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.121-pi02w (2026-11-22)
+
+The radio's PTT tones are built from the same shared code as the full Node Controller and Node Talker. This is a release: Node Talker now asks Node Controller whether the call is already open, so the radio and Node Talker no longer send the same open tone twice. This replaces 9.3.120-pi02w, which was never released.
+
+- Everything in 9.3.120-pi02w still applies: the Phone tab switch, its own key-up and unkey codes, Listen only, and the notice when a tone can't be sent.
+- Node Controller keeps the open state. A key-up sends nothing while the call is open, whether the radio or Node Talker opened it.
+- Node Talker's close code (`#`) clears the open state, so the next key-up sends the open code again.
+- The open/close decision and the code check are the shared functions in `shared/confio.py`, copied unchanged into this build, the full build and Node Talker.
 
 ## 9.3.120-pi02w (2026-11-22)
 

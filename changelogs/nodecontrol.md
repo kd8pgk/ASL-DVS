@@ -1,6 +1,15 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_114_20261121.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_115_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.115 (2026-11-22)
+
+The radio's PTT can send the phone tones, the same as the Pi Zero 2 W build. This is a release: a new setting on the Phone tab and a new action on a call.
+
+- **Send tones when I key the radio on a call** (Phone tab, under Send keypad tones) is off by default. When it is on and a phone call is up, keying the radio sends the key-up code (default `*99`), and unkeying sends the unkey code (default `#`). Both codes are set on the Phone tab, are saved with Save Phone, and can use 0-9, `*` and `#` (up to 8 characters).
+- It is independent of Node Talker: its own switch and codes. Node Talker now asks whether the call is already open, so the two don't send the same open tone twice.
+- Nothing is sent with Listen only on, when the radio is keyed outside a phone call, or when the setting is off.
+- The open/close decision and the code check are the shared functions in `shared/confio.py`, the same code as the Pi Zero 2 W build and Node Talker.
 
 ## 9.3.114 (2026-11-21)
 
