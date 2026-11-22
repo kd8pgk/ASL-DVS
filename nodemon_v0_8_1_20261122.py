@@ -25,7 +25,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 DATE_STR = "2026-11-18"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1398,12 +1398,12 @@ def _link_view(link, kinds, gateways):
 
 TOOL_LINKS = (
     ("nodecontrol", "Node Controller", 8989, "http", "/"),
-    ("sysmon", "SysMon", 9999, "http", "/"),
+    ("sysmon", "SysMon", 9999, "https", "/"),
     ("instmon", "instmon", 8990, "http", "/"),
     ("wifimon", "wifimon", 8991, "http", "/"),
     ("44helper", "44helper", 9997, "http", "/"),
-    ("nodetalker", "Node Talker", 8993, "http", "/"),
-    ("noderecorder", "Node Recorder", 8995, "http", "/"),
+    ("nodetalker", "Node Talker", 8993, "https", "/"),
+    ("noderecorder", "Node Recorder", 8995, "https", "/"),
     ("pibrary", "Pibrary", 9000, "http", "/"),
     ("termon", "Terminal Monitor", 7878, "https", "/"),
     ("cockpit", "Cockpit", 9090, "https", "/"),
@@ -2768,7 +2768,7 @@ def install_service():
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
             os.remove(old)
             print(f"  [-] Removed the previous version {old}")
-    print(f"Open http://<node-address>:{_cfg_get('port')} and log in with the root password.")
+    print(f"Open https://<node-address>:{_cfg_get('port')} and log in with the root password.")
 
 
 def uninstall_service():

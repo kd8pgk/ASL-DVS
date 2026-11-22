@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -8456,7 +8456,7 @@ function hostLinks(d) {
   const L = d.links || {};
   let any = false;
   document.querySelectorAll('.ql[data-ql]').forEach((q) => {
-    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : base + ':' + q.dataset.qlPort + '/';
+    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
     const on = !!L[q.dataset.ql];
     q.classList.toggle('hidden', !on);
     any = any || on;
@@ -11744,7 +11744,7 @@ async function loadConfig() {
   autoSync();
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
-  if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
+  if (sysmonPort) $('tune-sysmon-link').href = 'https://' + location.hostname + ':' + sysmonPort + '/';
 }
 
 function tuneUi() {
@@ -13586,7 +13586,7 @@ def install_service():
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
             os.remove(old)
             print(f"  [-] Removed the previous version {old}")
-    print(f"Open http://<pi-address>:{_cfg_get('port')} , log in, and pick the node on the Node card.")
+    print(f"Open https://<pi-address>:{_cfg_get('port')} , log in, and pick the node on the Node card.")
 
 
 def _print_digital():

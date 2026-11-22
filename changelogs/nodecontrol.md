@@ -1,6 +1,15 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_114_20261121.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_115_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.115 (2026-11-22)
+
+Quick links to tools that serve TLS open **https**. This is a release: the address a link opens changed.
+
+- **Listen** (Node Talker) and **SysMon** open `https://<host>:<port>/`, and Cockpit joins Node Mon on https. A tool whose HTTPS is turned off in its own Setup needs its link opened by hand over http.
+- InstMon, WiFiMon and DVSwitch stay on http (they have no TLS, or sit on port 80).
+- This is the full build's own change, made at the owner's request; the Pi Zero 2 W build got the same in 9.3.120-pi02w.
+- Nothing else changes.
 
 ## 9.3.114 (2026-11-21)
 

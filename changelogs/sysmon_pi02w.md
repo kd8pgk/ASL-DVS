@@ -1,6 +1,14 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_90_20261121.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_91_20261122.py`. Newest entries first.
+
+## 6.13.91-pi02w (2026-11-22)
+
+The **Cockpit** quick link opens **https**, like Node Mon. This is a release: the address a link opens changed.
+
+- Cockpit opens `https://<host>:9090/`. The other quick links are unchanged (Node Controller stays on http, DVSwitch and USRP2M17 are on port 80).
+- This is the SysMon Pi Zero 2 W build; the other build got the same change in its own release.
+- Nothing else changes.
 
 ## 6.13.90-pi02w (2026-11-21)
 

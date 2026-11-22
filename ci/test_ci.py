@@ -3415,7 +3415,7 @@ class InstmonNodemonTests(unittest.TestCase):
 
     def test_registry_entry_is_complete(self):
         m, c = self.m, self.nodemon()
-        self.assertEqual((c["name"], c["service"], c["port"], c.get("scheme", "http")), ("Node Monitor", "nodemon", 7777, "http"))
+        self.assertEqual((c["name"], c["service"], c["port"], c.get("scheme", "http")), ("Node Monitor", "nodemon", 7777, "https"))
         self.assertEqual(c["install_link"], "/usr/local/bin/nodemon.py")
         self.assertEqual(c["unit_paths"], {"nodemon": ("/usr/local/bin/nodemon.py", "/usr/local/lib/asl_dvs/nodemon")})
         for table in (m.LIB_SUBDIRS, m.ALLOWED_EXT, m._FU_DEFAULT_STEM):
@@ -3496,7 +3496,8 @@ class InstmonTermonTests(unittest.TestCase):
         self.assertEqual(m.ALLOWED_EXT["termon"], (".py",))
         for other in m.COMPONENTS:
             if other is not c:
-                self.assertEqual(other.get("scheme", "http"), "http", other["name"])
+                self.assertEqual(other.get("scheme", "http"),
+                                 "https" if other["name"] in ("SysMon", "Node Talker", "Node Recorder", "Terminal Monitor", "Node Monitor") else "http", other["name"])
 
     def test_termon_files_are_recognised_by_name_and_by_content(self):
         m = self.m

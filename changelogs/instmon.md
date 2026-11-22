@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_116_0_20261121.py`.
+Current file: `instmon_v2_117_0_20261122.py`.
+
+## 2.117.0 (2026-11-22)
+
+The **Allmon3** quick link is replaced by **Node Mon**, and links to tools that serve TLS open **https**. This is a release: the address a link opens changed.
+
+- **Quick Links:** the first button is **Node Mon** (`https://<host>:7777/`) in place of Allmon3. Cockpit opens `https://<host>:9090/`.
+- **Tools tab:** the Go button for SysMon, Node Talker, Node Recorder and Node Monitor opens https. The Dashboard and the tools without TLS stay on http.
+- Nothing else changes.
 
 ## 2.116.0 (2026-11-22)
 

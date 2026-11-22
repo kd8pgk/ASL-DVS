@@ -1,6 +1,14 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_102_20261121.py`. Newest entries first.
+Current file: `sysmon_v6_13_103_20261122.py`. Newest entries first.
+
+## 6.13.103 (2026-11-22)
+
+The **Cockpit** quick link opens **https**, like Node Mon. This is a release: the address a link opens changed.
+
+- Cockpit opens `https://<host>:9090/`. The other quick links are unchanged (Node Controller stays on http, DVSwitch and USRP2M17 are on port 80).
+- This is the SysMon full build; the other build got the same change in its own release.
+- Nothing else changes.
 
 ## 6.13.102 (2026-11-21)
 

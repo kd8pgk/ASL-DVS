@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.90-pi02w"
+VERSION      = "6.13.91-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2782,7 +2782,7 @@ body.tab-edit #zone-content{
      title="Node Monitor">Node Mon</a>
   <a id="lnk-dvswitch" class="ql-btn" href="/dvswitch" target="_blank" rel="noopener"
      title="DVSwitch dashboard">DVSwitch</a>
-  <a id="lnk-cockpit" class="ql-btn" href="http://localhost:9090/" target="_blank" rel="noopener"
+  <a id="lnk-cockpit" class="ql-btn" href="https://localhost:9090/" target="_blank" rel="noopener"
      title="Cockpit admin UI">Cockpit</a>
   <a id="lnk-m17" class="ql-btn" href="/m17" target="_blank" rel="noopener"
      title="USRP2M17">USRP2M17</a>
@@ -7450,7 +7450,7 @@ function _startApp() {
   const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};
   for (const [id, port] of Object.entries(qlPorts)) {
     const el = document.getElementById(id);
-    if (el) el.href = `${id === "lnk-nodemon" ? "https" : "http"}://${qlHost}:${port}/`;
+    if (el) el.href = `${(id === "lnk-nodemon" || id === "lnk-cockpit") ? "https" : "http"}://${qlHost}:${port}/`;
   }
   const qlPaths = {"lnk-dvswitch": "/dvswitch", "lnk-m17": "/m17"};
   for (const [id, path] of Object.entries(qlPaths)) {

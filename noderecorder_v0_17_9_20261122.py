@@ -37,7 +37,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.17.8.1"
+VERSION = "0.17.9"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6507,7 +6507,7 @@ function hostLinks(d) {
   const L = d.links || {};
   let any = false;
   document.querySelectorAll('.ql[data-ql]').forEach((q) => {
-    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : base + ':' + q.dataset.qlPort + '/';
+    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
     const on = !!L[q.dataset.ql];
     q.classList.toggle('hidden', !on);
     any = any || on;
@@ -8776,7 +8776,7 @@ def install_service():
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
             os.remove(old)
             print(f"  [-] Removed the previous version {old}")
-    print(f"Open http://<pi-address>:{PORT} , log in, and pick the node on the Node card.")
+    print(f"Open https://<pi-address>:{PORT} , log in, and pick the node on the Node card.")
 
 
 def _print_digital():

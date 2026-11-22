@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_8_20261116.py`. Newest entries first.
+Current file: `noderecorder_v0_17_9_20261122.py`. Newest entries first.
+
+## 0.17.9 (2026-11-22)
+
+The **Node Mon** quick link works again: it opens **https**, because Node Monitor serves TLS only. This is a release: the address a link opens changed.
+
+- **Node Mon** and **Cockpit** open `https://<host>:<port>/`; before, Node Mon opened `http://` and got no answer.
+- The console message after `--install` says `https://`.
+- The version was `0.17.8.1`; a release drops the cosmetic part.
+- Nothing else changes.
 
 ## 0.17.8.1 (2026-11-16)
 
