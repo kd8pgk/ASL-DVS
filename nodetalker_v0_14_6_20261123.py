@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.5"
+VERSION = "0.14.6"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
@@ -4772,8 +4772,10 @@ def dashboard_conf():
 
 
 def main_node():
-    n = _cfg_get("node")
-    return n or dashboard_conf()["asl_node"]
+    dash = dashboard_conf()["asl_node"]
+    if dash:
+        return dash
+    return _cfg_get("node")
 
 
 _fav_lock = threading.RLock()
