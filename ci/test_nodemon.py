@@ -836,6 +836,19 @@ class QuickLinks(unittest.TestCase):
         self.assertIn("classList.add('hot')", nm._JS)
 
 
+class RecHub(nm.Hub):
+    def __init__(self):
+        super().__init__()
+        self.by = []
+
+    def bump(self):
+        self.by.append(threading.current_thread().name)
+        super().bump()
+
+    def count(self, name):
+        return sum(1 for x in self.by if x == name)
+
+
 class Speed(LivePoll):
     def logins(self):
         return sum(1 for m in self.ami.seen if m.get("Action") == "Login")
@@ -884,22 +897,32 @@ class Speed(LivePoll):
 
     def test_the_change_counter_moves_only_when_the_state_changes(self):
         nm._config.update(poll_sec=1)
-        self.run_monitor()
+        hub = RecHub()
+        patch = unittest.mock.patch.object(nm, "HUB", hub)
+        patch.start()
+        self.addCleanup(patch.stop)
+        mon = nm.Monitor()
+        mon.touch()
+        old = nm.MON
+        nm.MON = mon
+        self.addCleanup(setattr, nm, "MON", old)
+        threading.Thread(target=mon.loop, name="speed-mon", daemon=True).start()
+        self.assertTrue(self.until(lambda: mon.state()["ok"], 10))
         time.sleep(0.3)
-        base = nm.HUB.seq
+        base = hub.count("speed-mon")
         n = self.xstats()
         self.assertTrue(self.until(lambda: self.xstats() >= n + 4, 6))
-        self.assertEqual(nm.HUB.seq, base)
+        self.assertEqual(hub.count("speed-mon"), base)
         self.ami.replies["654321"] = NO_LINKS
-        self.assertGreater(nm.HUB.wait(base, 5.0), base)
+        self.assertTrue(self.until(lambda: hub.count("speed-mon") > base, 5))
 
     def test_a_waiting_request_is_woken_by_a_change(self):
-        base = nm.HUB.seq
-        threading.Timer(0.2, nm.HUB.bump).start()
+        hub = nm.Hub()
+        threading.Timer(0.2, hub.bump).start()
         t = time.monotonic()
-        self.assertEqual(nm.HUB.wait(base, 5.0), base + 1)
+        self.assertEqual(hub.wait(0, 5.0), 1)
         self.assertLess(time.monotonic() - t, 2.0)
-        self.assertEqual(nm.HUB.wait(base + 1, 0.2), base + 1)
+        self.assertEqual(hub.wait(1, 0.2), 1)
 
     def test_a_held_request_keeps_the_polling_awake(self):
         with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 0.1):
@@ -949,14 +972,15 @@ class Caches(unittest.TestCase):
         with unittest.mock.patch.object(nm, "node_plan", lambda: plan), \
                 unittest.mock.patch.object(nm, "gateway_for", lambda k: dict(state)), \
                 unittest.mock.patch.object(nm, "quick_links", lambda: []):
-            base = nm.HUB.seq
-            last = nm._warm_once(None)
-            self.assertEqual(nm.HUB.seq, base + 1)
-            last = nm._warm_once(last)
-            self.assertEqual(nm.HUB.seq, base + 1)
-            state["text"] = "b"
-            nm._warm_once(last)
-            self.assertEqual(nm.HUB.seq, base + 2)
+            hub = RecHub()
+            with unittest.mock.patch.object(nm, "HUB", hub):
+                last = nm._warm_once(None)
+                self.assertEqual(hub.count("MainThread"), 1)
+                last = nm._warm_once(last)
+                self.assertEqual(hub.count("MainThread"), 1)
+                state["text"] = "b"
+                nm._warm_once(last)
+                self.assertEqual(hub.count("MainThread"), 2)
 
     def test_rpt_conf_is_parsed_once_while_its_text_is_the_same(self):
         tmp = tempfile.TemporaryDirectory()
