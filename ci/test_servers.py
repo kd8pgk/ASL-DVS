@@ -26,7 +26,7 @@ SERVERS = {
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_120_20261122.py", "port": 8989, "scheme": "https", "plain_loopback": True},
     "sysmon": {"file": "sysmon_v6_13_103_20261122.py", "port": 9999, "scheme": "https", "plain_loopback": True},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_91_20261122.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "nodetalker": {"file": "nodetalker_v0_13_0_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "nodetalker": {"file": "nodetalker_v0_14_0_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_17_9_20261122.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "piper_dashboard": {"file": "piper_dashboard_v0_8_1_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},

@@ -126,9 +126,13 @@ class Revalidation(Served):
         self.assertNotEqual(r.getheader("ETag"), tag)
         self.assertEqual(json.loads(body)["n"], 2)
 
-    def test_the_page_is_not_a_json_reply(self):
-        r, _, _ = self.get("/")
-        self.assertIsNone(r.getheader("ETag"))
+    def test_the_page_has_its_own_tag_and_answers_304(self):
+        r, body, c = self.get("/")
+        tag = r.getheader("ETag")
+        self.assertTrue(tag)
+        self.assertEqual(r.getheader("Cache-Control"), "no-cache")
+        r2, body2, _ = self.get("/", {"If-None-Match": tag}, conn=c)
+        self.assertEqual((r2.status, body2), (304, b""))
 
 
 class Page(Served):
@@ -184,7 +188,7 @@ class PageScript(unittest.TestCase):
         self.assertIn("NET.gate('hl', 30000)", self.html)
         self.assertIn("NET.gate('svc', 10000)", self.html)
         self.assertIn("NET.gate('kc', 10000)", self.html)
-        self.assertIn("NET.sample(performance.now() - t0)", self.html)
+        self.assertIn("NET.sample(Math.max(0, performance.now() - t0 - lastSrvMs))", self.html)
         self.assertIn("api('/api/status', {tag: true})", self.html)
 
     def test_the_balancer_and_the_receive_health_report_are_not_slowed(self):
