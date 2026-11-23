@@ -1,6 +1,14 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_9_1_20261123.py`. Newest entries first.
+Current file: `nodemon_v0_9_2_20261123.py`. Newest entries first.
+
+## 0.9.2 (2026-11-23)
+
+The Overview is tidier and the Linked Nodes tab shows every outside node. This is a release: the page logic changed.
+
+- **Notes column.** It no longer says the node is registered. It names the node's primary link: its first established direct link, preferring one that is not a private node on this machine.
+- **Linked to column.** The expandable "Other nodes on the links" list is gone from it; the column shows the direct links only.
+- **Linked Nodes tab.** A new card, "Other nodes on the links", lists all the outside nodes linked beyond the main node's direct links. The Main node and Private node cards keep their own lists.
 
 ## 0.9.1 (2026-11-23)
 
