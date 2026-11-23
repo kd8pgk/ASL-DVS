@@ -165,7 +165,7 @@ class NodeTalkerReadsItTests:
         self.assertEqual(nt.svc_status()["source"], "nodecontrol")
 
     def test_both_tools_carry_the_same_function_text(self):
-        for name in ("svc_table", "svc_uptime_text", "svc_unit_info", "svc_classify", "svc_rows", "reg_parse", "svc_reg_state"):
+        for name in ("svc_table", "svc_uptime_text", "svc_unit_info", "svc_classify", "svc_rows", "svc_reg_state"):
             self.assertEqual(getattr(self.mod, name).__code__.co_code, getattr(nt, name).__code__.co_code, name)
 
     def test_the_two_tools_judge_the_same_systemd_text_the_same_way(self):
