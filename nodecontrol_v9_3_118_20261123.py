@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.117"
+VERSION      = "9.3.118"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -282,6 +282,7 @@ class Config:
     asl_node:            str      = ASL_NODE
     bridge_nodes:        List[str] = field(default_factory=lambda: list(DEFAULT_BRIDGE_NODES))
     port:                int      = PORT
+    https:               bool     = True
     callsign:            str      = ""
     enabled_tabs:        Set[str] = field(default_factory=lambda: set(ALL_PAGES))
     enabled_tabs_sorted: list     = field(default_factory=lambda: list(ALL_PAGES))
@@ -314,6 +315,9 @@ def _apply_config(cfg: dict) -> None:
             v = str(cfg["bridge_node"]).strip()
             if v.isdigit():
                 _cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL] = v
+        if "https" in cfg:
+            v = cfg["https"]
+            _cfg.https = v if isinstance(v, bool) else str(v).strip().lower() not in ("0", "false", "no", "off")
         if "port" in cfg:
             try:
                 p = int(cfg["port"])
@@ -3678,6 +3682,7 @@ def _generate_default_conf() -> None:
             f"bridge_node={_cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL]}\n",
             f"bridge_nodes={','.join(_cfg.bridge_nodes)}\n",
             f"port={_cfg.port}\n",
+            f"https={str(_cfg.https).lower()}\n",
             f"callsign={_cfg.callsign}\n",
             f"enabled_tabs={chr(44).join(_cfg.enabled_tabs_sorted)}\n",
             f"cpuweight_enabled={str(_cfg.cpuweight_enabled).lower()}\n\n",
@@ -3953,6 +3958,7 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
             f"bridge_node={_cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL]}\n",
             f"bridge_nodes={','.join(_cfg.bridge_nodes)}\n",
             f"port={_cfg.port}\n",
+            f"https={str(_cfg.https).lower()}\n",
             f"callsign={_cfg.callsign}\n",
             f"enabled_tabs={','.join(_cfg.enabled_tabs_sorted)}\n",
             f"svx_tab={'on' if 'SVX' in _cfg.enabled_tabs else 'off'}\n",
@@ -4035,6 +4041,7 @@ def action_get_config() -> dict:
         "bridge_nodes":         list(_cfg.bridge_nodes),
         "bridge_slot_labels":   list(BRIDGE_SLOT_LABELS),
         "port":                 _cfg.port,
+        "https":                _cfg.https,
         "callsign":             _cfg.callsign,
         "enabled_tabs":         _cfg.enabled_tabs_sorted,
         "mode_net_urls":        merged_mode_urls,
@@ -4100,12 +4107,15 @@ def action_save_config(cfg: dict) -> Tuple[bool, str]:
 
     with _cfg_lock:
         prev_port = _cfg.port
+        prev_https = _cfg.https
     apply_cfg = {"asl_node": asl_node, "bridge_node": bridge_node,
                  "port": port_str, "callsign": callsign}
     if bridge_nodes is not None:
         apply_cfg["bridge_nodes"] = bridge_nodes
     if "cpuweight_enabled" in cfg:
         apply_cfg["cpuweight_enabled"] = bool(cfg["cpuweight_enabled"])
+    if "https" in cfg:
+        apply_cfg["https"] = bool(cfg["https"])
     _apply_config(apply_cfg)
     _write_event_script()
 
@@ -4120,6 +4130,8 @@ def action_save_config(cfg: dict) -> Tuple[bool, str]:
     ok, msg = _write_conf(nodes, tgs, echo_nodes)
     if ok and port != prev_port:
         msg += f" (port {port} takes effect after restart)"
+    if ok and _cfg.https != prev_https:
+        msg += " (the https setting takes effect after restart)"
     return ok, msg
 
 @_conf_locked
@@ -10278,6 +10290,7 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
               <div class="cfg-field">
                 <label class="cfg-lbl" for="cfg-port">Web UI Port</label>
                 <input id="cfg-port" class="cfg-inp" type="text" inputmode="numeric" placeholder="e.g. 8989" maxlength="5">
+                <label class="tab-chk-lbl" style="display:block;margin-top:.3rem"><input type="checkbox" id="cfg-https"> Use https (restart to apply)</label>
               </div>
               <div class="cfg-field">
                 <label class="tab-chk-lbl"><input type="checkbox" id="cfg-cpuweight">CPUWeight</label>
@@ -12974,6 +12987,7 @@ async function cfgLoad(){
       if(el)el.value=bn[i]||'';
     }
     byId('cfg-port').value=d.port||'';
+    byId('cfg-https').checked=!!d.https;
     byId('cfg-cpuweight').checked=!!d.cpuweight_enabled;
     const enabled=Array.isArray(d.enabled_tabs)?d.enabled_tabs:[];
     STATIC_PAGES.forEach(m=>{
@@ -13000,7 +13014,7 @@ async function cfgSave(){
   const enabled_tabs=STATIC_PAGES
     .filter(m=>{const el=byId('chk-'+m);return el&&el.checked});
   const cpuweight_enabled=byId('cfg-cpuweight').checked;
-  const d=await api({action:'save-config',asl_node,bridge_node,bridge_nodes,port,callsign,enabled_tabs,cpuweight_enabled,mode_net_urls:modeNetUrls});
+  const d=await api({action:'save-config',asl_node,bridge_node,bridge_nodes,port,callsign,enabled_tabs,cpuweight_enabled,https:byId('cfg-https').checked,mode_net_urls:modeNetUrls});
   if(!d.ok){toast('Config: '+d.message,'err');return false}return true;
 }
 async function loadTgData(){
@@ -14604,6 +14618,8 @@ _HTML_BYTES = login_ui_inject(HTML
                               .replace("__BUILD_DATE__", BUILD_DATE),
                               "login-pw").encode()
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
+_HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
+_HTML_LITE_GZIP  = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
 
 _AUTH_ACCOUNT        = "root"
 
@@ -14967,11 +14983,11 @@ def _login_record_success(ip: str) -> None:
         d["locked"].pop(ip, None)
     _shared_auth_mutate(_mut)
 
-def _session_cookie_header(token: str, max_age: int) -> str:
-    return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, False)
+def _session_cookie_header(token: str, max_age: int, secure: bool = False) -> str:
+    return sess_cookie(_SESSION_COOKIE_NAME, token, max_age, secure)
 
-def _clear_session_cookie_header() -> str:
-    return sess_cookie_clear(_SESSION_COOKIE_NAME, False)
+def _clear_session_cookie_header(secure: bool = False) -> str:
+    return sess_cookie_clear(_SESSION_COOKIE_NAME, secure)
 
 _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
@@ -15019,6 +15035,228 @@ def with_work_ms(cls):
 _page_etags: dict = {}
 
 
+def _set_tls_note(note: str) -> None:
+    global _HTML_BYTES, _HTML_GZIP, _HTML_LITE_BYTES, _HTML_LITE_GZIP
+    if not note:
+        return
+    import html as _html
+    old = b'<div id="login-tls" class="lg-note"></div>'
+    new = ('<div id="login-tls" class="lg-note">' + _html.escape(note) + '</div>').encode("utf-8")
+    _HTML_BYTES = _HTML_BYTES.replace(old, new)
+    _HTML_GZIP = gzip.compress(_HTML_BYTES, compresslevel=6)
+    _HTML_LITE_BYTES = re.sub(rb"@font-face\{[^}]*\}\n?", b"", _HTML_BYTES)
+    _HTML_LITE_GZIP = gzip.compress(_HTML_LITE_BYTES, compresslevel=6)
+
+def tls_lan_ips():
+    import re
+    import socket
+    import subprocess
+    ips = set()
+    try:
+        r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
+        ips.update(x for x in r.stdout.split() if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", x))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 9))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    ips.add("127.0.0.1")
+    return sorted(ips)
+
+def tls_ensure_cert(tls_dir, fallback_name, log=None):
+    import os
+    import re
+    import shutil
+    import socket
+    import subprocess
+    say = log or (lambda msg, level="info": None)
+    cert, key = os.path.join(tls_dir, "cert.pem"), os.path.join(tls_dir, "key.pem")
+    if os.path.exists(cert) and os.path.exists(key):
+        return True
+    openssl = shutil.which("openssl")
+    if not openssl:
+        say("openssl not found: can't create the HTTPS certificate", "err")
+        return False
+    host = socket.gethostname().split(".")[0]
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
+        host = fallback_name
+    try:
+        os.makedirs(tls_dir, mode=0o700, exist_ok=True)
+        os.chmod(tls_dir, 0o700)
+    except OSError as exc:
+        say("Can't create %s: %s" % (tls_dir, exc), "err")
+        return False
+    san = ",".join(["DNS:%s" % host, "DNS:%s.local" % host] + ["IP:%s" % ip for ip in tls_lan_ips()])
+    key_tmp, cert_tmp = key + ".tmp", cert + ".tmp"
+    cmd = [openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+           "-keyout", key_tmp, "-out", cert_tmp, "-days", "3650", "-subj", "/CN=%s" % host,
+           "-addext", "subjectAltName=%s" % san]
+    old_umask = os.umask(0o077)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as exc:
+        say("openssl failed: %s" % exc, "err")
+        return False
+    finally:
+        os.umask(old_umask)
+    if r.returncode != 0 or not (os.path.exists(key_tmp) and os.path.exists(cert_tmp)):
+        say("openssl failed: %s" % r.stderr.strip()[:300], "err")
+        for p in (key_tmp, cert_tmp):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        return False
+    os.chmod(key_tmp, 0o600)
+    os.chmod(cert_tmp, 0o644)
+    os.replace(key_tmp, key)
+    os.replace(cert_tmp, cert)
+    say("Created a self-signed HTTPS certificate for %s (%s)" % (host, san), "ok")
+    return True
+
+def tls_set_aside(tls_dir, log=None):
+    import os
+    import time
+    say = log or (lambda msg, level="info": None)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    for name in ("cert.pem", "key.pem"):
+        p = os.path.join(tls_dir, name)
+        if os.path.exists(p):
+            try:
+                os.replace(p, "%s.%s.bad" % (p, stamp))
+            except OSError as exc:
+                say("Can't move %s aside: %s" % (p, exc), "err")
+                return False
+    return True
+
+def tls_context(tls_dir):
+    import os
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(os.path.join(tls_dir, "cert.pem"), os.path.join(tls_dir, "key.pem"))
+    return ctx
+
+def tls_redirect(sock, port):
+    import re
+    data = b""
+    try:
+        sock.settimeout(5)
+        while b"\r\n\r\n" not in data and len(data) < 8192:
+            chunk = sock.recv(2048)
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return
+    lines = data.decode("latin-1", "replace").split("\r\n")
+    parts = lines[0].split(" ") if lines else []
+    path = parts[1] if len(parts) >= 2 and parts[1].startswith("/") else "/"
+    if any(c in path for c in "\r\n ") or path.startswith("//"):
+        path = "/"
+    host = ""
+    for ln in lines[1:]:
+        k, _, v = ln.partition(":")
+        if k.strip().lower() == "host":
+            host = v.strip()
+            break
+    if not re.match(r"^[A-Za-z0-9.\-]{1,253}(?::\d{1,5})?$|^\[[0-9A-Fa-f:.]{2,45}\](?::\d{1,5})?$", host):
+        ips = [ip for ip in tls_lan_ips() if not ip.startswith("127.")] or ["127.0.0.1"]
+        host = "%s:%d" % (ips[0], port)
+    body = b"This page is served over HTTPS.\r\n"
+    resp = ("HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s%s\r\n"
+            "Content-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+            % (host, path, len(body))).encode("latin-1") + body
+    try:
+        sock.sendall(resp)
+    except OSError:
+        pass
+
+def tls_finish_request(server, request, client_address, port, plain_loopback=True):
+    import ipaddress
+    import socket
+    import ssl
+    if getattr(server, "ssl_ctx", None) is None:
+        server.RequestHandlerClass(request, client_address, server)
+        return
+    try:
+        request.settimeout(10)
+        first = request.recv(1, socket.MSG_PEEK)
+    except OSError:
+        return
+    if not first:
+        return
+    if first[0] != 0x16:
+        local = False
+        if plain_loopback and client_address:
+            try:
+                ip = ipaddress.ip_address(str(client_address[0]).split("%")[0])
+                local = (ip.ipv4_mapped or ip).is_loopback if ip.version == 6 else ip.is_loopback
+            except ValueError:
+                local = False
+        if not local:
+            tls_redirect(request, port)
+            return
+        request.settimeout(None)
+        server.RequestHandlerClass(request, client_address, server)
+        return
+    try:
+        tls = server.ssl_ctx.wrap_socket(request, server_side=True)
+    except (ssl.SSLError, OSError):
+        return
+    try:
+        tls.settimeout(None)
+        server.RequestHandlerClass(tls, client_address, server)
+    finally:
+        try:
+            tls.close()
+        except OSError:
+            pass
+
+def tls_start(server, enabled, tls_dir, fallback_name, log=None):
+    import ssl
+    say = log or (lambda msg, level="info": None)
+    server.ssl_ctx = None
+    if not enabled:
+        return ""
+    if tls_ensure_cert(tls_dir, fallback_name, log):
+        try:
+            server.ssl_ctx = tls_context(tls_dir)
+        except (ssl.SSLError, OSError) as exc:
+            say("HTTPS certificate could not be loaded (%s); making a new one" % exc, "err")
+            if tls_set_aside(tls_dir, log) and tls_ensure_cert(tls_dir, fallback_name, log):
+                try:
+                    server.ssl_ctx = tls_context(tls_dir)
+                except (ssl.SSLError, OSError) as exc2:
+                    say("The new HTTPS certificate could not be loaded either (%s); serving plain HTTP" % exc2, "err")
+            else:
+                say("No new HTTPS certificate; serving plain HTTP", "err")
+    else:
+        say("No HTTPS certificate; serving plain HTTP", "err")
+    if server.ssl_ctx is None:
+        return ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
+                "is sent in plain text. See the log.")
+    return ""
+
+def tls_secure(connection, headers=None, proxied=False):
+    import ssl
+    if isinstance(connection, ssl.SSLSocket):
+        return True
+    return bool(proxied and headers is not None and headers.get("X-Forwarded-Proto", "").strip().lower() == "https")
+
+_TLS_DIR = "/etc/asl_dvs/nodecontrol_tls"
+
+def _tls_log(msg: str, level: str = "info") -> None:
+    if level in ("err", "warn"):
+        log.warning("%s", msg)
+    else:
+        log.info("%s", msg)
+
+
 @with_work_ms
 class Handler(BaseHTTPRequestHandler):
     timeout = 30
@@ -15038,7 +15276,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         renew = self.__dict__.pop("_renew_cookie", None)
         if renew and not (extra_headers and "Set-Cookie" in extra_headers):
-            self.send_header("Set-Cookie", _session_cookie_header(renew[0], renew[1]))
+            self.send_header("Set-Cookie", _session_cookie_header(renew[0], renew[1], self._secure()))
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
@@ -15145,6 +15383,10 @@ class Handler(BaseHTTPRequestHandler):
             raise _EarlyReturn()
         return self.rfile.read(length)
 
+    def _secure(self) -> bool:
+        local = self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        return tls_secure(self.connection, self.headers, local and self._via_proxy())
+
     def _via_proxy(self) -> bool:
         return any(self.headers.get(h) is not None for h in _PROXY_HEADERS)
 
@@ -15226,7 +15468,7 @@ class Handler(BaseHTTPRequestHandler):
             token, age = _issue_session()
             log.info("login: successful root-password login from %s", ip)
             self.send_json({"ok": True}, 200,
-                            extra_headers={"Set-Cookie": _session_cookie_header(token, age)})
+                            extra_headers={"Set-Cookie": _session_cookie_header(token, age, self._secure())})
         else:
             _login_record_failure(ip)
             log.warning("login: failed attempt from %s", ip)
@@ -15283,7 +15525,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             log.exception("Unhandled error in action dispatch")
             self.send_json({"ok": False, "message": "Internal server error"}, 500); return
-        extra = {"Set-Cookie": _clear_session_cookie_header()} if data.get("action") == "logout" else None
+        extra = {"Set-Cookie": _clear_session_cookie_header(self._secure())} if data.get("action") == "logout" else None
         try:
             self.send_json({"ok": ok, "message": msg}, 200 if ok else 400, extra_headers=extra)
         except (BrokenPipeError, ConnectionResetError):
@@ -16331,6 +16573,11 @@ def _lan_ip() -> str:
         return "your-pi-ip"
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    ssl_ctx = None
+
+    def finish_request(self, request, client_address):
+        tls_finish_request(self, request, client_address, self.server_address[1])
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._conn_semaphore = threading.BoundedSemaphore(_MAX_CONCURRENT_CONNECTIONS)
@@ -16683,6 +16930,8 @@ def main() -> None:
         log.warning("local API: could not create %s", _LOCAL_API_KEY_PATH)
     Handler.allow_reuse_address = True
     server = _QuietThreadingHTTPServer(("0.0.0.0", _cfg.port), Handler)
+    _set_tls_note(tls_start(server, _cfg.https, _TLS_DIR, "nodecontrol", _tls_log))
+    scheme = "https" if server.ssl_ctx is not None else "http"
 
     def _sigterm(signum, frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -16707,8 +16956,8 @@ def main() -> None:
 ╠══════════════════════════════════════════════╣
 {_bridge_block}
 ╠══════════════════════════════════════════════╣
-║  Local     : http://localhost:{_cfg.port}{lpad}║
-║  Network   : http://{ip}:{_cfg.port}{npad}║
+║  Local     : {scheme}://localhost:{_cfg.port}{lpad}║
+║  Network   : {scheme}://{ip}:{_cfg.port}{npad}║
 ╚══════════════════════════════════════════════╝
 """)
     global _http_ok_at

@@ -1,6 +1,11 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_117_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_118_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.118 (2026-11-23)
+
+Serves https. This is a release: the Dashboard now serves https with a self-signed certificate, as the Pi Zero 2 W build does. Plain http from another device is redirected to https; loopback http still works. The https setting is on the Config tab (restart to apply) and is on by default. The session cookie takes the __Host- prefix and the Secure flag on https.
+- Nothing else changes.
 
 ## 9.3.117 (2026-11-23)
 

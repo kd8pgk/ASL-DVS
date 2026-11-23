@@ -1,6 +1,11 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_108_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_109_20261123.py`. Newest entries first.
+
+## 6.13.109 (2026-11-23)
+
+The Node Controller link goes to https, because the full build's Dashboard now serves https. This is a release.
+- Nothing else changes.
 
 ## 6.13.108 (2026-11-23)
 

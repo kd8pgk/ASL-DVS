@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.108"
+VERSION      = "6.13.109"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -8568,7 +8568,7 @@ window.loadTab_zello = function() { loadZello(); };
 function setQuickLinks() {
   const h = window.location.hostname;
   const set = (id, url) => { const el = document.getElementById(id); if (el) el.href = url; };
-  set("lnk-dashboard", "http://" + h + ":8989/");
+  set("lnk-dashboard", "https://" + h + ":8989/");
   set("lnk-nodemon", "https://" + h + ":7777/");
   set("lnk-cockpit", "https://" + h + ":9090/");
   set("lnk-wifimon", "http://" + h + ":8991/");

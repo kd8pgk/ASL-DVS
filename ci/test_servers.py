@@ -22,9 +22,9 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_117_20261123.py", "port": 8989, "scheme": "http"},
+    "nodecontrol": {"file": "nodecontrol_v9_3_118_20261123.py", "port": 8989, "scheme": "https"},
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_123_20261123.py", "port": 8989, "scheme": "https", "plain_loopback": True},
-    "sysmon": {"file": "sysmon_v6_13_108_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "sysmon": {"file": "sysmon_v6_13_109_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_97_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
     "nodetalker": {"file": "nodetalker_v0_14_6_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},

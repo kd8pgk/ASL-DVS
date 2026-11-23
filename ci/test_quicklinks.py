@@ -52,7 +52,7 @@ class QuickLinks(unittest.TestCase):
             self.assertIn('id="lnk-nodemon" class="ql-btn" href="https://localhost:7777/"', s, pat)
 
     def test_dashboard_link_uses_the_scheme_the_dashboard_serves(self):
-        self.assertIn('set("lnk-dashboard", "http://" + h + ":8989/");', src("sysmon_v[0-9]*.py"))
+        self.assertIn('set("lnk-dashboard", "https://" + h + ":8989/");', src("sysmon_v[0-9]*.py"))
         self.assertIn('set("lnk-dashboard", "https://" + h + ":8989/");', src("sysmon_pi02w_v*.py"))
 
     def test_talker_and_recorder_links(self):
