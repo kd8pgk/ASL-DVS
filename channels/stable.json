@@ -155,13 +155,13 @@
    "version": "3.1"
   },
   "wifimon": {
-   "blob": "14869ce83ae48a46857417c2423c9bf94baeed3f",
-   "commit": "c3636c6cab50a06aebe1c36950a82fc8afe0041c",
-   "file": "wifimon_v5_53_0_20261111.py",
-   "landed": "2026-11-12T08:18:57Z",
-   "promoted": "2026-11-15T16:22:16Z",
+   "blob": "4d5a92db4e82cf681e793d0b0b76a8cef6e3e57d",
+   "commit": "73168d3618ad104e641f2d384acf3c3573c46002",
+   "file": "wifimon_v5_54_0_20261113.py",
+   "landed": "2026-11-13T04:57:48Z",
+   "promoted": "2026-11-23T17:34:46Z",
    "reason": "count",
-   "version": "5.53.0"
+   "version": "5.54.0"
   }
  }
 }
