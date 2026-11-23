@@ -56,40 +56,40 @@
    "version": "2.111.0"
   },
   "nodecontrol": {
-   "blob": "e33492540ae62538fc9c79464e60e172ed6b075e",
-   "commit": "f6dcb2f8df6f1bdf628969e80611c8374aef3efe",
-   "file": "nodecontrol_v9_3_111_20261113.py",
-   "landed": "2026-11-13T10:53:54Z",
-   "promoted": "2026-11-22T23:32:50Z",
+   "blob": "3048647192a793761052308aa873bd074926bf41",
+   "commit": "e9ad16126fab792e2a3f6edfb360a0ef40a7c912",
+   "file": "nodecontrol_v9_3_112_20261116.py",
+   "landed": "2026-11-16T08:44:08Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "9.3.111"
+   "version": "9.3.112"
   },
   "nodecontrol_pi02w": {
-   "blob": "5ed75e757031279f14502524d3d4e357aad2238e",
-   "commit": "cbad574ad5c59a5d4702703094905b0b29d079c6",
-   "file": "nodecontrol_pi02w_v9_3_116_20261113.py",
-   "landed": "2026-11-13T09:58:32Z",
-   "promoted": "2026-11-22T23:32:50Z",
+   "blob": "9a82751334ad1f2916e7d1d70b53e823ac8bf0d7",
+   "commit": "3566f86612a5d8d96a63f1cba72cb282446a0dc5",
+   "file": "nodecontrol_pi02w_v9_3_117_20261113.py",
+   "landed": "2026-11-13T11:58:26Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "9.3.116-pi02w"
+   "version": "9.3.117-pi02w"
   },
   "nodemon": {
-   "blob": "e8e2fded00874df98d2fd387fbf454a7668363b2",
-   "commit": "a5f32c070970909e322e90e59284045c39d30206",
-   "file": "nodemon_v0_6_0_20261116.py",
-   "landed": "2026-11-16T22:53:49Z",
-   "promoted": "2026-11-23T07:54:15Z",
+   "blob": "d65682e6c681df6c7269ee969b6d8d36af3b1ce5",
+   "commit": "5dc48cec5891dacb7a2e9ac5547ba77fa2280634",
+   "file": "nodemon_v0_7_0_20261117.py",
+   "landed": "2026-11-18T12:44:58Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "0.6.0"
+   "version": "0.7.0"
   },
   "noderecorder": {
-   "blob": "26001b99e3d55133c0fb8e9d5a3025df9470ecc2",
-   "commit": "84cf9a3e45ce7041bbac4ad36c44127103cd8d90",
-   "file": "noderecorder_v0_17_4_20261113.py",
-   "landed": "2026-11-13T13:34:54Z",
-   "promoted": "2026-11-22T23:32:50Z",
+   "blob": "3eeb22695802af006e5aed5d21482f8e1ba361ee",
+   "commit": "2b35aac4c706d2ecf6184aad6c4be112b85a26a1",
+   "file": "noderecorder_v0_17_6_20261113.py",
+   "landed": "2026-11-14T04:52:41Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "0.17.4"
+   "version": "0.17.6"
   },
   "nodetalker": {
    "blob": "83748eeef153122e57bb6c1438497bd05778c49f",
@@ -101,31 +101,31 @@
    "version": "0.10.51"
   },
   "pibrary": {
-   "blob": "4a5aa4eea2d29c621dcb6e315defcda2006ca09b",
-   "commit": "d170b4952de0ad199e66e26a337f0edb2615a730",
-   "file": "pibrary_v0_16_1_20261104.py",
-   "landed": "2026-11-04T16:37:49Z",
-   "promoted": "2026-11-15T16:22:16Z",
+   "blob": "00013a0665069affaf18fc1af50181550d4a305a",
+   "commit": "6c71877eca07a6ea0066ee1edc9771ec96c7a310",
+   "file": "pibrary_v0_17_0_20261113.py",
+   "landed": "2026-11-13T03:46:55Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "0.16.1"
+   "version": "0.17.0"
   },
   "sysmon": {
-   "blob": "812ee72f2d7b95f70a9e79938455400e270012fa",
-   "commit": "4369b718c49a0878b7a2ddb4eba313a212999114",
-   "file": "sysmon_v6_13_99_20261113.py",
-   "landed": "2026-11-13T12:24:19Z",
-   "promoted": "2026-11-22T23:32:50Z",
+   "blob": "596bba1df411cda0785e5256ed263a1a546d7255",
+   "commit": "2305b34ac3f30aa2f40f4131ccc797904d4149b6",
+   "file": "sysmon_v6_13_100_20261116.py",
+   "landed": "2026-11-16T16:25:35Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "6.13.99"
+   "version": "6.13.100"
   },
   "sysmon_pi02w": {
-   "blob": "7a5f60c054ecbaadf788c12ae7c38d50f9aaf141",
-   "commit": "cbad574ad5c59a5d4702703094905b0b29d079c6",
-   "file": "sysmon_pi02w_v6_13_87_20261113.py",
-   "landed": "2026-11-13T09:58:32Z",
-   "promoted": "2026-11-22T23:32:50Z",
+   "blob": "5f881615e0f5df24b077ea2e2b1a0bb687f5f68e",
+   "commit": "c7002ed00b4837ca4caf9c23839024c0b7b170bf",
+   "file": "sysmon_pi02w_v6_13_88_20261113.py",
+   "landed": "2026-11-13T11:39:43Z",
+   "promoted": "2026-11-23T08:21:58Z",
    "reason": "count",
-   "version": "6.13.87-pi02w"
+   "version": "6.13.88-pi02w"
   },
   "termon": {
    "blob": "d3f4d73ade58a7dd6efa4b2b731dbcbc01cad745",
