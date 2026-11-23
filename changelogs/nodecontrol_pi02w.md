@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_122_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_123_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.123-pi02w (2026-11-23)
+
+The link row changes. This is a release: the header shows the tab badge and the connected link in the indicator; the Listen, DVSwitch and Cockpit buttons are gone and a Node Talker button takes their place. The row is five buttons, and on a phone they form one row under the indicator. This build has no SVX, so the indicator shows no SVX talkgroup.
 
 ## 9.3.122-pi02w (2026-11-23)
 

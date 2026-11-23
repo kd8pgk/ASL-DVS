@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.122-pi02w"
+VERSION      = "9.3.123-pi02w"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -8681,13 +8681,6 @@ body.offline.perm-linked #perm-link-bar {
   gap: .4rem;
   min-width: 0;
 }
-.ql.ql-listen {
-  color: var(--green);
-  border-color: rgba(0,255,176,.45);
-  background: rgba(0,255,176,.08);
-  text-shadow: 0 0 8px rgba(0,255,176,.4);
-  flex: 0 0 auto;
-}
 #tg-indicator {
   grid-column: 2;
   justify-self: center;
@@ -8725,6 +8718,7 @@ body.offline.perm-linked #perm-link-bar {
   0%   { box-shadow: 0 0 18px rgba(0,255,176,.85), inset 0 0 10px rgba(0,255,176,.2); }
   100% { box-shadow: none; }
 }
+.tg-badge{font-family:var(--sans);font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--bright);border:1px solid var(--border2);border-radius:3px;padding:.05rem .32rem;margin-right:.35rem;vertical-align:middle;}
 #tg-indicator.ind-idle{color: #ffffff;border-color:var(--border2)}
 #tg-indicator.ind-unconfirmed{border-style:dashed}
 #tg-indicator.ind-asl,#tg-indicator.ind-dmr,#tg-indicator.ind-stfu,#tg-indicator.ind-ysf,#tg-indicator.ind-fcs,#tg-indicator.ind-p25,#tg-indicator.ind-nxdn,#tg-indicator.ind-dstar,#tg-indicator.ind-xlx,#tg-indicator.ind-m17,#tg-indicator.ind-echo{color:var(--mc);border-color:rgba(var(--mc-rgb),.4);background:rgba(var(--mc-rgb),.07);text-shadow:0 0 8px rgba(var(--mc-rgb),.5)}
@@ -8738,6 +8732,7 @@ body.offline.perm-linked #perm-link-bar {
 #tg-indicator.ind-nxdn{--mc:var(--lime);--mc-rgb:212,255,0}
 #tg-indicator.ind-dstar{--mc:var(--pink);--mc-rgb:255,68,204}
 #tg-indicator.ind-xlx{--mc:var(--teal);--mc-rgb:0,255,229}
+#tg-indicator.ind-svx{--mc:var(--green);--mc-rgb:0,255,176}
 #tg-indicator.ind-m17{--mc:var(--purple);--mc-rgb:212,102,255}
 #tg-indicator.ind-phone{color:var(--green);border-color:rgba(0,255,176,.4);background:rgba(0,255,176,.07);text-shadow:0 0 8px rgba(0,255,176,.5)}
 #tg-indicator.ind-rx{color:#ffd700;border-color:rgba(220,60,60,.6);background:rgba(200,20,20,.22);box-shadow:0 0 10px rgba(220,30,30,.35),inset 0 0 8px rgba(220,30,30,.12);text-shadow:0 0 10px rgba(255,215,0,.8)}
@@ -9051,7 +9046,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 }
 @media (max-width: 560px) {
   .sec-lbl-row {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     row-gap: .4rem;
     column-gap: .25rem;
     padding-top: .15rem;
@@ -9059,7 +9054,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   .ql-group { display: contents; }
   .tg-wrap { grid-column: 1 / -1; grid-row: 1; max-width: 96%; }
   #tg-indicator { grid-column: 1 / -1; grid-row: 1; max-width: 92%; }
-  .ql.ql-listen { grid-row: auto; font-size: .66rem; padding: .3rem .5rem; letter-spacing: .04em; }
   .ql {
     grid-row: 2;
     font-size: clamp(.45rem, 2.1vw, .66rem);
@@ -9847,12 +9841,10 @@ body.rec-locked [id$="-grid"] { opacity: .55; }
     <div class="sec-lbl-row">
       <div class="ql-group ql-left">
         <a class="ql" data-ql-port="7777" href="#" target="_blank" rel="noopener">Node Mon</a>
-        <a class="ql" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
-        <a class="ql" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
+        <a id="lnk-talker" class="ql ql-off" href="#" aria-disabled="true" title="Node Talker is not running">Node Talker</a>
       </div>
       <div class="tg-wrap">
-        <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
-        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Talker is not running">Listen</a>
+        <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-badge" class="tg-badge" hidden></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
       </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
@@ -10886,7 +10878,7 @@ function applyEdCollapsed(){
 // Expected: returns to DMR without showing network selector (user didn't click DMR tab again).
 // If showPage() incorrectly called clickTab() or reTuneTab(), it would trigger retune and
 // show network selector unexpectedly.  Maintain this distinction to prevent regression.
-function showPage(page){if(!PAGES.includes(page))return;inEdit=false;curPage=page;syncPageDisplay();_saveTabState()}
+function showPage(page){if(!PAGES.includes(page))return;inEdit=false;curPage=page;_refreshTgBadge();syncPageDisplay();_saveTabState()}
 function indUnknown(mode){
   const el=byId('tg-indicator');
   const valEl=byId('tg-value');
@@ -10896,26 +10888,33 @@ function indUnknown(mode){
   el.className='ind-idle';
   el.title='Asterisk is not answering. The link state is unknown.';
 }
+const _TAB_BADGE={ASL:'ASL',ECHO:'Echo',SVX:'SVX',DMR:'DMR',STFU:'STFU',YSF:'YSF',FCS:'FCS',P25:'P-25',NXDN:'NXDN',DSTAR:'D-STAR',XLX:'XLX',M17:'M17'};
+function _refreshTgBadge(){
+  const b=byId('tg-badge');
+  if(!b)return;
+  const lbl=_TAB_BADGE[curPage]||'';
+  if(b.textContent!==lbl)b.textContent=lbl;
+  b.hidden=!lbl;
+}
 function setIndicator(value,mode,keyed,name,state){
   const el    =byId('tg-indicator');
   const valEl =byId('tg-value');
   const dotL  =byId('tg-dot-l');
   const dotR  =byId('tg-dot-r');
   if(!el)return;
+  _refreshTgBadge();
   function setDots(on){
     const cls='dot '+(on?'dot-on':'dot-off');
     if(dotL)dotL.className=cls;
     if(dotR)dotR.className=cls;
   }
-  // Disconnect / idle path
   if(!value||value===TG_DISCONNECT){
-    if(valEl)valEl.textContent=mode||'——';
+    if(valEl)valEl.textContent='——';
     setDots(false);
     el.className='ind-idle';
     el.removeAttribute('title');
     return;
   }
-  // Value: raw tg always; friendly name as tooltip
   const unc=_tuneState==='unconfirmed'&&!!(MODE_CAPS[mode]&&MODE_CAPS[mode].isDigital);
   if(valEl){
     valEl.textContent=unc?value+' ?':value;
@@ -10924,11 +10923,9 @@ function setIndicator(value,mode,keyed,name,state){
     else el.removeAttribute('title');
   }
   setDots(!unc);
-  // Outer class: base colour + optional state modifier
   const base=(keyed?'ind-rx':'ind-'+(mode||'').toLowerCase())+(unc?' ind-unconfirmed':'');
   if(state==='confirmed'){
     el.className=base+' ind-confirmed';
-    // One-shot: remove ind-confirmed after animation completes
     setTimeout(()=>{
       const cur=byId('tg-indicator');
       if(cur)cur.className=base;
@@ -14265,7 +14262,7 @@ function _startApp(){
   },60_000);
   _initQuickLinks();
   _probeSysMon();
-  _probeNodeListen();
+  _probeNodeTalker();
 }
 
 /* ── Root-password auth (v8.0.9) ──────────────────────────────────────────
@@ -14398,8 +14395,8 @@ function _openNamedTab(url, name) {
   if (blank) w.location.href = url;
   try { w.focus(); } catch (_) {}
 }
-async function _probeNodeListen() {
-  const a = document.getElementById('lnk-listen');
+async function _probeNodeTalker() {
+  const a = document.getElementById('lnk-talker');
   if (!a) return;
   try {
     const r = await fetch('/api/nodelisten-status');
@@ -14409,7 +14406,7 @@ async function _probeNodeListen() {
       a.href = `https://${window.location.hostname}:${d.port}/`;
       a.classList.remove('ql-off');
       a.removeAttribute('aria-disabled');
-      a.title = 'Listen to this node in the browser (Node Talker)';
+      a.title = 'Open Node Talker';
     } else {
       a.href = '#';
       a.classList.add('ql-off');
@@ -14418,12 +14415,6 @@ async function _probeNodeListen() {
     }
   } catch (_) {}
 }
-document.getElementById('lnk-listen').addEventListener('click', (ev) => {
-  const a = ev.currentTarget;
-  ev.preventDefault();
-  if (a.classList.contains('ql-off')) return;
-  _openNamedTab(a.href, 'asl_dvs_listen');
-});
 try { window.name = 'asl_dvs_dash'; } catch (_) {}
 // Boot gate: the session cookie is HttpOnly, so this page can't just check
 // for it — it asks the server via /api/whoami instead. That request
