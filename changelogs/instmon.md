@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_118_0_20261122.py`.
+Current file: `instmon_v2_119_0_20261123.py`.
+
+## 2.119.0 (2026-11-23)
+
+Faster page. This is a release: replies carry a new header and the page logic changed.
+
+- **A busy node is not a slow network.** Every GET reply carries `X-Work-Ms`, the server's own time. The page adds up the server time of the calls a poll made and subtracts it before the slow-link logic judges the link.
+- Shared code: `etag_of`, `etag_match` and `with_work_ms` are copied from `shared/confio.py`; the tags and the 304 answers are unchanged.
+- Nothing else changes.
 
 ## 2.118.0 (2026-11-22)
 

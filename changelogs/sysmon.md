@@ -1,6 +1,15 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_103_20261122.py`. Newest entries first.
+Current file: `sysmon_v6_13_104_20261123.py`. Newest entries first.
+
+## 6.13.104 (2026-11-23)
+
+Faster page and fewer processes (full build). This is a release: replies carry a new header and two Asterisk reads take another route.
+
+- **No process for the registration and link checks.** `rpt show registrations` and `rpt lstats` go through one kept Asterisk manager (AMI) connection instead of starting `asterisk -rx` each time, with the command line as the fallback. The code is the shared one in `shared/confio.py`.
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304.
+- **`X-Work-Ms`** on every GET reply, the server's own time.
+- Nothing else changes.
 
 ## 6.13.103 (2026-11-22)
 

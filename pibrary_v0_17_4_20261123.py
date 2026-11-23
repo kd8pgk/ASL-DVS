@@ -31,7 +31,7 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.17.3"
+VERSION = "0.17.4"
 DATE_STR = "2026-11-13"
 APP_NAME = "Pibrary"
 
@@ -5287,10 +5287,13 @@ NET.gate = function (key, ms) {
 document.addEventListener('DOMContentLoaded', function () { NET.show(); });
 
 const _tags = {};
+let _srvMs = 0;
 async function netGet(url) {
   const headers = {};
   if (_tags[url]) headers['If-None-Match'] = _tags[url].etag;
   const r = await fetch(url, {headers: headers});
+  const ms = parseInt(r.headers.get('X-Work-Ms') || '', 10);
+  _srvMs = isNaN(ms) ? 0 : ms;
   if (r.status === 304 && _tags[url]) return {ok: true, status: 200, data: JSON.parse(_tags[url].text)};
   const text = await r.text();
   let data = null;
@@ -5811,7 +5814,7 @@ async function pollStatus() {
     const res = await netGet('/api/status');
     const s = res.data;
     if (!s) return;
-    NET.sample(performance.now() - t0);
+    NET.sample(Math.max(0, performance.now() - t0 - _srvMs));
     const g = document.createElement('div');
     g.className = 'kv';
     addKv(g, 'Host', s.hostname + (s.model ? ' (' + s.model + ')' : ''));
@@ -6784,7 +6787,7 @@ async function pollKeep() {
     const t0 = performance.now();
     const res = await netGet('/api/keep');
     if (res.ok) {
-      NET.sample(performance.now() - t0);
+      NET.sample(Math.max(0, performance.now() - t0 - _srvMs));
       const d = res.data;
       const before = JSON.stringify(_keepItems.map(function(k) { return k.kind; }));
       _keepItems = d.pending || [];
@@ -9224,6 +9227,45 @@ def _icon_png(size):
         return png
 
 
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
+
+_page_etags = {}
+
+
+@with_work_ms
 class PibraryHandler(http.server.BaseHTTPRequestHandler):
     server_version = f"pibrary/{VERSION}"
     protocol_version = "HTTP/1.1"
@@ -9267,13 +9309,7 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
         return False
 
     def _etag_matches(self, etag):
-        raw = self.headers.get("If-None-Match", "")
-        if not raw:
-            return False
-        if raw.strip() == "*":
-            return True
-        bare = etag[2:] if etag.startswith("W/") else etag
-        return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in raw.split(","))
+        return etag_match(self.headers.get("If-None-Match", ""), etag)
 
     def _cookie_is(self, name, value):
         return any(part.strip() == name + "=" + value for part in self.headers.get("Cookie", "").split(";"))
@@ -9293,7 +9329,7 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         extra = list(extra_headers or [])
         if self.command == "GET" and status == 200:
-            etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+            etag = etag_of(body)
             if self._etag_matches(etag):
                 self.send_response(304)
                 self.send_header("ETag", etag)
@@ -9324,10 +9360,22 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
         lite = self._wants_lite()
         packed = self._accepts_gzip()
         body = render_page(lite, packed)
+        etag = _page_etags.get((bool(lite), bool(packed)))
+        if etag is None:
+            etag = _page_etags[(bool(lite), bool(packed))] = etag_of(body)
+        if self._etag_matches(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Vary", "Accept-Encoding, Cookie")
+            self._keep_ok = True
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("ETag", etag)
         self.send_header("Vary", "Accept-Encoding, Cookie")
         if packed:
             self.send_header("Content-Encoding", "gzip")
