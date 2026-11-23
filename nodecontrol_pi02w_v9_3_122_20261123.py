@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.121-pi02w"
+VERSION      = "9.3.122-pi02w"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -6834,26 +6834,43 @@ def svc_rows(run, now_mono, stfu_probe=None):
                      "installed": installed, "restartable": restartable})
     return rows
 
-def reg_parse(out, node):
+def reg_nodes(out):
     import re
-    if not out.strip() or not node:
-        return "unknown"
     bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
     cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
-    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
-    state = "unregistered"
-    for line in out.splitlines():
+    nodes = {}
+    for line in (out or "").splitlines():
         cols = cols_re.match(line)
-        if cols and cols.group(2) == node:
-            text = cols.group(5).lower()
-        elif pat.search(line):
-            text = " ".join(t for t in line.lower().split() if "." not in t)
+        if cols and re.fullmatch(r"\d{4,6}", cols.group(2)):
+            node, text = cols.group(2), cols.group(5).lower()
         else:
-            continue
+            toks = line.split()
+            node = next((t for t in toks if re.fullmatch(r"\d{4,6}", t)), "")
+            if not node:
+                continue
+            text = " ".join(t for t in line.lower().split() if "." not in t)
         if any(w in text for w in bad):
-            return "unregistered"
-        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
-    return state
+            state = "unregistered"
+        elif re.search(r"\bregistered\b", text):
+            state = "registered"
+        else:
+            state = "unknown"
+        if nodes.get(node) != "unregistered":
+            nodes[node] = state
+    return nodes
+
+def reg_verdict(nodes, main=""):
+    nodes = dict(nodes or {})
+    main = str(main or "").strip()
+    if main and main not in nodes:
+        return "unregistered"
+    if "unregistered" in nodes.values():
+        return "unregistered"
+    if not nodes:
+        return "unknown"
+    if all(v == "registered" for v in nodes.values()):
+        return "registered"
+    return "unknown"
 
 def svc_reg_state(node, asterisk_on, parsed):
     node = str(node or "").strip()
@@ -6891,7 +6908,7 @@ def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
 def _asl_reg_check() -> str:
     node = (_cfg.asl_node or "").strip()
     out, ok = ami_command("rpt show registrations", timeout=4)
-    state = reg_parse(out, node) if ok else "unknown"
+    state = reg_verdict(reg_nodes(out), node) if ok and out.strip() else "unknown"
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
         if state != prev:

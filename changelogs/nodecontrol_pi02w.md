@@ -1,6 +1,14 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_121_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_122_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.122-pi02w (2026-11-23)
+
+The AllStarLink registration check uses the shared reader. This is a release: the verdict changed.
+
+- **Shared reader.** `reg_nodes` and `reg_verdict` (`shared/confio.py`, the code Node Talker and SysMon use) replace `reg_parse`. Every node listed by `rpt show registrations` counts: one that is rejected, timed out or unregistered makes the verdict "not registered", and so does this node missing from the list. A port in the host column is not read as a node number, "Request Sent" and "Auth. Sent" are "not known yet", and "No Authentication" is "not registered".
+- The full build keeps `reg_parse` until it is asked for.
+- Nothing else changes.
 
 ## 9.3.121-pi02w (2026-11-23)
 

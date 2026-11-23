@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.105"
+VERSION      = "6.13.106"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -5624,13 +5624,17 @@ function renderTunnelCard(t) {
   hdr.className = "ov-card-hdr";
   hdr.innerHTML = `<span class="ov-card-title">Tunnel</span>`;
   card.appendChild(hdr);
-  const lines = [t.present ? "wg0 interface present" : "wg0 interface not present"];
-  if (t.address) lines.push("Address: " + t.address);
-  if (t.handshake) lines.push("Handshake: " + t.handshake);
-  if (t.transfer) lines.push("Transfer: " + t.transfer);
+  const rows = [[t.present ? "dot-on" : "dot-fail", t.present ? "wg0 interface present" : "wg0 interface not present"]];
+  if (t.address) rows.push(["", "Address: " + t.address]);
+  if (t.present) {
+    const age = t.handshake_age;
+    const cls = age == null ? "dot-fail" : age <= 180 ? "dot-on" : age <= 900 ? "dot-warn" : "dot-fail";
+    rows.push([cls, t.handshake ? "Handshake: " + t.handshake : "Handshake: none"]);
+  }
+  if (t.transfer) rows.push(["", "Transfer: " + t.transfer]);
   const body = document.createElement("div");
-  body.style.cssText = "padding:8px 14px;font-size:var(--fs-sm);line-height:1.6";
-  body.innerHTML = lines.map(esc).join("<br>");
+  body.style.cssText = "padding:8px 14px;font-size:var(--fs-sm);line-height:1.8";
+  body.innerHTML = rows.map(r => `<div style="display:flex;align-items:center;gap:8px"><span class="dot ${r[0] || ""}" style="${r[0] ? "" : "visibility:hidden"}"></span><span>${esc(r[1])}</span></div>`).join("");
   card.appendChild(body);
   container.insertBefore(card, document.getElementById("ov-global-bar"));
 }
@@ -17507,7 +17511,7 @@ def _tunnel_card_info() -> "dict | None":
                 break
     except OSError:
         pass
-    info = {"present": present, "address": address, "handshake": "", "transfer": ""}
+    info = {"present": present, "address": address, "handshake": "", "transfer": "", "handshake_age": None}
     if present:
         for raw in _run(["wg", "show", "wg0"]).splitlines():
             line = raw.strip()
@@ -17516,6 +17520,13 @@ def _tunnel_card_info() -> "dict | None":
                 info["handshake"] = line.split(":", 1)[1].strip()
             elif low.startswith("transfer:"):
                 info["transfer"] = line.split(":", 1)[1].strip()
+        stamps = []
+        for raw in _run(["wg", "show", "wg0", "latest-handshakes"]).splitlines():
+            parts = raw.split()
+            if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) > 0:
+                stamps.append(int(parts[1]))
+        if stamps:
+            info["handshake_age"] = max(0, int(time.time()) - max(stamps))
     return info
 
 def _route_overview(h: Handler) -> None:
