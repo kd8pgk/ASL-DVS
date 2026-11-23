@@ -210,7 +210,7 @@ class PageScript(unittest.TestCase):
         self.assertIn("r.status===304&&_recData", self.html)
 
     def test_the_status_poll_is_the_probe(self):
-        self.assertIn("NET.sample(performance.now()-t0)", self.html)
+        self.assertIn("NET.sample(Math.max(0,performance.now()-t0-(isNaN(ms)?0:ms)))", self.html)
 
 
 NODE_TEST = r"""

@@ -856,7 +856,7 @@ class Speed(LivePoll):
     def test_replies_may_arrive_in_any_order(self):
         import io
         raw = b"Response: Success\r\nActionID: b\r\n\r\nResponse: Success\r\nActionID: a\r\n\r\n"
-        got = nm._ami_read_many(io.BytesIO(raw), ["a", "b"])
+        got = nm.ami_read_many(io.BytesIO(raw), ["a", "b"])
         self.assertEqual(set(got), {"a", "b"})
         self.assertIn("ActionID: a", got["a"])
 

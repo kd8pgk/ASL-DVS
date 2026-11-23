@@ -179,9 +179,13 @@ class Revalidation(Served):
         self.assertEqual(r2.status, 304)
         self.assertIn("pibrary_session=tok", r2.getheader("Set-Cookie") or "")
 
-    def test_the_page_is_not_a_json_reply(self):
-        r, _, _ = self.get("/")
-        self.assertIsNone(r.getheader("ETag"))
+    def test_the_page_has_its_own_tag_and_answers_304(self):
+        r, body, c = self.get("/")
+        tag = r.getheader("ETag")
+        self.assertTrue(tag)
+        self.assertEqual(r.getheader("Cache-Control"), "no-cache")
+        r2, body2, _ = self.get("/", {"If-None-Match": tag}, conn=c)
+        self.assertEqual((r2.status, body2), (304, b""))
 
 
 class Page(Served):
@@ -238,7 +242,7 @@ class PageScript(unittest.TestCase):
     def test_the_polls_follow_the_rules(self):
         for key, ms in (("st", 5000), ("rc", 60000), ("al", 30000), ("kp", 5000), ("lg", 2000), ("sm", 2000)):
             self.assertIn("NET.gate('%s', %d)" % (key, ms), self.html)
-        self.assertIn("NET.sample(performance.now() - t0)", self.html)
+        self.assertIn("NET.sample(Math.max(0, performance.now() - t0 - _srvMs))", self.html)
         for url in ("/api/status", "/api/alerts", "/api/keep", "/api/lib/recent?n=5"):
             self.assertIn("netGet('%s')" % url, self.html)
 

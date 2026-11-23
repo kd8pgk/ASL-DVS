@@ -50,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_103_20261122.py` | `sysmon_pi02w_v6_13_91_20261122.py` | `instmon_v2_118_0_20261122.py` |
+| File name | `sysmon_v6_13_104_20261123.py` | `sysmon_pi02w_v6_13_92_20261123.py` | `instmon_v2_119_0_20261123.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -104,7 +104,7 @@ This downloads the installer and runs it. On a node with nothing installed, the 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_118_0_20261122.py --install
+   sudo python3 instmon_v2_119_0_20261123.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -156,7 +156,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_14_0_20261123.py --install
+  sudo python3 nodetalker_v0_14_1_20261123.py --install
   ```
 
 Then:
@@ -374,7 +374,7 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_17_3_20261115.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_17_4_20261123.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
 - Login is on by default: sign in with the Pibrary password, or the node's root password
@@ -525,19 +525,19 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_115_20261122.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_120_20261122.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_103_20261122.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_91_20261122.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_118_0_20261122.py` | common |
+| `nodecontrol_v9_3_116_20261123.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_121_20261123.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_104_20261123.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_92_20261123.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_119_0_20261123.py` | common |
 | `wifimon_v5_57_0_20261115.py` | common |
 | `44helper_v0_1_75_20261122.py` | common |
-| `nodetalker_v0_14_0_20261123.py` | common |
-| `noderecorder_v0_17_9_20261122.py` | common |
+| `nodetalker_v0_14_1_20261123.py` | common |
+| `noderecorder_v0_18_0_20261123.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
-| `pibrary_v0_17_3_20261115.py` | common |
+| `pibrary_v0_17_4_20261123.py` | common |
 | `termon_v0_2_5_20261113.py` | common (stands alone for now) |
-| `nodemon_v0_9_0_20261123.py` | common |
+| `nodemon_v0_9_1_20261123.py` | common |
 | `piper_dashboard_v0_8_1_20261121.py` | common |
 | `install_all_v7_9_0_20261121.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |

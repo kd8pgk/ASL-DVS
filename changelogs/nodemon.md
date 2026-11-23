@@ -1,6 +1,14 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_9_0_20261123.py`. Newest entries first.
+Current file: `nodemon_v0_9_1_20261123.py`. Newest entries first.
+
+## 0.9.1 (2026-11-23)
+
+Every GET reply says how long the server worked. This is a release: replies carry a new header.
+
+- **`X-Work-Ms`.** Every GET reply carries the server's own time, so a page can tell a busy node from a slow network.
+- **Shared code.** The AMI helpers (`ami_msg`, `ami_read`, `ami_read_for`, `ami_read_many`, `ami_output`), `etag_of`, `etag_match` and `with_work_ms` are copied from `shared/confio.py`; the private `_ami_*` copies are gone.
+- Nothing else changes.
 
 ## 0.9.0 (2026-11-23)
 

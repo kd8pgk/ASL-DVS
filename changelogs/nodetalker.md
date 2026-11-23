@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_0_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_1_20261123.py`. Newest entries first.
+
+## 0.14.1 (2026-11-23)
+
+The speed code is now the shared one. This is a release: every GET reply carries a new header.
+
+- **`X-Work-Ms` on every GET reply**, not only the status; the page still subtracts it before it judges the link.
+- **Shared code.** The manager session, the refresher and the tag helpers come from `shared/confio.py` (`AmiCmd`, `ami_or_cli`, `Warm`, `etag_of`, `etag_match`, `etag_stable`, `with_work_ms`), the same code Node Recorder 0.18.0 and SysMon use. The private `_ami_*` copies are gone.
+- Nothing else changes.
 
 ## 0.14.0 (2026-11-23)
 

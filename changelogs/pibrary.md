@@ -1,6 +1,15 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_17_3_20261115.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_17_4_20261123.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.17.4 (2026-11-23)
+
+Faster page. This is a release: replies carry a new header and the page logic changed.
+
+- **A busy node is not a slow network.** Every GET reply carries `X-Work-Ms`, the server's own time. The page subtracts it before the slow-link logic judges the link.
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304 to a matching `If-None-Match`, so a reload does not download it again. JSON replies are unchanged.
+- Shared code: `etag_of`, `etag_match` and `with_work_ms` are copied from `shared/confio.py`.
+- Nothing else changes.
 
 ## 0.17.3 (2026-11-15)
 

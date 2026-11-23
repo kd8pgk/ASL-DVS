@@ -1,6 +1,15 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_120_20261122.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_121_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.121-pi02w (2026-11-23)
+
+Faster page. This is a release: replies carry a new header and the page logic changed.
+
+- **The page does not mistake a busy node for a slow network.** Every GET reply carries `X-Work-Ms`, the server's own time. The page subtracts it before the slow-link logic judges the link.
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304 to a matching `If-None-Match`, so a reload does not download it again. JSON replies and the status tag are unchanged.
+- Shared code: `etag_of`, `etag_match` and `with_work_ms` are copied from `shared/confio.py`.
+- Nothing else changes.
 
 ## 9.3.120-pi02w (2026-11-22)
 

@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.103"
+VERSION      = "6.13.104"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -710,7 +710,7 @@ _REG_LIVE_COLS_RE = re.compile(r'^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$')
 
 def get_live_registrations() -> dict:
 
-    out, err = _run_with_stderr(["asterisk", "-rx", "rpt show registrations"], timeout=8)
+    out, err = _asterisk_read("rpt show registrations", timeout=8)
     if not out:
         return {
             "ok": False, "raw": "",
@@ -14703,6 +14703,214 @@ class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
             return
         _log(f"WARN — unhandled server error from {client_address}: {exc}")
 
+def ami_credentials(conf_path, user="", secret=""):
+    if user and secret:
+        return user, secret
+    try:
+        with open(conf_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "", ""
+    name = ""
+    word = ""
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and "]" in line:
+            if name and word and section.lower() != "general":
+                return name, word
+            section = line[1:line.index("]")].strip()
+            name = section
+            word = ""
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "secret":
+                word = v.strip()
+    if name and word and section.lower() != "general":
+        return name, word
+    return "", ""
+
+
+def ami_msg(**fields):
+    return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
+
+
+def ami_read(fh, max_bytes=1000000):
+    lines = []
+    size = 0
+    while True:
+        raw = fh.readline(65536)
+        if not raw:
+            raise OSError("AMI closed the connection")
+        size += len(raw)
+        if size > max_bytes:
+            raise OSError("AMI sent too much without finishing a reply")
+        ln = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if not ln:
+            if lines:
+                return lines
+            continue
+        lines.append(ln)
+
+
+def ami_read_for(fh, action_id, seconds=5.0):
+    import time
+    end = time.monotonic() + seconds
+    while True:
+        lines = ami_read(fh)
+        if f"ActionID: {action_id}" in lines:
+            return lines
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
+
+
+def ami_output(lines):
+    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
+    if out:
+        return "\n".join(out)
+    if any(ln.startswith("Response: Follows") for ln in lines):
+        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
+        return "\n".join(body)
+    return ""
+
+
+class AmiCmd:
+    def __init__(self, conf_path, host="127.0.0.1", port=5038, idle_sec=60.0):
+        import threading
+        self.conf_path = conf_path
+        self.host = host
+        self.port = port
+        self.idle_sec = idle_sec
+        self.lock = threading.Lock()
+        self.sock = None
+        self.fh = None
+        self.n = 0
+        self.used = 0.0
+        self.refused = None
+        self.skip_until = 0.0
+
+    def close(self):
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except OSError:
+            pass
+        self.sock = self.fh = None
+
+    def open(self):
+        import socket
+        user, secret = ami_credentials(self.conf_path)
+        if not user or not secret:
+            raise ValueError("no AMI login")
+        if self.refused == (user, secret):
+            raise ValueError("AMI login refused")
+        sock = socket.create_connection((self.host, self.port), timeout=3)
+        try:
+            sock.settimeout(5.0)
+            fh = sock.makefile("rb")
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
+                raise ValueError("that port is not the Asterisk manager")
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="cmdlogin"))
+            reply = ami_read_for(fh, "cmdlogin")
+            if "Response: Success" not in reply:
+                if "Response: Error" in reply:
+                    self.refused = (user, secret)
+                raise ValueError("AMI login failed")
+        except BaseException:
+            sock.close()
+            raise
+        self.sock, self.fh = sock, fh
+
+    def run(self, command, timeout=6.0):
+        import time
+        now = time.monotonic()
+        if now < self.skip_until or not self.lock.acquire(timeout=timeout):
+            return None
+        try:
+            if self.sock is not None and now - self.used > self.idle_sec:
+                self.close()
+            for _ in range(2):
+                fresh = self.sock is None
+                try:
+                    if fresh:
+                        self.open()
+                    self.n += 1
+                    aid = f"cmd{self.n}"
+                    self.sock.settimeout(timeout)
+                    self.sock.sendall(ami_msg(Action="Command", Command=command, ActionID=aid))
+                    lines = ami_read_for(self.fh, aid, timeout)
+                    self.used = time.monotonic()
+                    return "Response: Error" not in lines, ami_output(lines)
+                except (OSError, ValueError):
+                    self.close()
+                    if fresh:
+                        break
+            self.skip_until = time.monotonic() + (300.0 if self.refused else 30.0)
+            return None
+        finally:
+            self.lock.release()
+
+
+def ami_or_cli(amicmd, command, timeout, fallback):
+    r = amicmd.run(command, timeout)
+    if r is not None:
+        return r
+    return fallback(command, timeout)
+
+
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
+
+AMI_CONF = os.environ.get("SYSMON_AMI_CONF", "/etc/asterisk/manager.conf")
+AMICMD = AmiCmd(AMI_CONF)
+_page_etags: dict = {}
+
+
+def _asterisk_read(command: str, timeout: int = 6) -> "tuple[str, str]":
+    def cli(cmd, tmo):
+        out, err = _run_with_stderr(["asterisk", "-rx", cmd], timeout=tmo)
+        return (bool(out) or not err), (out if out else err)
+    AMICMD.conf_path = AMI_CONF
+    ok, text = ami_or_cli(AMICMD, command, timeout, cli)
+    return ("", text.strip()) if not ok else (text.strip(), "")
+
+
+@with_work_ms
 class Handler(BaseHTTPRequestHandler):
 
     timeout = 20
@@ -14772,15 +14980,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def send_html(self) -> None:
-        self.send_response(200)
+        packed = self._accepts_gzip()
+        body = _HTML_GZIP if packed else _HTML_BYTES
+        etag = _page_etags.get(id(body))
+        if etag is None:
+            etag = _page_etags[id(body)] = etag_of(body)
+        unchanged = etag_match(self.headers.get("If-None-Match", ""), etag)
+        self.send_response(304 if unchanged else 200)
         self.send_header("Content-Type",          "text/html; charset=utf-8")
-        self.send_header("Cache-Control",          "no-store")
+        self.send_header("Cache-Control",          "no-cache")
+        self.send_header("ETag",                   etag)
+        self.send_header("Vary",                   "Accept-Encoding")
         self.send_header("X-Content-Type-Options", "nosniff")
-        if self._accepts_gzip():
-            body = _HTML_GZIP
+        if unchanged:
+            self.end_headers()
+            return
+        if packed:
             self.send_header("Content-Encoding", "gzip")
-        else:
-            body = _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -26660,7 +26876,7 @@ def _nl_web_clients(port: int) -> "tuple[list, str]":
 def _nl_lstats(node: str) -> "tuple[bool, list]":
     if not node:
         return False, []
-    out, err = _run_with_stderr(["asterisk", "-rx", f"rpt lstats {node}"], timeout=6)
+    out, err = _asterisk_read(f"rpt lstats {node}", timeout=6)
     if not out and err:
         return False, []
     return True, [ln.split()[0] for ln in out.splitlines() if ln.split() and ln.split()[0].isdigit()]

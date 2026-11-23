@@ -91,7 +91,7 @@ class AmiCommands(unittest.TestCase):
             f.write("[general]\nenabled = yes\n[admin]\nsecret = pw\n")
         self.saved = (nt.AMI_CONF, nt.AMI_PORT, nt.AMICMD)
         nt.AMI_CONF, nt.AMI_PORT = conf, self.ami.server_address[1]
-        nt.AMICMD = nt.AmiCmd()
+        nt.AMICMD = nt.AmiCmd(conf, port=nt.AMI_PORT)
         self.addCleanup(lambda: (setattr(nt, "AMI_CONF", self.saved[0]), setattr(nt, "AMI_PORT", self.saved[1]),
                                  setattr(nt, "AMICMD", self.saved[2])))
 
@@ -144,98 +144,52 @@ class AmiCommands(unittest.TestCase):
 
     def test_an_idle_connection_is_not_kept_for_ever(self):
         nt.AMICMD.run("rpt lstats 1")
-        with mock.patch.object(nt, "AMI_CMD_IDLE_SEC", 0.0):
-            time.sleep(0.01)
-            nt.AMICMD.run("rpt lstats 1")
+        nt.AMICMD.idle_sec = 0.0
+        time.sleep(0.01)
+        nt.AMICMD.run("rpt lstats 1")
         self.assertEqual(self.logins(), 2)
 
 
 class FastReads(unittest.TestCase):
     def setUp(self):
-        self.saved = (dict(nt._WARM), dict(nt._lstats_cache), dict(nt._recorder_cache), dict(nt._STATUS_ASK))
+        self.saved = (nt.WARM.on, dict(nt._lstats_cache), dict(nt._recorder_cache))
         self.addCleanup(self.restore)
 
     def restore(self):
-        nt._WARM.clear()
-        nt._WARM.update(self.saved[0])
+        nt.WARM.on = self.saved[0]
         nt._lstats_cache.clear()
         nt._lstats_cache.update(self.saved[1])
         nt._recorder_cache.clear()
         nt._recorder_cache.update(self.saved[2])
-        nt._STATUS_ASK.update(self.saved[3])
-        nt._fast.on = False
-
-    def test_only_a_status_request_with_the_refresher_running_takes_an_older_answer(self):
-        now = time.monotonic()
-        nt._WARM["on"] = False
-        nt._fast.on = True
-        self.assertFalse(nt._stale_ok(now - 3))
-        nt._WARM["on"] = True
-        nt._fast.on = False
-        self.assertFalse(nt._stale_ok(now - 3))
-        nt._fast.on = True
-        self.assertTrue(nt._stale_ok(now - 3))
-        self.assertFalse(nt._stale_ok(now - nt.WARM_STALE_SEC - 1))
+        nt.WARM.local.fast = False
 
     def test_the_status_request_does_not_start_a_process_for_a_slightly_old_link_list(self):
-        nt._WARM["on"] = True
+        nt.WARM.on = True
         nt._lstats_cache.update(t=time.monotonic() - 4.0, node="1", ok=True, links=[{"node": "9"}])
         with mock.patch.object(nt, "ast_cli_fast", side_effect=AssertionError("must not run")):
-            nt._fast.on = True
-            self.assertEqual(nt.rpt_links("1"), (True, [{"node": "9"}]))
-            nt._fast.on = False
+            self.assertEqual(nt.WARM.fast(nt.rpt_links, "1"), (True, [{"node": "9"}]))
         with mock.patch.object(nt, "ast_cli_fast", return_value=(True, "")) as cli:
             self.assertEqual(nt.rpt_links("1"), (True, []))
         cli.assert_called_once()
 
     def test_an_action_still_gets_a_fresh_read(self):
-        nt._WARM["on"] = True
+        nt.WARM.on = True
         nt._lstats_cache.update(t=time.monotonic(), node="1", ok=True, links=[{"node": "9"}])
         nt._lstats_invalidate()
-        nt._fast.on = True
         with mock.patch.object(nt, "ast_cli_fast", return_value=(True, "")) as cli:
-            nt.rpt_links("1")
+            nt.WARM.fast(nt.rpt_links, "1")
         cli.assert_called_once()
 
     def test_the_recorder_is_not_asked_again_on_the_request_path(self):
-        nt._WARM["on"] = True
+        nt.WARM.on = True
         nt._recorder_cache.update(t=time.monotonic() - 4.0, v={"state": "x"}, info=None)
-        nt._fast.on = True
         with mock.patch.object(nt.urllib.request, "urlopen", side_effect=AssertionError("must not run")):
-            self.assertEqual(nt.recorder_busy(), {"state": "x"})
-
-    def test_the_refresher_builds_the_status_while_a_page_asks_and_rests_after(self):
-        calls = []
-        nt._WARM["quit"] = False
-        nt._STATUS_ASK["t"] = time.monotonic()
-        with mock.patch.object(nt, "build_status", lambda full: calls.append(full) or {}), \
-                mock.patch.object(nt, "WARM_SEC", 0.05):
-            th = threading.Thread(target=nt._warm_loop, daemon=True)
-            th.start()
-            end = time.time() + 5
-            while time.time() < end and len(calls) < 3:
-                time.sleep(0.02)
-            self.assertGreaterEqual(len(calls), 3)
-            self.assertTrue(all(calls))
-            nt._STATUS_ASK["t"] = time.monotonic() - 1000
-            time.sleep(0.3)
-            n = len(calls)
-            time.sleep(0.4)
-            self.assertEqual(len(calls), n)
-            nt.status_asked()
-            end = time.time() + 5
-            while time.time() < end and len(calls) == n:
-                time.sleep(0.02)
-            self.assertGreater(len(calls), n)
-            nt._WARM["quit"] = True
-            nt.WARM_EVENT.set()
-            th.join(3)
-        nt._WARM["quit"] = False
+            self.assertEqual(nt.WARM.fast(nt.recorder_busy), {"state": "x"})
 
     def test_an_action_wakes_the_refresher(self):
-        nt.WARM_EVENT.clear()
+        nt.WARM.event.clear()
         nt._lstats_invalidate()
-        self.assertTrue(nt.WARM_EVENT.is_set())
+        self.assertTrue(nt.WARM.event.is_set())
 
     def test_the_rpt_conf_parse_is_kept_while_the_text_is_the_same(self):
         path = os.path.join(WORK, "rpt.conf")
@@ -320,12 +274,12 @@ class StatusReply(Served):
         self.assertRegex(r.getheader("X-Work-Ms"), r"^\d+$")
 
     def test_the_status_and_whoami_keep_the_refresher_awake(self):
-        nt._STATUS_ASK["t"] = -1e9
+        nt.WARM.t = -1e9
         self.get("/api/status")
-        self.assertLess(time.monotonic() - nt._STATUS_ASK["t"], 5)
-        nt._STATUS_ASK["t"] = -1e9
+        self.assertLess(time.monotonic() - nt.WARM.t, 5)
+        nt.WARM.t = -1e9
         self.get("/api/whoami")
-        self.assertLess(time.monotonic() - nt._STATUS_ASK["t"], 5)
+        self.assertLess(time.monotonic() - nt.WARM.t, 5)
 
 
 class PageReply(Served):

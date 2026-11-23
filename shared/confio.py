@@ -1,15 +1,11 @@
 USED_BY = {
-    "atomic_write": ("nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "nodetalker",
-                     "amp_nodetalker", "44helper", "wifimon", "confputter", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
-    "ami_credentials": ("nodetalker", "noderecorder", "nodemon"),
+    "atomic_write": ("nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "nodetalker", "amp_nodetalker", "44helper", "wifimon", "confputter", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
+    "ami_credentials": ("nodetalker", "noderecorder", "nodemon", "sysmon_pi02w", "sysmon"),
     "http_get": ("44helper",),
     "fill_secrets": ("44helper", "confputter"),
-    "firewall_backend": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                         "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
-    "open_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                           "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
-    "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                            "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
+    "firewall_backend": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper", "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
+    "open_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper", "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
+    "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper", "nodetalker", "amp_nodetalker", "pibrary", "noderecorder", "nodemon", "piper_dashboard"),
     "system_profile": ("44helper", "wifimon"),
     "allmon3_sync": ("44helper", "nodecontrol", "nodecontrol_pi02w", "nodetalker", "noderecorder"),
     "suitelog_redact": ("nodetalker", "instmon"),
@@ -53,6 +49,18 @@ USED_BY = {
     "tls_finish_request": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
     "tls_start": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
     "tls_secure": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
+    "ami_msg": ("sysmon_pi02w", "nodetalker", "nodemon", "noderecorder", "sysmon"),
+    "ami_read": ("sysmon_pi02w", "nodetalker", "nodemon", "noderecorder", "sysmon"),
+    "ami_read_for": ("sysmon_pi02w", "nodetalker", "nodemon", "noderecorder", "sysmon"),
+    "ami_output": ("sysmon_pi02w", "nodetalker", "nodemon", "noderecorder", "sysmon"),
+    "AmiCmd": ("sysmon_pi02w", "nodetalker", "noderecorder", "sysmon"),
+    "ami_or_cli": ("sysmon_pi02w", "nodetalker", "noderecorder", "sysmon"),
+    "etag_of": ("sysmon_pi02w", "nodecontrol_pi02w", "nodetalker", "nodemon", "noderecorder", "pibrary", "instmon", "sysmon", "nodecontrol"),
+    "etag_match": ("sysmon_pi02w", "nodecontrol_pi02w", "nodetalker", "nodemon", "noderecorder", "pibrary", "instmon", "sysmon", "nodecontrol"),
+    "with_work_ms": ("sysmon_pi02w", "nodecontrol_pi02w", "nodetalker", "nodemon", "noderecorder", "pibrary", "instmon", "sysmon", "nodecontrol"),
+    "Warm": ("nodetalker", "noderecorder"),
+    "etag_stable": ("nodetalker", "noderecorder"),
+    "ami_read_many": ("nodemon",),
 }
 
 
@@ -1211,3 +1219,262 @@ def tls_secure(connection, headers=None, proxied=False):
     if isinstance(connection, ssl.SSLSocket):
         return True
     return bool(proxied and headers is not None and headers.get("X-Forwarded-Proto", "").strip().lower() == "https")
+
+
+def ami_msg(**fields):
+    return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
+
+
+def ami_read(fh, max_bytes=1000000):
+    lines = []
+    size = 0
+    while True:
+        raw = fh.readline(65536)
+        if not raw:
+            raise OSError("AMI closed the connection")
+        size += len(raw)
+        if size > max_bytes:
+            raise OSError("AMI sent too much without finishing a reply")
+        ln = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if not ln:
+            if lines:
+                return lines
+            continue
+        lines.append(ln)
+
+
+def ami_read_for(fh, action_id, seconds=5.0):
+    import time
+    end = time.monotonic() + seconds
+    while True:
+        lines = ami_read(fh)
+        if f"ActionID: {action_id}" in lines:
+            return lines
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
+
+
+def ami_read_many(fh, action_ids, seconds=10.0):
+    import time
+    end = time.monotonic() + seconds
+    want = set(action_ids)
+    got = {}
+    while len(got) < len(want):
+        lines = ami_read(fh)
+        for aid in want:
+            if aid not in got and f"ActionID: {aid}" in lines:
+                got[aid] = lines
+                break
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
+    return got
+
+
+def ami_output(lines):
+    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
+    if out:
+        return "\n".join(out)
+    if any(ln.startswith("Response: Follows") for ln in lines):
+        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
+        return "\n".join(body)
+    return ""
+
+
+class AmiCmd:
+    def __init__(self, conf_path, host="127.0.0.1", port=5038, idle_sec=60.0):
+        import threading
+        self.conf_path = conf_path
+        self.host = host
+        self.port = port
+        self.idle_sec = idle_sec
+        self.lock = threading.Lock()
+        self.sock = None
+        self.fh = None
+        self.n = 0
+        self.used = 0.0
+        self.refused = None
+        self.skip_until = 0.0
+
+    def close(self):
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except OSError:
+            pass
+        self.sock = self.fh = None
+
+    def open(self):
+        import socket
+        user, secret = ami_credentials(self.conf_path)
+        if not user or not secret:
+            raise ValueError("no AMI login")
+        if self.refused == (user, secret):
+            raise ValueError("AMI login refused")
+        sock = socket.create_connection((self.host, self.port), timeout=3)
+        try:
+            sock.settimeout(5.0)
+            fh = sock.makefile("rb")
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
+                raise ValueError("that port is not the Asterisk manager")
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="cmdlogin"))
+            reply = ami_read_for(fh, "cmdlogin")
+            if "Response: Success" not in reply:
+                if "Response: Error" in reply:
+                    self.refused = (user, secret)
+                raise ValueError("AMI login failed")
+        except BaseException:
+            sock.close()
+            raise
+        self.sock, self.fh = sock, fh
+
+    def run(self, command, timeout=6.0):
+        import time
+        now = time.monotonic()
+        if now < self.skip_until or not self.lock.acquire(timeout=timeout):
+            return None
+        try:
+            if self.sock is not None and now - self.used > self.idle_sec:
+                self.close()
+            for _ in range(2):
+                fresh = self.sock is None
+                try:
+                    if fresh:
+                        self.open()
+                    self.n += 1
+                    aid = f"cmd{self.n}"
+                    self.sock.settimeout(timeout)
+                    self.sock.sendall(ami_msg(Action="Command", Command=command, ActionID=aid))
+                    lines = ami_read_for(self.fh, aid, timeout)
+                    self.used = time.monotonic()
+                    return "Response: Error" not in lines, ami_output(lines)
+                except (OSError, ValueError):
+                    self.close()
+                    if fresh:
+                        break
+            self.skip_until = time.monotonic() + (300.0 if self.refused else 30.0)
+            return None
+        finally:
+            self.lock.release()
+
+
+def ami_or_cli(amicmd, command, timeout, fallback):
+    r = amicmd.run(command, timeout)
+    if r is not None:
+        return r
+    return fallback(command, timeout)
+
+
+class Warm:
+    def __init__(self, work, every=1.0, idle=30.0, stale=8.0):
+        import threading
+        self.work = work
+        self.every = every
+        self.idle = idle
+        self.stale = stale
+        self.on = False
+        self.quit = False
+        self.t = -1e9
+        self.event = threading.Event()
+        self.local = threading.local()
+
+    def asked(self):
+        import time
+        now = time.monotonic()
+        was_idle = now - self.t > self.idle
+        self.t = now
+        if was_idle:
+            self.event.set()
+
+    def kick(self):
+        self.event.set()
+
+    def wanted(self):
+        import time
+        return time.monotonic() - self.t <= self.idle
+
+    def stale_ok(self, stamp):
+        import time
+        return self.on and getattr(self.local, "fast", False) and time.monotonic() - stamp < self.stale
+
+    def fast(self, call, *args):
+        self.local.fast = True
+        try:
+            return call(*args)
+        finally:
+            self.local.fast = False
+
+    def loop(self, log=None):
+        self.on = True
+        while not self.quit:
+            if not self.wanted():
+                self.event.clear()
+                if not self.wanted():
+                    self.event.wait(5.0)
+                continue
+            try:
+                self.work()
+            except Exception as exc:
+                if log:
+                    log(f"Background refresh failed: {exc.__class__.__name__}", "warn")
+            self.event.wait(self.every)
+            self.event.clear()
+
+
+def text_cached(cache, text, parse):
+    if cache[1] is None or cache[0] != text:
+        cache[:] = [text, parse(text)]
+    return cache[1]
+
+
+def tail_cached(cache, path, limit, parse):
+    import os
+    with open(path, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        sig = (path, st.st_ino, st.st_size, st.st_mtime_ns)
+        if cache[1] is not None and cache[0] == sig:
+            return cache[1]
+        fh.seek(max(0, st.st_size - limit))
+        value = parse(fh.read().decode("utf-8", "replace").splitlines())
+    cache[:] = [sig, value]
+    return value
+
+
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def etag_stable(obj, skip=()):
+    import json
+    return json.dumps({k: v for k, v in obj.items() if k not in skip}).encode("utf-8")
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+

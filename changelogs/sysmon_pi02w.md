@@ -1,6 +1,16 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_91_20261122.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_92_20261123.py`. Newest entries first.
+
+## 6.13.92-pi02w (2026-11-23)
+
+Faster page and fewer processes. This is a release: replies carry a new header, the page logic changed, and two Asterisk reads take another route.
+
+- **The page does not mistake a busy node for a slow network.** Every GET reply carries `X-Work-Ms`, the server's own time. The page subtracts it before the slow-link logic judges the link, so a node that is busy no longer makes the page poll slower.
+- **No process for the registration and link checks.** `rpt show registrations` and `rpt lstats` go through one kept Asterisk manager (AMI) connection instead of starting `asterisk -rx` each time. It reconnects by itself, closes after a minute unused and falls back to the command line when the manager login is missing or refused. The code is the shared one in `shared/confio.py` (`AmiCmd`, `ami_or_cli`).
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304 to a matching `If-None-Match`, so a reload does not download it again. JSON replies are unchanged.
+- Shared code: `ami_credentials`, `ami_msg`, `ami_read`, `ami_read_for`, `ami_output`, `AmiCmd`, `ami_or_cli`, `etag_of`, `etag_match` and `with_work_ms` are copied from `shared/confio.py`.
+- Nothing else changes.
 
 ## 6.13.91-pi02w (2026-11-22)
 

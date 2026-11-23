@@ -22,17 +22,17 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_115_20261122.py", "port": 8989, "scheme": "http"},
-    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_120_20261122.py", "port": 8989, "scheme": "https", "plain_loopback": True},
-    "sysmon": {"file": "sysmon_v6_13_103_20261122.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_91_20261122.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "nodetalker": {"file": "nodetalker_v0_14_0_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "nodecontrol": {"file": "nodecontrol_v9_3_116_20261123.py", "port": 8989, "scheme": "http"},
+    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_121_20261123.py", "port": 8989, "scheme": "https", "plain_loopback": True},
+    "sysmon": {"file": "sysmon_v6_13_104_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_92_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "nodetalker": {"file": "nodetalker_v0_14_1_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "noderecorder": {"file": "noderecorder_v0_17_9_20261122.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "noderecorder": {"file": "noderecorder_v0_18_0_20261123.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "piper_dashboard": {"file": "piper_dashboard_v0_8_1_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
-    "pibrary": {"file": "pibrary_v0_17_3_20261115.py", "port": 9000, "scheme": "http", "health": "/api/health",
+    "pibrary": {"file": "pibrary_v0_17_4_20261123.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
-    "instmon": {"file": "instmon_v2_118_0_20261122.py", "port": 8990, "scheme": "http", "health": "/",
+    "instmon": {"file": "instmon_v2_119_0_20261123.py", "port": 8990, "scheme": "http", "health": "/",
                 "health_expect": b"<html", "error_keys": ("message",),
                 "dirs_env": {"INSTMON_CONFIG_DIR": "config", "INSTMON_LIBRARY_DIR": "library"},
                 "files_env": {"INSTMON_SUITELOG": "run/suitelog.jsonl", "INSTMON_SUITELOG_FLAG": "run/suitelog.on",
@@ -45,7 +45,7 @@ SERVERS = {
                "no_launcher": True,
                "dirs_env": {"TERMON_CONFIG_DIR": "config"},
                "files_env": {"TERMON_LOCK": "run/termon.lock", "TERMON_RPT_CONF": "run/rpt.conf"}},
-    "nodemon": {"file": "nodemon_v0_9_0_20261123.py", "port": 7777, "scheme": "https", "health": "/api/health",
+    "nodemon": {"file": "nodemon_v0_9_1_20261123.py", "port": 7777, "scheme": "https", "health": "/api/health",
                 "tls_conf": True, "dirs_env": {"NODEMON_CONFIG_DIR": "config"},
                 "files_env": {"NODEMON_RPT_CONF": "run/rpt.conf", "NODEMON_AMI_CONF": "run/manager.conf",
                               "NODEMON_M17_INI": "run/m17.ini", "NODEMON_SVX_CONF": "run/svxlink.conf",
@@ -53,6 +53,9 @@ SERVERS = {
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
+
+WORK_MS = {"sysmon_pi02w", "nodecontrol_pi02w", "nodemon", "nodetalker", "noderecorder", "pibrary", "instmon", "sysmon", "nodecontrol"}
+PAGE_ETAG = {"sysmon_pi02w", "nodecontrol_pi02w", "nodetalker", "noderecorder", "pibrary", "sysmon", "nodecontrol"}
 
 ALWAYS_PUBLIC_PREFIXES = ("/static/", "/favicon")
 ALWAYS_PUBLIC_PATHS = {"/", "/index.html", "/healthz", "/api/ping"}
@@ -304,6 +307,23 @@ def make_case(key):
             status, _, body = self.server.request("GET", self.server.spec["health"])
             self.assertEqual(status, 200)
             self.assertIn(self.server.spec.get("health_expect", b'"ok"'), body)
+
+        @unittest.skipUnless(key in WORK_MS, "this tool does not report its own work time yet")
+        def test_a_get_reply_says_how_long_the_server_worked(self):
+            _, headers, _ = self.server.request("GET", self.server.spec["health"])
+            self.assertRegex(headers.get("X-Work-Ms") or "", r"^\d+$")
+
+        @unittest.skipUnless(key in PAGE_ETAG, "this tool does not revalidate its page yet")
+        def test_the_page_is_revalidated_with_a_tag(self):
+            for extra in ({}, {"Accept-Encoding": "gzip"}):
+                status, headers, body = self.server.request("GET", "/", headers=extra)
+                self.assertEqual(status, 200)
+                tag = headers.get("ETag")
+                self.assertTrue(tag)
+                self.assertEqual(headers.get("Cache-Control"), "no-cache")
+                status2, headers2, body2 = self.server.request("GET", "/", headers=dict(extra, **{"If-None-Match": tag}))
+                self.assertEqual((status2, body2), (304, b""))
+                self.assertEqual(headers2.get("ETag"), tag)
 
         @unittest.skipUnless(SERVERS[key].get("plain_loopback"), "plain HTTP from the Pi is not served by this tool yet")
         def test_plain_http_is_served_from_the_pi_and_redirected_from_the_network(self):

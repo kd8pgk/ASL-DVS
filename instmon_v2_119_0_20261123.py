@@ -41,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.118.0"
+VERSION ="2.119.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -13186,15 +13186,26 @@ function _elShown(id) {
   const el = document.getElementById(id);
   return !!(el && el.offsetParent !== null);
 }
+window._srvAcc = 0;
+(function () {
+  const plain = window.fetch;
+  window.fetch = function () {
+    return plain.apply(this, arguments).then(function (r) {
+      const ms = parseInt(r.headers.get('X-Work-Ms') || '', 10);
+      if (!isNaN(ms)) window._srvAcc += ms;
+      return r;
+    });
+  };
+})();
 function netPoll(fn, ms, probe) {
   let busy = false, next = 0;
   setInterval(function () {
     if (document.hidden || busy || Date.now() < next) return;
     busy = true;
-    const t0 = performance.now();
+    const t0 = performance.now(), s0 = window._srvAcc;
     Promise.resolve().then(fn).catch(function () {}).then(function () {
       busy = false;
-      if (probe) NET.sample(performance.now() - t0);
+      if (probe) NET.sample(Math.max(0, performance.now() - t0 - (window._srvAcc - s0)));
       const idle = NET.mult > 1 && Date.now() - NET.active > 120000 ? 2 : 1;
       next = Date.now() + ms * (NET.mult * idle - 1);
     });
@@ -14327,6 +14338,42 @@ _POST_ROUTES ={
 GZIP_MIN_BYTES = 600
 
 
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
+
+@with_work_ms
 class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     server_version =f"instmon/{VERSION }"
     protocol_version = "HTTP/1.1"
@@ -14365,17 +14412,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         return False
 
     def _etag_matches(self, etag):
-        raw = self.headers.get("If-None-Match", "")
-        if not raw:
-            return False
-        if raw.strip() == "*":
-            return True
-        bare = etag[2:] if etag.startswith("W/") else etag
-        for item in raw.split(","):
-            item = item.strip()
-            if (item[2:] if item.startswith("W/") else item) == bare:
-                return True
-        return False
+        return etag_match(self.headers.get("If-None-Match", ""), etag)
 
     def _send_body(self, status, body, ctype, extra_headers=None):
         extra = list(extra_headers or [])
@@ -14387,7 +14424,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 extra.append(("Set-Cookie", sess_cookie(_SESSION_COOKIE_NAME, self._session_token() or "", age, False)))
         etag = ""
         if self.command in ("GET", "HEAD") and status == 200 and "etag" not in names:
-            etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+            etag = etag_of(body)
             if "cache-control" not in names:
                 extra.append(("Cache-Control", "private, no-cache"))
         if etag and self._etag_matches(etag):
