@@ -14479,15 +14479,6 @@ async function _probeSysMon() {
     }
   } catch (_) {}
 }
-function _openNamedTab(url, name) {
-  let w = null;
-  try { w = window.open('', name); } catch (_) {}
-  if (!w) { window.open(url, name); return; }
-  let blank = false;
-  try { blank = w.location.href === 'about:blank'; } catch (_) {}
-  if (blank) w.location.href = url;
-  try { w.focus(); } catch (_) {}
-}
 async function _probeNodeTalker() {
   const a = document.getElementById('lnk-talker');
   if (!a) return;
