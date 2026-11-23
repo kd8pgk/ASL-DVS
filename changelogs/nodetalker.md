@@ -1,6 +1,20 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_12_0_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_13_0_20261123.py`. Newest entries first.
+
+## 0.13.0 (2026-11-23)
+
+An Internet access section in Setup, for reaching Node Talker from outside the home network through a Cloudflare Tunnel. This is a release: a new setting, a new route and new page content.
+
+- **Allow logins from the internet.** The `allow_wan` setting (it already existed, but only through the settings route) is now a checkbox under Setup, Internet access. It stays off by default. With it on, requests that arrive through a tunnel running on this node (from 127.0.0.1, with Cloudflare's headers) may log in, over https only, as before.
+- **Fixed address.** New setting `public_hostname`: a host name such as `node.example.com`, or empty. The Android app uses it, and the card shows it as the address.
+- **Status.** New route `/api/internet` (login needed) and a block under the checkbox: whether a tunnel is found and connected, the address, how many internet logins worked and failed in the last 24 hours, the last login and last failure with their address and age, and warnings.
+  - **Tunnel.** Found by asking `cloudflared`'s own metrics port (20241 to 20245 on 127.0.0.1) whether it is ready, or by `cloudflared.service` being active.
+  - **Quick tunnel.** A running quick tunnel reports its `trycloudflare.com` address through the same port; Node Talker shows it, only when it has the expected form, and says it changes when the tunnel restarts. A fixed address takes its place when set.
+  - **Warnings.** Listen without logging in is on while the internet is open; no tunnel on this node; requests through the tunnel without https.
+- **Log and counts.** Every internet login and failure is counted by the visitor's address (the one Cloudflare gives, not the tunnel's) and still written to the log as before. The login limits for the internet, the Secure cookie and the refusal over plain http are unchanged and are now covered by tests.
+- **Tests.** New `ci/test_nodetalker_internet.py`: the setting's checks, the tunnel probe against a stand-in for `cloudflared`, the status, and requests with Cloudflare headers (refused while off, counted, wait after repeated failures, cookie flags, plain http refused).
+- Nothing else changes. Node Talker Mobile 0.13.0 uses the address: it asks `/api/internet` while on the home network and keeps the tunnel address as the node's away address.
 
 ## 0.12.0 (2026-11-23)
 

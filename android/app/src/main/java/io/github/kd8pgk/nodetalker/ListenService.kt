@@ -311,10 +311,11 @@ class ListenService : Service() {
         Talk.nodeId = null
     }
 
-    private fun talkLoop(n: Node, g: Int) {
+    private fun talkLoop(home: Node, g: Int) {
         val backoff = Backoff(2000L)
         while (talkWanted && g == talkGen) {
             var upMs = 0L
+            val n = NodeRoute.pick(home)
             val c = WsClient(n, CookieManager.getInstance().getCookie(n.origin))
             try {
                 c.connect()
@@ -342,6 +343,7 @@ class ListenService : Service() {
                     upMs = SystemClock.elapsedRealtime() - upAt
                 }
             } catch (e: IOException) {
+                NodeRoute.forget(home.id)
                 Talk.error = e.message ?: e.javaClass.simpleName
                 if (talkWanted && g == talkGen) talkFailed(e)
             }
@@ -536,10 +538,11 @@ class ListenService : Service() {
 
     private fun live(g: Int) = running && g == gen
 
-    private fun netLoop(n: Node, g: Int) {
+    private fun netLoop(home: Node, g: Int) {
         val backoff = Backoff(1000L)
         while (live(g)) {
             var upMs = 0L
+            val n = NodeRoute.pick(home)
             try {
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
                 connectAt = SystemClock.elapsedRealtime()
@@ -585,6 +588,7 @@ class ListenService : Service() {
                 c.disconnect()
                 if (live(g)) throw IOException(getString(R.string.listen_ended))
             } catch (e: IOException) {
+                NodeRoute.forget(home.id)
                 if (!live(g)) return
                 stats.reconnect(if (e.message == getString(R.string.listen_ended)) SocketErrors.CLOSED else SocketErrors.classify(e))
                 val waitMs = backoff.next(upMs)
@@ -633,7 +637,7 @@ class ListenService : Service() {
         return at != 0L && SystemClock.elapsedRealtime() - at > STATS_GRACE_MS && !(Listen.muted || focusLost)
     }
 
-    private fun reportLoop(n: Node, g: Int) {
+    private fun reportLoop(home: Node, g: Int) {
         var beats = 0
         try {
             var tick = 0
@@ -647,6 +651,7 @@ class ListenService : Service() {
                 val beat = beats % STATS_BEAT_EVERY == 0
                 ListenLog.flush(this)
                 val snap = stats.take(beat, netInfo?.take().orEmpty()) ?: continue
+                val n = NodeRoute.pick(home)
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
                 val t0 = SystemClock.elapsedRealtime()
                 when (RxReport.send(n, cookie, snap)) {

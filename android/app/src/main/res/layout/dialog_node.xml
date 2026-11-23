@@ -42,4 +42,14 @@
         android:layout_height="wrap_content"
         android:minHeight="48dp"
         android:text="@string/field_https" />
+
+    <EditText
+        android:id="@+id/away"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/field_away"
+        android:importantForAutofill="no"
+        android:inputType="textUri"
+        android:maxLength="255"
+        android:minHeight="48dp" />
 </LinearLayout>

@@ -99,7 +99,12 @@ class NodesActivity : Activity() {
             val v = convertView ?: LayoutInflater.from(parent.context).inflate(R.layout.row_node, parent, false)
             val n = nodes[position]
             v.findViewById<TextView>(R.id.name).text = n.title
-            v.findViewById<TextView>(R.id.url).text = n.origin
+            val away = when {
+                n.awayHost.isEmpty() -> ""
+                n.awayAuto -> getString(R.string.row_away_learned, n.awayText)
+                else -> getString(R.string.row_away, n.awayText)
+            }
+            v.findViewById<TextView>(R.id.url).text = if (away.isEmpty()) n.origin else n.origin + "\n" + away
             return v
         }
     }
@@ -137,6 +142,8 @@ class NodesActivity : Activity() {
         val address = v.findViewById<EditText>(R.id.address)
         val port = v.findViewById<EditText>(R.id.port)
         val https = v.findViewById<CheckBox>(R.id.https)
+        val away = v.findViewById<EditText>(R.id.away)
+        away.setText(if (n != null && !n.awayAuto) n.awayText else "")
         name.setText(n?.name.orEmpty())
         address.setText(n?.host.orEmpty())
         port.setText(String.format(java.util.Locale.ROOT, "%d", n?.port ?: Node.DEFAULT_PORT))
@@ -161,10 +168,33 @@ class NodesActivity : Activity() {
                 }
                 val useHttps = h ?: https.isChecked
                 val same = n != null && n.host.equals(host, true) && n.port == portNum && n.https == useHttps
+                val awayText = away.text.toString().trim()
+                var awayHost = n?.awayHost.orEmpty()
+                var awayPort = n?.awayPort ?: 443
+                var awayHttps = n?.awayHttps ?: true
+                var awayAuto = n?.awayAuto ?: true
+                if (awayText.isEmpty()) {
+                    if (!awayAuto) {
+                        awayHost = ""
+                        awayAuto = true
+                    }
+                } else {
+                    val (ah, ap, aHttps) = Node.parseAddress(awayText)
+                    val scheme = aHttps ?: true
+                    val apNum = ap ?: if (scheme) 443 else 80
+                    if (!Node.validHost(ah) || apNum !in 1..65535) {
+                        away.error = getString(R.string.bad_away)
+                        return@setOnClickListener
+                    }
+                    awayHost = ah
+                    awayPort = apNum
+                    awayHttps = scheme
+                    awayAuto = false
+                }
                 NodeStore.put(
                     this,
                     Node(n?.id ?: UUID.randomUUID().toString(), name.text.toString().trim(), host, portNum, useHttps,
-                        if (same) n!!.pin else ""),
+                        if (same) n!!.pin else "", awayHost, awayPort, awayHttps, awayAuto),
                 )
                 dlg.dismiss()
                 refresh()

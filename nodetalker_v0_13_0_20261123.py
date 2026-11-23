@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -256,6 +256,7 @@ DEFAULT_CONFIG = {
     "rx_plc": True,
     "tx_buffer_ms": 120,
     "allow_wan": False,
+    "public_hostname": "",
     "rx_hpf": True,
     "rx_agc": True,
     "rx_gate": 1,
@@ -292,6 +293,19 @@ _norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
 _norm_tot = _norm_int(30, 600, "tot_sec must be 30-600")
 _norm_txbuf = _norm_int(40, 400, "tx_buffer_ms must be 40-400")
 _norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
+
+
+_HOST_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def _norm_public_host(value):
+    v = str(value or "").strip().lower()
+    if v.startswith("https://"):
+        v = v[8:]
+    v = v.rstrip("/")
+    if v and not _HOST_NAME_RE.match(v):
+        raise ValueError("public_hostname must be a host name such as node.example.com, or empty")
+    return v
 
 
 def _norm_kc_quiet(value):
@@ -380,6 +394,7 @@ _NORMALIZERS = {
     "rx_plc": _parse_bool,
     "tx_buffer_ms": _norm_txbuf,
     "allow_wan": _parse_bool,
+    "public_hostname": _norm_public_host,
     "ptt_mode": _norm_ptt_mode,
     "ptt_guard_sec": _norm_ptt_guard,
     "ptt_rx_gap": _parse_bool,
@@ -11838,7 +11853,7 @@ async function ffUpload() {
   if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 
-const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https', 'balancer_off'];
+const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https', 'balancer_off', 'allow_wan'];
 const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms', 'kerchunk_quiet_sec', 'phone_lead_ms'], AUDIO_BOOL = ['busy_lockout', 'phone_tones', 'jitter_adapt', 'rx_plc'];
 const AUDIO_TXT = ['phone_open', 'phone_close'];
 
@@ -11847,6 +11862,8 @@ async function loadConfig() {
   if (!d.ok) return;
   CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  $('cfg-public_hostname').value = d.config.public_hostname || '';
+  loadInternet();
   AUDIO_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   AUDIO_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
   AUDIO_TXT.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
@@ -11906,9 +11923,38 @@ async function saveConfig() {
   const body = {};
   CFG_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
   CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
+  body.public_hostname = $('cfg-public_hostname').value;
   const d = await post('/api/config', body);
   setMsg('cfg-msg', d);
-  if (d.ok) { publicListen = body.public_listen; balOff = !!body.balancer_off; autoSync(); loadNode(); }
+  if (d.ok) { publicListen = body.public_listen; balOff = !!body.balancer_off; autoSync(); loadNode(); loadInternet(); }
+}
+
+function netAgo(s) {
+  if (s == null) return '';
+  if (s < 90) return s + ' s ago';
+  if (s < 5400) return Math.round(s / 60) + ' min ago';
+  return Math.round(s / 3600) + ' h ago';
+}
+
+async function loadInternet() {
+  const box = $('net-status');
+  if (!box) return;
+  const d = await api('/api/internet');
+  box.replaceChildren();
+  if (!d || !d.ok) return;
+  const add = (text, cls) => { const p = document.createElement('div'); p.textContent = text; if (cls) p.className = cls; box.appendChild(p); };
+  const t = d.tunnel || {};
+  add('Tunnel: ' + (t.ready ? 'connected' : t.running ? 'running, not connected yet' : 'not found on this node'), t.ready ? 'st-ok' : 'st-warn');
+  add('Address: ' + (d.url ? d.url + (d.url_kind === 'quick' ? ' (quick tunnel)' : '') : 'none yet'));
+  if (d.allow_wan) {
+    let line = 'Internet logins in the last 24 hours: ' + d.logins_ok + ' ok, ' + d.logins_failed + ' failed.';
+    if (d.last_login) line += ' Last ok: ' + d.last_login.ip + ', ' + netAgo(d.last_login.ago) + '.';
+    if (d.last_failure) line += ' Last failure: ' + d.last_failure.ip + ', ' + netAgo(d.last_failure.ago) + '.';
+    add(line);
+  } else {
+    add('Internet access is off.');
+  }
+  (d.warnings || []).forEach((w) => add(w, 'st-warn'));
 }
 
 async function logCopy() {
@@ -12319,6 +12365,11 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><label><input type="checkbox" id="cfg-balancer_off"> Turn off the balancer</label></div>
 <p class="muted small">The balancer runs by itself while a logged-in Node Talker page is open and the screen is on, and keeps the RX and TX levels right. Tick this to stop it on every phone.</p>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
+<h3 style="margin:14px 0 4px">Internet access</h3>
+<div class="row"><label><input type="checkbox" id="cfg-allow_wan"> Allow logins from the internet (through a tunnel)</label></div>
+<div class="row"><label>Fixed address <input type="text" id="cfg-public_hostname" placeholder="node.example.com (optional)" maxlength="253" autocapitalize="off" autocomplete="off" spellcheck="false"></label></div>
+<p class="muted small">Needs a Cloudflare Tunnel on this node that points at http://localhost:8993 (44helper's Cloudflare tab sets one up). Everyone who reaches the address must log in with this Pi's root password; a few wrong tries make it wait, and the internet as a whole is limited to 20 failures in 10 minutes. Leave the fixed address empty to use a quick tunnel's own address, which changes when it restarts.</p>
+<div id="net-status" class="small"></div>
 <div id="cfg-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Tune card on this phone</h3>
 <div class="row"><label>Text <input type="range" id="tn-font" min="10" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
@@ -12806,6 +12857,103 @@ _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
 
 
+CF_METRICS_PORTS = tuple(range(20241, 20246))
+CF_TTL_SEC = 10.0
+_QUICK_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.trycloudflare\.com$")
+_net_lock = threading.Lock()
+_net_events = deque(maxlen=200)
+_net_proxy = {"seen": 0.0, "secure": 0.0}
+_tunnel_cache = {"t": -1e9, "v": None}
+NET_WINDOW_SEC = 24 * 3600
+
+
+def net_note_login(ok, ip):
+    with _net_lock:
+        _net_events.append((time.time(), bool(ok), str(ip)[:64]))
+
+
+def net_note_proxy(secure):
+    now = time.time()
+    with _net_lock:
+        _net_proxy["seen"] = now
+        if secure:
+            _net_proxy["secure"] = now
+
+
+def _cf_get(port, path):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.4)
+    try:
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        return resp.status, resp.read(2048)
+    finally:
+        conn.close()
+
+
+def tunnel_probe(force=False):
+    now = time.monotonic()
+    with _net_lock:
+        hit = _tunnel_cache["v"]
+        if not force and hit is not None and now - _tunnel_cache["t"] < CF_TTL_SEC:
+            return hit
+    out = {"running": False, "ready": False, "quick_host": ""}
+    for port in CF_METRICS_PORTS:
+        try:
+            status, body = _cf_get(port, "/ready")
+            info = json.loads(body.decode("utf-8", "replace"))
+        except (OSError, ValueError, http.client.HTTPException):
+            continue
+        if not isinstance(info, dict) or "readyConnections" not in info:
+            continue
+        out["running"] = True
+        out["ready"] = status == 200 and int(info.get("readyConnections") or 0) > 0
+        try:
+            qs, qbody = _cf_get(port, "/quicktunnel")
+            host = str(json.loads(qbody.decode("utf-8", "replace")).get("hostname", "")).strip().lower() if qs == 200 else ""
+        except (OSError, ValueError, AttributeError, http.client.HTTPException):
+            host = ""
+        if host and _QUICK_HOST_RE.match(host):
+            out["quick_host"] = host
+        break
+    if not out["running"]:
+        try:
+            out["running"] = _svc_active("cloudflared.service")
+        except (OSError, subprocess.SubprocessError):
+            pass
+    with _net_lock:
+        _tunnel_cache.update(t=now, v=out)
+    return out
+
+
+def net_status():
+    tun = tunnel_probe()
+    host = _cfg_get("public_hostname")
+    url, kind = ("https://" + host, "domain") if host else (("https://" + tun["quick_host"], "quick") if tun["quick_host"] else ("", ""))
+    now = time.time()
+    with _net_lock:
+        events = [e for e in _net_events if now - e[0] <= NET_WINDOW_SEC]
+        seen, secure = _net_proxy["seen"], _net_proxy["secure"]
+    ok = [e for e in events if e[1]]
+    bad = [e for e in events if not e[1]]
+    warnings = []
+    if _cfg_get("allow_wan") and _cfg_get("public_listen"):
+        warnings.append("Listen without logging in is on, so anyone who finds the internet address can listen. Turn it off unless you want that.")
+    if _cfg_get("allow_wan") and not tun["running"]:
+        warnings.append("Internet access is on but no tunnel is running on this node.")
+    if _cfg_get("allow_wan") and seen and not secure:
+        warnings.append("Internet requests arrived without https. Logins from the internet are refused until they come over https.")
+    if kind == "quick":
+        warnings.append("This is a quick tunnel: its address changes when the tunnel restarts. Use a domain for a fixed address.")
+    return {"allow_wan": _cfg_get("allow_wan"), "public_listen": _cfg_get("public_listen"),
+            "tunnel": tun, "url": url, "url_kind": kind, "public_hostname": host,
+            "proxy_seen_ago": int(now - seen) if seen else None,
+            "proxy_https_ago": int(now - secure) if secure else None,
+            "logins_ok": len(ok), "logins_failed": len(bad),
+            "last_login": {"ago": int(now - ok[-1][0]), "ip": ok[-1][2]} if ok else None,
+            "last_failure": {"ago": int(now - bad[-1][0]), "ip": bad[-1][2]} if bad else None,
+            "warnings": warnings}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "nodetalker/" + VERSION
     sys_version = ""
@@ -12840,6 +12988,8 @@ class Handler(BaseHTTPRequestHandler):
         return tls_secure(self.connection, self.headers, self._proxied())
 
     def _wan_refused(self):
+        if self._proxied():
+            net_note_proxy(self._secure())
         if _cfg_get("allow_wan") or not self._wan():
             return False
         self.close_connection = True
@@ -12972,6 +13122,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
                 self._json(200, dict(build_status(authed), ok=True))
+            elif path == "/api/internet":
+                self._json(200, dict(net_status(), ok=True))
             elif path == "/api/rxhealth":
                 if (query.get("all") or [""])[0] == "1":
                     self._json(200, rxh_report())
@@ -13178,10 +13330,14 @@ class Handler(BaseHTTPRequestHandler):
             if _verify_root_password(str(body.get("password", ""))):
                 _record_auth_success(ip)
                 token, age = _issue_session()
+                if wan:
+                    net_note_login(True, ip)
                 log_event(f"Login from {ip}{where}", "warn" if wan else "ok")
                 self._json(200, {"ok": True}, {"Set-Cookie": self._cookie(token, age)})
             else:
                 _record_auth_failure(ip, wan)
+                if wan:
+                    net_note_login(False, ip)
                 log_event(f"Failed login from {ip}{where}", "warn")
                 self._json(401, {"ok": False, "error": "Wrong password."})
             return

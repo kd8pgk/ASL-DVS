@@ -16,7 +16,26 @@ data class Node(
     val port: Int,
     val https: Boolean,
     val pin: String = "",
+    val awayHost: String = "",
+    val awayPort: Int = 443,
+    val awayHttps: Boolean = true,
+    val awayAuto: Boolean = true,
+    val viaAway: Boolean = false,
 ) {
+    val hasAway: Boolean
+        get() = !viaAway && awayHost.isNotEmpty() && validHost(awayHost) && awayPort in 1..65535
+
+    fun useAway(): Node =
+        if (!hasAway) this else copy(host = awayHost, port = awayPort, https = awayHttps, pin = "", viaAway = true)
+
+    val awayText: String
+        get() {
+            if (awayHost.isEmpty()) return ""
+            val std = if (awayHttps) 443 else 80
+            return (if (awayHttps) "https" else "http") + "://" + (if (awayHost.contains(':')) "[$awayHost]" else awayHost) +
+                (if (awayPort == std) "" else ":$awayPort")
+        }
+
     val origin: String
         get() = (if (https) "https" else "http") + "://" + (if (host.contains(':')) "[$host]" else host) + ":" + port
 
@@ -40,6 +59,7 @@ data class Node(
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("host", host)
         .put("port", port).put("https", https).put("pin", pin)
+        .put("away_host", awayHost).put("away_port", awayPort).put("away_https", awayHttps).put("away_auto", awayAuto)
 
     companion object {
         const val DEFAULT_PORT = 8993
@@ -52,6 +72,10 @@ data class Node(
             o.optInt("port", DEFAULT_PORT),
             o.optBoolean("https"),
             o.optString("pin"),
+            o.optString("away_host"),
+            o.optInt("away_port", 443),
+            o.optBoolean("away_https", true),
+            o.optBoolean("away_auto", true),
         )
 
         fun validHost(h: String) = HOST_RE.matches(h)
@@ -155,6 +179,7 @@ object NodeStore {
     fun get(c: Context, id: String?) = all(c).firstOrNull { it.id == id }
 
     fun put(c: Context, node: Node) {
+        if (node.viaAway) return
         val list = all(c).toMutableList()
         val i = list.indexOfFirst { it.id == node.id }
         if (i >= 0) list[i] = node else list.add(node)
