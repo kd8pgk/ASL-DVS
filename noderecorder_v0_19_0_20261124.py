@@ -36,7 +36,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.0"
+VERSION = "0.19.0"
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -2132,7 +2132,7 @@ FAV_MAX = 15
 FAV_JSON_MAX = 10
 DMR_NET_MAX = 10
 DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
-FAV_MODES = ("ASL", "EchoLink") + DVS_MODES + ("M17",)
+FAV_MODES = ("ASL", "EchoLink", "SVX") + DVS_MODES + ("M17",)
 DVS_SEARCH_PATHS = tuple(p for p in (os.environ.get("NODERECORDER_DVSWITCH", ""), "/opt/MMDVM_Bridge/dvswitch.sh",
                                      "/usr/local/sbin/dvswitch.sh", "/var/lib/dvswitch/dvswitch.sh") if p)
 DVS_TIMEOUT = {"mode": 40, "tune": 40}
@@ -2151,6 +2151,14 @@ M17_SERVICE = "usrp2m17"
 M17_NET_PORTS = (17010, 17000)
 M17_USRP_PORTS = (32008, 34008)
 M17_GAIN_DB = 3
+DEFAULT_SVX_BRIDGE = "1900"
+SVX_PORTS = frozenset((34000, 32000))
+SVX_SERVICE = "svxlink-usrp"
+SVX_LOG = os.environ.get("NODERECORDER_SVX_LOG", "/var/log/svxlink")
+SVX_LOG_TAIL = 262144
+SVX_TTL_SEC = 3.0
+SVX_CTRL_PTY = os.environ.get("NODERECORDER_SVX_CTRL", "/var/lib/svxlink/dtmf_ctrl")
+SVX_TG_MAX = 10 ** 9
 DEFAULT_BRIDGES = ("1999", "1917")
 BLANK_NAME, BLANK_ADDR = "blank", "000000"
 _DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
@@ -2308,7 +2316,7 @@ def _mode_of(value):
     m = str(value or "").strip().upper().replace("-", "")
     if m.startswith("ECHO"):
         return "EchoLink"
-    if m in ("ASL", "M17") or m in DVS_MODES:
+    if m in ("ASL", "M17", "SVX") or m in DVS_MODES:
         return m
     raise ValueError(f"Unknown mode {str(value)[:20]!r}")
 
@@ -2383,6 +2391,11 @@ def _norm_fav_core(f, nets=None):
     mode = _mode_of(f.get("mode", "ASL") or "ASL")
     if mode == "M17":
         return _norm_m17_fav(f)
+    if mode == "SVX":
+        num = str(f.get("num", "")).strip()
+        if not num.isdigit() or not 0 < int(num) < SVX_TG_MAX:
+            raise ValueError("SVX talkgroup must be digits, 1 to 999999999")
+        return {"mode": "SVX", "num": str(int(num)), "label": _label(f.get("label"), f"SVX TG {int(num)}")}
     if mode in DVS_MODES:
         tg = _clean_tg(f.get("num"), mode)
         if mode == "DSTAR":
@@ -2435,6 +2448,8 @@ def nets_public(nets):
 def fav_target(f):
     if f["mode"] == "M17":
         return f"{f['num']}|{f['module']}"
+    if f["mode"] == "SVX":
+        return f"SVX|{f['num']}"
     if f["mode"] in DVS_MODES:
         return f"{f['mode']}|{f.get('net', '')}|{f['num']}"
     return f["num"] if f["mode"] == "ASL" else "3" + f["num"].zfill(6)
@@ -2868,6 +2883,15 @@ def bridge_nodes(max_age=30.0):
         else:
             node, src = "", ""
         out[kind], out[kind + "_src"] = node, src
+    if SVX_PORTS in usrp:
+        node, src = usrp[SVX_PORTS], "rpt.conf"
+    elif len(dash) > 2 and dash[2].isdigit():
+        node, src = dash[2], "Node Controller"
+    elif DEFAULT_SVX_BRIDGE in usrp.values():
+        node, src = DEFAULT_SVX_BRIDGE, "default"
+    else:
+        node, src = "", ""
+    out["svx"], out["svx_src"] = node, src
     _bridge_cache.update(t=time.monotonic(), v=out)
     return out
 
@@ -3557,11 +3581,14 @@ def digital_info():
     cfg = favcfg()
     setv = ([x.strip() for x in str(cfg.get("bridge_nodes", "")).split(",")] + ["", ""])[:2]
     m17_unit = M17_SERVICE + ".service"
-    states = service_states(sorted(set(GATEWAY_SERVICES.values())) + [m17_unit])
+    svx_unit = SVX_SERVICE + ".service"
+    states = service_states(sorted(set(GATEWAY_SERVICES.values())) + [m17_unit, svx_unit])
     services = {MODE_LABEL.get(m, m): states.get(s, "unknown") for m, s in GATEWAY_SERVICES.items()}
     services["USRP2M17"] = states.get(m17_unit, "unknown")
+    services["SvxLink"] = states.get(svx_unit, "unknown")
     return {"ok": True, "control": "nc" if nc_running() else "solo", "dvswitch": dvs_path(),
             "analog_bridge": os.path.isfile(AB_INI), "m17": _m17_present(), "m17_hosts": os.path.isfile(M17_HOSTS),
+            "svx": _svx_ready(), "svx_now": svx_now(),
             "services": services, "bridges": b,
             "set": {"digital_bridge": setv[0], "m17_bridge": setv[1], "callsign": str(cfg.get("callsign", ""))},
             "callsign": call, "callsign_src": call_src, "nets": nets_public(nets_load()), "net_max": DMR_NET_MAX,
@@ -3918,6 +3945,10 @@ def tune_list(mode):
         mode = _mode_of(mode)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    if mode == "SVX":
+        rows = [[tg, f"{tg} · {name}", ""] for name, tg in _svx_saved_rows()]
+        found = os.path.isfile(DASH_CONF)
+        return {"ok": True, "mode": mode, "found": found, "rows": rows, "files": [DASH_CONF] if found else []}
     if mode not in TUNE_LIST_FILES and mode != "M17":
         return {"ok": True, "mode": mode, "found": False, "rows": [], "files": []}
     paths = _tune_paths(mode)
@@ -4047,6 +4078,8 @@ def _tune_connect_impl(b):
         f = _tune_fav(b)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+    if f["mode"] == "SVX":
+        return svx_connect(f)
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -4078,6 +4111,8 @@ def tune_disconnect(b=None):
 
 
 def _tune_disconnect_impl(b=None):
+    if isinstance(b, dict) and _mode_safe(b) == "SVX":
+        return svx_release()
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -4151,6 +4186,136 @@ def astdb_name(num):
     return _astdb_names["map"].get(str(int(num)), "") if str(num).isdigit() else ""
 
 
+_SVX_TAIL_RE = re.compile(r"^(?:\w{3} \w{3}\s+\d+ [\d:]+ \d{4}: )(.*)$")
+
+
+def svx_events(lines):
+    state = ""
+    tg = ""
+    link = True
+    for raw in lines:
+        m = _SVX_TAIL_RE.match(raw.rstrip())
+        text = m.group(1) if m else raw.strip()
+        if text.startswith("ReflectorLogic: Authentication OK"):
+            state = "connected"
+        elif text.startswith("ReflectorLogic: Disconnected from "):
+            state = "down"
+        elif text.startswith("ReflectorLogic: Connecting to"):
+            state = state or "connecting"
+        else:
+            mt = re.match(r"ReflectorLogic: Selecting TG #(\d+)", text)
+            if mt:
+                tg = mt.group(1)
+            else:
+                ml = re.match(r"(?:(De)a|A)ctivating link '?ReflectorLink'?", text)
+                if ml:
+                    link = not ml.group(1)
+    return {"state": state, "tg": tg, "link": link}
+
+
+def _svx_ready():
+    try:
+        return os.path.lexists(SVX_CTRL_PTY) and os.path.realpath(SVX_CTRL_PTY).startswith("/dev/pts/")
+    except OSError:
+        return False
+
+
+def _svx_send(cmd):
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        log_event(f"SVX: refused command {cmd!r}", "warn")
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            log_event(f"SVX: {SVX_CTRL_PTY} is not a SvxLink control device", "warn")
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        return True
+    except OSError as exc:
+        log_event(f"SVX: {cmd}: {exc}", "warn")
+        return False
+
+
+def _svx_saved_rows():
+    try:
+        text = open(DASH_CONF, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return []
+    rows, section = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and "]" in line:
+            section = line[1:line.index("]")].strip().upper()
+            continue
+        if section != "SVX" or ("=" in line and "|" not in line):
+            continue
+        parts = line.split("|")
+        if len(parts) >= 2:
+            name, tg = parts[0].strip(), parts[1].strip()
+            if name and tg.isdigit() and 0 < int(tg) < SVX_TG_MAX:
+                rows.append((name[:24], str(int(tg))))
+    return rows[:50]
+
+
+def svx_connect(f):
+    tg = str(f.get("num", ""))
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY}). Start SvxLink from the Services tab."}
+    if not _svx_send(f"91{tg}#"):
+        return {"ok": False, "error": "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."}
+    log_event(f"SVX: tuned talkgroup {tg}", "ok")
+    return {"ok": True, "message": f"SvxLink tuned to talkgroup {tg}."}
+
+
+def svx_release():
+    if _svx_ready():
+        _svx_send("910#")
+        _svx_send("9#")
+    log_event("SVX: released the talkgroup", "info")
+    return {"ok": True, "message": "SvxLink talkgroup released."}
+
+
+def svx_text():
+    if not _svc_active(SVX_SERVICE):
+        return "SvxLink stopped"
+    try:
+        with open(SVX_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - SVX_LOG_TAIL))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return "talkgroup unknown"
+    ev = svx_events(lines)
+    if not ev["state"]:
+        return "talkgroup unknown"
+    if ev["state"] != "connected":
+        return "reflector not connected"
+    if not ev["link"]:
+        return "reflector link off"
+    if ev["tg"] and ev["tg"] != "0":
+        return "TG " + ev["tg"]
+    return "no talkgroup"
+
+
+_svx_cache = {"t": -1e9, "v": ""}
+
+
+def svx_now():
+    now = time.monotonic()
+    if now - _svx_cache["t"] < SVX_TTL_SEC or WARM.stale_ok(_svx_cache["t"]):
+        return _svx_cache["v"]
+    text = svx_text()
+    _svx_cache.update(t=now, v=text)
+    return text
+
+
 def _bridge_tune(n, nc, dvs, m17_now, dig, m17):
     if nc:
         if n == m17 and m17_now:
@@ -4169,15 +4334,18 @@ def live_link(links, links_ok, nc, favs):
     if not links:
         return {"state": "none", "mode": "", "label": "", "tag": ""}
     bridges = bridge_nodes(5.0)
-    dig, m17 = bridges.get("digital", ""), bridges.get("m17", "")
+    dig, m17, svx = bridges.get("digital", ""), bridges.get("m17", ""), bridges.get("svx", "")
     linked = {l["node"] for l in links}
-    linked_bridge = bool(linked & {dig, m17} - {""})
+    linked_bridge = bool(linked & {dig, m17, svx} - {""})
     dvs = (nc_dvs_current() or {}) if nc and dig in linked else {}
     m17_now = m17_current() if nc and m17 in linked else ""
-    infra = {REC_NODE, dig, m17} - {""}
+    infra = {REC_NODE, dig, m17, svx} - {""}
 
     bridge = None
     for l in links:
+        if svx and l["node"] == svx:
+            bridge = ("SVX", svx_now(), "linking" if str(l.get("state", "")).upper().startswith("CONN") else "connected")
+            break
         if l["node"] in (dig, m17):
             mode, label = _bridge_tune(l["node"], nc, dvs, m17_now, dig, m17)
             if label:
@@ -5441,7 +5609,9 @@ SCHEDULE_MIN_MIN = 3
 SCHEDULE_FORMATS = ("ulaw", "pcm")
 SCHEDULE_NAME_MAX = 40
 SCHEDULE_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
-STEP_TIMEOUT = {"connect": 120, "start": 15, "stop": 30, "disconnect": 60}
+STEP_TIMEOUT = {"connect": 120, "start": 15, "stop": 30, "disconnect": 60, "return": 120}
+RETURN_PATH = os.path.join(CONFIG_DIR, "schedule_return.json")
+RETURN_SKIP_MIN = 10
 LINK_CHECK_SEC = 5
 LINK_LOST_CHECKS = 2
 RETRY_SEC = 30
@@ -5753,7 +5923,7 @@ def _entry_linked(target):
     f = _tune_fav(target)
     if f["mode"] in ("ASL", "EchoLink"):
         return fav_target(f) in peers
-    bridge = bridge_nodes().get("m17" if f["mode"] == "M17" else "digital")
+    bridge = bridge_nodes().get({"M17": "m17", "SVX": "svx"}.get(f["mode"], "digital"))
     return bool(bridge) and bridge in peers
 
 
@@ -5776,6 +5946,9 @@ class DryActions:
     def disconnect(self, entry):
         return True, f"dry run: would disconnect {entry['name']}", None
 
+    def give_back(self, target):
+        return True, f"dry run: would return to {return_name(target)}", None
+
 
 class RealActions:
     def connect(self, entry):
@@ -5795,7 +5968,14 @@ class RealActions:
         return ENGINE.stop()
 
     def disconnect(self, entry):
+        keep = getattr(self, "keep_link", None)
+        if keep is not None and keep(entry):
+            return True, "stayed linked: it is the return link", None
         r = tune_disconnect(entry["target"])
+        return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
+
+    def give_back(self, target):
+        r = tune_connect(dict(target))
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
 
@@ -5885,6 +6065,90 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     if not rec and result == "ok":
         detail = "linked, not recorded"
     return done(result, detail)
+
+
+_return_lock = threading.Lock()
+
+
+def return_load():
+    out = {"enabled": False, "target": None}
+    try:
+        with open(RETURN_PATH, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except FileNotFoundError:
+        return out
+    except (OSError, ValueError) as exc:
+        log_event(f"Schedule: {RETURN_PATH} could not be read ({exc}); there is no return link", "warn")
+        return out
+    if not isinstance(doc, dict):
+        return out
+    t = doc.get("target")
+    if isinstance(t, dict) and t.get("mode") and t.get("num"):
+        out["target"] = _target_keys(t)
+    out["enabled"] = bool(_parse_bool(doc.get("enabled", False)) and out["target"])
+    return out
+
+
+def return_name(target):
+    if not target:
+        return ""
+    try:
+        return fav_name(_tune_fav(target))
+    except ValueError:
+        return f"{target.get('mode', '')} {target.get('num', '')}".strip()
+
+
+def return_view():
+    r = return_load()
+    return {"enabled": r["enabled"], "target": r["target"], "name": return_name(r["target"]), "skip_min": RETURN_SKIP_MIN}
+
+
+def return_set(body):
+    if not isinstance(body, dict):
+        raise ValueError("bad request")
+    enabled = _parse_bool(body.get("enabled", False))
+    raw = body.get("target")
+    with _return_lock:
+        target = return_load()["target"]
+        if isinstance(raw, dict) and str(raw.get("num", "") or "").strip():
+            try:
+                target = _target_keys(_tune_fav(raw))
+            except ValueError as exc:
+                msg = str(exc)
+                if "DMR network list" in msg:
+                    msg += ". Add the network on the Setup tab (Digital card), or use Copy from Node Controller there."
+                return {"ok": False, "error": msg}
+        if enabled and not target:
+            return {"ok": False, "error": "Pick the link to return to first."}
+        try:
+            _atomic_write(RETURN_PATH, json.dumps({"version": 1, "enabled": bool(enabled and target), "target": target}) + "\n", 0o644)
+        except OSError as exc:
+            return {"ok": False, "error": f"could not save {RETURN_PATH}: {exc}"}
+    log_event("Schedule: return link " + (f"set to {return_name(target)}" if enabled else "turned off"), "ok")
+    return dict(return_view(), ok=True, message="Saved.")
+
+
+def return_decision(entry, now, cfg=None, blocked=""):
+    cfg = cfg or return_load()
+    if not cfg["enabled"] or not cfg["target"]:
+        return "none", ""
+    name = return_name(cfg["target"])
+    if blocked:
+        return "skip", blocked
+    try:
+        same = fav_target(_tune_fav(cfg["target"])) == fav_target(_tune_fav(entry["target"]))
+    except ValueError:
+        same = False
+    if same:
+        return "keep", f"stayed on {name}: it is the return link"
+    horizon = now + timedelta(minutes=RETURN_SKIP_MIN)
+    for e in schedule_load()["entries"]:
+        if not e["enabled"]:
+            continue
+        nxt = schedule_next(e, now)
+        if (e["id"] != entry["id"] and schedule_current(e, now)) or (nxt and nxt[0] <= horizon):
+            return "skip", f"{e['name']} starts within {RETURN_SKIP_MIN} minutes"
+    return "go", name
 
 
 def _special_remove(eid):
@@ -6111,9 +6375,37 @@ class Scheduler:
             self.state = "connecting"
             self._state_save()
         actions = self.dry() if dry else (CurrentLinkActions() if manual else self.real())
+        if not manual:
+            actions.keep_link = self._keep_link
         self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, start_at, actions, abort, manual),
                                        name="sched-run", daemon=True)
         self.thread.start()
+
+    def _keep_link(self, entry):
+        if self.user_stop or self.preempt or self.stop.is_set():
+            return False
+        cfg = return_load()
+        if not cfg["enabled"] or not cfg["target"]:
+            return False
+        try:
+            return fav_target(_tune_fav(cfg["target"])) == fav_target(_tune_fav(entry["target"]))
+        except ValueError:
+            return False
+
+    def _give_back(self, entry, actions, blocked):
+        cfg = return_load()
+        action, text = return_decision(entry, sched_now(), cfg, blocked)
+        if action == "none":
+            return None
+        if action != "go" or getattr(actions, "give_back", None) is None:
+            log_event(f"Schedule: {entry['name']}: no return ({text})", "info")
+            return None
+        self._set_state("returning")
+        t0 = self.clock()
+        ok, msg, _ = _run_step(actions.give_back, STEP_TIMEOUT["return"], dict(cfg["target"]))
+        log_event(f"Schedule: {entry['name']}: returned to {text}" if ok else f"Schedule: {entry['name']}: return link failed ({msg})",
+                  "ok" if ok else "warn")
+        return {"step": "return", "ok": bool(ok), "msg": str(msg or ""), "secs": round(self.clock() - t0, 1)}
 
     def stop_by_hand(self):
         with self.lock:
@@ -6166,6 +6458,18 @@ class Scheduler:
                     self.done[entry["id"]] = s_iso
                 self.active = None
                 self._state_save()
+            blocked = ("stopped by hand" if self.user_stop else "a special recording took over" if preempted
+                       else "Node Recorder is stopping" if self.stop.is_set()
+                       else "the recording is being tried again" if retrying else "")
+        back = None
+        if not manual:
+            try:
+                back = self._give_back(entry, actions, blocked)
+            except Exception as exc:
+                log_event(f"Schedule: return link: {exc}", "warn")
+        with self.lock:
+            if back is not None and not back["ok"] and self.results:
+                self.results[-1]["detail"] = ((self.results[-1].get("detail") or "") + "; " if self.results[-1].get("detail") else "") + "return link failed: " + back["msg"]
             self.cur = None
             self.state = "idle"
         if special and not retrying:
@@ -6208,7 +6512,13 @@ def schedule_dry_run(body):
     states = []
     res = run_sequence(entry, DryActions(), entry["duration_min"] * 60.0 - SCHEDULE_EDGE_SEC, threading.Event(),
                        lambda s, file=None: states.append(s), lambda: clock["t"], sleep, start_at=float(SCHEDULE_EDGE_SEC))
-    return {"ok": True, "result": res["result"], "detail": res["detail"], "steps": res["steps"], "states": states,
+    action, text = return_decision(entry, sched_now())
+    steps = list(res["steps"])
+    if action == "go":
+        steps.append({"step": "return", "ok": True, "msg": f"dry run: would return to {text}", "secs": 0.0})
+    elif action in ("skip", "keep"):
+        steps.append({"step": "return", "ok": True, "msg": ("dry run: would not return: " if action == "skip" else "dry run: ") + text, "secs": 0.0})
+    return {"ok": True, "result": res["result"], "detail": res["detail"], "steps": steps, "states": states,
             "message": "Dry run finished: nothing was connected or recorded."}
 
 
@@ -6295,7 +6605,8 @@ def schedule_sources(_body=None):
     found, talker = _read_talker_favs()
     dash = dashboard_conf()
     return {"ok": True, "talker": talker, "talker_found": found, "talker_path": TALKER_FAV_PATH,
-            "controller": [_fav_pick(f) for f in dash["favs"]], "controller_found": os.path.exists(DASH_CONF),
+            "controller": [_fav_pick(f) for f in dash["favs"]] + [{"mode": "SVX", "num": tg, "label": name} for name, tg in _svx_saved_rows()],
+            "controller_found": os.path.exists(DASH_CONF),
             "controller_path": DASH_CONF, "nets": [n["name"] for n in nets_load()], "modes": list(FAV_MODES),
             "tz": _cfg_get("schedule_tz"), "tz_pi": pi_tz_name(), "tz_choices": _tz_names()}
 
@@ -6330,7 +6641,7 @@ def schedule_view():
             "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "engine_ready": ENGINE_READY,
             "dry_run": bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY, "now": now.strftime("%a %d %b %H:%M"),
             "now_at": now.isoformat(timespec="minutes"),
-            "tz": _cfg_get("schedule_tz"), "tz_label": sched_tz_label()}
+            "tz": _cfg_get("schedule_tz"), "tz_label": sched_tz_label(), "return": return_view()}
 
 
 _CSS = r"""@font-face{font-family:"Readex Pro";font-style:normal;font-weight:400;font-display:swap;src:url(data:font/woff2;base64,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) format("woff2")}
@@ -6584,7 +6895,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 
 _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
-let favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
+let favNets = [], favModes = ['ASL', 'EchoLink', 'SVX', 'M17'];
 let nets = [], netMax = 10;
 function setOffline(on) {
   const b = document.getElementById('offline-banner');
@@ -6787,11 +7098,11 @@ async function netAnswer(action) {
   const text = action === 'add' ? 'Adding the network to Node Controller and tuning...' : 'Tuning...';
   await connectFlow(Object.assign({}, a.body, {net_action: action}), a.label, text, a.url, a.box);
 }
-const TN_MODES = ['ASL', 'EchoLink', 'DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17'];
+const TN_MODES = ['ASL', 'EchoLink', 'DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17', 'SVX'];
 const TN_SEARCH = ['ASL', 'EchoLink'];
 const TN_HINT = {ASL: 'Node #, call or place', EchoLink: 'Node # or call', DMR: 'TG number', STFU: 'TG, ID or name', YSF: 'Name, # or IP:port', P25: 'TG # or host',
-  NXDN: 'TG # or host', DSTAR: 'REF001 C or callsign', M17: 'M17-USA A'};
-const TN_NOUN = {ASL: 'nodes', EchoLink: 'stations', STFU: 'talkgroups', YSF: 'reflectors', P25: 'talkgroups', NXDN: 'talkgroups', DSTAR: 'reflectors', M17: 'reflectors'};
+  NXDN: 'TG # or host', DSTAR: 'REF001 C or callsign', M17: 'M17-USA A', SVX: 'TG number'};
+const TN_NOUN = {ASL: 'nodes', EchoLink: 'stations', STFU: 'talkgroups', YSF: 'reflectors', P25: 'talkgroups', NXDN: 'talkgroups', DSTAR: 'reflectors', M17: 'reflectors', SVX: 'talkgroups'};
 const TN_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STFU: /^\d{1,8}$/, P25: /^\d{1,8}$/, NXDN: /^\d{1,8}$/,
   YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
@@ -7099,6 +7410,7 @@ async function loadDigital() {
   if (d.analog_bridge) found.push('Analog_Bridge');
   found.push(d.m17 ? 'USRP2M17' : 'no USRP2M17');
   if (d.m17_hosts) found.push('M17Hosts.json');
+  found.push(d.svx ? 'SvxLink' + (d.svx_now ? ' (' + d.svx_now + ')' : '') : 'no SvxLink control device');
   $('dg-found').textContent = found.join(' · ');
   $('dg-svc').textContent = Object.keys(d.services || {}).map((k) => k + ' ' + (SVC_TXT[d.services[k]] || d.services[k])).join(' · ') || '-';
   $('dg-tuned').textContent = d.tuned || 'nothing';
@@ -7107,7 +7419,7 @@ async function loadDigital() {
   $('dg-mbridge').value = d.set.m17_bridge; $('dg-mbridge').placeholder = b.m17 || 'none';
   $('dg-call').value = d.set.callsign; $('dg-call').placeholder = d.callsign || 'none';
   const src = (v, s) => v ? v + (s && s !== 'set here' ? ' (from ' + s + ')' : '') : 'none found';
-  $('dg-auto').textContent = 'In use: digital bridge ' + src(b.digital, b.digital_src) + ', M17 bridge ' + src(b.m17, b.m17_src)
+  $('dg-auto').textContent = 'In use: digital bridge ' + src(b.digital, b.digital_src) + ', M17 bridge ' + src(b.m17, b.m17_src) + ', SvxLink bridge ' + src(b.svx, b.svx_src)
     + ', callsign ' + src(d.callsign, d.callsign_src) + '. Leave a box empty to find it on its own.';
   $('nw-import').disabled = !d.dash_nets;
   sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
@@ -7353,7 +7665,7 @@ async function oldNodesRemove() {
   setMsg('rn-msg', await post('/api/oldnodes/remove', {}));
   loadRecNode();
 }
-const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', linked: 'Linked (not recording)', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
+const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', linked: 'Linked (not recording)', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...', returning: 'Returning to the return link...'};
 const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
   stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
@@ -7422,6 +7734,7 @@ async function loadSchedule() {
   const d = await api('/api/schedule');
   if (!d.ok) return;
   schedRows = d.entries;
+  rlShow(d.return);
   renderNextUp(d);
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
@@ -7628,7 +7941,7 @@ async function saveConfig() {
   setMsg('cfg-msg', await post('/api/config', body));
 }
 const SC_FIELDS = {ASL: {num: 'Node'}, EchoLink: {num: 'Number'}, DMR: {num: 'Talkgroup', net: true}, STFU: {num: 'Talkgroup'}, YSF: {num: 'Reflector'},
-  P25: {num: 'Talkgroup'}, NXDN: {num: 'Talkgroup'}, DSTAR: {num: 'Reflector', mod: true}, M17: {num: 'Reflector', mod: true}};
+  P25: {num: 'Talkgroup'}, NXDN: {num: 'Talkgroup'}, DSTAR: {num: 'Reflector', mod: true}, M17: {num: 'Reflector', mod: true}, SVX: {num: 'Talkgroup'}};
 let schedRows = [], schedSrc = null, schedEditId = '', schedLabel = '';
 function schedDaysValue() {
   return Array.from($('sc-days').querySelectorAll('input:checked')).map((c) => Number(c.value));
@@ -7673,6 +7986,7 @@ async function loadSchedSources() {
   tzFill(d);
   schedPickFill();
   schedNetFill($('sc-net').value);
+  rlPickFill(); rlNetFill($('rl-net').value);
   $('sc-src').textContent = 'Favorites to pick from, read only: Node Talker ' + (d.talker_found ? d.talker.length : 'not found')
     + ', Node Controller ' + (d.controller_found ? d.controller.length : 'not found') + '. A pick is copied into the entry; it does not stay linked.';
 }
@@ -7691,6 +8005,80 @@ function schedPick() {
   schedNetFill(f.net || '');
   schedLabel = f.label || '';
   note('sc-msg', 'ok', 'Copied ' + (f.label || schedTarget(f)) + '. Changing it later in ' + (parts[0] === 'talker' ? 'Node Talker' : 'Node Controller') + ' will not change this entry.');
+}
+let rlLabel = '', rlDirty = false;
+function rlFieldsShow() {
+  const m = $('rl-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
+  $('rl-num-l').textContent = f.num;
+  $('rl-net-w').classList.toggle('hidden', !f.net);
+  $('rl-mod-w').classList.toggle('hidden', !f.mod);
+  $('cd-return').dataset.mode = m;
+}
+function rlNetFill(want) {
+  const sel = $('rl-net'), nets = schedSrc ? schedSrc.nets : [];
+  sel.innerHTML = '';
+  addOption(sel, '', nets.length ? 'Network...' : 'Add a DMR network on the Setup tab first');
+  nets.forEach((n) => addOption(sel, n, n));
+  if (want && !nets.includes(want)) addOption(sel, want, want + ' (not in the list)');
+  sel.value = want || '';
+}
+function rlPickFill() {
+  const m = $('rl-mode').value, sel = $('rl-pick');
+  sel.innerHTML = '';
+  addOption(sel, '', 'Pick a favorite...');
+  if (!schedSrc) return;
+  [['talker', 'Node Talker'], ['controller', 'Node Controller']].forEach((src) => {
+    const list = schedSrc[src[0]].map((f, i) => [f, i]).filter((x) => x[0].mode === m);
+    if (!list.length) return;
+    const g = document.createElement('optgroup');
+    g.label = src[1];
+    list.forEach((x) => { const o = document.createElement('option'); o.value = src[0] + ':' + x[1]; o.textContent = x[0].label || schedTarget(x[0]); g.appendChild(o); });
+    sel.appendChild(g);
+  });
+}
+function rlModeChanged() {
+  rlDirty = true;
+  rlFieldsShow(); rlPickFill();
+  $('rl-num').value = ''; $('rl-mod').value = ''; rlNetFill(''); rlLabel = '';
+}
+function rlPick() {
+  const v = $('rl-pick').value;
+  if (!v || !schedSrc) return;
+  const parts = v.split(':'), f = schedSrc[parts[0]][Number(parts[1])];
+  if (!f) return;
+  rlDirty = true;
+  $('rl-num').value = f.num || '';
+  $('rl-mod').value = f.module || '';
+  rlNetFill(f.net || '');
+  rlLabel = f.label || '';
+}
+function rlTarget() {
+  const m = $('rl-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
+  const target = {mode: m, num: $('rl-num').value.trim()};
+  if (f.net) target.net = $('rl-net').value;
+  if (f.mod && $('rl-mod').value.trim()) target.module = $('rl-mod').value.trim().toUpperCase();
+  if (rlLabel) target.label = rlLabel;
+  return target;
+}
+function rlShow(r) {
+  if (!r) return;
+  const t = r.target;
+  $('rl-now').textContent = t ? 'Return link: ' + r.name + (r.enabled ? '' : ' (off)') : 'No return link is set.';
+  if (rlDirty) return;
+  $('rl-on').checked = !!r.enabled;
+  if (!t) return;
+  $('rl-mode').value = t.mode;
+  rlFieldsShow(); rlPickFill();
+  $('rl-num').value = t.num || '';
+  $('rl-mod').value = t.module || '';
+  rlNetFill(t.net || '');
+  rlLabel = t.label || '';
+}
+async function rlSave() {
+  note('rl-msg', '', 'Saving...');
+  const d = await post('/api/schedule/return', {enabled: $('rl-on').checked, target: rlTarget()});
+  setMsg('rl-msg', d);
+  if (d.ok) { rlDirty = false; rlShow(d); }
 }
 function schedClear(keepMsg) {
   schedEditId = ''; schedLabel = '';
@@ -7810,7 +8198,8 @@ async function tzSave() {
   loadSchedule();
 }
 function schedInit() {
-  Object.keys(SC_FIELDS).forEach((m) => addOption($('sc-mode'), m, modeName(m)));
+  Object.keys(SC_FIELDS).forEach((m) => { addOption($('sc-mode'), m, modeName(m)); addOption($('rl-mode'), m, modeName(m)); });
+  rlFieldsShow(); rlPickFill(); rlNetFill('');
   hmInit('sc-start'); hmInit('sc-end');
   $('sc-tz').addEventListener('change', tzSave);
   schedClear();
@@ -7851,6 +8240,11 @@ function initPage() {
   $('sc-pick').addEventListener('change', schedPick);
   ['sc-num', 'sc-mod', 'sc-net'].forEach((id) => $(id).addEventListener('input', () => { schedLabel = ''; }));
   $('sc-set').addEventListener('click', schedSet);
+  $('rl-mode').addEventListener('change', rlModeChanged);
+  $('rl-pick').addEventListener('change', rlPick);
+  $('rl-on').addEventListener('input', () => { rlDirty = true; });
+  ['rl-num', 'rl-mod', 'rl-net'].forEach((id) => $(id).addEventListener('input', () => { rlDirty = true; rlLabel = ''; }));
+  $('rl-save').addEventListener('click', rlSave);
   $('sc-clear').addEventListener('click', () => schedClear());
   setInterval(pollHostLinks, 30000);
   setInterval(beat, 5000);
@@ -7965,6 +8359,12 @@ html[data-theme="light"] *{text-shadow:none!important}
 #c-mode[data-mode="XLX"]{border-color:rgb(0,255,229)!important}
 .card[data-mode="M17"] .big-num{color:rgb(212,102,255)!important}
 #c-mode[data-mode="M17"]{border-color:rgb(212,102,255)!important}
+.card[data-mode="SVX"]{border-color:rgb(212,255,0)!important}
+.card[data-mode="SVX"] select,.card[data-mode="SVX"] input{border-color:rgb(212,255,0)!important;color:rgb(212,255,0)!important}
+#c-mode[data-mode="SVX"]{color:rgb(212,255,0)!important}
+.lk-badge[data-mode="SVX"]{border-color:rgb(212,255,0)!important;color:rgb(212,255,0)!important}
+.card[data-mode="SVX"] .big-num{color:rgb(212,255,0)!important}
+#c-mode[data-mode="SVX"]{border-color:rgb(212,255,0)!important}
 </style>
 </head>
 <body>
@@ -8021,6 +8421,19 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="sch-trace" class="mono small hidden"></div>
 <div id="sch-results" class="muted small"></div>
 </div>
+</div>
+<div class="card" id="cd-return">
+<h2>Return link</h2>
+<div class="row"><label><input type="checkbox" id="rl-on"> Return to this link after a scheduled recording</label></div>
+<div class="row"><label>Mode <select id="rl-mode"></select></label>
+<label>Favorite <select id="rl-pick"></select></label></div>
+<div class="row"><label><span id="rl-num-l">Node</span> <input type="text" id="rl-num" maxlength="40" style="width:150px"></label>
+<label id="rl-net-w" class="hidden">Network <select id="rl-net"></select></label>
+<label id="rl-mod-w" class="hidden">Module <input type="text" id="rl-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
+<div class="row"><button id="rl-save" class="btn primary" type="button">Save</button></div>
+<div id="rl-msg" class="msg"></div>
+<div id="rl-now" class="muted small"></div>
+<p class="muted small">When a scheduled recording ends, Node Recorder links this again. It does not when another scheduled recording starts within 10 minutes (that one links its own), when you stop the recording by hand, or after Record now.</p>
 </div>
 </section>
 
@@ -8339,6 +8752,7 @@ _POST_ACTIONS = {
     "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
     "/api/schedule/remove": (schedule_remove, ()),
+    "/api/schedule/return": (return_set, (ValueError,)),
     "/api/recording/start": (recording_start, (ValueError,)),
     "/api/recording/stop": (lambda b: recording_stop(), ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
@@ -8552,6 +8966,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, storage_view())
             elif path == "/api/convert":
                 self._json(200, encoder_view())
+            elif path == "/api/schedule/return":
+                self._json(200, dict(return_view(), ok=True))
             elif path == "/api/schedule/sources":
                 self._json(200, schedule_sources())
             elif path == "/api/schedule":
