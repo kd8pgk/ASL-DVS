@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_75_20261122.py`. Newest entries first.
+Current file: `44helper_v0_1_76_20261123.py`. Newest entries first.
+
+## 0.1.76 (2026-11-23)
+
+The title bar names the node or host. This is a release: the header line now comes from the hostname when the node number is not set.
+
+- **Header line:** the line under the logo shows the callsign and "Node N" as before. When the node number is not set, it shows this machine's hostname in place of the "Deployment model: not configured" text.
+- Nothing else changes.
 
 ## 0.1.75.1 (2026-11-23)
 

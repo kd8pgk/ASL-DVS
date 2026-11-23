@@ -1,6 +1,13 @@
 # instmon changelog
 
-Current file: `instmon_v2_119_0_20261123.py`.
+Current file: `instmon_v2_120_0_20261123.py`.
+
+## 2.120.0 (2026-11-23)
+
+The title bar names the host. This is a release: the header line now carries this machine's hostname.
+
+- **Header line:** "Installer & Component Manager" is followed by this machine's hostname.
+- Nothing else changes.
 
 ## 2.119.0 (2026-11-23)
 

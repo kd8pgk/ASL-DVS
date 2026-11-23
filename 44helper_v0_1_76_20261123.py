@@ -45,7 +45,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.75.1"
+APP_VERSION = "0.1.76"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -30406,7 +30406,9 @@ def render_page(cfg: configparser.ConfigParser) -> str:
         identity_bits.append(callsign)
     if node:
         identity_bits.append(f"Node {node}")
-    identity_line = " · ".join(identity_bits) if identity_bits else "Deployment model: not configured"
+    else:
+        identity_bits.append(socket.gethostname().split(".")[0])
+    identity_line = " · ".join(identity_bits)
 
     panels = "".join(
         _PANEL_RENDERERS[t_id]()
