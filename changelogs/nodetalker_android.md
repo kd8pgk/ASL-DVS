@@ -1,6 +1,18 @@
 # Node Talker Mobile changelog
 
-Current version: `0.12.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.13.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.13.0 (2026-11-23)
+
+An away address for each node, so a phone can reach its node from outside the home network through a tunnel (Node Talker 0.13.0's Internet access). This version takes Node Talker 0.13.0's number.
+
+- **Away address.** Edit a node and fill in **Away address** (for example `https://node.example.com`), or leave it empty. The node's row shows it under the home address.
+- **Which one is used.** Each time the app opens the node, connects to listen, reconnects after a drop, talks, reports or sends its log, it first tries the home address for 1.5 seconds. If nothing answers there, it uses the away address. The answer is kept for 30 seconds, and forgotten at once when a connection drops, so leaving or reaching home Wi-Fi is noticed on the next try. The page's title adds "(away)" while it is the away address.
+- **Learned from the node.** On the home address, after the page has loaded and you are logged in, the app asks the node for its tunnel address (`/api/internet`) and saves it as the away address when the node says internet logins are allowed and the address is an `https://` one. It checks at most every 10 minutes and replaces an address it learned itself. An address you typed is never replaced. A quick tunnel's address changes when the tunnel restarts, and the app can only learn the new one while it is at home.
+- **Each address has its own login.** The page, the listening and the microphone use the away address's own session, so you log in once on it.
+- **Certificates.** The away address must have a normal, trusted certificate (a Cloudflare Tunnel does). If it does not, the page is refused instead of asking to trust it, and nothing is saved as the home address's certificate.
+- **No settings to turn on.** A node with no away address behaves exactly as before.
+- **Tests.** New unit tests for choosing between the addresses, how long the answer is kept, and when a learned address is stored or left alone.
 
 ## 0.12.1 (2026-11-23)
 

@@ -43,6 +43,7 @@ class TalkerActivity : Activity() {
     private var pendingDownload: String? = null
     private var pendingText: String? = null
     private var certDialog: AlertDialog? = null
+    private var learnAt = 0L
     private var popup: WebView? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
     private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
@@ -350,7 +351,34 @@ class TalkerActivity : Activity() {
 
     private fun load() {
         error.visibility = View.GONE
-        web.loadUrl(node.origin + "/")
+        val base = NodeStore.get(this, node.id) ?: node
+        Thread({
+            val routed = NodeRoute.pick(base)
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                node = routed
+                title = if (routed.viaAway) getString(R.string.title_away, routed.title) else routed.title
+                web.loadUrl(routed.origin + "/")
+            }
+        }, "nt-route").apply { isDaemon = true }.start()
+    }
+
+    private fun learnAway() {
+        val now = System.currentTimeMillis()
+        if (node.viaAway || now - learnAt < LEARN_GAP_MS) return
+        learnAt = now
+        val id = node.id
+        val home = node
+        Thread({
+            val cookie = try {
+                CookieManager.getInstance().getCookie(home.origin)
+            } catch (e: RuntimeException) {
+                null
+            }
+            val stored = NodeStore.get(this, id) ?: return@Thread
+            val changed = AwayLearn.apply(stored, AwayLearn.fetch(home, cookie))
+            if (changed != null) NodeStore.put(this, changed)
+        }, "nt-away").apply { isDaemon = true }.start()
     }
 
     private fun reopen() {
@@ -398,6 +426,7 @@ class TalkerActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 sendState()
+                learnAway()
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -470,6 +499,11 @@ class TalkerActivity : Activity() {
     }
 
     private fun checkCert(handler: SslErrorHandler, err: SslError) {
+        if (node.viaAway) {
+            handler.cancel()
+            showError(getString(R.string.cert_refused))
+            return
+        }
         if (!node.sameOrigin(Uri.parse(err.url))) {
             handler.cancel()
             return
@@ -629,6 +663,7 @@ class TalkerActivity : Activity() {
     companion object {
         const val EXTRA_NODE = "node"
         private const val REQ_MIC = 1
+        private const val LEARN_GAP_MS = 600000L
         private const val REQ_FILE = 2
         private const val REQ_SAVE = 3
         private const val REQ_NOTIFY = 4

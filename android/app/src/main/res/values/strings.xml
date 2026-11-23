@@ -12,6 +12,11 @@
     <string name="field_address">Address, for example 192.168.1.50 or node.local</string>
     <string name="field_port">Port</string>
     <string name="field_https">HTTPS</string>
+    <string name="field_away">Away address, for example https://node.example.com (optional)</string>
+    <string name="bad_away">That is not a web address the app can use.</string>
+    <string name="title_away">%1$s (away)</string>
+    <string name="row_away">Away: %1$s</string>
+    <string name="row_away_learned">Away: %1$s (from the node)</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="edit">Edit</string>

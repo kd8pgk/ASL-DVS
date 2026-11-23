@@ -14,7 +14,7 @@ An Internet access section in Setup, for reaching Node Talker from outside the h
   - **Warnings.** Listen without logging in is on while the internet is open; no tunnel on this node; requests through the tunnel without https.
 - **Log and counts.** Every internet login and failure is counted by the visitor's address (the one Cloudflare gives, not the tunnel's) and still written to the log as before. The login limits for the internet, the Secure cookie and the refusal over plain http are unchanged and are now covered by tests.
 - **Tests.** New `ci/test_nodetalker_internet.py`: the setting's checks, the tunnel probe against a stand-in for `cloudflared`, the status, and requests with Cloudflare headers (refused while off, counted, wait after repeated failures, cookie flags, plain http refused).
-- Nothing else changes. Node Talker Mobile 0.13.0 uses the address.
+- Nothing else changes. Node Talker Mobile 0.13.0 uses the address: it asks `/api/internet` while on the home network and keeps the tunnel address as the node's away address.
 
 ## 0.12.0 (2026-11-23)
 

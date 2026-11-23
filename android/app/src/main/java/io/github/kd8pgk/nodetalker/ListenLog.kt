@@ -158,12 +158,13 @@ object ListenLog {
                 for (i in 0 until minOf(arr.length(), BATCH)) batch.put(arr.get(i))
             }
             if (batch.length() == 0) return
+            val route = NodeRoute.pick(node)
             val cookie = try {
-                CookieManager.getInstance().getCookie(node.origin)
+                CookieManager.getInstance().getCookie(route.origin)
             } catch (e: RuntimeException) {
                 null
             }
-            val code = post(node, cookie, JSONObject().put("client", "android").put("events", batch).toString())
+            val code = post(route, cookie, JSONObject().put("client", "android").put("events", batch).toString())
             if (code != 200 && code != 404) return
             drop(c, batch.length())
         }
