@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.14.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.14.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.14.4 (2026-11-23)
+
+The address fallback now also works for an `https` node that has no trusted-certificate pin. App-only change; Node Talker is still 0.14.3.
+
+- **Learns the certificate.** While a node opens by its host name with a certificate the phone already accepts, the app saves that certificate's fingerprint with the node (`lan_pin`), next to the address.
+- **Checks it on the address.** When the host name does not answer, the app connects to the saved address and accepts only that exact certificate; any other certificate is refused with the usual message and nothing is saved. A pin you trusted yourself is used first when there is one.
+- **A renewed certificate** (for example a Let's Encrypt one) is learned again the next time the node opens by name; until then the address fallback is refused for that node.
+- **Nothing else changes.**
 
 ## 0.14.3 (2026-11-23)
 

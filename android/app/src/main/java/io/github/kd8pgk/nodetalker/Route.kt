@@ -88,9 +88,12 @@ object LanLearn {
         ip.isNotEmpty() && ip.all { it.isDigit() || it == '.' } && Node.validHost(ip) && ip.count { it == '.' } == 3
     }
 
-    fun apply(node: Node, found: String?): Node? {
-        if (found == null || node.viaAway || node.viaLan || node.lanIp == found) return null
-        return node.copy(lanIp = found)
+    fun apply(node: Node, found: String?, certPin: String = ""): Node? {
+        if (node.viaAway || node.viaLan) return null
+        val ip = found ?: node.lanIp
+        val fp = if (node.https && node.pin.isEmpty() && certPin.isNotEmpty()) certPin else node.lanPin
+        if (ip == node.lanIp && fp == node.lanPin) return null
+        return node.copy(lanIp = ip, lanPin = fp)
     }
 
     fun fetch(node: Node, cookie: String?): String? {

@@ -167,9 +167,22 @@ class LanFallbackTest {
     }
 
     @Test
-    fun anHttpsNodeWithoutAPinNeverUsesTheAddress() {
+    fun anHttpsNodeNeedsAPinOrALearnedCertificateToUseTheAddress() {
         assertFalse(node("lan3", https = true).hasLan)
         assertTrue(node("lan4", https = true, pin = "ab").hasLan)
+        val learned = node("lan6", https = true).copy(lanPin = "cd")
+        assertTrue(learned.hasLan)
+        assertEquals("cd", learned.useLan().pin)
+        assertEquals("ab", node("lan7", https = true, pin = "ab").copy(lanPin = "cd").useLan().pin)
+    }
+
+    @Test
+    fun theCertificateIsLearnedOnlyForAnUnpinnedHttpsNode() {
+        val n = node("lan8", https = true)
+        assertEquals("cd", LanLearn.apply(n, null, "cd")?.lanPin)
+        assertEquals(null, LanLearn.apply(n.copy(lanPin = "cd"), null, "cd"))
+        assertEquals(null, LanLearn.apply(node("lan9", pin = "ab", https = true), null, "cd")?.lanPin?.takeIf { it.isNotEmpty() })
+        assertEquals(null, LanLearn.apply(node("lan10"), null, "cd"))
     }
 
     @Test

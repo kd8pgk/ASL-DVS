@@ -369,6 +369,7 @@ class TalkerActivity : Activity() {
         learnAt = now
         val id = node.id
         val home = node
+        val certPin = if (home.https && home.pin.isEmpty()) Certs.der(web.certificate)?.let { Certs.fingerprint(it) }.orEmpty() else ""
         Thread({
             val cookie = try {
                 CookieManager.getInstance().getCookie(home.origin)
@@ -378,7 +379,7 @@ class TalkerActivity : Activity() {
             val stored = NodeStore.get(this, id) ?: return@Thread
             val changed = AwayLearn.apply(stored, AwayLearn.fetch(home, cookie))
             if (changed != null) NodeStore.put(this, changed)
-            val withLan = LanLearn.apply(changed ?: stored, LanLearn.fetch(home, cookie))
+            val withLan = LanLearn.apply(changed ?: stored, LanLearn.fetch(home, cookie), certPin)
             if (withLan != null) NodeStore.put(this, withLan)
         }, "nt-away").apply { isDaemon = true }.start()
     }
@@ -501,6 +502,16 @@ class TalkerActivity : Activity() {
     }
 
     private fun checkCert(handler: SslErrorHandler, err: SslError) {
+        if (node.viaLan) {
+            val der = Certs.der(err.certificate)
+            if (der != null && node.pin.isNotEmpty() && node.sameOrigin(Uri.parse(err.url)) && Certs.fingerprint(der) == node.pin) {
+                handler.proceed()
+            } else {
+                handler.cancel()
+                showError(getString(R.string.cert_refused))
+            }
+            return
+        }
         if (node.viaAway) {
             handler.cancel()
             showError(getString(R.string.cert_refused))
