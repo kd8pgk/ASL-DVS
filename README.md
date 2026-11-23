@@ -109,7 +109,7 @@ This downloads the installer and runs it. On a node with nothing installed, the 
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_9_0_20261121.sh
+   sudo bash install_all_v8_0_0_20261123.sh
    ```
    - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`). It also installs instmon when it isn't installed.
    - **Menu (7.7.0 and later):** an interactive run asks `Choose [1-5/q]`: 1 full first install, 2 full upgrade, 3 full replace, 4 component install, 5 reset only. Enter is 1 on a fresh node and 2 on an installed one; the old keys `c`, `i` and `u` still work. Before anything changes it shows the plan and asks `Go ahead?`; type `C` or `D` there to leave out the manuals or the reset (a replace needs `skip` typed to drop the reset). `--reset-only` is the quick repair. Without a terminal and without `--action` or `--reset-only` the run is the same as 7.6.0.
@@ -539,11 +539,12 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `termon_v0_2_6_20261123.py` | common (stands alone for now) |
 | `nodemon_v0_9_3_20261123.py` | common |
 | `piper_dashboard_v0_8_2_20261123.py` | common |
-| `install_all_v7_9_0_20261121.sh` | common |
+| `install_all_v8_0_0_20261123.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
+| `tunnel_remove_v1_0_0_20261123.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
 always pick the newest.
@@ -585,6 +586,7 @@ per tool and build:
 | [`confgetter.md`](changelogs/confgetter.md) | `confgetter_v*.sh` |
 | [`confputter.md`](changelogs/confputter.md) | `confputter_v*.py` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
+| [`tunnel_remove.md`](changelogs/tunnel_remove.md) | `tunnel_remove_v*.sh` |
 
 Every new version adds an entry at the top of its changelog.
 

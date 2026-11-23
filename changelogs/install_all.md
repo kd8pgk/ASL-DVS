@@ -1,6 +1,19 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_9_0_20261121.sh`. Newest entries first.
+Current file: `install_all_v8_0_0_20261123.sh`. Newest entries first.
+
+## 8.0.0 (2026-11-23)
+
+The installer installs the whole suite and nothing else. This is a release: the menu, the optional-tool picker, the manuals step, the reset and quiet flows, and the old-version migration are gone.
+
+- **One run:** install or reinstall the full suite. Every tool is installed on every run; a tool is removed later with the uninstaller or instmon.
+- **Ports:** the suite's ports are opened in the active firewall. ufw is used when it is active; otherwise firewalld, with the ports kept after a reboot. If neither runs, nothing is opened and a note says so.
+- **Directories:** `/etc/asl_dvs`, `/etc/sysmon` and the instmon library folders are created before anything is installed.
+- **Manuals:** not downloaded.
+- **Home folder:** `wifi_menu_v3_1_20261011.sh` and `tunnel_remove_v1_0_0_20261123.sh` are copied into the home folder of the user who ran sudo.
+- **Files:** a tool's file is taken from the folder the installer is in, or else downloaded from GitHub on the stable or testing channel, as before.
+- **Flags:** `--build=pi02w|full`, `--offline` and `--non-interactive` are kept. The old flags (`--tools`, `--core`, `--no-manuals`, `--action`, `--reset` and the rest) are accepted and ignored with a warning, so instmon and the uninstaller keep working until they are updated.
+- **Not carried over:** the first-run callsign and node prompts for the Dashboard, and the migration from `/etc/dvswitch/dvswitch.conf`. The Dashboard's own Config tab sets the callsign and node.
 
 ## 7.9.0 (2026-11-21)
 
