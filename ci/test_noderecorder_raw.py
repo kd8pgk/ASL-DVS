@@ -289,7 +289,8 @@ class SecondPart(unittest.TestCase):
         self.assertEqual(len(FakeActions.seen), 1)
 
     def test_a_special_is_kept_until_its_last_part(self):
-        self.entries = [mk_entry("sp", self.start_hm, self.end_hm, kind="special")]
+        self.entries = [mk_entry("sp", self.start_hm, self.end_hm, kind="special",
+                                   date=(self.now - nr.timedelta(minutes=2)).strftime("%Y-%m-%d"))]
         FakeActions.script = [{"drop_after": 1}, {"drop_after": 1}]
         self.assertTrue(self.drive(lambda: len(FakeActions.seen) >= 2))
         self.assertEqual(self.removed, [])
