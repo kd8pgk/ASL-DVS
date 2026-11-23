@@ -1,6 +1,13 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_104_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_105_20261123.py`. Newest entries first.
+
+## 6.13.105 (2026-11-23)
+
+A Tunnel card on the Overview tab, asked for by name for the full build. This is a release: a route gains a field and the page logic changed.
+
+- **New Tunnel card on the Overview tab**, below the Pinned Services cards. It shows only the connection state, as 44helper's Tunnel / wg0 card does: `wg0 interface present` (or `not present`), `Address`, `Handshake` and `Transfer`. It is left out when the node has no WireGuard (no `wg0` interface and no `/etc/wireguard/wg0.conf`).
+- `/api/overview` carries one new key, `tunnel` (`null` without WireGuard). Nothing else changes.
 
 ## 6.13.104 (2026-11-23)
 

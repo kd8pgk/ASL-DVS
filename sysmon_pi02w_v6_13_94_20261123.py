@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.93-pi02w"
+VERSION      = "6.13.94-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -4601,6 +4601,27 @@ async function loadOverview() {
   const d = await api("/api/overview");
   if (!d) return;
   renderOverview(d.groups);
+  renderTunnelCard(d.tunnel);
+}
+
+function renderTunnelCard(t) {
+  const container = document.getElementById("ov-content");
+  if (!container || !t) return;
+  const card = document.createElement("div");
+  card.className = "ov-card";
+  const hdr = document.createElement("div");
+  hdr.className = "ov-card-hdr";
+  hdr.innerHTML = `<span class="ov-card-title">Tunnel</span>`;
+  card.appendChild(hdr);
+  const lines = [t.present ? "wg0 interface present" : "wg0 interface not present"];
+  if (t.address) lines.push("Address: " + t.address);
+  if (t.handshake) lines.push("Handshake: " + t.handshake);
+  if (t.transfer) lines.push("Transfer: " + t.transfer);
+  const body = document.createElement("div");
+  body.style.cssText = "padding:8px 14px;font-size:var(--fs-sm);line-height:1.6";
+  body.innerHTML = lines.map(esc).join("<br>");
+  card.appendChild(body);
+  container.insertBefore(card, document.getElementById("ov-global-bar"));
 }
 
 function renderOverview(groups) {
@@ -13206,6 +13227,31 @@ def _reg_summary_for_page() -> "dict | None":
     out["since_text"] = time.strftime("%H:%M", time.localtime(sm["since"]))
     return out
 
+def _tunnel_card_info() -> "dict | None":
+    conf = Path("/etc/wireguard/wg0.conf")
+    present = os.path.isdir("/sys/class/net/wg0")
+    if not present and not conf.exists():
+        return None
+    address = ""
+    try:
+        for line in conf.read_text().splitlines():
+            key, sep, val = line.partition("=")
+            if sep and key.strip().lower() == "address":
+                address = val.strip()
+                break
+    except OSError:
+        pass
+    info = {"present": present, "address": address, "handshake": "", "transfer": ""}
+    if present:
+        for raw in _run(["wg", "show", "wg0"]).splitlines():
+            line = raw.strip()
+            low = line.lower()
+            if low.startswith("latest handshake:"):
+                info["handshake"] = line.split(":", 1)[1].strip()
+            elif low.startswith("transfer:"):
+                info["transfer"] = line.split(":", 1)[1].strip()
+    return info
+
 def _route_overview(h: Handler) -> None:
     qt_results  = get_state_snapshot().get("quick_tests", {})
     batch_units = [e["unit"] for e in _pinned if "unit" in e]
@@ -13271,7 +13317,7 @@ def _route_overview(h: Handler) -> None:
             "perm_reasons":  perm_reasons,
         })
 
-    h.send_json({"ok": True, "groups": groups})
+    h.send_json({"ok": True, "groups": groups, "tunnel": _tunnel_card_info()})
 
 def get_service_pid(unit: str) -> int:
     if not _validate_unit(unit):

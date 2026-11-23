@@ -112,6 +112,8 @@ jobs:
         run: python3 ci/test_nodetalker_links.py
       - name: Services card tests (Node Talker)
         run: python3 ci/test_nodetalker_services.py
+      - name: Tunnel card tests (SysMon)
+        run: python3 ci/test_sysmon_tunnel_card.py
       - name: SvxLink badge tests (Node Talker)
         run: python3 ci/test_nodetalker_svx.py
       - name: Node Talker transmit audio to the recorder tests
