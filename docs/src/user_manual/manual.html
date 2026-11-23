@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-11-10</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-11-23</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The Node Controller Suite</span></h1>
@@ -28,19 +28,19 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_108_20261108.py</td><td>9.3.108-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_83_20261028.py</td><td>6.13.83-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_1_19_20261108.py</td><td>0.1.19</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_99_0_20261110.py</td><td>2.99.0</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_49_0_20261107.py</td><td>5.49.0</td></tr>
-      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_10_27_20261110.py</td><td>0.10.27</td></tr>
-      <tr><td>Installer</td><td class="mono">install_all_v7_5_0_20261110.sh</td><td>7.5.0</td></tr>
-      <tr><td>Node Recorder</td><td class="mono">noderecorder_v0_15_0_20261110.py</td><td>0.15.0</td></tr>
-      <tr><td>Pibrary</td><td class="mono">pibrary_v0_16_1_20261104.py</td><td>0.16.1</td></tr>
-      <tr><td>Terminal Monitor</td><td class="mono">termon_v0_2_4_20261109.py</td><td>0.2.4</td></tr>
-      <tr><td>Uninstaller</td><td class="mono">uninstall_all_v1_10_0_20261110.sh</td><td>1.10.0</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_95_20261028.py</td><td>6.13.95</td></tr>
-      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_104_20261108.py</td><td>9.3.104</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_122_20261123.py</td><td>9.3.122-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_95_20261123.py</td><td>6.13.95-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_1_76_20261123.py</td><td>0.1.76</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_120_0_20261123.py</td><td>2.120.0</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_58_0_20261123.py</td><td>5.58.0</td></tr>
+      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_14_5_20261123.py</td><td>0.14.5</td></tr>
+      <tr><td>Installer</td><td class="mono">install_all_v7_9_0_20261121.sh</td><td>7.9.0</td></tr>
+      <tr><td>Node Recorder</td><td class="mono">noderecorder_v0_18_1_20261123.py</td><td>0.18.1</td></tr>
+      <tr><td>Pibrary</td><td class="mono">pibrary_v0_17_5_20261123.py</td><td>0.17.5</td></tr>
+      <tr><td>Terminal Monitor</td><td class="mono">termon_v0_2_6_20261123.py</td><td>0.2.6</td></tr>
+      <tr><td>Uninstaller</td><td class="mono">uninstall_all_v1_11_0_20261116.sh</td><td>1.11.0</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_106_20261123.py</td><td>6.13.106</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_116_20261123.py</td><td>9.3.116</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -198,7 +198,7 @@ sudo systemctl status sysmon</pre>
   </table>
 
   <h2><span class="n">1.3</span>A first look at each page</h2>
-  <p>Every page has a header with the tool's name and version and a Log Out button. Most pages have a row of
+  <p>Every page has a header with the tool's name and version and a Log Out button. The line under the name shows the callsign and node number where the tool knows them, and the machine's hostname where it does not. Most pages have a row of
     tabs under the header; click a tab to switch view. The pictures below show each tool's tabs in order.</p>
 
   <figure>
@@ -405,11 +405,11 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_116_0_20261121.py --install</pre>
+<pre>sudo python3 instmon_v2_120_0_20261123.py --install</pre>
       From 2.45.0 the install also downloads the manuals (PDF) from GitHub, so they are on instmon's Manuals card
       straight away. With no internet the install still finishes, and instmon downloads them once it can reach GitHub.</li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
-<pre>sudo bash install_all_v7_8_0_20261116.sh</pre>
+<pre>sudo bash install_all_v7_9_0_20261121.sh</pre>
       Or, on a node with nothing installed, do steps 1 to 3 in one line:
 <pre>curl -fsSL https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh | sudo bash</pre>
       The installer shows the Pi it runs on, then a start menu: <b>1</b> full first install (the whole suite and the manuals), <b>2</b> full upgrade
@@ -1255,7 +1255,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds six tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello, SVX and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs. From 6.13.71-pi02w the Pi Zero 2 W build has the Reg tab again (6.2).</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_101_20261116.py</code>
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_106_20261123.py</code>
     (version <code>6.13.101.1</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
