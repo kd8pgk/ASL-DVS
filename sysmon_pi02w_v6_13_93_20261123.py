@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.92-pi02w"
+VERSION      = "6.13.93-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -699,10 +699,48 @@ _REGISTER_RE = re.compile(
     r'^\s*register\s*=>\s*(\d+):([^@\s]+)@([\w.\-]+)(?::\d+)?(?:/\S*)?\s*(?:;.*)?$',
     re.IGNORECASE,
 )
-_REG_LIVE_NODE_RE  = re.compile(r'\b(\d{4,6})\b')
-_REG_LIVE_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _REG_LIVE_ADDR_RE = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5})\b')
 _REG_LIVE_COLS_RE = re.compile(r'^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$')
+
+def reg_nodes(out):
+    import re
+    bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+    cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+    nodes = {}
+    for line in (out or "").splitlines():
+        cols = cols_re.match(line)
+        if cols and re.fullmatch(r"\d{4,6}", cols.group(2)):
+            node, text = cols.group(2), cols.group(5).lower()
+        else:
+            toks = line.split()
+            node = next((t for t in toks if re.fullmatch(r"\d{4,6}", t)), "")
+            if not node:
+                continue
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        if any(w in text for w in bad):
+            state = "unregistered"
+        elif re.search(r"\bregistered\b", text):
+            state = "registered"
+        else:
+            state = "unknown"
+        if nodes.get(node) != "unregistered":
+            nodes[node] = state
+    return nodes
+
+
+def reg_verdict(nodes, main=""):
+    nodes = dict(nodes or {})
+    main = str(main or "").strip()
+    if main and main not in nodes:
+        return "unregistered"
+    if "unregistered" in nodes.values():
+        return "unregistered"
+    if not nodes:
+        return "unknown"
+    if all(v == "registered" for v in nodes.values()):
+        return "registered"
+    return "unknown"
+
 
 def get_live_registrations() -> dict:
 
@@ -714,13 +752,12 @@ def get_live_registrations() -> dict:
             "nodes": {},
         }
 
-    nodes: "dict[str, str]" = {}
+    nodes = reg_nodes(out)
     perceived: "dict[str, str]" = {}
     for line in out.splitlines():
-        m = _REG_LIVE_NODE_RE.search(line)
-        if not m:
+        node = next((t for t in line.split() if t in nodes), None)
+        if node is None:
             continue
-        node = m.group(1)
         cols = _REG_LIVE_COLS_RE.match(line.strip())
         if cols and _REG_LIVE_ADDR_RE.fullmatch(cols.group(3)):
             perceived[node] = cols.group(3)
@@ -729,13 +766,6 @@ def get_live_registrations() -> dict:
             first = (line.split() or [""])[0]
             if len(addrs) >= 2 or (addrs and addrs[0] != first):
                 perceived[node] = addrs[-1]
-        low  = line.lower()
-        if any(w in low for w in _REG_LIVE_BAD_WORDS):
-            nodes[node] = "unregistered"
-        elif "regist" in low:
-            nodes[node] = "registered"
-        else:
-            nodes[node] = "unknown"
     return {"ok": True, "raw": out, "error": None, "nodes": nodes, "perceived": perceived}
 
 def _reg_addr_path(addr: str) -> str:
@@ -13158,12 +13188,8 @@ def _reg_live_summary(rl: dict, prev: "dict | None") -> dict:
         state = "down"
     elif not nodes:
         state = "wait" if _reg_http_configured() else "none"
-    elif "unregistered" in nodes.values():
-        state = "fail"
-    elif all(v == "registered" for v in nodes.values()):
-        state = "ok"
     else:
-        state = "wait"
+        state = {"unregistered": "fail", "registered": "ok"}.get(reg_verdict(nodes), "wait")
     now = time.time()
     since = prev["since"] if prev and prev.get("state") == state else now
     return {"state": state, "since": since, "checked": now,

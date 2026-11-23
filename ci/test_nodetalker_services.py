@@ -93,18 +93,43 @@ class Classify(unittest.TestCase):
 class Registration(unittest.TestCase):
     def test_parse(self):
         head = "Host                 Username   Perceived             Refresh  State\n"
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Registered\n", "27342"), "registered")
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Rejected\n", "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 - 180 Request Sent\n", "27342"), "unknown")
-        self.assertEqual(nt.reg_parse(head, "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse(head + "x 127342 y 180 Registered\n", "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Unregistered\n", "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 - 180 Auth. Sent\n", "27342"), "unknown")
-        self.assertEqual(nt.reg_parse(head + "register.allstarlink.org 27342 - 180 No Authentication\n", "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse(head + "other.example.org 99999 - 180 Registered\n", "27342"), "unregistered")
-        self.assertEqual(nt.reg_parse("27342 registered\n", "27342"), "registered")
-        self.assertEqual(nt.reg_parse("", "27342"), "unknown")
-        self.assertEqual(nt.reg_parse(head, ""), "unknown")
+
+        def verdict(text, node="27342"):
+            return nt.reg_verdict(nt.reg_nodes(text), node) if text.strip() else "unknown"
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Registered\n"), "registered")
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Rejected\n"), "unregistered")
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 - 180 Request Sent\n"), "unknown")
+        self.assertEqual(verdict(head), "unregistered")
+        self.assertEqual(verdict(head + "x 127342 y 180 Registered\n"), "unregistered")
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 44.1.2.3:4569 180 Unregistered\n"), "unregistered")
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 - 180 Auth. Sent\n"), "unknown")
+        self.assertEqual(verdict(head + "register.allstarlink.org 27342 - 180 No Authentication\n"), "unregistered")
+        self.assertEqual(verdict(head + "other.example.org 99999 - 180 Registered\n"), "unregistered")
+        self.assertEqual(verdict("27342 registered\n"), "registered")
+        self.assertEqual(verdict(""), "unknown")
+
+    def test_every_listed_node_counts(self):
+        head = "Host Username Perceived Refresh State\n"
+        two = (head + "register.allstarlink.org:443 27342 44.1.2.3:4569 180 Registered\n"
+               + "register.allstarlink.org:443 27343 - 0 Rejected\n")
+        self.assertEqual(nt.reg_nodes(two), {"27342": "registered", "27343": "unregistered"})
+        self.assertEqual(nt.reg_verdict(nt.reg_nodes(two), "27342"), "unregistered")
+        self.assertEqual(nt.reg_verdict({"27342": "registered"}, "27342"), "registered")
+        self.assertEqual(nt.reg_verdict({"27342": "registered", "27343": "unknown"}, "27342"), "unknown")
+
+    def test_a_port_or_host_name_is_not_a_node(self):
+        iax = "register.allstarlink.org:4569 Y 27342 44.1.2.3:4569 60 Request Sent\n"
+        self.assertEqual(nt.reg_nodes(iax), {"27342": "unknown"})
+        self.assertEqual(nt.reg_nodes("register.allstarlink.org:4569 Y 27342 44.1.2.3:4569 60 Registered\n"), {"27342": "registered"})
+
+    def test_the_detail_names_the_failing_node(self):
+        two = ("h 27342 44.1.2.3:4569 180 Registered\n" + "h 27343 - 0 Rejected\n")
+        r = self.reg("27342", out=(True, two))
+        self.assertEqual(r["state"], "unregistered")
+        self.assertIn("27343", r["detail"])
+        r = self.reg("27342", out=(True, "h 27399 44.1.2.3:4569 180 Registered\n"))
+        self.assertEqual(r["state"], "unregistered")
+        self.assertIn("27342", r["detail"])
 
     def reg(self, node, on=True, out=(True, "")):
         with nt._svc_lock:
@@ -300,6 +325,16 @@ class FromNodeController(unittest.TestCase):
     def read(self, doc):
         self.put(doc)
         return nt.svc_from_nc(self.NOWE)
+
+    def test_the_registration_is_never_taken_from_the_file(self):
+        self.put(self.doc(checked_at=time.time(), next_check_secs=15.0))
+        with nt._svc_lock:
+            nt._reg_cache.update(t=-1e9, node="", state="unknown", detail="", since=None)
+        with mock.patch.object(nt, "main_node", lambda: "27342"), \
+                mock.patch.object(nt, "ast_cli", lambda cmd, timeout=0: (True, "h 27342 - 0 Rejected\n")):
+            d = nt.svc_status()
+        self.assertEqual(d["source"], "nodecontrol")
+        self.assertEqual(d["reg"]["state"], "unregistered")
 
     def test_a_good_file_is_accepted(self):
         d = self.read(self.doc())
