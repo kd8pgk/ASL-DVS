@@ -36,7 +36,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.4"
+VERSION = "0.18.5"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
@@ -2309,7 +2309,7 @@ def _mode_of(value):
     m = str(value or "").strip().upper().replace("-", "")
     if m.startswith("ECHO"):
         return "EchoLink"
-    if m in ("ASL", "M17") or m in DVS_MODES:
+    if m in ("ASL", "M17", "SVX") or m in DVS_MODES:
         return m
     raise ValueError(f"Unknown mode {str(value)[:20]!r}")
 
@@ -3613,7 +3613,10 @@ def digital_info():
             "set": {"digital_bridge": setv[0], "m17_bridge": setv[1], "callsign": str(cfg.get("callsign", ""))},
             "callsign": call, "callsign_src": call_src, "nets": nets_public(nets_load()), "net_max": DMR_NET_MAX,
             "dash_nets": len(dashboard_conf()["nets"]), "tuned": _solo["name"] if _solo["target"] else "",
-            "home": home_load(), "file": FAV_CONF_PATH}
+            "home": home_load(), "svx_bridge": _svx_bridge(),
+            "dash_favs": [{"mode": f["mode"], "num": f["num"], "net": f.get("net", "") or "", "module": f.get("module", "") or "",
+                           "label": f.get("label", "") or ""} for f in dashboard_conf()["favs"]],
+            "file": FAV_CONF_PATH}
 
 
 def m17_connect(f, node, op=3):
@@ -4089,6 +4092,58 @@ def _tune_fav(b):
     return _norm_fav(f, nets_load())
 
 
+SVX_CTRL_PTY = "/var/lib/svxlink/dtmf_ctrl"
+SVX_BRIDGE_SLOT = 3
+
+def _svx_ready():
+    try:
+        return os.path.lexists(SVX_CTRL_PTY) and os.path.realpath(SVX_CTRL_PTY).startswith("/dev/pts/")
+    except OSError:
+        return False
+
+def _svx_send(cmd):
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        log_event(f"SVX: sent {cmd} to SvxLink", "ok")
+        return True
+    except OSError as exc:
+        log_event(f"SVX: could not send {cmd}: {exc}", "warn")
+        return False
+
+def _svx_bridge():
+    dl = dashboard_conf()["bridge_list"]
+    return dl[SVX_BRIDGE_SLOT] if len(dl) > SVX_BRIDGE_SLOT and dl[SVX_BRIDGE_SLOT].isdigit() else ""
+
+def svx_connect(f, node):
+    bridge = _svx_bridge()
+    if not bridge:
+        return {"ok": False, "error": "No SvxLink bridge node is set: the Dashboard's bridge_nodes needs a fourth entry (SVX)."}
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY}). Run Connect to an SvxReflector on 44helper's SvxLink tab first."}
+    if not _linked(node, bridge):
+        ok, out = ilink(node, 3, bridge)
+        if not ok:
+            return {"ok": False, "error": f"Asterisk refused to link the SvxLink bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
+    if not _svx_send(f"91{f['num']}#"):
+        return {"ok": False, "error": "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."}
+    return {"ok": True, "message": f"SVX talkgroup {f['num']} picked"}
+
+def svx_disconnect():
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY})."}
+    _svx_send("910#")
+    _svx_send("9#")
+    return {"ok": True, "message": "SVX talkgroup dropped"}
+
 def _tune_connect_impl(b):
     try:
         f = _tune_fav(b)
@@ -4101,6 +4156,8 @@ def _tune_connect_impl(b):
         return m17_connect(f, node)
     if f["mode"] in ("ASL", "EchoLink"):
         return node_connect(f, node)
+    if f["mode"] == "SVX":
+        return svx_connect(f, node)
     act = b.get("net_action")
     return solo_dvs(f, node, act if act in ("add", "once") else None)
 
@@ -4128,6 +4185,8 @@ def _tune_disconnect_impl(b=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
+    if isinstance(b, dict) and _mode_safe(b) == "SVX":
+        return svx_disconnect()
     if isinstance(b, dict) and _mode_safe(b) in ("ASL", "EchoLink") and b.get("num"):
         try:
             f = _tune_fav(b)
@@ -7171,6 +7230,11 @@ async function loadDigital() {
   const h = d.home || {};
   $('hc-mode').value = h.mode || ''; $('hc-num').value = h.num || ''; $('hc-net').value = h.net || '';
   $('hc-module').value = h.module || ''; $('hc-label').value = h.label || '';
+  dashFavs = d.dash_favs || [];
+  const dsel = $('hc-dash');
+  dsel.innerHTML = '';
+  dsel.appendChild(new Option(dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites', ''));
+  dashFavs.forEach((f, i) => dsel.appendChild(new Option((f.label || (f.mode + ' ' + f.num)) + ' (' + f.mode + ')', String(i))));
   $('hc-now').textContent = h.mode ? 'Home channel: ' + (h.label || (h.mode + ' ' + h.num)) : 'No home channel: the node is left disconnected after a recording.';
   netMax = d.net_max || 10;
   drawNets();
@@ -7207,6 +7271,7 @@ async function nwImport() {
   setMsg('nw-msg', d);
   if (d.ok) { loadDigital(); loadTuneInfo(); loadSchedSources(); }
 }
+let dashFavs = [];
 async function hcSave() {
   const d = await post('/api/home', {mode: $('hc-mode').value, num: $('hc-num').value.trim(), net: $('hc-net').value.trim(),
     module: $('hc-module').value.trim(), label: $('hc-label').value.trim()});
@@ -7913,6 +7978,12 @@ function initPage() {
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
   $('hc-save').addEventListener('click', hcSave);
+  $('hc-dash').addEventListener('change', () => {
+    const f = dashFavs[+$('hc-dash').value];
+    if (!f) return;
+    $('hc-mode').value = f.mode; $('hc-num').value = f.num; $('hc-net').value = f.net || '';
+    $('hc-module').value = f.module || ''; $('hc-label').value = f.label || '';
+  });
   $('t-net-add').addEventListener('click', () => netAnswer('add'));
   $('t-net-once').addEventListener('click', () => netAnswer('once'));
   $('t-net-no').addEventListener('click', () => netAnswer(''));
@@ -8224,7 +8295,8 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="nw-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Home channel</h3>
 <p class="muted small">After a recording ends, Node Recorder connects this channel. It is set up like a Node Talker favorite. Leave the mode on Off to leave the node disconnected instead.</p>
-<div class="row"><label>Mode <select id="hc-mode"><option value="">Off</option><option>ASL</option><option>EchoLink</option><option>DMR</option><option>STFU</option><option>YSF</option><option>P25</option><option>NXDN</option><option>DSTAR</option><option>M17</option></select></label>
+<div class="row"><label>From the Dashboard <select id="hc-dash"></select></label>
+<label>Mode <select id="hc-mode"><option value="">Off</option><option>ASL</option><option>EchoLink</option><option>DMR</option><option>STFU</option><option>YSF</option><option>P25</option><option>NXDN</option><option>DSTAR</option><option>M17</option><option>SVX</option></select></label>
 <label>Node, talkgroup or room <input id="hc-num" type="text" maxlength="24" autocomplete="off"></label>
 <label>DMR network <input id="hc-net" type="text" maxlength="40" autocomplete="off"></label>
 <label>M17 module <input id="hc-module" type="text" maxlength="1" autocomplete="off"></label>

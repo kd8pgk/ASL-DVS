@@ -1,6 +1,16 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_4_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_18_5_20261123.py`. Newest entries first.
+
+## 0.18.5 (2026-11-23)
+
+SvxLink and Dashboard favorites for the home channel. This is a release.
+
+- **SVX mode:** the home channel can be an SVX talkgroup. Node Recorder links the SvxLink bridge node, then sends the talkgroup to SvxLink's control device, as Node Controller's SVX tab does. Disconnect drops the talkgroup and then the link.
+- **SVX bridge:** the fourth entry of the Dashboard's bridge_nodes (the SVX slot). If it is not set, an SVX home channel reports that.
+- **From the Dashboard:** a dropdown on the Home channel card fills the fields from the Dashboard's favorites.
+- **Scheduled recordings only:** the home channel is connected after a scheduled recording. A manual recording leaves the link as it is, as before.
+- Nothing else changes.
 
 ## 0.18.4 (2026-11-23)
 
