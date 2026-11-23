@@ -20,8 +20,10 @@ USED_BY = {
     "svc_unit_info": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
     "svc_classify": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
     "svc_rows": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
-    "reg_parse": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "reg_parse": ("nodecontrol", "nodecontrol_pi02w"),
     "svc_reg_state": ("nodetalker", "nodecontrol", "nodecontrol_pi02w"),
+    "reg_nodes": ("nodetalker", "sysmon_pi02w"),
+    "reg_verdict": ("nodetalker", "sysmon_pi02w"),
     "sess_policy": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "termon", "nodemon", "piper_dashboard"),
     "sess_digest": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "termon", "nodemon", "piper_dashboard"),
     "sess_stamp": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "termon", "nodemon", "piper_dashboard"),
@@ -765,6 +767,46 @@ def reg_parse(out, node):
             return "unregistered"
         state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
     return state
+
+
+def reg_nodes(out):
+    import re
+    bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
+    cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+    nodes = {}
+    for line in (out or "").splitlines():
+        cols = cols_re.match(line)
+        if cols and re.fullmatch(r"\d{4,6}", cols.group(2)):
+            node, text = cols.group(2), cols.group(5).lower()
+        else:
+            toks = line.split()
+            node = next((t for t in toks if re.fullmatch(r"\d{4,6}", t)), "")
+            if not node:
+                continue
+            text = " ".join(t for t in line.lower().split() if "." not in t)
+        if any(w in text for w in bad):
+            state = "unregistered"
+        elif re.search(r"\bregistered\b", text):
+            state = "registered"
+        else:
+            state = "unknown"
+        if nodes.get(node) != "unregistered":
+            nodes[node] = state
+    return nodes
+
+
+def reg_verdict(nodes, main=""):
+    nodes = dict(nodes or {})
+    main = str(main or "").strip()
+    if main and main not in nodes:
+        return "unregistered"
+    if "unregistered" in nodes.values():
+        return "unregistered"
+    if not nodes:
+        return "unknown"
+    if all(v == "registered" for v in nodes.values()):
+        return "registered"
+    return "unknown"
 
 
 def svc_reg_state(node, asterisk_on, parsed):

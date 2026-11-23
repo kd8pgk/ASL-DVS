@@ -1,6 +1,13 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_92_20261123.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_93_20261123.py`. Newest entries first.
+
+## 6.13.93-pi02w (2026-11-23)
+
+The live registration reading is now the shared code that Node Talker uses. This is a release: what counts as registered changed.
+
+- **Shared parser.** `reg_nodes` and `reg_verdict` (`shared/confio.py`) read `rpt show registrations`. A "Request Sent" or "Auth. Sent" line was shown as registered because the host name `register.allstarlink.org` contains "regist"; it is now "waiting". A port in the host column (`host:4569`, IAX) was read as the node number; it no longer is. "No Authentication" is now counted as not registered.
+- The red / waiting / green verdict of the ASL header and the Reg tab is unchanged otherwise: any listed node rejected or unregistered is red.
 
 ## 6.13.92-pi02w (2026-11-23)
 

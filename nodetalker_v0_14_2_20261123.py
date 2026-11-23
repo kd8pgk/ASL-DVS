@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.1"
+VERSION = "0.14.2"
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
 
@@ -3579,26 +3579,44 @@ def svc_rows_nt(run, now_mono, stfu_probe=None):
     return rows
 
 
-def reg_parse(out, node):
+def reg_nodes(out):
     import re
-    if not out.strip() or not node:
-        return "unknown"
     bad = ("unregist", "rejected", "failed", "timeout", "timed out", "authentication")
     cols_re = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
-    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
-    state = "unregistered"
-    for line in out.splitlines():
+    nodes = {}
+    for line in (out or "").splitlines():
         cols = cols_re.match(line)
-        if cols and cols.group(2) == node:
-            text = cols.group(5).lower()
-        elif pat.search(line):
-            text = " ".join(t for t in line.lower().split() if "." not in t)
+        if cols and re.fullmatch(r"\d{4,6}", cols.group(2)):
+            node, text = cols.group(2), cols.group(5).lower()
         else:
-            continue
+            toks = line.split()
+            node = next((t for t in toks if re.fullmatch(r"\d{4,6}", t)), "")
+            if not node:
+                continue
+            text = " ".join(t for t in line.lower().split() if "." not in t)
         if any(w in text for w in bad):
-            return "unregistered"
-        state = "registered" if re.search(r"\bregistered\b", text) else "unknown"
-    return state
+            state = "unregistered"
+        elif re.search(r"\bregistered\b", text):
+            state = "registered"
+        else:
+            state = "unknown"
+        if nodes.get(node) != "unregistered":
+            nodes[node] = state
+    return nodes
+
+
+def reg_verdict(nodes, main=""):
+    nodes = dict(nodes or {})
+    main = str(main or "").strip()
+    if main and main not in nodes:
+        return "unregistered"
+    if "unregistered" in nodes.values():
+        return "unregistered"
+    if not nodes:
+        return "unknown"
+    if all(v == "registered" for v in nodes.values()):
+        return "registered"
+    return "unknown"
 
 
 def svc_reg_state(node, asterisk_on, parsed):
@@ -3644,7 +3662,16 @@ def svc_registration(asterisk_on):
         if c["node"] == node and now - c["t"] < SVC_REG_SEC:
             return {"state": c["state"], "node": node, "detail": c["detail"], "since": c["since"]}
     ok, out = ast_cli("rpt show registrations", timeout=4)
-    state, detail = svc_reg_state(node, True, reg_parse(out, node) if ok else None)
+    nodes = reg_nodes(out) if ok else {}
+    parsed = None if not ok else (reg_verdict(nodes, node) if out.strip() else "unknown")
+    state, detail = svc_reg_state(node, True, parsed)
+    if state == "unregistered":
+        others = sorted(n for n, v in nodes.items() if v == "unregistered" and n != node)
+        if node not in nodes:
+            detail = "Not registered: node " + node + " is not in the registration list"
+        elif others:
+            detail = "Not registered: node " + ", ".join(others) + " is rejected or not registered"
+
     with _svc_lock:
         c = _reg_cache
         if c["node"] == node and c["state"] != state and c["t"] > -1e8:
@@ -3713,6 +3740,8 @@ def svc_status(_body=None):
             return dict(_svc_cache["v"])
         own_only = now < _svc_own_until["t"]
     v = None if own_only else svc_from_nc()
+    if v is not None:
+        v["reg"] = svc_registration(any(r["key"] == "asterisk" and r["light"] == "on" for r in v["services"]))
     if v is None:
         rows = svc_rows_nt(_svc_run, now, svc_stfu_by_hand)
         reg = svc_registration(rows[0]["light"] == "on")

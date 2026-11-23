@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_1_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_2_20261123.py`. Newest entries first.
+
+## 0.14.2 (2026-11-23)
+
+The AllStarLink registration light now tells the truth and uses the same code as SysMon. This is a release: the registration verdict changed.
+
+- **Every node in `rpt show registrations` counts.** Node Talker used to look only at its own node. It now reads the whole list, like SysMon: when any listed node is rejected, timed out or unregistered, the light is red and the line names the node. Its own node missing from the list is also red.
+- **Node Controller's registration is no longer trusted.** The service rows may still come from Node Controller's file, but the registration verdict is always read here, so an old or differently-parsed answer from another build cannot show "Registered" while SysMon says otherwise.
+- **Shared parser.** `reg_nodes` and `reg_verdict` in `shared/confio.py` replace the private `reg_parse`; SysMon (Pi Zero 2 W build) uses the same two. A port in the host column (`host:4569`) or a host name is never read as a node number, "Request Sent" and "Auth. Sent" are "not known yet" (not registered, not red), and "No Authentication" is red.
+- Tests: `ci/test_nodetalker_services.py` covers all nodes, ports in the host column, the detail text and the file's registration being ignored.
 
 ## 0.14.1 (2026-11-23)
 
