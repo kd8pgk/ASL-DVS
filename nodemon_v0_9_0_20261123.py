@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -25,8 +26,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.8.1"
-DATE_STR = "2026-11-18"
+VERSION = "0.9.0"
+DATE_STR = "2026-11-23"
 APP_NAME = "Node Monitor"
 PORT = 7777
 
@@ -60,6 +61,11 @@ GZIP_MIN_BYTES = 600
 POLL_MIN_SEC = 1
 EXIT_NO_TLS = 78
 POLL_MAX_SEC = 30
+LONGPOLL_SEC = 20.0
+PARK_SEC = 900.0
+FRESH_WAIT_SEC = 0.6
+WARM_SEC = 1.0
+KICK_DELAYS = (0.35, 1.5)
 PRIVATE_MIN = 1000
 PRIVATE_MAX = 1999
 _START_TIME = time.time()
@@ -607,6 +613,20 @@ def _ami_read(fh):
             continue
         lines.append(ln)
 
+def _ami_read_many(fh, action_ids, seconds=None):
+    end = time.monotonic() + (seconds or AMI_REPLY_SEC * 2)
+    want = set(action_ids)
+    got = {}
+    while len(got) < len(want):
+        lines = _ami_read(fh)
+        for aid in want:
+            if aid not in got and f"ActionID: {aid}" in lines:
+                got[aid] = lines
+                break
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
+    return got
+
 def _ami_read_for(fh, action_id):
     end = time.monotonic() + AMI_REPLY_SEC
     while True:
@@ -1000,13 +1020,21 @@ _BRIDGE_KINDS = {34001: ("dvswitch", "DVSwitch bridge"), 34008: ("m17", "M17 bri
 _USRP_RX_RE = re.compile(r"USRP/[^:\s]+:(\d+):(\d+)", re.I)
 
 
+_plan_cache = ["", None]
+
+
 def node_plan():
     try:
         with open(RPT_CONF, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError as exc:
         return {"ok": False, "error": f"{RPT_CONF}: {exc.strerror or exc}", "public": [], "private": [], "kind": {}}
-    scan = rpt_scan(text)
+    cached = _plan_cache
+    if cached[0] == text:
+        scan = cached[1]
+    else:
+        scan = rpt_scan(text)
+        _plan_cache[:] = [text, scan]
     names = []
     for s in scan["secs"]:
         n = s["name"]
@@ -1108,42 +1136,162 @@ def parse_localnodes(lines):
 
 IDLE_AFTER_SEC = 30.0
 WAKE_WAIT_SEC = 4.0
+WARM_WAKE = threading.Event()
+
+
+class Hub:
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.seq = 0
+
+    def bump(self):
+        with self.cond:
+            self.seq += 1
+            self.cond.notify_all()
+
+    def wait(self, since, seconds):
+        end = time.monotonic() + seconds
+        with self.cond:
+            while self.seq == since:
+                left = end - time.monotonic()
+                if left <= 0:
+                    break
+                self.cond.wait(left)
+            return self.seq
+
+
+HUB = Hub()
+
+
+class AmiParked(Exception):
+    pass
 
 
 class Monitor:
     def __init__(self):
         self.lock = threading.Lock()
+        self.fresh = threading.Condition(self.lock)
         self.snap = {"ok": False, "error": "starting", "at": 0.0, "banner": "", "loaded": [], "regs": {},
                      "nodes": {}, "idle": False}
         self.refused = None
         self.wake_event = threading.Event()
+        self.kick_event = threading.Event()
         self.last_ask = -1e9
+        self.waiters = 0
 
     def touch(self):
         self.last_ask = time.monotonic()
         self.wake_event.set()
+        WARM_WAKE.set()
+
+    def hold(self):
+        with self.lock:
+            self.waiters += 1
+        self.touch()
+
+    def release(self):
+        with self.lock:
+            self.waiters -= 1
+        self.last_ask = time.monotonic()
+
+    def kick(self):
+        self.touch()
+        self.kick_event.set()
+
+    def kick_later(self, delays=None):
+        self.kick()
+        for sec in (KICK_DELAYS if delays is None else delays):
+            t = threading.Timer(sec, self.kick_event.set)
+            t.daemon = True
+            t.start()
 
     def _wanted(self):
-        return time.monotonic() - self.last_ask < IDLE_AFTER_SEC
+        return self.waiters > 0 or time.monotonic() - self.last_ask < IDLE_AFTER_SEC
 
     def waiting(self):
         with self.lock:
             return self.snap["idle"] or self.snap["error"] == "starting"
 
+    def wait_fresh(self):
+        with self.fresh:
+            seconds = FRESH_WAIT_SEC if self.snap["at"] else WAKE_WAIT_SEC
+            self.fresh.wait_for(lambda: not (self.snap["idle"] or self.snap["error"] == "starting"), seconds)
+
     def state(self):
         with self.lock:
-            return json.loads(json.dumps(self.snap))
+            return dict(self.snap)
 
     def _put(self, **kw):
         with self.lock:
             self.snap.update(kw)
+            self.fresh.notify_all()
 
     def _down(self, error):
         with self.lock:
             was = self.snap["ok"]
+            changed = was or self.snap["error"] != error
             self.snap.update(ok=False, error=error, nodes={}, regs={}, loaded=[], idle=False)
+            self.fresh.notify_all()
         if was:
             log_event(f"Asterisk link lost ({error})", "warn")
+        if changed:
+            HUB.bump()
+
+    def _poll_once(self, sock, fh, banner):
+        plan = node_plan()
+        nodes = plan["public"] + plan["private"]
+        batch = [("nmlocal", {"Action": "Command", "Command": "rpt localnodes"}),
+                 ("nmregs", {"Action": "Command", "Command": "rpt show registrations"})]
+        for node in nodes:
+            batch.append(("nmx" + node, {"Action": "RptStatus", "Command": "XStat", "Node": node}))
+        self.kick_event.clear()
+        guard = _cap_time(sock, AMI_REPLY_SEC * 2)
+        try:
+            for aid, fields in batch:
+                sock.sendall(_ami_msg(ActionID=aid, **fields))
+            got = _ami_read_many(fh, [aid for aid, _ in batch])
+        finally:
+            guard.cancel()
+        loaded = parse_localnodes(got["nmlocal"])
+        regs = parse_registrations(got["nmregs"])
+        out = {}
+        for node in nodes:
+            reply = got["nmx" + node]
+            if "Response: Success" in reply:
+                out[node] = dict(parse_xstat(reply), ok=True, error="")
+            else:
+                msg = next((x[9:] for x in reply if x.startswith("Message: ")), "no answer")
+                out[node] = {"links": [], "others": [], "txkeyed": False, "rxkeyed": False, "ok": False, "error": msg}
+        new = {"ok": True, "error": "", "banner": banner, "loaded": loaded, "regs": regs, "nodes": out}
+        with self.lock:
+            first = not self.snap["ok"]
+            changed = first or self.snap["idle"] or any(self.snap.get(k) != v for k, v in new.items())
+            self.snap.update(new, at=time.time(), idle=False)
+            self.fresh.notify_all()
+        if first:
+            log_event(f"Link state from Asterisk (AMI {AMI_HOST}:{AMI_PORT}): {banner}", "ok")
+        if changed:
+            HUB.bump()
+
+    def _park(self, sock, fh):
+        self._put(idle=True)
+        log_event("No page is open: Asterisk is not polled until one is", "info")
+        while not self._wanted():
+            self.wake_event.clear()
+            if self._wanted():
+                break
+            if not self.wake_event.wait(PARK_SEC) and not self._wanted():
+                return False
+        log_event("A page is open again: polling Asterisk again", "info")
+        guard = _cap_time(sock, AMI_REPLY_SEC)
+        try:
+            sock.sendall(_ami_msg(Action="Ping", ActionID="nmping"))
+            _ami_read_for(fh, "nmping")
+        except (OSError, ValueError):
+            raise AmiParked()
+        finally:
+            guard.cancel()
+        return True
 
     def _session(self, user, secret):
         sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
@@ -1158,46 +1306,16 @@ class Monitor:
                 if "Response: Error" in reply:
                     raise AmiRefused("Asterisk refused the AMI login")
                 raise ValueError("the manager gave no answer to the login")
-            self._put(banner=banner)
             if self.snap["idle"]:
                 log_event("A page is open again: polling Asterisk again", "info")
-            n = 0
             while True:
-                n += 1
-                plan = node_plan()
-                nodes = [x for x in (plan["public"] + plan["private"])]
-
-                def ask(**fields):
-                    nonlocal n
-                    n += 1
-                    aid = f"nm{n}"
-                    sock.sendall(_ami_msg(ActionID=aid, **fields))
-                    guard = _cap_time(sock, AMI_REPLY_SEC * 2)
-                    try:
-                        return _ami_read_for(fh, aid)
-                    finally:
-                        guard.cancel()
-
-                loaded = parse_localnodes(ask(Action="Command", Command="rpt localnodes"))
-                regs = parse_registrations(ask(Action="Command", Command="rpt show registrations"))
-                out = {}
-                for node in nodes:
-                    reply = ask(Action="RptStatus", Command="XStat", Node=node)
-                    if "Response: Success" in reply:
-                        out[node] = dict(parse_xstat(reply), ok=True, error="")
-                    else:
-                        msg = next((x[9:] for x in reply if x.startswith("Message: ")), "no answer")
-                        out[node] = {"links": [], "others": [], "txkeyed": False, "rxkeyed": False, "ok": False, "error": msg}
-                with self.lock:
-                    first = not self.snap["ok"]
-                    self.snap.update(ok=True, error="", at=time.time(), loaded=loaded, regs=regs, nodes=out, idle=False)
-                if first:
-                    log_event(f"Link state from Asterisk (AMI {AMI_HOST}:{AMI_PORT}): {banner}", "ok")
-                time.sleep(_cfg_get("poll_sec"))
+                self._poll_once(sock, fh, banner)
+                end = time.monotonic() + _cfg_get("poll_sec")
+                while self._wanted() and not self.kick_event.is_set() and time.monotonic() < end:
+                    self.kick_event.wait(min(0.5, max(0.0, end - time.monotonic())))
                 if not self._wanted():
-                    self._put(idle=True)
-                    log_event("No page is open: Asterisk is not polled until one is", "info")
-                    return
+                    if not self._park(sock, fh):
+                        return
         finally:
             sock.close()
 
@@ -1216,6 +1334,8 @@ class Monitor:
             else:
                 try:
                     self._session(user, secret)
+                    continue
+                except AmiParked:
                     continue
                 except AmiRefused as exc:
                     self.refused = (user, secret)
@@ -1343,6 +1463,9 @@ def svx_events(lines):
     return {"state": state, "tg": tg, "host": host, "link": link}
 
 
+_svx_cache = [None, None]
+
+
 def read_svx():
     src = "SvxLink log"
     conf = _ini_read(SVX_CONF)
@@ -1357,13 +1480,16 @@ def read_svx():
         return _gateway("svx", "down", "SvxLink is stopped", where, src)
     try:
         with open(SVX_LOG, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - SVX_LOG_TAIL))
-            lines = fh.read().decode("utf-8", "replace").splitlines()
+            st = os.fstat(fh.fileno())
+            sig = (SVX_LOG, st.st_ino, st.st_size, st.st_mtime_ns)
+            if _svx_cache[0] == sig:
+                ev = _svx_cache[1]
+            else:
+                fh.seek(max(0, st.st_size - SVX_LOG_TAIL))
+                ev = svx_events(fh.read().decode("utf-8", "replace").splitlines())
+                _svx_cache[:] = [sig, ev]
     except OSError:
         return _gateway("svx", "unknown", "SvxLink log not readable", where, src)
-    ev = svx_events(lines)
     if not ev["state"]:
         return _gateway("svx", "unknown", "no reflector login in the log yet", where, src)
     if ev["state"] != "connected":
@@ -1448,25 +1574,74 @@ def quick_links():
     return out
 
 
+_WARM = {"on": False}
+_gw_cache = {}
+GW_MAX_AGE_SEC = 3.0
+
+
+def gateway_view(kind):
+    if _WARM["on"]:
+        hit = _gw_cache.get(kind)
+        if hit and time.monotonic() - hit[0] < GW_MAX_AGE_SEC:
+            return hit[1]
+    return gateway_for(kind)
+
+
+def links_view():
+    if _WARM["on"] and _links_cache["t"] > -1e8:
+        return _links_cache["v"]
+    return quick_links()
+
+
+def _warm_once(last):
+    plan = node_plan()
+    now = time.monotonic()
+    seen = {"plan": (plan["ok"], plan["error"], plan.get("main"), tuple(plan["public"]), tuple(plan["private"]),
+                     tuple(sorted(plan["kind"].items())))}
+    for kind in {k for k, _label in plan["kind"].values()}:
+        g = gateway_for(kind)
+        if g is not None:
+            _gw_cache[kind] = (now, g)
+            seen["gw:" + kind] = g
+    seen["links"] = quick_links()
+    if seen != last:
+        HUB.bump()
+    return seen
+
+
+def _warm_loop():
+    _WARM["on"] = True
+    last = None
+    while True:
+        if not MON._wanted():
+            WARM_WAKE.clear()
+            if not MON._wanted():
+                WARM_WAKE.wait(5.0)
+            continue
+        try:
+            last = _warm_once(last)
+        except Exception as exc:
+            log_event(f"Background refresh failed: {exc.__class__.__name__}", "warn")
+        time.sleep(WARM_SEC)
+
+
 def build_status(authed=True):
     if authed and MON._wanted():
-        end = time.monotonic() + WAKE_WAIT_SEC
-        while MON.waiting() and time.monotonic() < end:
-            time.sleep(0.1)
+        MON.wait_fresh()
     plan = node_plan()
     snap = MON.state()
     kinds = plan["kind"]
     gateways = {}
     for _node, (kind, _label) in kinds.items():
         if kind not in gateways:
-            g = gateway_for(kind)
+            g = gateway_view(kind)
             if g is not None:
                 gateways[kind] = g
     loaded = set(snap["loaded"])
     out = {"version": VERSION, "ami": {"ok": snap["ok"], "error": snap["error"], "banner": snap["banner"],
                                         "age": (time.time() - snap["at"]) if snap["at"] else None},
            "plan": {"ok": plan["ok"], "error": plan["error"]}, "main": None, "private": [],
-           "gateways": gateways, "poll_sec": _cfg_get("poll_sec"), "links": quick_links() if authed else []}
+           "gateways": gateways, "poll_sec": _cfg_get("poll_sec"), "links": links_view() if authed else []}
     if not plan["ok"]:
         return out
 
@@ -1849,7 +2024,9 @@ __CSS__</style>
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
-let authed = false, current = 'ov', status = null, logSince = 0, timer = null, COMMANDS = [];
+let authed = false, current = 'ov', status = null, logSince = 0, COMMANDS = [];
+let seq = -1, seqSeen = -1, pollGen = 0, pollCtl = null, lastSig = '', pendingPaint = false;
+const stale = {ov: true, main: true, linked: true, priv: true};
 let isRoot = false;
 const bars = {};
 const discoBusy = {};
@@ -1865,13 +2042,14 @@ async function api(path, opts) {
   const o = opts || {};
   const init = {method: o.method || 'GET', headers: {'X-Requested-With': 'XMLHttpRequest'}};
   if (o.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(o.body); }
+  if (o.signal) init.signal = o.signal;
   try {
     const r = await fetch(path, init);
     let d = {};
     try { d = await r.json(); } catch (e) { d = {}; }
     if (r.status === 401 && path !== '/api/login' && authed) { authed = false; render(); }
     return d;
-  } catch (e) { return {ok: false, error: 'Server unreachable.'}; }
+  } catch (e) { return {ok: false, error: e && e.name === 'AbortError' ? 'Cancelled.' : 'Server unreachable.'}; }
 }
 function render() {
   const wasOpen = $('login-screen').classList.contains('open');
@@ -1879,7 +2057,7 @@ function render() {
   $('app').classList.toggle('hidden', !authed);
   $('logout').classList.toggle('hidden', !authed);
   if (!authed && !wasOpen) $('pw').focus();
-  if (authed) poll(); else if (timer) { clearTimeout(timer); timer = null; }
+  if (authed) poll(); else stopPoll();
 }
 async function login(ev) {
   ev.preventDefault();
@@ -1896,6 +2074,7 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   ['ov', 'main', 'linked', 'priv', 'log'].forEach((n) => $('pg-' + n).classList.toggle('hidden', n !== name));
   if (name === 'log') pollLog();
+  paintTab(name);
 }
 function kv(label, node) {
   const r = el('div', 'row');
@@ -1986,8 +2165,7 @@ function buildBar(node) {
     res.className = 'cmdres ' + (d.ok ? 'ok' : 'err');
     res.textContent = d.ok ? d.message : (d.error || 'It failed.');
     if (document.activeElement && bar.contains(document.activeElement)) document.activeElement.blur();
-    poll();
-    setTimeout(poll, 1500);
+    fetchNow();
   });
   [sel, tgt, txt, go, res, dl].forEach((x) => bar.appendChild(x));
   bar._dl = dl;
@@ -2041,8 +2219,7 @@ async function disconNode(node) {
   disconMsg = {text: d.ok ? d.message : (d.error || 'It failed.'), cls: d.ok ? 'ok' : 'err', at: Date.now()};
   if (current !== 'ov') { const sm = $('sysmsg'); sm.className = 'sysmsg ' + disconMsg.cls; sm.textContent = disconMsg.text; }
   if (status) renderOv(status);
-  poll();
-  setTimeout(poll, 1500);
+  fetchNow();
 }
 function disconCell(n) {
   if (!n.ok || n.loaded === false) return '';
@@ -2209,32 +2386,69 @@ function renderBanner(d) {
   else if (d.ami.age !== null && d.ami.age > d.poll_sec * 4 + 10) { cls = 'warn'; text = 'The link state is ' + Math.round(d.ami.age) + ' s old.'; }
   b.appendChild(el('div', 'banner ' + cls, text));
 }
+const RENDERERS = {ov: renderOv, main: renderMain, linked: renderLinked, priv: renderPriv};
+function paintTab(name) {
+  if (!status || !stale[name] || !RENDERERS[name]) return;
+  stale[name] = false;
+  RENDERERS[name](status);
+}
+function paintAll() {
+  Object.keys(stale).forEach((k) => { stale[k] = true; });
+  paintTab(current);
+}
+function isBusy() {
+  return !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('.cmdbar'));
+}
 function renderAll(d) {
   status = d;
   $('hdr-node').textContent = d.main ? 'Node ' + d.main.node : '';
   renderBanner(d);
-  const busy = document.activeElement && document.activeElement.closest && document.activeElement.closest('.cmdbar');
-  if (busy) return;
-  renderOv(d);
-  renderMain(d);
-  renderLinked(d);
-  renderPriv(d);
+  const sig = JSON.stringify(Object.assign({}, d, {seq: 0, ami: Object.assign({}, d.ami, {age: 0})}));
+  if (sig === lastSig && !pendingPaint) return;
+  lastSig = sig;
+  if (isBusy()) { pendingPaint = true; return; }
+  pendingPaint = false;
+  paintAll();
 }
-async function poll() {
-  if (!authed) return;
-  if (timer) clearTimeout(timer);
-  if (document.visibilityState !== 'hidden') {
-    await api('/api/wake', {method: 'POST', body: {}});
-    const d = await api('/api/status');
-    if (d && d.ok !== false && d.ami) renderAll(d);
-    else if (d && d.error === 'Server unreachable.') {
+function takeStatus(d) {
+  if (typeof d.seq === 'number') { if (d.seq < seqSeen) return; seqSeen = d.seq; seq = d.seq; }
+  if (d.unchanged) {
+    if (status && status.ami) { status.ami.age = d.age; renderBanner(status); }
+    return;
+  }
+  renderAll(d);
+}
+function stopPoll() {
+  pollGen++;
+  if (pollCtl) pollCtl.abort();
+  pollCtl = null;
+}
+function pause(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function pollLoop(gen) {
+  let first = true;
+  while (authed && gen === pollGen && document.visibilityState !== 'hidden') {
+    const ctl = new AbortController();
+    pollCtl = ctl;
+    const d = await api('/api/status?since=' + (first ? -1 : seq), {signal: ctl.signal});
+    first = false;
+    if (gen !== pollGen) return;
+    if (d && d.ok !== false && (d.ami || d.unchanged)) { takeStatus(d); continue; }
+    if (d && d.error === 'Server unreachable.') {
       $('status-banner').textContent = '';
       $('status-banner').appendChild(el('div', 'banner err', 'Node Monitor is not answering. Retrying every few seconds.'));
     }
-    if (current === 'log') pollLog();
+    await pause(3000);
   }
-  const ms = Math.max(1000, ((status && status.poll_sec) || 3) * 1000);
-  timer = setTimeout(poll, ms);
+}
+function poll() {
+  if (!authed) return;
+  stopPoll();
+  seqSeen = -1;
+  pollLoop(pollGen);
+}
+async function fetchNow() {
+  const d = await api('/api/status?since=-1');
+  if (d && d.ok !== false && d.ami) takeStatus(d);
 }
 async function pollLog() {
   const d = await api('/api/log?since=' + logSince);
@@ -2254,7 +2468,13 @@ $('logout').addEventListener('click', logout);
 $('sys-disc').addEventListener('click', () => sysAction('disc'));
 $('sys-reboot').addEventListener('click', () => sysAction('reboot'));
 $('sys-shutdown').addEventListener('click', () => sysAction('shutdown'));
-document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'hidden') poll(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'hidden') poll(); else stopPoll(); });
+document.addEventListener('focusout', () => setTimeout(() => { if (pendingPaint && !isBusy()) { pendingPaint = false; paintAll(); } }, 0));
+setInterval(() => {
+  if (!authed || document.visibilityState === 'hidden') return;
+  if (current === 'log') pollLog();
+  if (disconMsg && Date.now() - disconMsg.at >= 15000) { disconMsg = null; stale.ov = true; paintTab(current); }
+}, 2000);
 async function sysAction(kind) {
   const node = status && status.main ? status.main.node : '';
   if (kind === 'disc') { disconNode(node); return; }
@@ -2313,7 +2533,8 @@ def render_page(nonce, packed):
 
 
 def _status_view(authed):
-    return dict(build_status(authed), ok=True)
+    seq = HUB.seq
+    return dict(build_status(authed), ok=True, seq=seq)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2449,6 +2670,37 @@ class Handler(BaseHTTPRequestHandler):
         self._json(403, {"ok": False, "error": "Wrong root password."})
         return False
 
+    def _client_gone(self):
+        sock = self.connection
+        try:
+            if not select.select([sock], [], [], 0)[0]:
+                return False
+            old = sock.gettimeout()
+            sock.settimeout(0.2)
+            try:
+                return sock.recv(1) == b""
+            finally:
+                sock.settimeout(old)
+        except (socket.timeout, ssl.SSLWantReadError):
+            return False
+        except (OSError, ValueError):
+            return True
+
+    def _long_status(self, since):
+        MON.hold()
+        try:
+            end = time.monotonic() + LONGPOLL_SEC
+            cur = HUB.seq
+            while since == cur and time.monotonic() < end and not self._client_gone():
+                cur = HUB.wait(since, 1.0)
+            if since == cur:
+                snap = MON.state()
+                return {"ok": True, "unchanged": True, "seq": cur,
+                        "age": (time.time() - snap["at"]) if snap["at"] else None}
+            return _status_view(True)
+        finally:
+            MON.release()
+
     def do_HEAD(self):
         self.do_GET()
 
@@ -2492,7 +2744,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/commands":
                 self._json(200, {"ok": True, "commands": list(COMMANDS)})
             elif path == "/api/status":
-                self._json(200, _status_view(authed))
+                if "since" in query:
+                    try:
+                        since = int(query["since"][0])
+                    except ValueError:
+                        since = -1
+                    self._json(200, self._long_status(since))
+                else:
+                    self._json(200, _status_view(authed))
             elif path == "/api/log":
                 try:
                     since = int(query.get("since", ["0"])[0])
@@ -2555,10 +2814,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
             return
         if path == "/api/command":
-            self._json(200, run_command(body, ip))
+            reply = run_command(body, ip)
+            if reply.get("ok"):
+                MON.kick_later()
+            self._json(200, reply)
             return
         if path == "/api/node-discon":
-            self._json(200, node_discon(body.get("node"), ip))
+            reply = node_discon(body.get("node"), ip)
+            MON.kick_later()
+            self._json(200, reply)
             return
         if path in ("/api/system/reboot", "/api/system/shutdown"):
             what = path.rsplit("/", 1)[1]
@@ -2656,6 +2920,7 @@ def run_server():
             httpd.server_close()
             return 1
     threading.Thread(target=MON.loop, name="ami-poll", daemon=True).start()
+    threading.Thread(target=_warm_loop, name="warm", daemon=True).start()
     threading.Thread(target=_watchdog_loop, args=(port,), name="watchdog", daemon=True).start()
     scheme = "https" if _tls_on() else "http"
     log_event(f"{APP_NAME} v{VERSION} on {scheme} {_cfg_get('bind_addr')}:{port}", "ok")

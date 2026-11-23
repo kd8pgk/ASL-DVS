@@ -34,8 +34,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.13.0"
-DATE_STR = "2026-11-21"
+VERSION = "0.14.0"
+DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -3095,9 +3095,17 @@ def parse_rpt(text):
     return lines, stanzas
 
 
-def read_rpt():
+_rpt_parse_cache = ["", None]
+
+
+def read_rpt(shared=False):
     with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-        return parse_rpt(fh.read())
+        text = fh.read()
+    if shared:
+        if _rpt_parse_cache[0] != text or _rpt_parse_cache[1] is None:
+            _rpt_parse_cache[:] = [text, parse_rpt(text)]
+        return _rpt_parse_cache[1]
+    return parse_rpt(text)
 
 
 def _is_ours(value):
@@ -3886,7 +3894,7 @@ _RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
 
 def recorder_busy():
-    if time.monotonic() - _recorder_cache["t"] < 2.0:
+    if time.monotonic() - _recorder_cache["t"] < 2.0 or _stale_ok(_recorder_cache["t"]):
         return _recorder_cache["v"]
     with _recorder_lock:
         return _recorder_probe()
@@ -3894,7 +3902,7 @@ def recorder_busy():
 
 def _recorder_probe():
     now = time.monotonic()
-    if now - _recorder_cache["t"] < 2.0:
+    if now - _recorder_cache["t"] < 2.0 or _stale_ok(_recorder_cache["t"]):
         return _recorder_cache["v"]
     busy = None
     info = None
@@ -3982,6 +3990,9 @@ def recording_text(rec):
             "until it ends, so the recording is not interrupted.")
 
 
+STATUS_VOLATILE = ("uptime", "last_rx_age", "listener_list")
+
+
 def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
@@ -4007,7 +4018,7 @@ def build_status(full):
         st["tuned_state"] = tune_state_now(nc) if st["tuned_now"] else ""
         st["link"] = live_link(links, ok, nc, favs, st["tuned_state"] == "unconfirmed")
         st["default_mode"] = _default_tune_mode(nc)
-        tx = tx_state(node)
+        tx = tx_state(node, shared=True)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
                                             "peak_db", "last_peak_db", "gaps", "last_gaps")}
@@ -4141,6 +4152,146 @@ def tx_nodes_line():
     return f"{TX_NODE} = radio@{host}/{TX_NODE},NONE"
 
 
+_WARM = {"on": False}
+_fast = threading.local()
+_STATUS_ASK = {"t": -1e9}
+WARM_EVENT = threading.Event()
+WARM_SEC = 1.0
+WARM_IDLE_SEC = 30.0
+WARM_STALE_SEC = 8.0
+
+
+def _stale_ok(stamp):
+    return _WARM["on"] and getattr(_fast, "on", False) and time.monotonic() - stamp < WARM_STALE_SEC
+
+
+def status_asked():
+    now = time.monotonic()
+    idle = now - _STATUS_ASK["t"] > WARM_IDLE_SEC
+    _STATUS_ASK["t"] = now
+    if idle:
+        WARM_EVENT.set()
+
+
+def build_status_fast(full):
+    _fast.on = True
+    try:
+        return build_status(full)
+    finally:
+        _fast.on = False
+
+
+def _warm_loop():
+    _WARM["on"] = True
+    while not _WARM.get("quit"):
+        if time.monotonic() - _STATUS_ASK["t"] > WARM_IDLE_SEC:
+            WARM_EVENT.clear()
+            if time.monotonic() - _STATUS_ASK["t"] > WARM_IDLE_SEC:
+                WARM_EVENT.wait(5.0)
+            continue
+        try:
+            build_status(True)
+        except Exception as exc:
+            log_event(f"Background status refresh failed: {exc.__class__.__name__}", "warn")
+        WARM_EVENT.wait(WARM_SEC)
+        WARM_EVENT.clear()
+
+
+AMI_CMD_IDLE_SEC = 60.0
+AMI_CMD_RETRY_SEC = 300.0
+
+
+def _ami_output(lines):
+    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
+    if out:
+        return "\n".join(out)
+    if any(ln.startswith("Response: Follows") for ln in lines):
+        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
+        return "\n".join(body)
+    return ""
+
+
+class AmiCmd:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.sock = None
+        self.fh = None
+        self.n = 0
+        self.used = 0.0
+        self.refused = None
+        self.skip_until = 0.0
+
+    def _close(self):
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except OSError:
+            pass
+        self.sock = self.fh = None
+
+    def _open(self):
+        user, secret = ami_credentials(AMI_CONF)
+        if not user or not secret:
+            raise ValueError("no AMI login")
+        if self.refused == (user, secret):
+            raise ValueError("AMI login refused")
+        sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=3)
+        try:
+            sock.settimeout(AMI_REPLY_SEC)
+            fh = sock.makefile("rb")
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
+                raise ValueError("that port is not the Asterisk manager")
+            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="ntcmdlogin"))
+            reply = _ami_read_for(fh, "ntcmdlogin")
+            if "Response: Success" not in reply:
+                if "Response: Error" in reply:
+                    self.refused = (user, secret)
+                raise ValueError("AMI login failed")
+        except BaseException:
+            sock.close()
+            raise
+        self.sock, self.fh = sock, fh
+
+    def run(self, command, timeout=6):
+        now = time.monotonic()
+        if now < self.skip_until or not self.lock.acquire(timeout=timeout):
+            return None
+        try:
+            if self.sock is not None and now - self.used > AMI_CMD_IDLE_SEC:
+                self._close()
+            for _ in range(2):
+                fresh = self.sock is None
+                try:
+                    if fresh:
+                        self._open()
+                    self.n += 1
+                    aid = f"ntc{self.n}"
+                    self.sock.settimeout(timeout)
+                    self.sock.sendall(_ami_msg(Action="Command", Command=command, ActionID=aid))
+                    lines = _ami_read_for(self.fh, aid)
+                    self.used = time.monotonic()
+                    ok = "Response: Error" not in lines
+                    return ok, _ami_output(lines)
+                except (OSError, ValueError):
+                    self._close()
+                    if fresh:
+                        break
+            self.skip_until = time.monotonic() + (AMI_CMD_RETRY_SEC if self.refused else 30.0)
+            return None
+        finally:
+            self.lock.release()
+
+
+AMICMD = AmiCmd()
+
+
+def ast_cli_fast(command, timeout=6):
+    r = AMICMD.run(command, timeout)
+    if r is not None:
+        return r
+    return ast_cli(command, timeout=timeout)
+
+
 def ast_cli(command, timeout=8):
     try:
         r = subprocess.run([AST_BIN, "-rx", command], capture_output=True, text=True, timeout=timeout)
@@ -4170,7 +4321,7 @@ def links_steady(node, ok, links):
     return ok, links
 
 
-_lstats_cache = {"t": 0.0, "node": "", "ok": False, "links": []}
+_lstats_cache = {"t": -1e9, "node": "", "ok": False, "links": []}
 _lstats_lock = threading.Lock()
 
 
@@ -4179,9 +4330,9 @@ def rpt_links(node, max_age=2.0):
         return False, []
     with _lstats_lock:
         c = _lstats_cache
-        if c["node"] == node and time.monotonic() - c["t"] < max_age:
+        if c["node"] == node and (time.monotonic() - c["t"] < max_age or _stale_ok(c["t"])):
             return c["ok"], list(c["links"])
-    ok, out = ast_cli(f"rpt lstats {node}", timeout=6)
+    ok, out = ast_cli_fast(f"rpt lstats {node}", timeout=6)
     links = []
     if ok:
         for line in out.splitlines():
@@ -4197,7 +4348,8 @@ def rpt_links(node, max_age=2.0):
 
 def _lstats_invalidate():
     with _lstats_lock:
-        _lstats_cache["t"] = 0.0
+        _lstats_cache["t"] = -1e9
+    WARM_EVENT.set()
 
 
 MODE_LABEL = {"DSTAR": "D-STAR"}
@@ -4848,7 +5000,7 @@ _bridge_cache = {"t": -60.0, "v": None}
 
 
 def bridge_nodes(max_age=30.0):
-    if _bridge_cache["v"] is not None and time.monotonic() - _bridge_cache["t"] < max_age:
+    if _bridge_cache["v"] is not None and (time.monotonic() - _bridge_cache["t"] < max_age or _stale_ok(_bridge_cache["t"])):
         return _bridge_cache["v"]
     setv = ([x.strip() for x in str(favcfg().get("bridge_nodes", "")).split(",")] + ["", ""])[:2]
     usrp = _usrp_nodes()
@@ -4911,7 +5063,7 @@ _probe_cache = {}
 def port_open_cached(port, ttl=15.0):
     now = time.monotonic()
     hit = _probe_cache.get(port)
-    if hit and now - hit[0] < ttl:
+    if hit and (now - hit[0] < ttl or _stale_ok(hit[0])):
         return hit[1]
     val = port_open(port)
     _probe_cache[port] = (now, val)
@@ -4982,7 +5134,7 @@ _m17_status = {"t": -M17_STATUS_TTL, "v": ""}
 
 def m17_current(max_age=M17_STATUS_TTL):
     now = time.monotonic()
-    if now - _m17_status["t"] < max_age:
+    if now - _m17_status["t"] < max_age or _stale_ok(_m17_status["t"]):
         return _m17_status["v"]
     r = dash_call({"action": "m17-status"}, timeout=3)
     v = r["message"].strip().upper() if r and r["ok"] else ""
@@ -5534,7 +5686,7 @@ def nc_dvs(f, node, net_action=None):
 
 def nc_dvs_current(max_age=M17_STATUS_TTL):
     now = time.monotonic()
-    if now - _nc_dvs_status["t"] < max_age:
+    if now - _nc_dvs_status["t"] < max_age or _stale_ok(_nc_dvs_status["t"]):
         return _nc_dvs_status["v"]
     r = dash_call({"action": "dvs-status"}, timeout=3)
     v = None
@@ -6482,7 +6634,7 @@ _svx_cache = {"t": -1e9, "v": ""}
 
 def svx_now():
     now = time.monotonic()
-    if now - _svx_cache["t"] < SVX_TTL_SEC:
+    if now - _svx_cache["t"] < SVX_TTL_SEC or _stale_ok(_svx_cache["t"]):
         return _svx_cache["v"]
     text = svx_text()
     _svx_cache.update(t=now, v=text)
@@ -7510,11 +7662,11 @@ def _put_nodes_line(lines, nodes_line):
     return new
 
 
-def tx_state(main=None):
+def tx_state(main=None, shared=False):
     out = {"node": TX_NODE, "main": main_node() if main is None else main, "defined": False, "ours": False, "recorder": False, "nodes_line": False,
            "ready": False, "linked": None, "rxchannel": f"USRP/127.0.0.1:{TX_USRP_LISTEN}:{TX_USRP_SEND}"}
     try:
-        lines, stanzas = read_rpt()
+        lines, stanzas = read_rpt(shared)
     except OSError as exc:
         out["error"] = f"Could not read {RPT_CONF}: {exc}"
         return out
@@ -8228,6 +8380,9 @@ document.addEventListener('click', function (ev) {
 document.addEventListener('DOMContentLoaded', function () { NET.show(); });
 
 const _tags = {};
+let lastSrvMs = 0;
+function put(id, v) { const e = $(id); if (e && e.textContent !== v) e.textContent = v; }
+function putCls(id, v) { const e = $(id); if (e && e.className !== v) e.className = v; }
 async function api(url, opts) {
   opts = opts || {};
   const tagged = !!opts.tag && !opts.method;
@@ -8240,8 +8395,10 @@ async function api(url, opts) {
   }
   let r;
   try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Talker is not answering.'}; }
-  let d = {};
-  if (tagged && r.status === 304 && _tags[url]) return JSON.parse(_tags[url].text);
+  let d = {}, vol = null;
+  if (url.indexOf('/api/status') === 0) { const ms = parseInt(r.headers.get('X-Work-Ms') || '', 10); lastSrvMs = isNaN(ms) ? 0 : ms; }
+  try { const v = r.headers.get('X-Volatile'); if (v) vol = JSON.parse(v); } catch (e) {}
+  if (tagged && r.status === 304 && _tags[url]) return Object.assign(JSON.parse(_tags[url].text), vol || {});
   try {
     const text = await r.text();
     d = JSON.parse(text);
@@ -8604,27 +8761,28 @@ function rxhShow(h) {
   });
 }
 
+let linksSig = '';
 async function pollStatus() {
   if (!(authed || publicListen) || document.visibilityState === 'hidden' && !playing) return;
   const t0 = performance.now();
   const d = await api('/api/status', {tag: true});
   if (!d || d.ok === false) return;
-  if (document.visibilityState !== 'hidden') NET.sample(performance.now() - t0);
+  if (document.visibilityState !== 'hidden') NET.sample(Math.max(0, performance.now() - t0 - lastSrvMs));
   recBusy = d.recording || null;
   recInfo = d.recorder || null;
   recApplyLocks();
   recApplyNote();
-  $('st-node').textContent = d.node || '(not set)';
+  put('st-node', d.node || '(not set)');
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
-  $('st-listeners').textContent = d.listeners + ' / ' + d.max_listeners;
+  put('st-listeners', d.listeners + ' / ' + d.max_listeners);
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
   const feedTxt = d.receiving ? ('receiving, ' + d.packets_per_sec + ' packets/s')
     : (d.last_rx_age != null ? 'no audio for ' + Math.round(d.last_rx_age) + ' s' : 'nothing received yet');
-  $('st-feed').className = 'dot ' + feedCls;
-  $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
+  putCls('st-feed', 'dot ' + feedCls);
+  put('st-feed-t', d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet'));
   $('st-feed-w').title = 'Feed from Asterisk: ' + feedTxt;
-  $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
-  if (!talking) $('st-level').textContent = fmtDb(d.peak_db);
+  putCls('st-active', 'dot ' + (d.audio_active ? 'rx' : ''));
+  if (!talking) put('st-level', fmtDb(d.peak_db));
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
   if (d.jitter_adapt !== undefined) jitAdapt = !!d.jitter_adapt;
   if (d.rx_plc !== undefined) plcOn = !!d.rx_plc;
@@ -8633,33 +8791,40 @@ async function pollStatus() {
   if (!authed) return;
   if (d.ptt_lock && !!d.ptt_lock.locked !== pttLocked) applyPttLock(d.ptt_lock.locked);
   const tx = d.tx || {};
-  $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
+  putCls('s-tx', 'dot ' + (tx.keyed ? 'tx' : ''));
   $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
   busyText = tx.keyed && !talking && !keyed && performance.now() - ownUnkeyAt > 2500 ? 'Busy: ' + tx.who + ' ' + fmtSecs(tx.secs) : '';
   rxStatus(!!d.audio_active || !!busyText);
   phoneOn = !!(d.phone && d.phone.active);
-  if ($('phone-state')) $('phone-state').textContent = phoneText(d.phone);
+  if ($('phone-state')) put('phone-state', phoneText(d.phone));
   pttLabel();
   totSec = tx.tot || totSec;
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
-  $('tune-rxpk').textContent = fmtDb(d.peak_db);
-  if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
-  if (authed) $('rx-notch-auto-v').textContent = d.rx_notch_auto_hz != null ? 'Tone found: ' + d.rx_notch_auto_hz.toFixed(1) + ' Hz.' : 'No tone found yet.';
+  put('tune-rxpk', fmtDb(d.peak_db));
+  if (d.rx_load_pct != null) put('rx-load', d.rx_load_pct + ' % of one CPU core (last 5 s)');
+  if (authed) put('rx-notch-auto-v', d.rx_notch_auto_hz != null ? 'Tone found: ' + d.rx_notch_auto_hz.toFixed(1) + ' Hz.' : 'No tone found yet.');
   rxhShow(d.rxh);
   const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
-  $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
-  const tb = $('s-links');
-  tb.innerHTML = '';
+  put('tune-gaps', gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none'));
   const links = d.links || [];
-  links.forEach((l) => {
-    const tr = document.createElement('tr');
+  const linkRows = links.map((l) => {
     const f = favs.find((x) => x.target === l.node);
-    [l.node + (l.node === tx.node ? ' (TX)' : ''), f ? f.label : '', l.dir, l.time, l.state].forEach((v) => {
-      const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td);
-    });
-    tb.appendChild(tr);
+    return [l.node + (l.node === tx.node ? ' (TX)' : ''), f ? f.label : '', l.dir, l.time, l.state];
   });
+  const linkSig = JSON.stringify(linkRows);
+  if (linkSig !== linksSig) {
+    linksSig = linkSig;
+    const tb = $('s-links');
+    tb.innerHTML = '';
+    linkRows.forEach((row) => {
+      const tr = document.createElement('tr');
+      row.forEach((v) => {
+        const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  }
   $('s-nolinks').classList.toggle('hidden', links.length > 0);
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
   listenLink = d.link || null;
@@ -8667,7 +8832,7 @@ async function pollStatus() {
   linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
   connectLabel();
   const unsure = d.tuned_state === 'unconfirmed';
-  $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now + (unsure ? ' ?' : '') : '';
+  put('t-now', d.tuned_now ? 'Tuned: ' + d.tuned_now + (unsure ? ' ?' : '') : '');
   $('t-now').title = d.tuned_now && unsure ? 'Not confirmed by the bridge. Tune it again.' : '';
   tunedNow = d.tuned_now || '';
   defaultMode = d.default_mode || '';
@@ -8677,8 +8842,8 @@ async function pollStatus() {
   }
   if (!tnPrimed && authed) tnSetSel(defaultSel());
   tnButtons();
-  $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
-  if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
+  put('nd-feeder', d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running');
+  if (d.udp_port) put('nd-udp', d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)');
 }
 
 let jitAdapt = true, plcOn = true, plcTail = null, plcU = null;
@@ -10710,6 +10875,7 @@ function whyNote(id, list) {
 }
 
 function availUi() {
+  if (document.visibilityState === 'hidden') return;
   const app = appAudio(), appT = appTalk(), md = navigator.mediaDevices;
   const caps = (app && appInfo()) || {}, appMic = appT && !!caps.micOpts;
   const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
@@ -10891,6 +11057,7 @@ function rxRef() {
 function gapLeft() { return ptt.gap ? Math.max(0, RX_GAP_MS - (performance.now() - rxRef())) : 0; }
 
 function gapTick() {
+  if (document.visibilityState === 'hidden') return;
   const left = gapLeft();
   const since = performance.now() - rxRef();
   const qk = qkLeft();
@@ -12114,7 +12281,7 @@ document.addEventListener('DOMContentLoaded', () => {
   whoami().then(() => { if (authed) loadFavs(); pollStatus(); });
   availUi();
   setInterval(availUi, 2000);
-  pollEvery(pollStatus, 1500, 5000);
+  pollEvery(pollStatus, 1000, 2500);
   setInterval(gapTick, 100);
   pollEvery(pollLog, 3000, 10000);
   setInterval(() => { if (authed && foldOpen('kc') && !NET.gate('kc', 10000)) kcRefresh(); }, 10000);
@@ -12798,6 +12965,9 @@ def login_ui_inject(html, input_id, nonce=""):
     return head + login_ui_html(input_id, nonce) + sep + tail
 
 
+_page_etags = {}
+
+
 def render_page(lite=False, packed=False):
     global _page
     if _page is None:
@@ -13007,7 +13177,8 @@ class Handler(BaseHTTPRequestHandler):
     def _head(self, code, ctype, headers):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in headers:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         for k, v in headers.items():
@@ -13042,13 +13213,14 @@ class Handler(BaseHTTPRequestHandler):
     def _wants_lite(self):
         return self.headers.get("Save-Data", "").strip().lower() == "on" or self._cookie_is("asl_slow", "on")
 
-    def _send(self, code, body, ctype, headers=None):
+    def _send(self, code, body, ctype, headers=None, etag_body=None):
         headers = dict(headers or {})
         if ctype.startswith("application/json") and "Content-Encoding" not in headers:
             if self.command == "GET" and code == 200:
-                etag = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+                etag = 'W/"' + hashlib.sha1(body if etag_body is None else etag_body).hexdigest()[:24] + '"'
                 if self._etag_matches(etag):
-                    self._head(304, ctype, {"ETag": etag, "Vary": "Accept-Encoding"})
+                    self._head(304, ctype, dict({k: v for k, v in headers.items() if k.startswith("X-")},
+                                                ETag=etag, Vary="Accept-Encoding"))
                     return
                 headers["ETag"] = etag
             if len(body) >= GZIP_MIN_BYTES and self._accepts_gzip():
@@ -13063,17 +13235,28 @@ class Handler(BaseHTTPRequestHandler):
         lite = self._wants_lite()
         packed = self._accepts_gzip()
         body = render_page(lite, packed)
-        headers = {"Content-Length": str(len(body)), "Vary": "Accept-Encoding, Cookie"}
+        etag = _page_etags.get((bool(lite), bool(packed)))
+        if etag is None:
+            etag = _page_etags[(bool(lite), bool(packed))] = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+        headers = {"Vary": "Accept-Encoding, Cookie", "Cache-Control": "no-cache", "ETag": etag}
+        if self._etag_matches(etag):
+            self._head(304, "text/html; charset=utf-8", headers)
+            return
+        headers["Content-Length"] = str(len(body))
         if packed:
             headers["Content-Encoding"] = "gzip"
         self._head(200, "text/html; charset=utf-8", headers)
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, code, obj, headers=None):
+    def _json(self, code, obj, headers=None, etag_skip=()):
         if isinstance(obj, dict) and obj.get("error") and "message" not in obj:
             obj = dict(obj, message=obj["error"])
-        self._send(code, json.dumps(obj).encode("utf-8"), "application/json", headers)
+        body = json.dumps(obj).encode("utf-8")
+        stable = None
+        if etag_skip and isinstance(obj, dict):
+            stable = json.dumps({k: v for k, v in obj.items() if k not in etag_skip}).encode("utf-8")
+        self._send(code, body, "application/json", headers, stable)
 
     def _read_json(self):
         try:
@@ -13112,6 +13295,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/health":
                 self._json(200, {"ok": True, "version": VERSION})
             elif path == "/api/whoami":
+                status_asked()
                 dport = dashboard_conf()["port"]
                 dash = port_open_cached(dport, ttl=5.0)
                 self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
@@ -13121,7 +13305,12 @@ class Handler(BaseHTTPRequestHandler):
                                  "links": quick_links() if authed else {},
                                  "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
-                self._json(200, dict(build_status(authed), ok=True))
+                status_asked()
+                t0 = time.perf_counter()
+                st = dict(build_status_fast(authed), ok=True)
+                vol = {k: st[k] for k in STATUS_VOLATILE if k in st}
+                self._json(200, st, {"X-Volatile": json.dumps(vol, separators=(",", ":")),
+                                     "X-Work-Ms": str(int((time.perf_counter() - t0) * 1000))}, STATUS_VOLATILE)
             elif path == "/api/internet":
                 self._json(200, dict(net_status(), ok=True))
             elif path == "/api/rxhealth":
@@ -13410,6 +13599,7 @@ def run_server():
     _kc_init()
     _kc_refresh()
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
+    threading.Thread(target=_warm_loop, name="status-warm", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=rxh_netstats_loop, name="rxh-net", daemon=True).start()
     threading.Thread(target=rxh_outq_loop, name="rxh-outq", daemon=True).start()

@@ -1,6 +1,21 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_13_0_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_0_20261123.py`. Newest entries first.
+
+## 0.14.0 (2026-11-23)
+
+The page answers faster and feels less laggy. This is a release: the status route, the page's polling and its page logic changed.
+
+- **The slow reads left the request.** While a page is open, a background thread builds the full status once a second, so the Asterisk link list, Node Recorder's state, Node Controller's tuning state, the bridge nodes, the SvxLink log and the open-port checks are kept current. A status request now takes the kept answer (up to 8 s old, normally under 3 s) instead of starting a process or an HTTP call itself. When nothing has been kept yet, or after an action, it reads on the spot as before. The refresher rests 30 s after the last status or `whoami` request, and an action (link, tune, disconnect) wakes it at once.
+- **No process per link check.** `rpt lstats` goes through one kept Asterisk manager (AMI) connection instead of starting `asterisk -rx` each time. It reconnects by itself, closes after a minute without use, and falls back to the command line when the manager login is missing, refused (not retried for 5 min) or fails (not retried for 30 s).
+- **A steady status costs almost nothing.** The tag of `/api/status` ignores the values that tick every second (`uptime`, `last_rx_age`, `listener_list`), so an unchanged status answers 304. The ticking values travel in the `X-Volatile` header, also on a 304, and the page puts them back. The reply body still carries every field, as before, for other clients.
+- **Slow server is not a slow network.** Every status reply carries `X-Work-Ms` (the server's own time). The page subtracts it before it judges the link, so a busy node no longer makes the page poll up to 8 times slower.
+- **Polled faster.** The status is asked every 1 s (was 1.5 s) while busy and every 2.5 s (was 5 s) when settled. The slow-link factor, the busy rules and the pause in a hidden tab are unchanged.
+- **Less work on the page.** Text and classes are written only when they changed, the link table is rebuilt only when its rows changed, and the 100 ms gap timer and the 2 s availability timer do nothing in a hidden tab.
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304 to a matching `If-None-Match`, so a reload does not download the 97 KB (73 KB light) again. Replies from `/api` stay `no-store`. The fonts stay inside the page.
+- **`rpt.conf` is parsed once per text** on the status path (it was parsed on every request).
+- Nothing else changes: the same routes, fields, login and audio paths.
+- Tests: new `ci/test_nodetalker_speed.py` (the manager session against a stand-in for Asterisk, the fast reads and the refresher, the tags and the volatile header, the page tag, the page script rules). `ci/test_nodetalker_slowlink.py` follows the page tag and the new sample call.
 
 ## 0.13.0 (2026-11-23)
 

@@ -1340,7 +1340,7 @@ class NodeTalkerCardTests(unittest.TestCase):
         self.assertNotIn('id="tx-auto"', self.text)
 
     def test_status_polling_slows_down_only_when_settled(self):
-        self.assertIn("pollEvery(pollStatus, 1500, 5000);", self.text)
+        self.assertIn("pollEvery(pollStatus, 1000, 2500);", self.text)
         self.assertIn("pollEvery(pollLog, 3000, 10000);", self.text)
 
     def test_first_open_setup_popup_is_wired(self):
