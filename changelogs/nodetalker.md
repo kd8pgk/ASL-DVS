@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_2_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_3_20261123.py`. Newest entries first.
+
+## 0.14.3 (2026-11-23)
+
+The node's own address goes to Node Talker Mobile, so the app can still connect when the host name will not resolve. This is a release: `/api/internet` has a new key.
+
+- **`lan_ips`.** `/api/internet` now lists the node's private IPv4 addresses (at most 4). They come from the Wi-Fi link file wifimon 5.58.0 writes (`ips`); with an older wifimon, or no file, Node Talker reads them itself (`ip -4 addr`). VPN and container interfaces are left out. The page already shows what it needs, so it is unchanged.
+- **Nothing else changes.** An older app ignores the new key.
 
 ## 0.14.2 (2026-11-23)
 

@@ -2127,6 +2127,17 @@ class WifimonLinkFileTests(unittest.TestCase):
         self.assertEqual(got["tx_packets"], 4000)
         self.assertIn("blips", got)
 
+    def test_node_ips_keep_private_lan_addresses_only(self):
+        out = ("2: wlan0    inet 192.168.1.50/24 brd 192.168.1.255 scope global wlan0\n"
+               "3: wg0    inet 44.1.2.3/32 scope global wg0\n"
+               "4: docker0    inet 172.17.0.1/16 scope global docker0\n"
+               "5: eth0    inet 8.8.4.4/24 scope global eth0\n")
+        self.wm._NODE_IPS_CACHE.update(at=0.0, ips=[])
+        with mock.patch.object(self.wm, "_tg_run", return_value=(0, out)):
+            self.assertEqual(self.wm._node_ips(), ["192.168.1.50"])
+        snap = self.wm._wifi_link_snapshot(self.fast(), {"blips": 0, "drops": 0, "chip_stalls": 0}, {"power_save": False}, now=1.0)
+        self.assertIn("ips", snap)
+
     def test_every_key_node_talker_reads_is_written_by_wifimon(self):
         snap = self.wm._wifi_link_snapshot(self.fast(), {"blips": 0, "drops": 0, "chip_stalls": 0}, {"power_save": False}, now=1.0)
         self.assertEqual(set(self.nt.WIFI_LINK_KEYS) - set(snap), set())

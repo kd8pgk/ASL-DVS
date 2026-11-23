@@ -194,7 +194,8 @@ class NodesActivity : Activity() {
                 NodeStore.put(
                     this,
                     Node(n?.id ?: UUID.randomUUID().toString(), name.text.toString().trim(), host, portNum, useHttps,
-                        if (same) n!!.pin else "", awayHost, awayPort, awayHttps, awayAuto),
+                        if (same) n!!.pin else "", awayHost, awayPort, awayHttps, awayAuto, false,
+                        if (same) n!!.lanIp else ""),
                 )
                 dlg.dismiss()
                 refresh()

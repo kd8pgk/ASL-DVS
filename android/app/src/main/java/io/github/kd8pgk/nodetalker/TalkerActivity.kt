@@ -365,7 +365,7 @@ class TalkerActivity : Activity() {
 
     private fun learnAway() {
         val now = System.currentTimeMillis()
-        if (node.viaAway || now - learnAt < LEARN_GAP_MS) return
+        if (node.viaAway || node.viaLan || now - learnAt < LEARN_GAP_MS) return
         learnAt = now
         val id = node.id
         val home = node
@@ -378,6 +378,8 @@ class TalkerActivity : Activity() {
             val stored = NodeStore.get(this, id) ?: return@Thread
             val changed = AwayLearn.apply(stored, AwayLearn.fetch(home, cookie))
             if (changed != null) NodeStore.put(this, changed)
+            val withLan = LanLearn.apply(changed ?: stored, LanLearn.fetch(home, cookie))
+            if (withLan != null) NodeStore.put(this, withLan)
         }, "nt-away").apply { isDaemon = true }.start()
     }
 

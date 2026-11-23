@@ -3121,6 +3121,26 @@ def _collect_slow() -> Dict[str, object]:
     out["ipmap"] = _ipv4_map()
     return out
 
+_NODE_IPS_CACHE: Dict[str, object] = {"at": 0.0, "ips": []}
+
+def _node_ips() -> List[str]:
+    now = time.monotonic()
+    if now - float(_NODE_IPS_CACHE["at"]) < 30 and _NODE_IPS_CACHE["ips"]:
+        return list(_NODE_IPS_CACHE["ips"])
+    rc, out = _tg_run(["ip", "-4", "-o", "addr", "show", "scope", "global"], timeout=3)
+    ips: List[str] = []
+    for line in out.splitlines() if rc == 0 else []:
+        m = re.match(r"\d+:\s+(\S+)\s+inet (\d+\.\d+\.\d+\.\d+)/", line)
+        if not m or re.match(r"(wg|tun|tap|docker|veth|br-|virbr)", m.group(1)):
+            continue
+        try:
+            if ipaddress.IPv4Address(m.group(2)).is_private and m.group(2) not in ips:
+                ips.append(m.group(2))
+        except ValueError:
+            continue
+    _NODE_IPS_CACHE.update(at=now, ips=ips[:4])
+    return ips[:4]
+
 def _wifi_link_snapshot(fast: Dict[str, object], health: Dict[str, object], slow: Dict[str, object],
                         now: Optional[float] = None) -> Dict[str, object]:
     linked = fast.get("linked")
@@ -3152,6 +3172,7 @@ def _wifi_link_snapshot(fast: Dict[str, object], health: Dict[str, object], slow
         "blips": health.get("blips"),
         "drops": health.get("drops"),
         "chip_stalls": health.get("chip_stalls"),
+        "ips": _node_ips(),
     }
     return out
 

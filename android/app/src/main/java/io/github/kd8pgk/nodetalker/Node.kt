@@ -21,7 +21,15 @@ data class Node(
     val awayHttps: Boolean = true,
     val awayAuto: Boolean = true,
     val viaAway: Boolean = false,
+    val lanIp: String = "",
+    val viaLan: Boolean = false,
 ) {
+    val hasLan: Boolean
+        get() = !viaAway && !viaLan && lanIp.isNotEmpty() && !lanIp.equals(host, true) &&
+            lanIp.all { it.isDigit() || it == '.' } && validHost(lanIp) && (!https || pin.isNotEmpty())
+
+    fun useLan(): Node = if (!hasLan) this else copy(host = lanIp, viaLan = true)
+
     val hasAway: Boolean
         get() = !viaAway && awayHost.isNotEmpty() && validHost(awayHost) && awayPort in 1..65535
 
@@ -59,7 +67,7 @@ data class Node(
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("host", host)
         .put("port", port).put("https", https).put("pin", pin)
-        .put("away_host", awayHost).put("away_port", awayPort).put("away_https", awayHttps).put("away_auto", awayAuto)
+        .put("away_host", awayHost).put("away_port", awayPort).put("away_https", awayHttps).put("away_auto", awayAuto).put("lan_ip", lanIp)
 
     companion object {
         const val DEFAULT_PORT = 8993
@@ -76,6 +84,8 @@ data class Node(
             o.optInt("away_port", 443),
             o.optBoolean("away_https", true),
             o.optBoolean("away_auto", true),
+            false,
+            o.optString("lan_ip"),
         )
 
         fun validHost(h: String) = HOST_RE.matches(h)
