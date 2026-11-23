@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_1_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_18_2_20261123.py`. Newest entries first.
+
+## 0.18.2 (2026-11-23)
+
+A return link after a recording. This is a release: the page shows a new line when a recording ends.
+
+- When a recording finishes, the page shows "Recording finished." and, if Node Controller is running, a "Back to Node Controller" link. The link opens the Dashboard in the same window the header button uses.
+- The line clears when the next recording starts.
+- Nothing else changes.
 
 ## 0.18.1 (2026-11-23)
 

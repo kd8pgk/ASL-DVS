@@ -36,7 +36,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.1"
+VERSION = "0.18.2"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
@@ -7418,6 +7418,20 @@ function schedTarget(t) {
   if (t.mode === 'DSTAR') { const p = schedDstar(t.num); return 'D-STAR ' + p[0] + (t.module || p[1] ? ' ' + (t.module || p[1]) : ''); }
   return t.mode + ' ' + t.num + (t.module ? ' ' + t.module : '');
 }
+let _recPrev = null;
+const _recBusy = (s) => s === 'recording' || s === 'stopping' || s === 'connecting';
+function showRecDone() {
+  const box = $('rec-done'), dash = $('dash-link');
+  box.textContent = 'Recording finished. ';
+  if (dash && !dash.classList.contains('hidden')) {
+    const a = document.createElement('a');
+    a.href = dash.href;
+    a.textContent = 'Back to ' + dash.textContent;
+    a.addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab(dash.href, 'asl_dvs_dash'); });
+    box.appendChild(a);
+  }
+  box.hidden = false;
+}
 async function loadSchedule() {
   if (!authed) return;
   const d = await api('/api/schedule');
@@ -7426,6 +7440,9 @@ async function loadSchedule() {
   renderNextUp(d);
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
+  if (_recPrev !== null && _recBusy(_recPrev) && !_recBusy(st.state)) showRecDone();
+  if (_recBusy(st.state)) { $('rec-done').hidden = true; $('rec-done').textContent = ''; }
+  _recPrev = st.state || null;
   $('rec-start').disabled = st.state !== 'idle';
   $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording' && st.state !== 'linked';
   $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
@@ -8053,6 +8070,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 <div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
+<div id="rec-done" class="muted" style="margin-top:6px" hidden></div>
 <div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
 <p class="muted small">Record now records the link that is up now, as it is, and keeps going through link changes until you press Stop. It stops by itself after 4 hours. It is not available while a scheduled recording is running.</p>
 <div id="rec-msg" class="msg"></div>
