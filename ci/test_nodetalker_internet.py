@@ -239,6 +239,13 @@ class Internet(Served):
         self.assertTrue(d["tunnel"]["ready"])
         self.assertTrue(d["allow_wan"])
 
+    def test_the_status_lists_the_nodes_private_addresses(self):
+        type(self).authed = True
+        r, d = self.call("GET", "/api/internet")
+        self.assertIsInstance(d["lan_ips"], list)
+        for ip in d["lan_ips"]:
+            self.assertTrue(ip.startswith(("10.", "192.168.", "172.")))
+
     def test_requests_through_the_proxy_are_refused_while_the_setting_is_off(self):
         self.cfg["allow_wan"] = False
         r, d = self.call("POST", "/api/login", {"password": "pw"})

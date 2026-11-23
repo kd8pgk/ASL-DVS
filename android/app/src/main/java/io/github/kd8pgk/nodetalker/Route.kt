@@ -11,17 +11,32 @@ object NodeRoute {
 
     fun decide(node: Node, homeReachable: Boolean): Node = if (node.hasAway && !homeReachable) node.useAway() else node
 
+    private val lanSeen = HashMap<String, Boolean>()
+
     fun pick(node: Node, now: Long = System.currentTimeMillis(), probe: (Node) -> Boolean = ::reachable): Node {
-        if (!node.hasAway) return node
+        if (!node.hasAway && !node.hasLan) return node
         val hit = synchronized(seen) { seen[node.id] }
-        if (hit != null && now - hit.first < KEEP_MS) return decide(node, hit.second)
-        val ok = probe(node)
-        synchronized(seen) { seen[node.id] = Pair(now, ok) }
-        return decide(node, ok)
+        val ok: Boolean
+        val lan: Boolean
+        if (hit != null && now - hit.first < KEEP_MS) {
+            ok = hit.second
+            lan = synchronized(seen) { lanSeen[node.id] } ?: false
+        } else {
+            ok = probe(node)
+            lan = !ok && node.hasLan && probe(node.useLan())
+            synchronized(seen) {
+                seen[node.id] = Pair(now, ok)
+                lanSeen[node.id] = lan
+            }
+        }
+        return if (!ok && lan) node.useLan() else decide(node, ok)
     }
 
     fun forget(id: String) {
-        synchronized(seen) { seen.remove(id) }
+        synchronized(seen) {
+            seen.remove(id)
+            lanSeen.remove(id)
+        }
     }
 
     fun reachable(node: Node): Boolean = try {
@@ -58,6 +73,34 @@ object AwayLearn {
             if (c.responseCode != 200) return null
             val o = org.json.JSONObject(c.inputStream.bufferedReader().readText())
             return candidate(o.optString("url"), o.optBoolean("allow_wan"))
+        } catch (e: java.io.IOException) {
+            return null
+        } catch (e: org.json.JSONException) {
+            return null
+        } finally {
+            c.disconnect()
+        }
+    }
+}
+
+object LanLearn {
+    fun candidate(ips: List<String>): String? = ips.firstOrNull { ip ->
+        ip.isNotEmpty() && ip.all { it.isDigit() || it == '.' } && Node.validHost(ip) && ip.count { it == '.' } == 3
+    }
+
+    fun apply(node: Node, found: String?): Node? {
+        if (found == null || node.viaAway || node.viaLan || node.lanIp == found) return null
+        return node.copy(lanIp = found)
+    }
+
+    fun fetch(node: Node, cookie: String?): String? {
+        val c = NodeHttp.open(node, "/api/internet", cookie)
+        try {
+            c.connectTimeout = 4000
+            c.readTimeout = 6000
+            if (c.responseCode != 200) return null
+            val a = org.json.JSONObject(c.inputStream.bufferedReader().readText()).optJSONArray("lan_ips") ?: return null
+            return candidate((0 until a.length()).map { a.optString(it) })
         } catch (e: java.io.IOException) {
             return null
         } catch (e: org.json.JSONException) {

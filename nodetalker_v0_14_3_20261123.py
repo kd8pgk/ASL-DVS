@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.2"
+VERSION = "0.14.3"
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
 
@@ -13187,6 +13187,29 @@ def tunnel_probe(force=False):
     return out
 
 
+def node_lan_ips():
+    d, _why = read_wifi_link()
+    ips = [i for i in (d or {}).get("ips", []) if isinstance(i, str)] if isinstance(d, dict) else []
+    if not ips:
+        try:
+            out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"],
+                                 capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            m = re.match(r"\d+:\s+(\S+)\s+inet (\d+\.\d+\.\d+\.\d+)/", line)
+            if m and not re.match(r"(wg|tun|tap|docker|veth|br-|virbr)", m.group(1)):
+                ips.append(m.group(2))
+    good = []
+    for i in ips:
+        try:
+            if ipaddress.IPv4Address(i).is_private and i not in good:
+                good.append(i)
+        except ValueError:
+            continue
+    return good[:4]
+
+
 def net_status():
     tun = tunnel_probe()
     host = _cfg_get("public_hostname")
@@ -13213,7 +13236,7 @@ def net_status():
             "logins_ok": len(ok), "logins_failed": len(bad),
             "last_login": {"ago": int(now - ok[-1][0]), "ip": ok[-1][2]} if ok else None,
             "last_failure": {"ago": int(now - bad[-1][0]), "ip": bad[-1][2]} if bad else None,
-            "warnings": warnings}
+            "warnings": warnings, "lan_ips": node_lan_ips()}
 
 
 @with_work_ms

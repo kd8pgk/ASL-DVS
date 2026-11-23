@@ -145,3 +145,39 @@ class AwayLearnTest {
         assertNull(AwayLearn.apply(node(), null))
     }
 }
+
+class LanFallbackTest {
+    private fun node(id: String, https: Boolean = false, pin: String = "", ip: String = "192.168.1.50") =
+        Node(id, "Pi", "pi.local", 8993, https, pin, lanIp = ip)
+
+    @Test
+    fun theSavedAddressIsUsedWhenTheNameDoesNotAnswer() {
+        val n = node("lan1")
+        NodeRoute.forget("lan1")
+        val got = NodeRoute.pick(n, 0L) { it.host == "192.168.1.50" }
+        assertEquals("192.168.1.50", got.host)
+        assertTrue(got.viaLan)
+    }
+
+    @Test
+    fun theNameIsKeptWhenItAnswers() {
+        val n = node("lan2")
+        NodeRoute.forget("lan2")
+        assertSame(n, NodeRoute.pick(n, 0L) { true })
+    }
+
+    @Test
+    fun anHttpsNodeWithoutAPinNeverUsesTheAddress() {
+        assertFalse(node("lan3", https = true).hasLan)
+        assertTrue(node("lan4", https = true, pin = "ab").hasLan)
+    }
+
+    @Test
+    fun onlyAnIpv4AddressIsLearned() {
+        assertEquals("10.0.0.5", LanLearn.candidate(listOf("fe80::1", "10.0.0.5")))
+        assertEquals(null, LanLearn.candidate(listOf("host.example", "")))
+        val n = node("lan5", ip = "")
+        assertEquals("10.0.0.5", LanLearn.apply(n, "10.0.0.5")?.lanIp)
+        assertEquals(null, LanLearn.apply(n.copy(lanIp = "10.0.0.5"), "10.0.0.5"))
+    }
+}

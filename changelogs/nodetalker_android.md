@@ -1,6 +1,14 @@
 # Node Talker Mobile changelog
 
-Current version: `0.13.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.14.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.14.3 (2026-11-23)
+
+The app can reach a node by its address when the host name does not resolve. This version takes Node Talker 0.14.3's number.
+
+- **Learns the address.** While a node opens by its host name, the app asks Node Talker (`/api/internet`, key `lan_ips`, which comes from wifimon 5.58.0) for the node's private IPv4 address and saves it with the node.
+- **Uses it as a fallback.** When the host name does not answer, the app tries the saved address before the away address. It does this only for an `http` node or an `https` node with a pinned certificate, because an address cannot pass the normal certificate name check. A node saved by an older app has no address until it has opened once. An older Node Talker simply gives no address.
+- **Nothing else changes.**
 
 ## 0.13.0 (2026-11-23)
 

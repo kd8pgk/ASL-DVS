@@ -515,8 +515,8 @@ class CookiePurgeAfterFullUpdate(unittest.TestCase):
 
 
 class GroupUpdate(unittest.TestCase):
-    NEW = "wifimon_v5_58_0_20261121.py"
-    OLD = "wifimon_v5_57_0_20261115.py"
+    NEW = "wifimon_v5_59_0_20261124.py"
+    OLD = "wifimon_v5_58_0_20261123.py"
 
     def setUp(self):
         self.dir = im.LIB_SUBDIRS["wifimon"]
@@ -525,7 +525,7 @@ class GroupUpdate(unittest.TestCase):
         with open(self.old_path, "wb") as fh:
             fh.write(b"old copy")
         self.entry = {"name": self.NEW, "category": "wifimon", "glob": "wifimon_v*.py",
-                      "version": "5.58.0", "blob": "b", "status": "update"}
+                      "version": "5.59.0", "blob": "b", "status": "update"}
         self.entry["glob"] = im._gh_kind_for_name(self.NEW)[1]
         with im._gh_lock:
             self.saved = dict(im._gh_state)

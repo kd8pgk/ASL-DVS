@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.57.0"
+APP_VERSION = "5.58.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -3121,6 +3121,26 @@ def _collect_slow() -> Dict[str, object]:
     out["ipmap"] = _ipv4_map()
     return out
 
+_NODE_IPS_CACHE: Dict[str, object] = {"at": 0.0, "ips": []}
+
+def _node_ips() -> List[str]:
+    now = time.monotonic()
+    if now - float(_NODE_IPS_CACHE["at"]) < 30 and _NODE_IPS_CACHE["ips"]:
+        return list(_NODE_IPS_CACHE["ips"])
+    rc, out = _tg_run(["ip", "-4", "-o", "addr", "show", "scope", "global"], timeout=3)
+    ips: List[str] = []
+    for line in out.splitlines() if rc == 0 else []:
+        m = re.match(r"\d+:\s+(\S+)\s+inet (\d+\.\d+\.\d+\.\d+)/", line)
+        if not m or re.match(r"(wg|tun|tap|docker|veth|br-|virbr)", m.group(1)):
+            continue
+        try:
+            if ipaddress.IPv4Address(m.group(2)).is_private and m.group(2) not in ips:
+                ips.append(m.group(2))
+        except ValueError:
+            continue
+    _NODE_IPS_CACHE.update(at=now, ips=ips[:4])
+    return ips[:4]
+
 def _wifi_link_snapshot(fast: Dict[str, object], health: Dict[str, object], slow: Dict[str, object],
                         now: Optional[float] = None) -> Dict[str, object]:
     linked = fast.get("linked")
@@ -3152,6 +3172,7 @@ def _wifi_link_snapshot(fast: Dict[str, object], health: Dict[str, object], slow
         "blips": health.get("blips"),
         "drops": health.get("drops"),
         "chip_stalls": health.get("chip_stalls"),
+        "ips": _node_ips(),
     }
     return out
 
@@ -6160,11 +6181,122 @@ _fw_cache: Dict[str, object] = {"at": -1e9, "name": "none"}
 _INSTALL_STATE_LOCK = threading.Lock()
 _INSTALL_STATE: Dict[str, object] = {"tool": None, "running": False, "rc": None,
                                      "started": 0.0, "message": ""}
+LANSCAN_PORTS = (
+    (8989, "Node Controller"), (9999, "SysMon"), (8990, "instmon"), (8991, "wifimon"),
+    (9997, "44helper"), (8993, "Node Talker"), (8995, "Node Recorder"), (9000, "Pibrary"),
+    (7777, "Node Monitor"), (8765, "Pi-Piper TTS"), (7878, "Terminal Monitor"),
+)
+LANSCAN_MAX_HOSTS = 1022
+LANSCAN_WORKERS = 16
+LANSCAN_CONNECT_SECS = 0.5
+LANSCAN_PROBE_SECS = 1.5
+_LANSCAN_LOCK = threading.Lock()
+_LANSCAN: Dict[str, object] = {"running": False, "started": 0.0, "finished": 0.0, "net": "",
+                               "done": 0, "total": 0, "hosts": [], "message": ""}
+
+def _lanscan_net() -> Tuple[Optional["ipaddress.IPv4Network"], str, str]:
+    dev = ""
+    rc, out = _tg_run(["ip", "-4", "route", "show", "table", "main", "default"])
+    for line in out.splitlines() if rc == 0 else []:
+        m = re.search(r"dev (\S+)", line)
+        if m and not m.group(1).startswith("wg"):
+            dev = m.group(1)
+            break
+    if not dev:
+        return None, "", "No network connection to scan."
+    rc, out = _tg_run(["ip", "-4", "-o", "addr", "show", "dev", dev, "scope", "global"])
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+/\d+)", out) if rc == 0 else None
+    if not m:
+        return None, dev, "No IPv4 address on " + dev + "."
+    iface = ipaddress.IPv4Interface(m.group(1))
+    if not iface.ip.is_private:
+        return None, dev, "Only a private (home or office) network is scanned."
+    net = iface.network
+    if net.num_addresses - 2 > LANSCAN_MAX_HOSTS:
+        net = ipaddress.IPv4Network((int(iface.ip) & 0xFFFFFF00, 24))
+    return net, str(iface.ip), ""
+
+def _lanscan_probe(ip: str, port: int) -> Dict[str, object]:
+    row: Dict[str, object] = {"port": port, "version": ""}
+    for scheme in ("http", "https"):
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request("%s://%s:%d/api/whoami" % (scheme, ip, port))
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                                 urllib.request.HTTPSHandler(context=ctx))
+            with opener.open(req, timeout=LANSCAN_PROBE_SECS) as r:
+                data = json.loads(r.read(4096).decode("utf-8", "replace"))
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                row["version"] = data["version"][:24]
+                row["scheme"] = scheme
+                return row
+        except Exception:
+            continue
+    return row
+
+def _lanscan_host(ip: str, own: str) -> Optional[Dict[str, object]]:
+    found = []
+    for port, name in LANSCAN_PORTS:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(LANSCAN_CONNECT_SECS)
+        try:
+            is_open = s.connect_ex((ip, port)) == 0
+        except OSError:
+            is_open = False
+        finally:
+            s.close()
+        if is_open:
+            row = _lanscan_probe(ip, port)
+            row["name"] = name
+            found.append(row)
+    if not found:
+        return None
+    return {"ip": ip, "self": ip == own, "ports": found}
+
+def _lanscan_run(net: "ipaddress.IPv4Network", own: str) -> None:
+    import concurrent.futures
+    hosts = [str(h) for h in net.hosts()]
+    with _LANSCAN_LOCK:
+        _LANSCAN.update(total=len(hosts), done=0, hosts=[])
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=LANSCAN_WORKERS) as pool:
+            for res in pool.map(lambda ip: _lanscan_host(ip, own), hosts):
+                with _LANSCAN_LOCK:
+                    _LANSCAN["done"] = int(_LANSCAN["done"]) + 1
+                    if res:
+                        _LANSCAN["hosts"].append(res)
+        msg = "Done."
+    except Exception as exc:
+        msg = "Scan stopped: %s" % exc
+    with _LANSCAN_LOCK:
+        _LANSCAN.update(running=False, finished=time.time(), message=msg)
+
+def _lanscan_start() -> Tuple[int, Dict[str, object]]:
+    with _LANSCAN_LOCK:
+        if _LANSCAN["running"]:
+            return 409, {"error": "A scan is already running."}
+        net, own, err = _lanscan_net()
+        if net is None:
+            return 409, {"error": err}
+        _LANSCAN.update(running=True, started=time.time(), finished=0.0, net=str(net),
+                        done=0, total=net.num_addresses - 2, hosts=[], message="")
+    threading.Thread(target=_lanscan_run, args=(net, own), daemon=True, name="lanscan").start()
+    return 200, {"ok": True, "message": "Scanning " + str(net) + "."}
+
+def _lanscan_public() -> Dict[str, object]:
+    with _LANSCAN_LOCK:
+        out = dict(_LANSCAN)
+        out["hosts"] = sorted(out["hosts"], key=lambda h: tuple(int(x) for x in h["ip"].split(".")))
+    out["ports"] = [{"port": p, "name": n} for p, n in LANSCAN_PORTS]
+    return out
+
 _PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip",
                   "Forwarded", "Via", "Cf-Connecting-Ip", "Cf-Ray", "Cf-Visitor", "Cf-Ipcountry")
 _CONTROL_PATHS = frozenset({"/api/radio", "/api/device/disconnect", "/api/device/switch",
                             "/api/device/mode", "/api/device/forget", "/api/service/restart",
-                            "/api/install/start"})
+                            "/api/install/start", "/api/lanscan/start"})
 
 def _source_allowed(ip: str) -> bool:
     try:
@@ -6556,6 +6688,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_undo(body)
         elif path == "/api/scan":
             self._handle_scan(body)
+        elif path == "/api/lanscan/start":
+            code, obj = _lanscan_start()
+            self._json(code, obj)
+        elif path == "/api/lanscan/status":
+            self._json(200, _lanscan_public())
         elif path == "/api/network/connect":
             self._handle_net_connect(body)
         elif path == "/api/network/add":
@@ -8076,6 +8213,13 @@ a.btnlink:hover{border-color:var(--blue)}
     <section class="card" id="card-wired" aria-labelledby="eth-h">
       <h2 id="eth-h">Wired (Ethernet)</h2>
       <div id="r-eth"><p class="muted">Loading…</p></div>
+    </section>
+    <section class="card" id="card-lanscan" aria-labelledby="ls-h">
+      <h2 id="ls-h">Find nodes on the network</h2>
+      <p class="muted" style="margin:0 0 8px">Checks every address on this node's own network for the Node Controller tool ports and shows what answers. Takes a minute or two; only the local private network is scanned.</p>
+      <div class="actions"><button type="button" id="ls-start">Scan network</button></div>
+      <p class="note" id="ls-note" hidden></p>
+      <div id="ls-out"></div>
     </section>
     <section class="card" id="card-hotspot" aria-labelledby="hs-h">
       <h2 id="hs-h">Emergency hotspot</h2>
@@ -9807,6 +9951,52 @@ a.btnlink:hover{border-color:var(--blue)}
     if (!confirm("Stop the hotspot" + (to ? " and connect to " + to : "") + "? Phones joined to it will lose this page.")) return;
     post("/api/hotspot/stop", { confirm: true, connect_to: to || null });
   });
+
+  let lsTimer = null;
+  function lsRender(d) {
+    const note = $("ls-note"), out = $("ls-out");
+    note.hidden = false;
+    if (d.running) note.textContent = "Scanning " + d.net + ": " + d.done + " of " + d.total + " addresses.";
+    else if (d.finished) note.textContent = "Scanned " + d.net + ": " + d.hosts.length + " host(s) answered. " + (d.message || "");
+    else { note.hidden = true; }
+    out.textContent = "";
+    (d.hosts || []).forEach((h) => {
+      const box = document.createElement("div");
+      box.style.cssText = "margin:8px 0";
+      const t = document.createElement("strong");
+      t.textContent = h.ip + (h.self ? " (this node)" : "");
+      box.appendChild(t);
+      h.ports.forEach((p) => {
+        const line = document.createElement("div");
+        const url = (p.scheme || "http") + "://" + h.ip + ":" + p.port + "/";
+        line.appendChild(document.createTextNode(p.name + " (" + p.port + ")" + (p.version ? " v" + p.version : "") + " "));
+        if (p.version) {
+          const a = document.createElement("a");
+          a.href = url; a.target = "_blank"; a.rel = "noopener"; a.textContent = "open";
+          line.appendChild(a);
+        }
+        box.appendChild(line);
+      });
+      out.appendChild(box);
+    });
+  }
+  async function lsPoll() {
+    try {
+      const r = await api("/api/lanscan/status", {});
+      if (r.status === 200) {
+        lsRender(r.data);
+        if (r.data.running) { lsTimer = setTimeout(lsPoll, 2000); $("ls-start").disabled = true; return; }
+      }
+    } catch (e) {}
+    $("ls-start").disabled = false;
+  }
+  $("ls-start").addEventListener("click", async () => {
+    $("ls-start").disabled = true;
+    const r = await post("/api/lanscan/start", {});
+    if (r && r.status < 300) { clearTimeout(lsTimer); lsPoll(); }
+    else $("ls-start").disabled = false;
+  });
+  lsPoll();
 
   const TABS = ["status", "networks", "devices", "watchdogs", "system"];
   let curTab = "status";
