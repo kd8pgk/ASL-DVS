@@ -98,6 +98,52 @@ locate_newest() {
     return 1
 }
 
+seed_identity() {
+    local cs="" nd="" lbl="" line
+    if [[ -f "${DASH_CONF}" && -f "${SYSMON_CONF_DIR}/sysmon.conf" ]]; then
+        ok "Callsign and node already set: config kept"
+        return 0
+    fi
+    if [[ -n "${AUTO_CALLSIGN:-}" && -n "${AUTO_NODE:-}" ]]; then
+        cs="${AUTO_CALLSIGN^^}"
+        cs="${cs//[^A-Z0-9\/\-\.]/}"
+        cs="${cs:0:9}"
+        nd="${AUTO_NODE//[^0-9]/}"
+        lbl="${AUTO_LABEL:-AllStarLink Node}"
+        lbl="${lbl:0:40}"
+    elif [[ "${NONINTERACTIVE}" != "true" ]]; then
+        while true; do
+            read -r -p "  Callsign (e.g. KD8PGK), or Enter to set it later in the Dashboard: " line </dev/tty
+            [[ -z "${line}" ]] && break
+            line="${line^^}"
+            if [[ "${line}" =~ ^[A-Z0-9/.-]{3,9}$ ]]; then cs="${line}"; break; fi
+            warn "Use 3 to 9 letters, digits, / . or -"
+        done
+        if [[ -n "${cs}" ]]; then
+            while true; do
+                read -r -p "  ASL node number (digits only, e.g. 652701): " line </dev/tty
+                [[ -z "${line}" ]] && break
+                if [[ "${line}" =~ ^[0-9]{1,8}$ ]]; then nd="${line}"; break; fi
+                warn "Digits only"
+            done
+            lbl="AllStarLink Node"
+        fi
+    fi
+    if [[ -z "${cs}" || -z "${nd}" ]]; then
+        warn "No callsign or node number set: set them in the Dashboard's Config tab"
+        return 0
+    fi
+    mkdir -p "${ASL_DVS_ETC}" "${SYSMON_CONF_DIR}"
+    if [[ ! -f "${DASH_CONF}" ]]; then
+        printf '# asl_dvs.conf — seed config written by installer\n[CONFIG]\nasl_node=%s\ncallsign=%s\n' "${nd}" "${cs}" > "${DASH_CONF}"
+        ok "Seed config written: ${DASH_CONF}"
+    fi
+    if [[ ! -f "${SYSMON_CONF_DIR}/sysmon.conf" ]]; then
+        printf '# sysmon.conf — seed config written by installer\n[identity]\ncallsign = %s\nnode = %s\nlabel = %s\n' "${cs}" "${nd}" "${lbl}" > "${SYSMON_CONF_DIR}/sysmon.conf"
+        ok "Seed config written: ${SYSMON_CONF_DIR}/sysmon.conf"
+    fi
+}
+
 TOOL_KEY=()
 TOOL_LABEL=()
 TOOL_PAT=()
@@ -301,6 +347,10 @@ if [[ ${#NEED[@]} -gt 0 ]]; then
         fi
     fi
 fi
+
+DASH_CONF="${ASL_DVS_ETC}/asl_dvs.conf"
+hdr "Callsign and node"
+seed_identity
 
 INSTALLED=()
 hdr "Installing"

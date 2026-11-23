@@ -157,6 +157,39 @@ class InstallAllV8(unittest.TestCase):
         self.assertIn("Terminal Monitor: no file found", r.stdout)
         self.assertIn("Not finished", r.stdout)
 
+    def test_auto_callsign_seeds_both_configs(self):
+        self.env["AUTO_CALLSIGN"] = "kd8pgk"
+        self.env["AUTO_NODE"] = "652701"
+        r = self.run_installer("--offline")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(os.path.join(self.tmp, "etc", "asl_dvs.conf")) as f:
+            dash = f.read()
+        self.assertIn("asl_node=652701", dash)
+        self.assertIn("callsign=KD8PGK", dash)
+        with open(os.path.join(self.tmp, "sysmon", "sysmon.conf")) as f:
+            sysm = f.read()
+        self.assertIn("callsign = KD8PGK", sysm)
+        self.assertIn("node = 652701", sysm)
+
+    def test_existing_configs_are_kept(self):
+        os.makedirs(os.path.join(self.tmp, "etc"))
+        os.makedirs(os.path.join(self.tmp, "sysmon"))
+        with open(os.path.join(self.tmp, "etc", "asl_dvs.conf"), "w") as f:
+            f.write("keep me\n")
+        with open(os.path.join(self.tmp, "sysmon", "sysmon.conf"), "w") as f:
+            f.write("keep me too\n")
+        self.env["AUTO_CALLSIGN"] = "KD8PGK"
+        self.env["AUTO_NODE"] = "652701"
+        self.run_installer("--offline")
+        with open(os.path.join(self.tmp, "etc", "asl_dvs.conf")) as f:
+            self.assertEqual(f.read(), "keep me\n")
+
+    def test_no_identity_non_interactive_warns_and_writes_nothing(self):
+        r = self.run_installer("--offline")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("No callsign or node number set", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "etc", "asl_dvs.conf")))
+
 
 if __name__ == "__main__":
     unittest.main()

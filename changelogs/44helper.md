@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_76_20261123.py`. Newest entries first.
+Current file: `44helper_v0_1_77_20261123.py`. Newest entries first.
+
+## 0.1.77 (2026-11-23)
+
+The Build tab's suite install matches the single-run installer. This is a release: the command it runs and the list it shows change.
+
+- **Command:** the suite install runs `install_all` with `--non-interactive --build=…` only. It no longer passes `--action`, `--tools` or the manuals; the installer installs the whole suite, so the missing-tools list only decides whether the button has work to do.
+- **Tools:** the list is instmon, Dashboard, SysMon, wifimon, Node Talker, Node Recorder, Pibrary, Node Monitor, Terminal Monitor and Pi-Piper TTS. Manuals are no longer in the list, and the manuals folder is no longer read.
+- The callsign and node are still passed as `AUTO_CALLSIGN` and `AUTO_NODE` on a fresh node.
 
 ## 0.1.76 (2026-11-23)
 

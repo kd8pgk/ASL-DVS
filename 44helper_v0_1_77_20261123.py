@@ -45,7 +45,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.76"
+APP_VERSION = "0.1.77"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -33687,26 +33687,20 @@ def _route_build_report(query: dict) -> tuple[int, str, bytes]:
         return 500, "application/json", json.dumps({"message": "Could not make the report: " + type(exc).__name__}).encode("utf-8")
     return 200, "text/plain; charset=utf-8", text.encode("utf-8")
 
-_BLD_MANUALS_DIR = "/etc/asl_dvs/instmon_library/docs"
 _BLD_ASLDVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 _BLD_BOOTSTRAP_URL = "https://raw.githubusercontent.com/" + _FCR_REPO + "/main/bootstrap.sh"
 _BLD_SUITE_TOOLS = (("instmon", "instmon", "instmon"), ("dashboard", "nodecontrol", "Dashboard"), ("sysmon", "sysmon", "SysMon"),
                     ("wifimon", "wifimon", "wifimon"), ("nodetalker", "nodetalker", "Node Talker"),
                     ("noderecorder", "noderecorder", "Node Recorder"), ("pibrary", "pibrary", "Pibrary"),
-                    ("nodemon", "nodemon", "Node Monitor"), ("manuals", "", "Manuals"))
+                    ("nodemon", "nodemon", "Node Monitor"), ("termon", "termon", "Terminal Monitor"),
+                    ("piper_dashboard", "piper_dashboard", "Pi-Piper TTS"))
 _BLD_SUITE_BUILDS = ("auto", "pi02w", "full")
 _BLD_SUITE_CHANNELS = ("stable", "testing")
 
 def _bld_suite_state() -> list[dict]:
     out = []
     for key, unit, name in _BLD_SUITE_TOOLS:
-        if key == "manuals":
-            try:
-                have = bool(os.listdir(_BLD_MANUALS_DIR))
-            except OSError:
-                have = False
-        else:
-            have = _bld_unit_exists(unit + ".service")
+        have = _bld_unit_exists(unit + ".service")
         out.append({"key": key, "name": name, "installed": have})
     return out
 
@@ -33721,7 +33715,7 @@ def _bld_suite_cmd(form: dict, tools: list[str]) -> str:
     env = [f"ASL_DVS_CHANNEL={channel if channel in _BLD_SUITE_CHANNELS else 'stable'}"]
     if all(_BLD_FIELD_RES[k][0].fullmatch(form.get(k, "")) for k in ("callsign", "node")):
         env += [f"AUTO_CALLSIGN={form['callsign']}", f"AUTO_NODE={form['node']}"]
-    args = f"--non-interactive --action=components --tools={','.join(tools)} --build={_bld_suite_build(form)}"
+    args = f"--non-interactive --build={_bld_suite_build(form)}"
     u = _BLD_BOOTSTRAP_URL
     script = (f"set -o pipefail; if command -v curl >/dev/null 2>&1; then curl -fsSL '{u}'; else wget -q -O - '{u}'; fi"
               f" | env {' '.join(env)} bash -s -- {args}")

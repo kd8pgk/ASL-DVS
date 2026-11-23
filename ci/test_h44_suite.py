@@ -31,7 +31,7 @@ class Tmp(unittest.TestCase):
         self.units = os.path.join(self.d.name, "units")
         self.docs = os.path.join(self.d.name, "docs")
         os.makedirs(self.units)
-        self.patches = [mock.patch.object(h44, "_BLD_UNIT_DIRS", (self.units,)), mock.patch.object(h44, "_BLD_MANUALS_DIR", self.docs)]
+        self.patches = [mock.patch.object(h44, "_BLD_UNIT_DIRS", (self.units,))]
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)
@@ -47,23 +47,17 @@ class State(Tmp):
     def test_nothing_installed(self):
         self.assertEqual(set(self.installed().values()), {False})
 
-    def test_units_and_manuals_are_read(self):
+    def test_units_are_read_and_manuals_are_not_in_the_list(self):
         for u in ("nodecontrol", "sysmon", "nodemon"):
             self.unit(u)
-        os.makedirs(self.docs)
-        open(os.path.join(self.docs, "a.pdf"), "w").close()
         got = self.installed()
-        self.assertEqual([k for k, v in got.items() if v], ["dashboard", "sysmon", "nodemon", "manuals"])
+        self.assertEqual([k for k, v in got.items() if v], ["dashboard", "sysmon", "nodemon"])
+        self.assertNotIn("manuals", got)
 
-    def test_an_empty_manuals_folder_counts_as_missing(self):
-        os.makedirs(self.docs)
-        self.assertFalse(self.installed()["manuals"])
-
-    def test_44helper_and_terminal_monitor_are_not_in_the_list(self):
+    def test_44helper_is_not_in_the_list_but_terminal_monitor_and_piper_are(self):
         keys = [t["key"] for t in h44._bld_suite_state()]
-        for never in ("44helper", "termon"):
-            self.assertNotIn(never, keys)
-        self.assertEqual(keys, ["instmon", "dashboard", "sysmon", "wifimon", "nodetalker", "noderecorder", "pibrary", "nodemon", "manuals"])
+        self.assertNotIn("44helper", keys)
+        self.assertEqual(keys, ["instmon", "dashboard", "sysmon", "wifimon", "nodetalker", "noderecorder", "pibrary", "nodemon", "termon", "piper_dashboard"])
 
 
 class Build(unittest.TestCase):
@@ -88,7 +82,7 @@ class Build(unittest.TestCase):
 
 
 class Command(unittest.TestCase):
-    def cmd(self, form=None, tools=("nodetalker", "manuals")):
+    def cmd(self, form=None, tools=("nodetalker", "termon")):
         with mock.patch.object(h44, "_bld_board", lambda: {"model": "Pi 4", "zero2": False}):
             return h44._bld_suite_cmd(dict(FORM, **(form or {})), list(tools))
 
@@ -107,7 +101,9 @@ class Command(unittest.TestCase):
         self.assertTrue(c.startswith("set -o pipefail; "))
         self.assertIn("curl -fsSL 'https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/bootstrap.sh'", c)
         self.assertIn("wget -q -O - ", c)
-        self.assertIn("bash -s -- --non-interactive --action=components --tools=nodetalker,manuals --build=full", c)
+        self.assertIn("bash -s -- --non-interactive --build=full", c)
+        self.assertNotIn("--tools=", c)
+        self.assertNotIn("manuals", c)
         self.assertIn("ASL_DVS_CHANNEL=stable AUTO_CALLSIGN=KD8PGK AUTO_NODE=652701", c)
 
     def test_only_valid_identity_reaches_the_shell(self):
@@ -143,7 +139,7 @@ class Action(Tmp):
             res = h44._bld_act_install_suite({"profile": profile})
         return res, started
 
-    ALL = ("instmon", "nodecontrol", "sysmon", "wifimon", "nodetalker", "noderecorder", "pibrary", "nodemon")
+    ALL = ("instmon", "nodecontrol", "sysmon", "wifimon", "nodetalker", "noderecorder", "pibrary", "nodemon", "termon", "piper_dashboard")
 
     def test_starts_one_background_job_for_the_missing_tools_only(self):
         res, started = self.go(installed_units=("nodecontrol", "sysmon", "instmon", "wifimon"))
@@ -151,15 +147,13 @@ class Action(Tmp):
         self.assertEqual(res["job_key"], "build_travel_suite")
         self.assertEqual(len(started), 1)
         cmd = started[0][1]
-        self.assertIn("--tools=nodetalker,noderecorder,pibrary,nodemon,manuals", cmd)
-        for installed in ("instmon,", "dashboard", "sysmon", "wifimon"):
-            self.assertNotIn(installed, cmd.split("--tools=")[1].split(" ")[0])
-        self.assertNotIn("44helper", cmd.split("--tools=")[1].split(" ")[0])
-        self.assertNotIn("termon", cmd)
+        self.assertIn("--non-interactive --build=", cmd)
+        self.assertNotIn("--tools=", cmd)
+        self.assertNotIn("--action=", cmd)
+        self.assertNotIn("manuals", cmd)
+        self.assertNotIn("44helper", cmd)
 
     def test_everything_installed_starts_nothing(self):
-        os.makedirs(self.docs)
-        open(os.path.join(self.docs, "m.pdf"), "w").close()
         res, started = self.go(installed_units=self.ALL)
         self.assertTrue(res["success"])
         self.assertEqual(started, [])
