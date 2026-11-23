@@ -195,7 +195,7 @@ class NodesActivity : Activity() {
                     this,
                     Node(n?.id ?: UUID.randomUUID().toString(), name.text.toString().trim(), host, portNum, useHttps,
                         if (same) n!!.pin else "", awayHost, awayPort, awayHttps, awayAuto, false,
-                        if (same) n!!.lanIp else ""),
+                        if (same) n!!.lanIp else "", false, if (same) n!!.lanPin else ""),
                 )
                 dlg.dismiss()
                 refresh()
