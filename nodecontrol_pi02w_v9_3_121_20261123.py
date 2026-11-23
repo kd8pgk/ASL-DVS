@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.120-pi02w"
+VERSION      = "9.3.121-pi02w"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -12830,7 +12830,8 @@ async function refresh(){
     const t0=performance.now();
     const r=await fetch('/api/status',{headers:hdrs,signal:ctrl.signal});
     clearTimeout(tid);
-    if(!document.hidden)NET.sample(performance.now()-t0);
+    const ms=parseInt(r.headers.get('X-Work-Ms')||'',10);
+    if(!document.hidden)NET.sample(Math.max(0,performance.now()-t0-(isNaN(ms)?0:ms)));
     if(r.status===304){
       _failCount=0;document.body.classList.remove('offline');
       return;
@@ -15112,6 +15113,45 @@ class _EarlyReturn(Exception):
 _PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X-Forwarded-For",
                   "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
 
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
+
+_page_etags: dict = {}
+
+
+@with_work_ms
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
@@ -15222,21 +15262,32 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def send_html(self) -> None:
-        self.send_response(200)
+        lite = self._wants_lite_page()
+        packed = self._accepts_gzip()
+        if packed:
+            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
+        else:
+            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
+        etag = _page_etags.get(id(body))
+        if etag is None:
+            etag = _page_etags[id(body)] = etag_of(body)
+        unchanged = etag_match(self.headers.get("If-None-Match", ""), etag)
+        self.send_response(304 if unchanged else 200)
         self.send_header("Content-Type",          "text/html; charset=utf-8")
-        self.send_header("Cache-Control",          "no-store")
+        self.send_header("Cache-Control",          "no-cache")
+        self.send_header("ETag",                   etag)
+        self.send_header("Vary",                   "Accept-Encoding, Cookie")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; font-src 'self' data:; style-src 'unsafe-inline'; "
                          "script-src 'unsafe-inline'; connect-src 'self'; "
                          "frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
-        lite = self._wants_lite_page()
-        if self._accepts_gzip():
-            body = _HTML_LITE_GZIP if lite else _HTML_GZIP
+        if unchanged:
+            self.end_headers()
+            return
+        if packed:
             self.send_header("Content-Encoding", "gzip")
-        else:
-            body = _HTML_LITE_BYTES if lite else _HTML_BYTES
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

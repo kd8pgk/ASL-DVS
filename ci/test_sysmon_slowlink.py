@@ -200,7 +200,7 @@ class PageScript(unittest.TestCase):
         for call in ('NET.gate("status", 5000, 4)', 'NET.gate("svc", 30000)', 'NET.gate("ports", 15000)',
                      'NET.gate("reg", 15000)', 'NET.gate("phone", 5000)'):
             self.assertIn(call, self.html)
-        self.assertIn("NET.sample(performance.now() - t0)", self.html)
+        self.assertIn("NET.sample(Math.max(0, performance.now() - t0 - (window._srvMs || 0)))", self.html)
 
     def test_a_running_sd_card_test_is_not_slowed(self):
         self.assertIn("setInterval(sdTestPoll, 1500)", self.html)

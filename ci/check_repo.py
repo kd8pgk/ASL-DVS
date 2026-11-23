@@ -353,7 +353,7 @@ SHARED_FILE = "shared/confio.py"
 def top_functions(text, names=None):
     tree = ast.parse(text)
     return {n.name: ast.get_source_segment(text, n) for n in tree.body
-            if isinstance(n, ast.FunctionDef) and (names is None or n.name in names)}
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and (names is None or n.name in names)}
 
 
 def check_shared_code(rev, head_tools):
