@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 VERSION = "0.8.2"
-HOSTNAME = socket.gethostname().split(".")[0]
 
 import argparse
 import configparser
@@ -29,6 +28,8 @@ import wave
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, unquote, parse_qs
+
+HOSTNAME = socket.gethostname().split(".")[0]
 
 VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 
