@@ -15376,7 +15376,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def handle_one_request(self) -> None:
+        self._body_taken = False
+        super().handle_one_request()
+        if self.close_connection and not self._body_taken:
+            self._drain_unread_body()
+
+    def _drain_unread_body(self) -> None:
+        try:
+            left = int(self.headers.get("Content-Length", 0) or 0)
+        except (AttributeError, ValueError):
+            return
+        if left <= 0 or left > 524_288:
+            return
+        try:
+            self.connection.settimeout(2)
+            while left > 0:
+                chunk = self.rfile.read(min(left, 65536))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:
+            pass
+
     def _read_body(self) -> bytes:
+        self._body_taken = True
         length = int(self.headers.get("Content-Length", 0))
         if length > 524_288:
             self.send_json({"ok": False, "message": "Request body too large"}, 413)
