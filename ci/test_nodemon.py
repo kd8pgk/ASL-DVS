@@ -710,7 +710,7 @@ class NodeDiscon(AmiCase):
 
     def test_the_state_badge_is_short_and_the_reason_moves_to_the_notes(self):
         js = nm._JS
-        body = js.split("function nodeSummary(n) {", 1)[1].split("\n}\n", 1)[0]
+        body = js.split("function nodeSummary(n, privNodes) {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("badge(st[0], down ? 'down' : 'up')", body)
         self.assertIn("let note = down ? st[1] : '';", body)
         card = js.split("function nodeCard(n, title) {", 1)[1].split("\n}\n", 1)[0]
@@ -747,6 +747,13 @@ class NodeDiscon(AmiCase):
         cell = js.split("function linkedCell(n) {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("n.links.map((l) => l.node)", cell)
         self.assertNotIn("n.others", cell)
+        self.assertNotIn("othersBox", cell)
+        linked = js.split("function renderLinked(d) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("n.others", linked)
+        self.assertIn("'Other nodes on the links ('", linked)
+        summ = js.split("function nodeSummary(n, privNodes) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("primary link", summ)
+        self.assertNotIn("ASL3", summ)
         ov = js.split("function renderOv(d) {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("a + n.links.length", ov)
         self.assertNotIn("others", ov)

@@ -26,7 +26,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1971,6 +1971,7 @@ td.mono{font-family:var(--mono)}
 details.others{margin-top:.35rem;white-space:normal;max-width:30rem}
 details.others summary{cursor:pointer;color:var(--blue);font-size:var(--fs-xs);letter-spacing:.06em}
 .others-list{margin-top:.3rem;max-height:9rem;overflow:auto;color:#aab8cc;word-break:break-word;line-height:1.5}
+.others-list.full{max-height:none}
 .keyed{color:var(--lime)}
 .r{text-align:right}
 .btn.discon{padding:.3rem .8rem;font-size:var(--fs-sm)}
@@ -2291,16 +2292,16 @@ function othersBox(n) {
 }
 function linkedCell(n) {
   const direct = n.links.map((l) => l.node);
-  const oth = othersBox(n);
-  if (!oth) return direct.length ? direct.length + ': ' + direct.join(', ') : 'none';
-  const box = el('div');
-  box.appendChild(el('span', '', direct.length ? direct.length + ': ' + direct.join(', ') : 'none'));
-  box.appendChild(oth);
-  return {node: box};
+  return direct.length ? direct.length + ': ' + direct.join(', ') : 'none';
 }
-function nodeSummary(n) {
+function primaryLink(n, privNodes) {
+  const up = n.links.filter((l) => String(l.state || '').toUpperCase() === 'ESTABLISHED');
+  const outside = up.filter((l) => privNodes.indexOf(l.node) === -1);
+  const l = outside[0] || up[0];
+  return l ? l.node : '';
+}
+function nodeSummary(n, privNodes) {
   const st = stateOf(n);
-  const reg = n.registration;
   const down = st[0] !== 'ok';
   const cells = [{text: n.node, mono: true}, n.role === 'main' ? 'Main node' : (n.bridge || 'Private node'),
                  {node: badge(st[0], down ? 'down' : 'up')},
@@ -2309,7 +2310,8 @@ function nodeSummary(n) {
   if (n.txkeyed) note = 'transmitting';
   else if (n.rxkeyed) note = 'receiving';
   if (n.gateway) note += (note ? '; ' : '') + n.gateway.text;
-  if (reg) note += (note ? '; ' : '') + 'ASL3 ' + reg.state.toLowerCase();
+  const pl = primaryLink(n, privNodes);
+  if (pl) note += (note ? '; ' : '') + 'primary link ' + pl;
   cells.push(note || '-');
   cells.push(disconCell(n));
   return cells;
@@ -2340,7 +2342,7 @@ function renderOv(d) {
   root.appendChild(c1);
   const c2 = el('div', 'card');
   c2.appendChild(el('h2', '', 'Nodes'));
-  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes', 'DisCon'], nodes.map(nodeSummary), 'No nodes were found in rpt.conf.', [5]);
+  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes', 'DisCon'], nodes.map((n) => nodeSummary(n, d.private.map((p) => p.node))), 'No nodes were found in rpt.conf.', [5]);
   const tb = tbl.querySelector('table');
   if (tb) tb.classList.add('nodes-tbl');
   const trs = tbl.querySelectorAll('tr');
@@ -2421,6 +2423,14 @@ function renderLinked(d) {
   });
   card.appendChild(table(LINK_COLS, rows, 'No links.'));
   root.appendChild(card);
+  const others = n.others || [];
+  const c2 = el('div', 'card');
+  const h2 = el('h2');
+  h2.appendChild(el('span', '', 'Other nodes on the links (' + others.length + ')'));
+  c2.appendChild(h2);
+  if (others.length) c2.appendChild(el('div', 'others-list full mono', others.join(', ')));
+  else c2.appendChild(el('div', 'empty', 'No other nodes are linked beyond the direct links.'));
+  root.appendChild(c2);
 }
 function renderPriv(d) {
   const root = $('pg-priv');
