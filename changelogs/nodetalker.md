@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_0_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_1_20261123.py`. Newest entries first.
+
+## 0.14.1 (2026-11-23)
+
+The speed code is now the shared one. This is a release: every GET reply carries a new header.
+
+- **`X-Work-Ms` on every GET reply**, not only the status; the page still subtracts it before it judges the link.
+- **Shared code.** The manager session, the refresher and the tag helpers come from `shared/confio.py` (`AmiCmd`, `ami_or_cli`, `Warm`, `etag_of`, `etag_match`, `etag_stable`, `with_work_ms`), the same code Node Recorder 0.18.0 and SysMon use. The private `_ami_*` copies are gone.
+- Nothing else changes.
 
 ## 0.14.0 (2026-11-23)
 
@@ -14,7 +22,6 @@ The page answers faster and feels less laggy. This is a release: the status rout
 - **Less work on the page.** Text and classes are written only when they changed, the link table is rebuilt only when its rows changed, and the 100 ms gap timer and the 2 s availability timer do nothing in a hidden tab.
 - **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304 to a matching `If-None-Match`, so a reload does not download the 97 KB (73 KB light) again. Replies from `/api` stay `no-store`. The fonts stay inside the page.
 - **`rpt.conf` is parsed once per text** on the status path (it was parsed on every request).
-- **Shared code.** The manager session, the refresher and the tag helpers now come from `shared/confio.py` (`AmiCmd`, `ami_or_cli`, `Warm`, `etag_of`, `etag_match`, `etag_stable`, `with_work_ms`), the same code Node Recorder 0.18.0 and SysMon use. Every GET reply carries `X-Work-Ms`, not only the status.
 - Nothing else changes: the same routes, fields, login and audio paths.
 - Tests: new `ci/test_nodetalker_speed.py` (the manager session against a stand-in for Asterisk, the fast reads and the refresher, the tags and the volatile header, the page tag, the page script rules). `ci/test_nodetalker_slowlink.py` follows the page tag and the new sample call.
 
