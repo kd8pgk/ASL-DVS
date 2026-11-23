@@ -1,6 +1,15 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_9_1_20261123.py`. Newest entries first.
+Current file: `nodemon_v0_9_2_20261123.py`. Newest entries first.
+
+## 0.9.2 (2026-11-23)
+
+The Overview card is shorter and the Linked Nodes tab shows every outside node. This is a release: page logic changed.
+
+- **Notes column.** It no longer says the ASL3 registration state. It names the node's primary link: the first established link, or for a private node its link to the main node when it has one, with its mode.
+- **Linked to column.** The "Other nodes on the links" drop-down is gone from the Overview. The column lists direct links only.
+- **Linked Nodes tab.** A second card lists every outside node linked through the main node's links, with a count, in full. The Main tab no longer repeats the list; private node cards keep theirs.
+- The registration is still shown on the Main tab and in the Status counts.
 
 ## 0.9.1 (2026-11-23)
 

@@ -710,7 +710,7 @@ class NodeDiscon(AmiCase):
 
     def test_the_state_badge_is_short_and_the_reason_moves_to_the_notes(self):
         js = nm._JS
-        body = js.split("function nodeSummary(n) {", 1)[1].split("\n}\n", 1)[0]
+        body = js.split("function nodeSummary(n, d) {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("badge(st[0], down ? 'down' : 'up')", body)
         self.assertIn("let note = down ? st[1] : '';", body)
         card = js.split("function nodeCard(n, title) {", 1)[1].split("\n}\n", 1)[0]
@@ -751,8 +751,22 @@ class NodeDiscon(AmiCase):
         self.assertIn("a + n.links.length", ov)
         self.assertNotIn("others", ov)
         card = js.split("function nodeCard(n, title) {", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("othersBox(n)", card)
+        self.assertIn("n.role === 'main' ? null : othersBox(n)", card)
         self.assertIn("details.others", nm._CSS)
+        self.assertNotIn("othersBox", cell)
+        linked = js.split("function renderLinked(d) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("'Other nodes on the links'", linked)
+        self.assertIn("n.others", linked)
+
+    def test_the_notes_name_the_primary_link_not_the_registration(self):
+        js = nm._JS
+        summ = js.split("function nodeSummary(n, d) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("primary link ", summ)
+        self.assertNotIn("registration", summ)
+        self.assertNotIn("ASL3", summ)
+        prim = js.split("function primaryLink(n, d) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("'ESTABLISHED'", prim)
+        self.assertIn("d.main.node", prim)
 
     def test_the_status_carries_the_others_for_every_node(self):
         snap = {"ok": True, "error": "", "at": time.time(), "banner": "", "loaded": ["654321", "1900"], "regs": {},

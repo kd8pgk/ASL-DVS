@@ -26,7 +26,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -1970,6 +1970,7 @@ td.mono{font-family:var(--mono)}
 .empty{color:#aab8cc;padding:.4rem 0}
 details.others{margin-top:.35rem;white-space:normal;max-width:30rem}
 details.others summary{cursor:pointer;color:var(--blue);font-size:var(--fs-xs);letter-spacing:.06em}
+.others-list.all{max-height:none}
 .others-list{margin-top:.3rem;max-height:9rem;overflow:auto;color:#aab8cc;word-break:break-word;line-height:1.5}
 .keyed{color:var(--lime)}
 .r{text-align:right}
@@ -2257,7 +2258,7 @@ function nodeCard(n, title) {
   }
   if (n.ok && COMMANDS.length) card.appendChild(kv('Command', cmdBar(n)));
   card.appendChild(table(LINK_COLS, linkRows(n), 'No links.'));
-  const oth = othersBox(n);
+  const oth = n.role === 'main' ? null : othersBox(n);
   if (oth) card.appendChild(oth);
   return card;
 }
@@ -2291,16 +2292,17 @@ function othersBox(n) {
 }
 function linkedCell(n) {
   const direct = n.links.map((l) => l.node);
-  const oth = othersBox(n);
-  if (!oth) return direct.length ? direct.length + ': ' + direct.join(', ') : 'none';
-  const box = el('div');
-  box.appendChild(el('span', '', direct.length ? direct.length + ': ' + direct.join(', ') : 'none'));
-  box.appendChild(oth);
-  return {node: box};
+  return direct.length ? direct.length + ': ' + direct.join(', ') : 'none';
 }
-function nodeSummary(n) {
+function primaryLink(n, d) {
+  if (!n.links.length) return null;
+  const up = n.links.filter((l) => String(l.state || '').toUpperCase() === 'ESTABLISHED');
+  const pool = up.length ? up : n.links;
+  const hub = d && d.main && n.role !== 'main' ? pool.find((l) => l.node === d.main.node) : null;
+  return hub || pool[0];
+}
+function nodeSummary(n, d) {
   const st = stateOf(n);
-  const reg = n.registration;
   const down = st[0] !== 'ok';
   const cells = [{text: n.node, mono: true}, n.role === 'main' ? 'Main node' : (n.bridge || 'Private node'),
                  {node: badge(st[0], down ? 'down' : 'up')},
@@ -2309,7 +2311,8 @@ function nodeSummary(n) {
   if (n.txkeyed) note = 'transmitting';
   else if (n.rxkeyed) note = 'receiving';
   if (n.gateway) note += (note ? '; ' : '') + n.gateway.text;
-  if (reg) note += (note ? '; ' : '') + 'ASL3 ' + reg.state.toLowerCase();
+  const pl = n.ok && n.loaded !== false ? primaryLink(n, d) : null;
+  if (pl) note += (note ? '; ' : '') + 'primary link ' + pl.node + (pl.mode_name ? ' (' + pl.mode_name + ')' : '');
   cells.push(note || '-');
   cells.push(disconCell(n));
   return cells;
@@ -2340,7 +2343,7 @@ function renderOv(d) {
   root.appendChild(c1);
   const c2 = el('div', 'card');
   c2.appendChild(el('h2', '', 'Nodes'));
-  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes', 'DisCon'], nodes.map(nodeSummary), 'No nodes were found in rpt.conf.', [5]);
+  const tbl = table(['Node', 'What', 'State', 'Linked to', 'Notes', 'DisCon'], nodes.map((n) => nodeSummary(n, d)), 'No nodes were found in rpt.conf.', [5]);
   const tb = tbl.querySelector('table');
   if (tb) tb.classList.add('nodes-tbl');
   const trs = tbl.querySelectorAll('tr');
@@ -2421,6 +2424,14 @@ function renderLinked(d) {
   });
   card.appendChild(table(LINK_COLS, rows, 'No links.'));
   root.appendChild(card);
+  const others = n.others || [];
+  const c2 = el('div', 'card');
+  const h2 = el('h2');
+  h2.appendChild(el('span', '', 'Other nodes on the links'));
+  h2.appendChild(badge(others.length ? 'ok' : 'unknown', String(others.length)));
+  c2.appendChild(h2);
+  c2.appendChild(others.length ? el('div', 'others-list all mono', others.join(', ')) : el('div', 'empty', 'No other nodes are linked through the links above.'));
+  root.appendChild(c2);
 }
 function renderPriv(d) {
   const root = $('pg-priv');
