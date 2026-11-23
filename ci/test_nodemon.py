@@ -836,5 +836,200 @@ class QuickLinks(unittest.TestCase):
         self.assertIn("classList.add('hot')", nm._JS)
 
 
+class Speed(LivePoll):
+    def logins(self):
+        return sum(1 for m in self.ami.seen if m.get("Action") == "Login")
+
+    def test_replies_may_arrive_in_any_order(self):
+        import io
+        raw = b"Response: Success\r\nActionID: b\r\n\r\nResponse: Success\r\nActionID: a\r\n\r\n"
+        got = nm._ami_read_many(io.BytesIO(raw), ["a", "b"])
+        self.assertEqual(set(got), {"a", "b"})
+        self.assertIn("ActionID: a", got["a"])
+
+    def test_one_pass_asks_everything_with_the_same_login(self):
+        nm._config.update(poll_sec=1)
+        self.run_monitor()
+        self.assertTrue(self.until(lambda: self.xstats() >= 8))
+        self.assertEqual(self.logins(), 1)
+
+    def test_a_parked_session_keeps_its_login_and_wakes_at_once(self):
+        nm._config.update(poll_sec=30)
+        with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 1.0):
+            mon = self.run_monitor()
+            self.assertTrue(self.until(lambda: mon.state()["idle"], 10))
+            n = self.xstats()
+            mon.touch()
+            self.assertTrue(self.until(lambda: self.xstats() > n, 3))
+            self.assertEqual(self.logins(), 1)
+            self.assertFalse(mon.state()["idle"])
+
+    def test_the_first_request_after_idle_does_not_wait_for_a_reconnect(self):
+        nm._config.update(poll_sec=30)
+        with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 1.0):
+            mon = self.run_monitor()
+            self.assertTrue(self.until(lambda: mon.state()["idle"], 10))
+            mon.touch()
+            t = time.monotonic()
+            d = nm.build_status(True)
+            self.assertLess(time.monotonic() - t, 1.5)
+            self.assertTrue(d["ami"]["ok"])
+
+    def test_a_kick_polls_again_before_the_next_interval(self):
+        nm._config.update(poll_sec=30)
+        mon = self.run_monitor()
+        n = self.xstats()
+        mon.kick()
+        self.assertTrue(self.until(lambda: self.xstats() > n, 3))
+
+    def test_the_change_counter_moves_only_when_the_state_changes(self):
+        nm._config.update(poll_sec=1)
+        self.run_monitor()
+        time.sleep(0.3)
+        base = nm.HUB.seq
+        n = self.xstats()
+        self.assertTrue(self.until(lambda: self.xstats() >= n + 4, 6))
+        self.assertEqual(nm.HUB.seq, base)
+        self.ami.replies["654321"] = NO_LINKS
+        self.assertGreater(nm.HUB.wait(base, 5.0), base)
+
+    def test_a_waiting_request_is_woken_by_a_change(self):
+        base = nm.HUB.seq
+        threading.Timer(0.2, nm.HUB.bump).start()
+        t = time.monotonic()
+        self.assertEqual(nm.HUB.wait(base, 5.0), base + 1)
+        self.assertLess(time.monotonic() - t, 2.0)
+        self.assertEqual(nm.HUB.wait(base + 1, 0.2), base + 1)
+
+    def test_a_held_request_keeps_the_polling_awake(self):
+        with unittest.mock.patch.object(nm, "IDLE_AFTER_SEC", 0.1):
+            mon = nm.Monitor()
+            mon.hold()
+            time.sleep(0.3)
+            self.assertTrue(mon._wanted())
+            mon.release()
+            self.assertTrue(mon._wanted())
+            time.sleep(0.3)
+            self.assertFalse(mon._wanted())
+
+
+for _name in dir(LivePoll):
+    if _name.startswith("test_") and _name not in Speed.__dict__:
+        setattr(Speed, _name, None)
+
+
+class Caches(unittest.TestCase):
+    def test_a_warm_status_reads_the_kept_gateways_and_links(self):
+        calls = []
+        old = (nm._WARM["on"], dict(nm._gw_cache), dict(nm._links_cache))
+        self.addCleanup(lambda: (nm._WARM.update(on=old[0]), nm._gw_cache.clear(), nm._gw_cache.update(old[1]),
+                                 nm._links_cache.clear(), nm._links_cache.update(old[2])))
+        nm._WARM["on"] = True
+        nm._gw_cache["svx"] = (time.monotonic(), {"kind": "svx", "state": "idle", "text": "kept"})
+        nm._links_cache.update(t=time.monotonic(), v=[{"key": "kept"}])
+        with unittest.mock.patch.object(nm, "gateway_for", lambda k: calls.append(k)), \
+                unittest.mock.patch.object(nm, "port_open", lambda *a, **k: calls.append("port") or False):
+            self.assertEqual(nm.gateway_view("svx")["text"], "kept")
+            self.assertEqual(nm.links_view(), [{"key": "kept"}])
+        self.assertEqual(calls, [])
+
+    def test_a_cold_or_old_entry_is_read_on_the_spot(self):
+        old = (nm._WARM["on"], dict(nm._gw_cache))
+        self.addCleanup(lambda: (nm._WARM.update(on=old[0]), nm._gw_cache.clear(), nm._gw_cache.update(old[1])))
+        nm._WARM["on"] = True
+        nm._gw_cache["svx"] = (time.monotonic() - 60, {"text": "old"})
+        with unittest.mock.patch.object(nm, "gateway_for", lambda k: {"text": "new"}):
+            self.assertEqual(nm.gateway_view("svx")["text"], "new")
+
+    def test_the_background_pass_flags_a_change_once(self):
+        old = dict(nm._gw_cache)
+        self.addCleanup(lambda: (nm._gw_cache.clear(), nm._gw_cache.update(old)))
+        plan = {"ok": True, "error": "", "main": "1", "public": ["1"], "private": [], "kind": {"1": ("svx", "SvxLink bridge")}}
+        state = {"text": "a"}
+        with unittest.mock.patch.object(nm, "node_plan", lambda: plan), \
+                unittest.mock.patch.object(nm, "gateway_for", lambda k: dict(state)), \
+                unittest.mock.patch.object(nm, "quick_links", lambda: []):
+            base = nm.HUB.seq
+            last = nm._warm_once(None)
+            self.assertEqual(nm.HUB.seq, base + 1)
+            last = nm._warm_once(last)
+            self.assertEqual(nm.HUB.seq, base + 1)
+            state["text"] = "b"
+            nm._warm_once(last)
+            self.assertEqual(nm.HUB.seq, base + 2)
+
+    def test_rpt_conf_is_parsed_once_while_its_text_is_the_same(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "rpt.conf")
+        with open(path, "w") as f:
+            f.write(RPT)
+        old = (nm.RPT_CONF, list(nm._plan_cache))
+        self.addCleanup(lambda: (setattr(nm, "RPT_CONF", old[0]), nm._plan_cache.__setitem__(slice(None), old[1])))
+        nm.RPT_CONF = path
+        nm._plan_cache[:] = ["", None]
+        with unittest.mock.patch.object(nm, "rpt_scan", wraps=nm.rpt_scan) as scan:
+            a = nm.node_plan()
+            b = nm.node_plan()
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(a, b)
+            with open(path, "a") as f:
+                f.write("\n[777]\nrxchannel = SimpleUSB/x\n")
+            nm.node_plan()
+            self.assertEqual(scan.call_count, 2)
+
+    def test_the_svxlink_log_is_read_again_only_when_it_changes(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        conf = os.path.join(tmp.name, "svxlink.conf")
+        log = os.path.join(tmp.name, "svxlink")
+        with open(conf, "w") as f:
+            f.write("[ReflectorLogic]\nHOSTS=h\nHOST_PORT=5300\n")
+        with open(log, "w") as f:
+            f.write("\n".join(LOG) + "\n")
+        saved = (nm.SVX_CONF, nm.SVX_LOG, list(nm._svx_cache), dict(nm._unit_cache))
+        self.addCleanup(lambda: (setattr(nm, "SVX_CONF", saved[0]), setattr(nm, "SVX_LOG", saved[1]),
+                                 nm._svx_cache.__setitem__(slice(None), saved[2]), nm._unit_cache.update(saved[3])))
+        nm.SVX_CONF, nm.SVX_LOG = conf, log
+        nm._svx_cache[:] = [None, None]
+        nm._unit_cache[nm.UNIT_SVX] = (time.monotonic() + 100, True)
+        with unittest.mock.patch.object(nm, "svx_events", wraps=nm.svx_events) as ev:
+            first = nm.read_svx()
+            self.assertEqual(nm.read_svx(), first)
+            self.assertEqual(ev.call_count, 1)
+            with open(log, "a") as f:
+                f.write("Mon Nov 16 10:52:30 2026: ReflectorLogic: Selecting TG #9\n")
+            self.assertEqual(nm.read_svx()["text"], "TG 9")
+            self.assertEqual(ev.call_count, 2)
+
+    def test_the_snapshot_copy_is_shallow_and_never_edited_in_place(self):
+        mon = nm.Monitor()
+        a = mon.state()
+        mon._put(loaded=["1"])
+        self.assertEqual(a["loaded"], [])
+        self.assertEqual(mon.state()["loaded"], ["1"])
+
+
+class PageSpeed(unittest.TestCase):
+    def test_the_page_waits_on_the_server_instead_of_a_timer(self):
+        js = nm._JS
+        self.assertIn("/api/status?since=", js)
+        self.assertNotIn("setTimeout(poll", js)
+        self.assertNotIn("'/api/wake'", js)
+        self.assertIn("AbortController", js)
+
+    def test_only_the_open_tab_is_drawn_and_an_unchanged_status_is_not_redrawn(self):
+        js = nm._JS
+        self.assertIn("paintTab(current)", js)
+        self.assertIn("sig === lastSig", js)
+        self.assertIn("d.unchanged", js)
+
+    def test_a_command_refreshes_the_page_once_and_the_server_follows_up(self):
+        src = open(PATH).read()
+        post = src.split("    def _do_post(self):", 1)[1].split("class Server", 1)[0]
+        self.assertEqual(post.count("MON.kick_later()"), 2)
+        self.assertEqual(nm._JS.count("fetchNow();"), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
