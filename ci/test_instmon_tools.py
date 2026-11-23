@@ -516,7 +516,7 @@ class CookiePurgeAfterFullUpdate(unittest.TestCase):
 
 class GroupUpdate(unittest.TestCase):
     NEW = "wifimon_v5_59_0_20261124.py"
-    OLD = "wifimon_v5_58_0_20261123.py"
+    OLD = "wifimon_v5_59_0_20261123.py"
 
     def setUp(self):
         self.dir = im.LIB_SUBDIRS["wifimon"]

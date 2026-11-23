@@ -50,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_106_20261123.py` | `sysmon_pi02w_v6_13_95_20261123.py` | `instmon_v2_119_0_20261123.py` |
+| File name | `sysmon_v6_13_110_20261123.py` | `sysmon_pi02w_v6_13_98_20261123.py` | `instmon_v2_120_0_20261123.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -104,21 +104,19 @@ This downloads the installer and runs it. On a node with nothing installed, the 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_119_0_20261123.py --install
+   sudo python3 instmon_v2_120_0_20261123.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_9_0_20261121.sh
+   sudo bash install_all_v8_0_0_20261123.sh
    ```
-   - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`). It also installs instmon when it isn't installed.
-   - **Menu (7.7.0 and later):** an interactive run asks `Choose [1-5/q]`: 1 full first install, 2 full upgrade, 3 full replace, 4 component install, 5 reset only. Enter is 1 on a fresh node and 2 on an installed one; the old keys `c`, `i` and `u` still work. Before anything changes it shows the plan and asks `Go ahead?`; type `C` or `D` there to leave out the manuals or the reset (a replace needs `skip` typed to drop the reset). `--reset-only` is the quick repair. Without a terminal and without `--action` or `--reset-only` the run is the same as 7.6.0.
-   - **Fresh node (7.6.0 and later):** when none of the tools is installed (instmon alone does not count), it asks once: Enter installs the whole suite, `c` chooses tool by tool, `n` quits. Without a terminal the whole suite is installed; `--core` keeps it to the Dashboard, SysMon, wifimon and 44helper. Terminal Monitor is never part of this: it has its own question (default no), `--with-termon` or `INSTALL_TERMON=1`.
-   - **Needed programs (7.6.0 and later):** if git (for downloads), openssl (for the HTTPS pages) or iproute2 (for the port checks) is missing, it lists them and offers to install them with apt in one question, and it offers python3 the same way. Saying no to git carries on with the files on the Pi. Without a terminal, git is installed when a download needs it and the others get a warning.
-   - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it, and ask again before installing a download older than the installed version. Use `--offline` (or `--no-download`) to use only the files on the Pi.
-   - On first install it asks for your callsign, node number and a label.
-   - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
-   - Any subset of the tools can be installed.
+   - The installer installs the whole suite on every run (or reinstalls it): instmon, the Dashboard, SysMon, wifimon, 44helper, Node Talker, Node Recorder, Node Monitor, Pibrary, Terminal Monitor and Pi-Piper TTS. No menu and no questions except the callsign and node number on a first install.
+   - A tool with no file in the installer's folder is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`).
+   - Ports are opened in the active firewall: ufw if it is on, otherwise firewalld (kept after a reboot). If neither runs, no ports are opened.
+   - It creates the folders the tools use and copies `wifi_menu_v3_1_20261011.sh` and `tunnel_remove_v1_0_0_20261123.sh` into the home folder of the user who ran sudo. Manuals are not downloaded.
+   - Callsign and node: on a first install it asks for them. Non-interactively, set `AUTO_CALLSIGN` and `AUTO_NODE` (and optionally `AUTO_LABEL`) first; without them it warns and you set them in the Dashboard's Config tab.
+   - Options: `--build=pi02w` or `--build=full` (default: picked from the Pi model), `--offline` (use only files on the Pi), `--non-interactive` (or `-y`). Older options such as `--tools`, `--core` and `--no-manuals` are ignored with a warning.
 
    You can also stage the files in instmon's library and press Install there.
 
@@ -156,7 +154,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_14_3_20261123.py --install
+  sudo python3 nodetalker_v0_14_7_20261123.py --install
   ```
 
 Then:
@@ -374,7 +372,7 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_17_4_20261123.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_17_5_20261123.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
 - Login is on by default: sign in with the Pibrary password, or the node's root password
@@ -525,25 +523,26 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_116_20261123.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_122_20261123.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_106_20261123.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_95_20261123.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_119_0_20261123.py` | common |
-| `wifimon_v5_58_0_20261123.py` | common |
-| `44helper_v0_1_75_20261122.py` | common |
-| `nodetalker_v0_14_3_20261123.py` | common |
-| `noderecorder_v0_18_0_20261123.py` | common |
+| `nodecontrol_v9_3_119_20261123.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_124_20261123.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_110_20261123.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_98_20261123.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_120_0_20261123.py` | common |
+| `wifimon_v5_59_0_20261123.py` | common |
+| `44helper_v0_1_77_20261123.py` | common |
+| `nodetalker_v0_14_7_20261123.py` | common |
+| `noderecorder_v0_18_5_20261123.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
-| `pibrary_v0_17_4_20261123.py` | common |
-| `termon_v0_2_5_20261113.py` | common (stands alone for now) |
-| `nodemon_v0_9_2_20261123.py` | common |
-| `piper_dashboard_v0_8_1_20261121.py` | common |
-| `install_all_v7_9_0_20261121.sh` | common |
+| `pibrary_v0_17_5_20261123.py` | common |
+| `termon_v0_2_6_20261123.py` | common (stands alone for now) |
+| `nodemon_v0_9_4_20261123.py` | common |
+| `piper_dashboard_v0_8_2_20261123.py` | common |
+| `install_all_v8_0_0_20261123.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |
 | `confputter_v1_0_0_20261027.py` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
+| `tunnel_remove_v1_0_0_20261123.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
 always pick the newest.
@@ -585,6 +584,7 @@ per tool and build:
 | [`confgetter.md`](changelogs/confgetter.md) | `confgetter_v*.sh` |
 | [`confputter.md`](changelogs/confputter.md) | `confputter_v*.py` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
+| [`tunnel_remove.md`](changelogs/tunnel_remove.md) | `tunnel_remove_v*.sh` |
 
 Every new version adds an entry at the top of its changelog.
 

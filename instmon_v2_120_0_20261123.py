@@ -41,7 +41,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.119.0"
+VERSION ="2.120.0"
 DATE_STR ="2026-11-16"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -13582,6 +13582,7 @@ def render_page (lite =False ):
     log_html ="-- System ready --\n"+f"instmon v{VERSION } ({DATE_STR }) backend online, {len (status ['components'])} component(s) tracked."
     return login_ui_inject (HTML_TEMPLATE .format (
     version =VERSION ,
+    host =socket .gethostname ().split (".")[0],
     date =DATE_STR ,
     port =PORT ,
     css =_FONT_FACE_RE .sub ("",_CSS )if lite else _CSS ,
@@ -13632,7 +13633,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <header>
   <div class="hdr-left">
     <div class="logo">Install Monitor</div>
-    <div class="logo-sub">Installer &amp; Component Manager</div>
+    <div class="logo-sub">Installer &amp; Component Manager &middot; {host}</div>
   </div>
   <div class="hdr-right">
     <span id="hdr-version">v{version}</span>

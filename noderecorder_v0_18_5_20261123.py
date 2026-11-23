@@ -36,7 +36,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.0"
+VERSION = "0.18.5"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -2308,7 +2309,7 @@ def _mode_of(value):
     m = str(value or "").strip().upper().replace("-", "")
     if m.startswith("ECHO"):
         return "EchoLink"
-    if m in ("ASL", "M17") or m in DVS_MODES:
+    if m in ("ASL", "M17", "SVX") or m in DVS_MODES:
         return m
     raise ValueError(f"Unknown mode {str(value)[:20]!r}")
 
@@ -3551,6 +3552,52 @@ def solo_status(node):
     return _solo["target"]
 
 
+HOME_PATH = os.path.join(CONFIG_DIR, "home_channel.json")
+
+def _home_clean(body):
+    f = _tune_fav({"mode": body.get("mode"), "num": body.get("num", ""), "net": body.get("net", ""),
+                   "module": body.get("module", ""), "label": body.get("label", "")})
+    return {"mode": f["mode"], "num": f["num"], "net": f.get("net", "") or "",
+            "module": f.get("module", "") or "", "label": str(f.get("label", "") or "")[:40]}
+
+def home_load():
+    try:
+        with open(HOME_PATH, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return _home_clean(raw) if isinstance(raw, dict) and raw.get("mode") else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+def home_save(body):
+    if not str(body.get("mode", "") or "").strip():
+        try:
+            os.remove(HOME_PATH)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not turn the home channel off: {exc}"}
+        log_event("Home channel turned off", "ok")
+        return {"ok": True, "message": "Home channel turned off. The node is left disconnected after a recording."}
+    try:
+        home = _home_clean(body)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        _atomic_write(HOME_PATH, json.dumps(home, indent=2) + "\n")
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not save: {exc}"}
+    name = home["label"] or f"{home['mode']} {home['num']}"
+    log_event(f"Home channel set: {name}", "ok")
+    return {"ok": True, "message": f"Home channel set to {name}. A recording now ends by connecting it."}
+
+def _same_channel(a, b):
+    try:
+        x, y = _tune_fav(dict(a)), _tune_fav(dict(b))
+    except (ValueError, TypeError):
+        return False
+    return all(str(x.get(k, "") or "") == str(y.get(k, "") or "") for k in ("mode", "num", "net", "module"))
+
 def digital_info():
     b = bridge_nodes(0)
     call, call_src = callsign_now()
@@ -3566,6 +3613,9 @@ def digital_info():
             "set": {"digital_bridge": setv[0], "m17_bridge": setv[1], "callsign": str(cfg.get("callsign", ""))},
             "callsign": call, "callsign_src": call_src, "nets": nets_public(nets_load()), "net_max": DMR_NET_MAX,
             "dash_nets": len(dashboard_conf()["nets"]), "tuned": _solo["name"] if _solo["target"] else "",
+            "home": home_load(), "svx_bridge": _svx_bridge(),
+            "dash_favs": [{"mode": f["mode"], "num": f["num"], "net": f.get("net", "") or "", "module": f.get("module", "") or "",
+                           "label": f.get("label", "") or ""} for f in dashboard_conf()["favs"]],
             "file": FAV_CONF_PATH}
 
 
@@ -4042,6 +4092,58 @@ def _tune_fav(b):
     return _norm_fav(f, nets_load())
 
 
+SVX_CTRL_PTY = "/var/lib/svxlink/dtmf_ctrl"
+SVX_BRIDGE_SLOT = 3
+
+def _svx_ready():
+    try:
+        return os.path.lexists(SVX_CTRL_PTY) and os.path.realpath(SVX_CTRL_PTY).startswith("/dev/pts/")
+    except OSError:
+        return False
+
+def _svx_send(cmd):
+    if not re.fullmatch(r"9[0-9]*#", cmd):
+        return False
+    try:
+        target = os.path.realpath(SVX_CTRL_PTY)
+        if not os.path.lexists(SVX_CTRL_PTY) or not target.startswith("/dev/pts/"):
+            return False
+        fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            os.write(fd, cmd.encode("ascii"))
+        finally:
+            os.close(fd)
+        log_event(f"SVX: sent {cmd} to SvxLink", "ok")
+        return True
+    except OSError as exc:
+        log_event(f"SVX: could not send {cmd}: {exc}", "warn")
+        return False
+
+def _svx_bridge():
+    dl = dashboard_conf()["bridge_list"]
+    return dl[SVX_BRIDGE_SLOT] if len(dl) > SVX_BRIDGE_SLOT and dl[SVX_BRIDGE_SLOT].isdigit() else ""
+
+def svx_connect(f, node):
+    bridge = _svx_bridge()
+    if not bridge:
+        return {"ok": False, "error": "No SvxLink bridge node is set: the Dashboard's bridge_nodes needs a fourth entry (SVX)."}
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY}). Run Connect to an SvxReflector on 44helper's SvxLink tab first."}
+    if not _linked(node, bridge):
+        ok, out = ilink(node, 3, bridge)
+        if not ok:
+            return {"ok": False, "error": f"Asterisk refused to link the SvxLink bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
+    if not _svx_send(f"91{f['num']}#"):
+        return {"ok": False, "error": "Could not send the talkgroup to SvxLink. Check that svxlink-usrp is running."}
+    return {"ok": True, "message": f"SVX talkgroup {f['num']} picked"}
+
+def svx_disconnect():
+    if not _svx_ready():
+        return {"ok": False, "error": f"SvxLink has no control device ({SVX_CTRL_PTY})."}
+    _svx_send("910#")
+    _svx_send("9#")
+    return {"ok": True, "message": "SVX talkgroup dropped"}
+
 def _tune_connect_impl(b):
     try:
         f = _tune_fav(b)
@@ -4054,6 +4156,8 @@ def _tune_connect_impl(b):
         return m17_connect(f, node)
     if f["mode"] in ("ASL", "EchoLink"):
         return node_connect(f, node)
+    if f["mode"] == "SVX":
+        return svx_connect(f, node)
     act = b.get("net_action")
     return solo_dvs(f, node, act if act in ("add", "once") else None)
 
@@ -4081,6 +4185,8 @@ def _tune_disconnect_impl(b=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
+    if isinstance(b, dict) and _mode_safe(b) == "SVX":
+        return svx_disconnect()
     if isinstance(b, dict) and _mode_safe(b) in ("ASL", "EchoLink") and b.get("num"):
         try:
             f = _tune_fav(b)
@@ -5796,7 +5902,16 @@ class RealActions:
 
     def disconnect(self, entry):
         r = tune_disconnect(entry["target"])
-        return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
+        home = home_load()
+        if home is None:
+            return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
+        if _same_channel(home, entry["target"]):
+            return True, "the home channel is the one just recorded; it stays connected", None
+        h = tune_connect(dict(home))
+        name = home["label"] or f"{home['mode']} {home['num']}"
+        if h.get("ok"):
+            return True, f"connected the home channel {name}", None
+        return False, f"could not connect the home channel {name}: " + str(h.get("error") or h.get("message") or ""), None
 
 
 class CurrentLinkActions(RealActions):
@@ -6718,7 +6833,7 @@ function hostLinks(d) {
   const L = d.links || {};
   let any = false;
   document.querySelectorAll('.ql[data-ql]').forEach((q) => {
-    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
+    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' || q.dataset.qlPort === '8991' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
     const on = !!L[q.dataset.ql];
     q.classList.toggle('hidden', !on);
     any = any || on;
@@ -7112,6 +7227,15 @@ async function loadDigital() {
   $('nw-import').disabled = !d.dash_nets;
   sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
   nets = (d.nets || []).map((n) => ({orig: n.name, name: n.name, address: n.address, url: n.url, password: '', has: n.has_password}));
+  const h = d.home || {};
+  $('hc-mode').value = h.mode || ''; $('hc-num').value = h.num || ''; $('hc-net').value = h.net || '';
+  $('hc-module').value = h.module || ''; $('hc-label').value = h.label || '';
+  dashFavs = d.dash_favs || [];
+  const dsel = $('hc-dash');
+  dsel.innerHTML = '';
+  dsel.appendChild(new Option(dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites', ''));
+  dashFavs.forEach((f, i) => dsel.appendChild(new Option((f.label || (f.mode + ' ' + f.num)) + ' (' + f.mode + ')', String(i))));
+  $('hc-now').textContent = h.mode ? 'Home channel: ' + (h.label || (h.mode + ' ' + h.num)) : 'No home channel: the node is left disconnected after a recording.';
   netMax = d.net_max || 10;
   drawNets();
 }
@@ -7146,6 +7270,13 @@ async function nwImport() {
   const d = await post('/api/dmr-networks/import', {});
   setMsg('nw-msg', d);
   if (d.ok) { loadDigital(); loadTuneInfo(); loadSchedSources(); }
+}
+let dashFavs = [];
+async function hcSave() {
+  const d = await post('/api/home', {mode: $('hc-mode').value, num: $('hc-num').value.trim(), net: $('hc-net').value.trim(),
+    module: $('hc-module').value.trim(), label: $('hc-label').value.trim()});
+  setMsg('hc-msg', d);
+  if (d.ok) loadDigital();
 }
 async function dgSave() {
   const d = await post('/api/digital', {digital_bridge: $('dg-dbridge').value.trim(), m17_bridge: $('dg-mbridge').value.trim(), callsign: $('dg-call').value.trim()});
@@ -7417,6 +7548,20 @@ function schedTarget(t) {
   if (t.mode === 'DSTAR') { const p = schedDstar(t.num); return 'D-STAR ' + p[0] + (t.module || p[1] ? ' ' + (t.module || p[1]) : ''); }
   return t.mode + ' ' + t.num + (t.module ? ' ' + t.module : '');
 }
+let _recPrev = null;
+const _recBusy = (s) => s === 'recording' || s === 'stopping' || s === 'connecting';
+function showRecDone() {
+  const box = $('rec-done'), dash = $('dash-link');
+  box.textContent = 'Recording finished. ';
+  if (dash && !dash.classList.contains('hidden')) {
+    const a = document.createElement('a');
+    a.href = dash.href;
+    a.textContent = 'Back to ' + dash.textContent;
+    a.addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab(dash.href, 'asl_dvs_dash'); });
+    box.appendChild(a);
+  }
+  box.hidden = false;
+}
 async function loadSchedule() {
   if (!authed) return;
   const d = await api('/api/schedule');
@@ -7425,6 +7570,9 @@ async function loadSchedule() {
   renderNextUp(d);
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
+  if (_recPrev !== null && _recBusy(_recPrev) && !_recBusy(st.state)) showRecDone();
+  if (_recBusy(st.state)) { $('rec-done').hidden = true; $('rec-done').textContent = ''; }
+  _recPrev = st.state || null;
   $('rec-start').disabled = st.state !== 'idle';
   $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording' && st.state !== 'linked';
   $('sch-note').textContent = 'Times are ' + (d.tz_label || 'the Pi\'s clock') + ' (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
@@ -7829,6 +7977,13 @@ function initPage() {
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
+  $('hc-save').addEventListener('click', hcSave);
+  $('hc-dash').addEventListener('change', () => {
+    const f = dashFavs[+$('hc-dash').value];
+    if (!f) return;
+    $('hc-mode').value = f.mode; $('hc-num').value = f.num; $('hc-net').value = f.net || '';
+    $('hc-module').value = f.module || ''; $('hc-label').value = f.label || '';
+  });
   $('t-net-add').addEventListener('click', () => netAnswer('add'));
   $('t-net-once').addEventListener('click', () => netAnswer('once'));
   $('t-net-no').addEventListener('click', () => netAnswer(''));
@@ -7968,7 +8123,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </style>
 </head>
 <body>
-<header><div class="hdr-left"><h1>Node Recorder</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
+<header><div class="hdr-left"><h1>Node Recorder</h1><div class="logo-sub" style="font-size:.78rem;opacity:.75">__HOST__</div></div><span class="ver">v__VERSION__</span><span class="sp"></span>
 <div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
 <div id="offline-banner" class="hidden" role="alert">Server unreachable. Node Recorder is not answering; retrying every 5 seconds.</div>
@@ -8052,6 +8207,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 <div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
+<div id="rec-done" class="muted" style="margin-top:6px" hidden></div>
 <div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
 <p class="muted small">Record now records the link that is up now, as it is, and keeps going through link changes until you press Stop. It stops by itself after 4 hours. It is not available while a scheduled recording is running.</p>
 <div id="rec-msg" class="msg"></div>
@@ -8137,6 +8293,17 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><button id="nw-add" class="btn" type="button">Add network</button>
 <button id="nw-import" class="btn" type="button">Copy from Node Controller</button></div>
 <div id="nw-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Home channel</h3>
+<p class="muted small">After a recording ends, Node Recorder connects this channel. It is set up like a Node Talker favorite. Leave the mode on Off to leave the node disconnected instead.</p>
+<div class="row"><label>From the Dashboard <select id="hc-dash"></select></label>
+<label>Mode <select id="hc-mode"><option value="">Off</option><option>ASL</option><option>EchoLink</option><option>DMR</option><option>STFU</option><option>YSF</option><option>P25</option><option>NXDN</option><option>DSTAR</option><option>M17</option><option>SVX</option></select></label>
+<label>Node, talkgroup or room <input id="hc-num" type="text" maxlength="24" autocomplete="off"></label>
+<label>DMR network <input id="hc-net" type="text" maxlength="40" autocomplete="off"></label>
+<label>M17 module <input id="hc-module" type="text" maxlength="1" autocomplete="off"></label>
+<label>Label <input id="hc-label" type="text" maxlength="40" autocomplete="off"></label></div>
+<div class="row"><button id="hc-save" class="btn primary" type="button">Save home channel</button></div>
+<div id="hc-msg" class="msg"></div>
+<p class="muted small" id="hc-now"></p>
 <div class="row"><button id="dig-save" class="btn primary" type="button">Save digital and DMR networks</button></div>
 </div>
 </div>
@@ -8318,7 +8485,7 @@ def render_page(lite=False, packed=False):
     if _page is None:
         html = _HTML_TEMPLATE
         for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_RECORD__", _ICON_RECORD),
-                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__TLS_NOTE__", _TLS_NOTE)):
+                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__HOST__", HOSTNAME), ("__TLS_NOTE__", _TLS_NOTE)):
             html = html.replace(key, val)
         html = login_ui_inject(html, "pw")
         _page = html.encode("utf-8")
@@ -8352,6 +8519,7 @@ _POST_ACTIONS = {
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
     "/api/digital": (digital_save, ()),
+    "/api/home": (home_save, ()),
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
 }

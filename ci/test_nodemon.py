@@ -797,7 +797,7 @@ class QuickLinks(unittest.TestCase):
         self.assertNotIn("allmon3", [x["key"] for x in got])
         by = {x["key"]: x for x in got}
         self.assertEqual((by["termon"]["scheme"], by["termon"]["port"]), ("https", 7878))
-        self.assertEqual((by["nodecontrol"]["scheme"], by["nodecontrol"]["port"], by["nodecontrol"]["path"]), ("http", 8989, "/"))
+        self.assertEqual((by["nodecontrol"]["scheme"], by["nodecontrol"]["port"], by["nodecontrol"]["path"]), ("https", 8989, "/"))
         self.assertEqual((by["dvswitch"]["port"], by["dvswitch"]["path"]), (80, "/dvswitch/"))
 
     def test_the_answer_is_kept_for_a_short_while(self):

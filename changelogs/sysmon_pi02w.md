@@ -1,6 +1,21 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_95_20261123.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_98_20261123.py`. Newest entries first.
+
+## 6.13.98-pi02w (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
+
+## 6.13.97-pi02w (2026-11-23)
+
+The M17 Installation card has a Callsign field and a Save callsign button. Saving writes the Callsign in the [M17 NETWORK] section of USRP2M17.ini and restarts usrp2m17. This is a release: a new action and a file write.
+- Nothing else changes.
+
+## 6.13.96-pi02w (2026-11-23)
+
+Quick links go to this machine's address from page load, and the Node Controller link uses https, the scheme the Pi Zero 2 W dashboard serves. This is a release.
+- Nothing else changes.
 
 ## 6.13.95-pi02w (2026-11-23)
 

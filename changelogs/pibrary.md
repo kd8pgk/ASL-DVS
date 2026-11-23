@@ -1,6 +1,11 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_17_4_20261123.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_17_5_20261123.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.17.5 (2026-11-23)
+
+The header names the host. This is a release: the subtitle now ends with this machine's hostname.
+- Nothing else changes.
 
 ## 0.17.4 (2026-11-23)
 

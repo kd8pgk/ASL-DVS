@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.95-pi02w"
+VERSION      = "6.13.98-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2816,7 +2816,7 @@ body.tab-edit #zone-content{
      title="Cockpit admin UI">Cockpit</a>
   <a id="lnk-m17" class="ql-btn" href="/m17" target="_blank" rel="noopener"
      title="USRP2M17">USRP2M17</a>
-  <a id="lnk-wifimon" class="ql-btn" href="http://localhost:8991/" target="_blank" rel="noopener"
+  <a id="lnk-wifimon" class="ql-btn" href="https://localhost:8991/" target="_blank" rel="noopener"
      title="WifiMon">WifiMon</a>
   <a id="lnk-dashboard" class="ql-btn" href="http://localhost:8989/" 
      title="Return to ASL-DVS Dashboard" target="_self" onclick="pauseAllPolling()">Node Controller</a>
@@ -3625,6 +3625,13 @@ body.tab-edit #zone-content{
       <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06)">
         <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
           onclick="m17Restart()">↺ Restart usrp2m17</button>
+      </div>
+      <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <label for="m17-callsign-inp" class="dvsm-card-sub" style="margin:0">Callsign</label>
+        <input id="m17-callsign-inp" class="find-inp" type="text" maxlength="9" autocomplete="off" spellcheck="false"
+          style="text-transform:uppercase;max-width:9rem" oninput="this.dataset.dirty='1'" placeholder="e.g. KD8PGK">
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
+          onclick="m17SetCallsign()">Save callsign</button>
       </div>
     </div>
 
@@ -5651,6 +5658,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 document.addEventListener("DOMContentLoaded", () => {
+  setQuickLinks();
   const ta = document.getElementById("ed-pinned");
   if (ta) ta.addEventListener("input", edCountPinned);
 });
@@ -7487,6 +7495,17 @@ let _m17IniPath = "";
 let _m17LoadedContent = null;
 
 
+function setQuickLinks() {
+  const h = window.location.hostname;
+  const set = (id, url) => { const el = document.getElementById(id); if (el) el.href = url; };
+  set("lnk-dashboard", "https://" + h + ":8989/");
+  set("lnk-nodemon", "https://" + h + ":7777/");
+  set("lnk-cockpit", "https://" + h + ":9090/");
+  set("lnk-wifimon", "https://" + h + ":8991/");
+  set("lnk-dvswitch", "http://" + h + "/dvswitch");
+  set("lnk-m17", "http://" + h + "/m17");
+}
+
 function _startApp() {
   _appStarted = true;
   if (sessionStorage.getItem("sysmon_paused_by_nav")) {
@@ -7494,26 +7513,7 @@ function _startApp() {
     _pausedByNavigation = true;
   }
 
-  const lnk = document.getElementById("lnk-dashboard");
-  if (lnk) {
-    const port = window.location.port || "8989";
-    const host = window.location.hostname;
-    const dashboardUrl = `http://${host}:8989/`;
-    lnk.href = dashboardUrl;
-    lnk.title = "Return to ASL-DVS Dashboard";
-  }
-
-  const qlHost = window.location.hostname;
-  const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};
-  for (const [id, port] of Object.entries(qlPorts)) {
-    const el = document.getElementById(id);
-    if (el) el.href = `${(id === "lnk-nodemon" || id === "lnk-cockpit") ? "https" : "http"}://${qlHost}:${port}/`;
-  }
-  const qlPaths = {"lnk-dvswitch": "/dvswitch", "lnk-m17": "/m17"};
-  for (const [id, path] of Object.entries(qlPaths)) {
-    const el = document.getElementById(id);
-    if (el) el.href = `http://${qlHost}${path}`;
-  }
+  setQuickLinks();
 
   api("/api/config").then(d => {
     if (d && d.ok) {
@@ -9965,9 +9965,23 @@ async function loadM17() {
   _m17RenderHosts("m17-body-hosts", "m17-badge-hosts", d.hosts || {});
   _m17RenderSample("m17-body-sample",  d.sample_stanza || "");
   _m17IniPath = (d.config && d.config.ini_path) || "";
+  const _csInp = document.getElementById("m17-callsign-inp");
+  if (_csInp && !_csInp.dataset.dirty) _csInp.value = (d.config && d.config.callsign) || "";
 }
 
 // ---- card: Edit USRP2M17.ini ----
+async function m17SetCallsign() {
+  const inp = document.getElementById("m17-callsign-inp");
+  const cs = (inp ? inp.value : "").trim().toUpperCase();
+  if (!cs) { toast("Type a callsign first", "err"); return; }
+  if (!await confirm(`Set the M17 callsign to ${cs}?\n\nThis writes USRP2M17.ini and restarts usrp2m17.`)) return;
+  const d = await api("/api/m17", "POST", {action: "set_callsign", callsign: cs});
+  if (!d || !d.ok) { toast(d?.message || "Save failed", "err"); return; }
+  if (inp) inp.dataset.dirty = "";
+  toast(d.message, "ok");
+  loadM17();
+}
+
 async function m17Save() {
   const ta = document.getElementById("m17-textarea");
   if (!ta || !_m17IniPath) return;
@@ -20776,6 +20790,7 @@ def _build_m17_payload() -> dict:
             "ini_path": cfg["ini_path"],
             "fields":  fields,
             "error":   cfg.get("error", ""),
+            "callsign": cfg.get("callsign", ""),
         },
         "compat":        compat,
         "sample_stanza": _m17_sample_stanza(cfg),
@@ -20785,6 +20800,38 @@ def _build_m17_payload() -> dict:
 
 def _route_m17_get(h: Handler) -> None:
     h.send_json(_build_m17_payload())
+
+_M17_CALLSIGN_RE = re.compile(r"[A-Z0-9/-]{3,9}")
+
+def _m17_set_callsign(cs: str) -> dict:
+    if not _M17_CALLSIGN_RE.fullmatch(cs):
+        return {"ok": False, "message": "Callsign: 3 to 9 letters, digits, / or -"}
+    path = next((c for c in _M17_INI_CANDIDATES if c.exists()), None)
+    if path is None:
+        return {"ok": False, "message": "USRP2M17.ini not found"}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "message": f"Could not read {path}: {exc}"}
+    out, in_sec, done = [], False, False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_sec = stripped[1:-1].strip().upper() == "M17 NETWORK"
+        elif in_sec and not done and "=" in stripped and stripped.split("=", 1)[0].strip().lower() == "callsign":
+            line = "Callsign=" + cs + "\n"
+            done = True
+        out.append(line)
+    if not done:
+        return {"ok": False, "message": "No Callsign line in the [M17 NETWORK] section of USRP2M17.ini"}
+    ok, msg = write_path_file(path, "".join(out))
+    if not ok:
+        return {"ok": False, "message": msg}
+    try:
+        _run(["systemctl", "restart", _M17_SERVICE_NAME], timeout=10)
+    except Exception as exc:
+        return {"ok": False, "message": f"Callsign saved, but usrp2m17 did not restart: {exc}"}
+    return {"ok": True, "message": f"Callsign set to {cs}; usrp2m17 restarted"}
 
 def _route_m17_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
@@ -20798,6 +20845,10 @@ def _route_m17_post(h: Handler, data: dict) -> None:
             h.send_json({"ok": True, "message": "usrp2m17 restarted"})
         except Exception as exc:
             h.send_json({"ok": False, "message": str(exc)})
+        return
+
+    if action == "set_callsign":
+        h.send_json(_m17_set_callsign(str(data.get("callsign", "")).strip().upper()))
         return
 
     if action == "update_hosts":

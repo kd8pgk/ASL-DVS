@@ -1,6 +1,11 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_58_0_20261123.py`. Newest entries first.
+Current file: `wifimon_v5_59_0_20261123.py`. Newest entries first.
+
+## 5.59.0 (2026-11-23)
+
+The dashboard serves https. This is a release: https is on by default, with a self-signed certificate; plain http from another device is redirected to https, and loopback http still works. The shared TLS helpers are copied from shared/confio.py.
+- Nothing else changes.
 
 ## 5.58.0 (2026-11-23)
 

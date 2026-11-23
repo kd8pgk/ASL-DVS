@@ -1,6 +1,26 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_106_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_110_20261123.py`. Newest entries first.
+
+## 6.13.110 (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
+
+## 6.13.109 (2026-11-23)
+
+The Node Controller link goes to https, because the full build's Dashboard now serves https. This is a release.
+- Nothing else changes.
+
+## 6.13.108 (2026-11-23)
+
+The M17 Installation card has a Callsign field and a Save callsign button. Saving writes the Callsign in the [M17 NETWORK] section of USRP2M17.ini and restarts usrp2m17. This is a release: a new action and a file write.
+- Nothing else changes.
+
+## 6.13.107 (2026-11-23)
+
+Quick links go to this machine's address from page load, not only after login. This is a release: the Node Controller link and the other quick buttons are set when the page loads and no longer depend on the login.
+- Nothing else changes.
 
 ## 6.13.106 (2026-11-23)
 

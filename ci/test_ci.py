@@ -3452,9 +3452,9 @@ class InstmonNodemonTests(unittest.TestCase):
         self.assertTrue(self_uninstall)
 
     def test_nothing_else_claims_nodemon_files_and_nodemon_claims_nothing_else(self):
-        for name in ("sysmon_v1_0_0_20261101.py", "nodetalker_v0_1_0_20261101.py", "termon_v0_2_5_20261113.py"):
+        for name in ("sysmon_v1_0_0_20261101.py", "nodetalker_v0_1_0_20261101.py", "termon_v0_2_6_20261123.py"):
             self.assertNotEqual(self.m._gh_kind_for_name(name)[0], "nodemon")
-        self.assertEqual(self.m._gh_kind_for_name("termon_v0_2_5_20261113.py")[0], "termon")
+        self.assertEqual(self.m._gh_kind_for_name("termon_v0_2_6_20261123.py")[0], "termon")
 
     def test_home_scan_finds_the_file(self):
         self.assertIn(("nodemon", ["nodemon*.py"]), self.m.HOME_SCAN_PATTERN_MAP)

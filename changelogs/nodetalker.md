@@ -1,6 +1,23 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_3_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_7_20261123.py`. Newest entries first.
+
+## 0.14.7 (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
+
+## 0.14.6 (2026-11-23)
+
+Node Talker uses the Dashboard's node number. This is a release: the node it links to can change.
+
+- **Stale node:** the node Node Talker used came from its own saved Setup value first, so after the node number was changed in the Dashboard (652704 → 652701) it kept linking its transmit node to the old number. The Dashboard's node number is now used whenever it is set; the saved Setup value is used only when there is no Dashboard config (solo).
+- Nothing else changes.
+
+## 0.14.5 (2026-11-23)
+
+The header names the host. This is a release: a hostname line now sits under the title.
+- Nothing else changes.
 
 ## 0.14.3 (2026-11-23)
 
