@@ -168,6 +168,8 @@ jobs:
         run: python3 ci/test_nodetalker_adapt.py
       - name: Node Talker kerchunk gate tests
         run: python3 ci/test_nodetalker_kerchunk_gate.py
+      - name: Node Talker internet access tests
+        run: python3 ci/test_nodetalker_internet.py
       - name: SysMon SVX tab tests
         run: python3 ci/test_sysmon_svx.py
       - name: Repo checks

@@ -84,24 +84,24 @@
   "length": 47
  },
  "cf:install:quick": {
-  "sha256": "9f000182c4e008b0ee7fa1aa83bf6627f1b2b84d82b7a2016552ba3c5e11709a",
-  "length": 8954
+  "sha256": "5882ce189ab4832d43e2c972ed07ca446c3229f813b46968240fb7737e2377b6",
+  "length": 8972
  },
  "cf:install:quick (fresh)": {
-  "sha256": "11ab4fe21236068a01483e45f0cd14b188ff09f67cfdff178722e111d3196c2a",
-  "length": 8942
+  "sha256": "8520914517fd90abd626e670df80c8118e292b20c6e5d1a8545e0cab25b9c035",
+  "length": 8960
  },
  "cf:install:syn": {
   "sha256": "95a292e3458d3d93f192b20669b25a50c2e435b89efea1f56fd0d078dd00ccbc",
   "length": 6816
  },
  "cf:install:token": {
-  "sha256": "40bc4deb4da61ab5b17389810856bbf840bf2c9f522a4cd669e4962acde524af",
-  "length": 12144
+  "sha256": "78082744c95b8efc5057e4ef843aa688a39a523fb5c2187595a732caf919939a",
+  "length": 12316
  },
  "cf:install:token (fresh)": {
-  "sha256": "ff96a684830b2480bd37083b2243e842cad8632551a12616d7401a8b816f7660",
-  "length": 12121
+  "sha256": "ac7d3b90fa78f790e8b3c602e3ff79ff2a2d53e15591c47b2a1f43fe0d3fae68",
+  "length": 12293
  },
  "cf:purge:quick": {
   "sha256": "e47286886a380d0cb6cb5efbd1e4bcb0b76ca2a528926598a68baaa36269271f",

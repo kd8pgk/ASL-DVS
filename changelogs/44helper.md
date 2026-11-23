@@ -2,6 +2,14 @@
 
 Current file: `44helper_v0_1_75_20261122.py`. Newest entries first.
 
+## 0.1.75.1 (2026-11-23)
+
+The Cloudflare tab names Node Talker. This is a cosmetic build: text only, so the file name stays and it does not go to stable on its own.
+
+- **Public Hostname step and quick tunnel:** the examples list port 8993 for Node Talker beside the dashboard, SysMon and instmon, and the quick-tunnel prompt names it.
+- **Node Talker has its own internet switch** (Node Talker 0.13.0): the step says to tick Allow logins from the internet in its Setup tab, where it shows the tunnel and its address.
+- Nothing else changes.
+
 ## 0.1.75 (2026-11-22)
 
 The Overview tab loads faster and asks the node for less. This is a release: how the status is gathered changed.

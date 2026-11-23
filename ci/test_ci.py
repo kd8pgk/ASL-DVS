@@ -1299,7 +1299,7 @@ class ConfgetterTests(unittest.TestCase):
 
 class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
-        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "setup-save"],
+        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "cfg-allow_wan", "cfg-public_hostname", "net-status", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "cfg-kerchunk_quiet_sec", "cfg-jitter_adapt", "cfg-rx_plc", "play-spec", "hs-out", "ap-out", "hs-names",
                   "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
@@ -1334,7 +1334,7 @@ class NodeTalkerCardTests(unittest.TestCase):
     def test_balancer_starts_by_itself_and_has_one_off_switch(self):
         self.assertIn("function autoWanted() { return authed && !balOff; }", self.text)
         self.assertIn("autoBootCheck();", self.text)
-        self.assertIn("CFG_BOOL = ['public_listen', 'https', 'balancer_off']", self.text)
+        self.assertIn("CFG_BOOL = ['public_listen', 'https', 'balancer_off', 'allow_wan']", self.text)
         self.assertEqual(self.owner("cfg-balancer_off"), "cd-setup")
         self.assertNotIn('id="rx-auto"', self.text)
         self.assertNotIn('id="tx-auto"', self.text)

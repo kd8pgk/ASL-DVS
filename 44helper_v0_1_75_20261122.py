@@ -45,7 +45,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.75"
+APP_VERSION = "0.1.75.1"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5595,12 +5595,14 @@ def _cf_token_install_steps() -> list[dict]:
          "cmd": _CF_DASH_NEXT_STEPS_URL,
          "manual": True,
          "note": "No command to run here. In the Zero Trust dashboard, open your tunnel's Public Hostname tab and "
-                 "map a hostname to the LOCAL service you want reachable (e.g. http://localhost:8989 for the "
-                 "dashboard, :9999 sysmon, :8990 instmon, or this 44helper's port). SECURITY: a Cloudflare Tunnel "
+                 "map a hostname to the LOCAL service you want reachable (e.g. http://localhost:8993 for "
+                 "Node Talker, :8989 for the dashboard, :9999 sysmon, :8990 instmon, or this 44helper's port). SECURITY: a Cloudflare Tunnel "
                  "needs no inbound port, so the firewall and the Ports tab can't see or flag what it publishes. Only tunnel a "
                  "service that has its own auth, and/or put a Cloudflare Access policy in front of the hostname "
                  "(same dashboard) before exposing anything -- the dashboard 8989 and sysmon 9999 share one "
-                 "root-password login, which is thin cover on the open internet, and instmon's auth is opt-in."},
+                 "root-password login, which is thin cover on the open internet, and instmon's auth is opt-in. Node Talker (8993) "
+                 "has its own internet switch: tick Allow logins from the internet in its Setup tab, and it shows the "
+                 "tunnel and its address there."},
     ]
 
 def _cf_token_purge_steps() -> list[dict]:
@@ -5636,7 +5638,7 @@ def _cf_quick_install_steps() -> list[dict]:
                  "(there is no stdin channel and it does not return). It prints a random *.trycloudflare.com URL "
                  "that proxies to the LOCAL port you point it at, needs no Cloudflare account or hostname, and "
                  "dies on Ctrl-C. Testing only, never persistent. Change `--url http://localhost:8989` to the "
-                 "service you want to test (8989 dashboard, 9999 sysmon, 8990 instmon, or this 44helper's port). "
+                 "service you want to test (8993 Node Talker, 8989 dashboard, 9999 sysmon, 8990 instmon, or this 44helper's port). "
                  "Same firewall-bypass caveat as the token method: the URL is world-reachable while it runs, so "
                  "only point it at a service with its own auth."},
     ]
@@ -5928,7 +5930,7 @@ _TERM_OWN_CMD: dict[str, str] = {
     ),
     "cf_quick": (
         "command -v cloudflared >/dev/null || { echo 'cloudflared is not installed. Run the install step first.'; exit 1; }; "
-        "read -r -p 'Local port to test [8989]: ' p; p=${p:-8989}; "
+        "read -r -p 'Local port to test (8993 Node Talker, 8989 dashboard) [8989]: ' p; p=${p:-8989}; "
         "case \"$p\" in *[!0-9]*) echo 'The port must be a number.'; exit 1;; esac; "
         "echo 'Press Ctrl+C to stop the tunnel.'; exec cloudflared tunnel --url \"http://localhost:$p\""
     ),
