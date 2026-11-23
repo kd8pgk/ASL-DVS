@@ -57,11 +57,39 @@ data class Node(
         fun validHost(h: String) = HOST_RE.matches(h)
 
         fun parseAddress(text: String): Triple<String, Int?, Boolean?> {
-            val t = text.trim()
-            if (!t.contains("://")) return Triple(t.trim('[', ']'), null, null)
-            val u = Uri.parse(t)
-            val https = u.scheme?.equals("https", ignoreCase = true)
-            return Triple(u.host.orEmpty().trim('[', ']'), if (u.port != -1) u.port else null, https)
+            var t = text.trim()
+            var https: Boolean? = null
+            val sep = t.indexOf("://")
+            if (sep >= 0) {
+                https = when (t.substring(0, sep).lowercase()) {
+                    "https" -> true
+                    "http" -> false
+                    else -> return Triple(text.trim(), null, null)
+                }
+                t = t.substring(sep + 3)
+            }
+            val cut = t.indexOfFirst { it == '/' || it == '?' || it == '#' }
+            if (cut >= 0) t = t.substring(0, cut)
+            val at = t.lastIndexOf('@')
+            if (at >= 0) t = t.substring(at + 1)
+            var host = t
+            var port: Int? = null
+            if (t.startsWith("[")) {
+                val end = t.indexOf(']')
+                if (end > 0) {
+                    host = t.substring(1, end)
+                    val rest = t.substring(end + 1)
+                    if (rest.startsWith(":")) port = rest.substring(1).toIntOrNull()
+                }
+            } else if (t.count { it == ':' } == 1) {
+                val p = t.substringAfter(':').toIntOrNull()
+                if (p != null) {
+                    host = t.substringBefore(':')
+                    port = p
+                }
+            }
+            if (port == null && https != null) port = if (https) 443 else 80
+            return Triple(host.trim('[', ']'), port, https)
         }
     }
 }

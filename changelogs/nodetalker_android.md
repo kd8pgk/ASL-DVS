@@ -1,6 +1,16 @@
 # Node Talker Mobile changelog
 
-Current version: `0.12.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.12.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.12.1 (2026-11-23)
+
+A web address typed into the Add node box now means what it says. This is the first step toward reaching a node through a tunnel from outside the home network.
+
+- **The bug.** `https://node.example.com` with no port was saved with the form's port, 8993, so a node behind a tunnel (or any https site on the standard port) could not be added from its address. It now uses the scheme's own port: 443 for `https://`, 80 for `http://`. An address that names a port keeps it.
+- **`host:port` works without a scheme.** `pi.local:8993`, `node.example.com:443` and `[::1]:9000` are split into host and port. A plain host, with the port and the https box left to the form, is as before.
+- **Tidier parsing.** Anything after the host (a path, a query, a login part) is ignored, and an address with another scheme or a port that is not a number is refused as a bad address.
+- **Tests.** New unit tests for each of the forms above. The address parser no longer depends on Android's `Uri`, so the tests run without a device.
+- The version takes the next Node Talker number, as an app-only change.
 
 ## 0.12.0 (2026-11-23)
 
