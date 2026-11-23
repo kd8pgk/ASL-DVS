@@ -164,6 +164,10 @@ jobs:
         run: python3 ci/test_quicklinks.py
       - name: 44helper Overview speed tests
         run: python3 ci/test_h44_overview_speed.py
+      - name: Node Talker adaptive buffer and concealment tests
+        run: python3 ci/test_nodetalker_adapt.py
+      - name: Node Talker kerchunk gate tests
+        run: python3 ci/test_nodetalker_kerchunk_gate.py
       - name: SysMon SVX tab tests
         run: python3 ci/test_sysmon_svx.py
       - name: Repo checks

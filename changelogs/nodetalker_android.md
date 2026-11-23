@@ -1,6 +1,17 @@
 # Node Talker Mobile changelog
 
-Current version: `0.11.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.12.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.12.0 (2026-11-23)
+
+Listening in the app adapts to the connection, fills short gaps, and the microphone filter is better. This version takes Node Talker 0.12.0's number.
+
+- **The buffer adapts.** The Buffer setting is now the most the app will hold. The app measures how evenly the audio frames arrive (the same smoothed deviation Node Talker's page uses) and, after about 3 seconds, holds as little as 0.1 s on a steady link and up to the setting on an uneven one. It changes only on quiet frames: one is dropped to shrink the delay, or a short silence is added to grow it, so speech is not cut.
+- **Short gaps are filled.** When the next frame is late, the app continues the last voiced sound for up to 60 ms, fading out, instead of going silent, and blends the first 4 ms of real audio back in. The refill after a longer gap is as before. Concealed frames are not counted in the receive statistics.
+- **A better microphone filter.** When the phone records at 16 kHz or 48 kHz, the app lowers it to 8 kHz with a 33- or 193-tap Kaiser-window filter instead of a 63-tap Hamming filter. The old filter let noise between 3.4 and 4.6 kHz fold back into the voice band; the new one is more than 60 dB down there, flat through the voice range and about 3 dB down at 3.4 kHz, and it computes only the samples it keeps. A phone that records at 8 kHz uses the 33-tap version of the same filter.
+- **No new settings.** There is nothing to switch; Node Talker's page has the on and off switches for its own listening.
+- **Tests.** New unit tests for the jitter estimate, the frame policy, the concealment and the filter.
+- Built in CI only; not run on a phone yet.
 
 ## 0.11.2 (2026-11-22)
 
