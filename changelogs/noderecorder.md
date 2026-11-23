@@ -1,6 +1,27 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_0_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_19_0_20261124.py`. Newest entries first.
+
+## 0.19.0 (2026-11-24)
+
+Node Recorder sees and uses SvxLink, and the Schedule tab has a Return link. This is a release: a new mode, a new setting, new routes and new page content.
+
+- **SvxLink is a mode (`SVX`).** A talkgroup (digits, 1 to 999999999) can be tuned on the Record tab, set in a scheduled recording and used as the return link. It works the way it does in Node Talker: Node Recorder sends the talkgroup to SvxLink's control device (`/var/lib/svxlink/dtmf_ctrl`, `91<TG>#`; release is `910#` and `9#`) and does not touch the link to the SvxLink bridge node.
+- **SvxLink is seen.**
+  - The bridge node is found from `rpt.conf` (the USRP port pair 34000/32000) and falls back to node 1900.
+  - The link card and the status show "SVX" and the talkgroup or the reflector state, read from the SvxLink log (kept, and read again only when the log changes).
+  - The Setup tab's Digital card lists SvxLink's service state, whether its control device is there, its talkgroup and its bridge node.
+  - The schedule's link check (the "link dropped" test) knows the SvxLink bridge.
+  - Saved talkgroups (the `[SVX]` section of Node Controller's conf) fill the lists on the Tune card and the Favorite pickers.
+- **Return link.** A new card under the Schedule card on the Schedule tab: an On checkbox and the link to return to (any mode, with the same pickers as the schedule form).
+  - After a scheduled recording ends on its own, Node Recorder links the return link again.
+  - It does not return when another enabled recording, a special included, starts within 10 minutes (that one links its own), when you stopped the recording by hand (the link is left for you), when Node Recorder is stopping, when a special took the window over, when the recording is being tried again, or after Record now.
+  - When the recording's link is the return link, the run stays on it instead of dropping and linking it again.
+  - A failed return does not change the recording's result; the result's detail says "return link failed: ...".
+  - The dry run shows the return step. While it links, the Record tab says "Returning to the return link...".
+  - Saved in `schedule_return.json` beside the schedule (not inside it, so an older Node Recorder cannot drop it when it saves the schedule). New routes: `GET` and `POST` `/api/schedule/return`; `/api/schedule` also carries it.
+- Tests: new `ci/test_noderecorder_svx.py` and `ci/test_noderecorder_svx_tune.py` (the Node Talker SvxLink suites, for Node Recorder) and `ci/test_noderecorder_return.py` (the store, the decision, the scheduler end to end, the dry run and the page).
+- Nothing else changes.
 
 ## 0.18.0 (2026-11-23)
 
