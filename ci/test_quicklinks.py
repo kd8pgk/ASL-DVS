@@ -41,9 +41,19 @@ class QuickLinks(unittest.TestCase):
     def test_sysmon_links(self):
         for pat in ("sysmon_pi02w_v*.py", "sysmon_v[0-9]*.py"):
             s = src(pat)
-            self.assertIn('id === "lnk-nodemon" || id === "lnk-cockpit"', s, pat)
+            self.assertIn("function setQuickLinks() {", s, pat)
+            self.assertIn('set("lnk-nodemon", "https://" + h + ":7777/");', s, pat)
+            self.assertIn('set("lnk-cockpit", "https://" + h + ":9090/");', s, pat)
+            self.assertIn('set("lnk-wifimon", "http://" + h + ":8991/");', s, pat)
+            self.assertIn('set("lnk-dvswitch", "http://" + h + "/dvswitch");', s, pat)
+            self.assertIn('set("lnk-m17", "http://" + h + "/m17");', s, pat)
+            self.assertIn('document.addEventListener("DOMContentLoaded", () => {\n  setQuickLinks();', s, pat)
             self.assertIn('id="lnk-cockpit" class="ql-btn" href="https://localhost:9090/"', s, pat)
             self.assertIn('id="lnk-nodemon" class="ql-btn" href="https://localhost:7777/"', s, pat)
+
+    def test_dashboard_link_uses_the_scheme_the_dashboard_serves(self):
+        self.assertIn('set("lnk-dashboard", "http://" + h + ":8989/");', src("sysmon_v[0-9]*.py"))
+        self.assertIn('set("lnk-dashboard", "https://" + h + ":8989/");', src("sysmon_pi02w_v*.py"))
 
     def test_talker_and_recorder_links(self):
         for pat in ("nodetalker_v*.py", "noderecorder_v*.py"):

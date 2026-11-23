@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.106"
+VERSION      = "6.13.107"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -6701,6 +6701,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 document.addEventListener("DOMContentLoaded", () => {
+  setQuickLinks();
   const ta = document.getElementById("ed-pinned");
   if (ta) ta.addEventListener("input", edCountPinned);
 });
@@ -8557,6 +8558,17 @@ let _zelloLoadedContent = null;
 window.loadTab_zello = function() { loadZello(); };
 
 
+function setQuickLinks() {
+  const h = window.location.hostname;
+  const set = (id, url) => { const el = document.getElementById(id); if (el) el.href = url; };
+  set("lnk-dashboard", "http://" + h + ":8989/");
+  set("lnk-nodemon", "https://" + h + ":7777/");
+  set("lnk-cockpit", "https://" + h + ":9090/");
+  set("lnk-wifimon", "http://" + h + ":8991/");
+  set("lnk-dvswitch", "http://" + h + "/dvswitch");
+  set("lnk-m17", "http://" + h + "/m17");
+}
+
 function _startApp() {
   _appStarted = true;
   if (sessionStorage.getItem("sysmon_paused_by_nav")) {
@@ -8564,26 +8576,7 @@ function _startApp() {
     _pausedByNavigation = true;
   }
 
-  const lnk = document.getElementById("lnk-dashboard");
-  if (lnk) {
-    const port = window.location.port || "8989";
-    const host = window.location.hostname;
-    const dashboardUrl = `http://${host}:8989/`;
-    lnk.href = dashboardUrl;
-    lnk.title = "Return to ASL-DVS Dashboard";
-  }
-
-  const qlHost = window.location.hostname;
-  const qlPorts = {"lnk-nodemon": 7777, "lnk-cockpit": 9090, "lnk-wifimon": 8991};
-  for (const [id, port] of Object.entries(qlPorts)) {
-    const el = document.getElementById(id);
-    if (el) el.href = `${(id === "lnk-nodemon" || id === "lnk-cockpit") ? "https" : "http"}://${qlHost}:${port}/`;
-  }
-  const qlPaths = {"lnk-dvswitch": "/dvswitch", "lnk-m17": "/m17"};
-  for (const [id, path] of Object.entries(qlPaths)) {
-    const el = document.getElementById(id);
-    if (el) el.href = `http://${qlHost}${path}`;
-  }
+  setQuickLinks();
 
   api("/api/config").then(d => {
     if (d && d.ok) {

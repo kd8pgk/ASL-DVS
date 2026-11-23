@@ -1,6 +1,11 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_106_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_107_20261123.py`. Newest entries first.
+
+## 6.13.107 (2026-11-23)
+
+Quick links go to this machine's address from page load, not only after login. This is a release: the Node Controller link and the other quick buttons are set when the page loads and no longer depend on the login.
+- Nothing else changes.
 
 ## 6.13.106 (2026-11-23)
 
