@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-VERSION = "0.8.1"
+VERSION = "0.8.2"
+HOSTNAME = socket.gethostname().split(".")[0]
 
 import argparse
 import configparser
@@ -848,7 +849,7 @@ a { color: var(--blue); }
 <header>
   <div class="hdr-left">
     <div class="logo">Pi-Piper TTS</div>
-    <div class="logo-sub">Text to speech</div>
+    <div class="logo-sub">Text to speech &middot; __HOST__</div>
   </div>
   <div class="hdr-right"><div class="hdr-ver">v__VERSION__</div><button id="logout" class="sec" hidden>Sign out</button></div>
 </header>
@@ -1703,7 +1704,7 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ("/", "/api/status") and not self.authed():
             return self._json(401, {"message": "login required", "login": True})
         if path == "/":
-            self._send(200, login_ui_inject(HTML.replace("__VERSION__", VERSION), "lg-pw"),
+            self._send(200, login_ui_inject(HTML.replace("__VERSION__", VERSION).replace("__HOST__", HOSTNAME), "lg-pw"),
                        "text/html; charset=utf-8")
         elif path == "/api/voices":
             self._json(200, list_voices(CFG["voices"]))

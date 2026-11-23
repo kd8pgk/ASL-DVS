@@ -1,6 +1,11 @@
 # Pi-Piper TTS changelog
 
-Current file: `piper_dashboard_v0_8_1_20261121.py`.
+Current file: `piper_dashboard_v0_8_2_20261123.py`.
+
+## 0.8.2 (2026-11-23)
+
+The header names the host. This is a release: the subtitle now ends with this machine's hostname.
+- Nothing else changes.
 
 ## 0.8.1 (2026-11-21)
 

@@ -36,7 +36,8 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.0"
+VERSION = "0.18.1"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -7968,7 +7969,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </style>
 </head>
 <body>
-<header><div class="hdr-left"><h1>Node Recorder</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
+<header><div class="hdr-left"><h1>Node Recorder</h1><div class="logo-sub" style="font-size:.78rem;opacity:.75">__HOST__</div></div><span class="ver">v__VERSION__</span><span class="sp"></span>
 <div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
 <div id="offline-banner" class="hidden" role="alert">Server unreachable. Node Recorder is not answering; retrying every 5 seconds.</div>
@@ -8318,7 +8319,7 @@ def render_page(lite=False, packed=False):
     if _page is None:
         html = _HTML_TEMPLATE
         for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_RECORD__", _ICON_RECORD),
-                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__TLS_NOTE__", _TLS_NOTE)):
+                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__HOST__", HOSTNAME), ("__TLS_NOTE__", _TLS_NOTE)):
             html = html.replace(key, val)
         html = login_ui_inject(html, "pw")
         _page = html.encode("utf-8")

@@ -35,7 +35,8 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-13"
 APP_NAME = "Terminal Monitor"
 SERVICE_NAME = "termon.service"
@@ -2683,7 +2684,7 @@ def _host_only(h):
 
 def r_page(h, q):
     nonce = secrets.token_urlsafe(18)
-    body = PAGE.replace("__NONCE__", nonce)
+    body = PAGE.replace("__NONCE__", nonce).replace("__HOST__", HOSTNAME)
     h._send(200, "text/html; charset=utf-8", body.encode("utf-8"), csp=_csp(nonce))
 
 
@@ -3642,7 +3643,7 @@ a.lnk{color:var(--accent);word-break:break-all}
 </head>
 <body>
 <header>
-  <h1>Terminal Monitor</h1><span class="ver" id="ver" hidden></span>
+  <h1>Terminal Monitor</h1><span class="logo-sub" style="font-size:.78rem;opacity:.75">__HOST__</span><span class="ver" id="ver" hidden></span>
   <div class="tabs">
     <button class="btn" id="tab-monitor" type="button">Monitor</button>
     <button class="btn" id="tab-terminal" type="button">Terminal</button>

@@ -34,7 +34,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.3"
+VERSION = "0.14.5"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
 
@@ -12487,7 +12488,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </style>
 </head>
 <body>
-<header><div class="hdr-left"><h1>Node Talker</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
+<header><div class="hdr-left"><h1>Node Talker</h1><div class="logo-sub" style="font-size:.78rem;opacity:.75">__HOST__</div></div><span class="ver">v__VERSION__</span><span class="sp"></span>
 <div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
@@ -13065,7 +13066,7 @@ def render_page(lite=False, packed=False):
     if _page is None:
         html = _HTML_TEMPLATE
         for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_LISTEN__", _ICON_LISTEN),
-                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__TLS_NOTE__", _TLS_NOTE)):
+                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__HOST__", HOSTNAME), ("__TLS_NOTE__", _TLS_NOTE)):
             html = html.replace(key, val)
         html = login_ui_inject(html, "pw")
         _page = html.encode("utf-8")

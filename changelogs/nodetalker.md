@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_3_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_5_20261123.py`. Newest entries first.
+
+## 0.14.5 (2026-11-23)
+
+The header names the host. This is a release: a hostname line now sits under the title.
+- Nothing else changes.
 
 ## 0.14.3 (2026-11-23)
 

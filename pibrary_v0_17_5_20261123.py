@@ -31,7 +31,8 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.17.4"
+VERSION = "0.17.5"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-13"
 APP_NAME = "Pibrary"
 
@@ -8720,7 +8721,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <div class="hdr-left">
     <div class="logo" id="logo" title="Pibrary">Pibrary</div>
-    <div class="logo-sub">Media library</div>
+    <div class="logo-sub">Media library &middot; %%HOST%%</div>
   </div>
   <div class="hdr-right">
     <span class="hdr-meta" title="%%DATE%%">v%%VERSION%% &middot; port %%PORT%%</span>
@@ -9159,6 +9160,7 @@ def render_page(lite=False, packed=False):
                  .replace("%%CSS%%", _CSS)
                  .replace("__JS__", _JS)
                  .replace("%%VERSION%%", VERSION)
+                 .replace("%%HOST%%", HOSTNAME)
                  .replace("%%DATE%%", DATE_STR)
                  .replace("%%PORT%%", str(PORT)))
         _page = login_ui_inject(_page, "login-pw").encode("utf-8")

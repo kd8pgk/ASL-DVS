@@ -1,6 +1,11 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_9_2_20261123.py`. Newest entries first.
+Current file: `nodemon_v0_9_3_20261123.py`. Newest entries first.
+
+## 0.9.3 (2026-11-23)
+
+The header names the host. This is a release: the line under the logo starts with this machine's hostname, then the node number.
+- Nothing else changes.
 
 ## 0.9.2 (2026-11-23)
 

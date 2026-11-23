@@ -1,6 +1,11 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_0_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_18_1_20261123.py`. Newest entries first.
+
+## 0.18.1 (2026-11-23)
+
+The header names the host. This is a release: a hostname line now sits under the title.
+- Nothing else changes.
 
 ## 0.18.0 (2026-11-23)
 

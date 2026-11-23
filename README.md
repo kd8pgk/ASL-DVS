@@ -156,7 +156,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_14_3_20261123.py --install
+  sudo python3 nodetalker_v0_14_5_20261123.py --install
   ```
 
 Then:
@@ -374,7 +374,7 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_17_4_20261123.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_17_5_20261123.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
 - Login is on by default: sign in with the Pibrary password, or the node's root password
@@ -532,13 +532,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_120_0_20261123.py` | common |
 | `wifimon_v5_58_0_20261123.py` | common |
 | `44helper_v0_1_76_20261123.py` | common |
-| `nodetalker_v0_14_3_20261123.py` | common |
-| `noderecorder_v0_18_0_20261123.py` | common |
+| `nodetalker_v0_14_5_20261123.py` | common |
+| `noderecorder_v0_18_1_20261123.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
-| `pibrary_v0_17_4_20261123.py` | common |
-| `termon_v0_2_5_20261113.py` | common (stands alone for now) |
-| `nodemon_v0_9_2_20261123.py` | common |
-| `piper_dashboard_v0_8_1_20261121.py` | common |
+| `pibrary_v0_17_5_20261123.py` | common |
+| `termon_v0_2_6_20261123.py` | common (stands alone for now) |
+| `nodemon_v0_9_3_20261123.py` | common |
+| `piper_dashboard_v0_8_2_20261123.py` | common |
 | `install_all_v7_9_0_20261121.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |
 | `confgetter_v1_0_3_20261116.sh` | common |

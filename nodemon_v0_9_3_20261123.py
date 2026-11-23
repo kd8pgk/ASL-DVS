@@ -26,7 +26,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
+HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Monitor"
 PORT = 7777
@@ -2033,7 +2034,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 __CSS__</style>
 </head>
 <body>
-<header><div class="hdr-left"><div class="logo">Node Monitor</div><div class="logo-sub" id="hdr-node"></div></div>
+<header><div class="hdr-left"><div class="logo">Node Monitor</div><div class="logo-sub">__HOST__<span id="hdr-node"></span></div></div>
 <div class="hdr-right"><span class="ver">v__VERSION__</span><button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
 <div id="login-screen" class="lg-screen">
 <div id="login-card" class="lg-card">
@@ -2462,7 +2463,7 @@ function isBusy() {
 }
 function renderAll(d) {
   status = d;
-  $('hdr-node').textContent = d.main ? 'Node ' + d.main.node : '';
+  $('hdr-node').textContent = d.main ? ' · Node ' + d.main.node : '';
   renderBanner(d);
   const sig = JSON.stringify(Object.assign({}, d, {seq: 0, ami: Object.assign({}, d.ami, {age: 0})}));
   if (sig === lastSig && !pendingPaint) return;
@@ -2585,7 +2586,7 @@ def render_page(nonce, packed):
     html = _page_cache.get("html")
     if html is None:
         html = _HTML_TEMPLATE
-        for key, val in (("__FONTS__", _FONTS), ("__CSS__", _CSS), ("__JS__", _JS), ("__VERSION__", VERSION)):
+        for key, val in (("__FONTS__", _FONTS), ("__CSS__", _CSS), ("__JS__", _JS), ("__VERSION__", VERSION), ("__HOST__", HOSTNAME)):
             html = html.replace(key, val)
         html = login_ui_inject(html, "pw", "__NONCE__")
         _page_cache["html"] = html

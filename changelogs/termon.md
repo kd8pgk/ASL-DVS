@@ -1,6 +1,11 @@
 # Terminal Monitor (termon) changelog
 
-Current file: `termon_v0_2_5_20261113.py`. Newest entries first.
+Current file: `termon_v0_2_6_20261123.py`. Newest entries first.
+
+## 0.2.6 (2026-11-23)
+
+The header names the host. This is a release: a hostname line now sits beside the title.
+- Nothing else changes.
 
 ## 0.2.5 (2026-11-13)
 
