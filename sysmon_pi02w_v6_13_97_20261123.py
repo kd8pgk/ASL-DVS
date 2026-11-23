@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.96-pi02w"
+VERSION      = "6.13.97-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -3625,6 +3625,13 @@ body.tab-edit #zone-content{
       <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06)">
         <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
           onclick="m17Restart()">↺ Restart usrp2m17</button>
+      </div>
+      <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <label for="m17-callsign-inp" class="dvsm-card-sub" style="margin:0">Callsign</label>
+        <input id="m17-callsign-inp" class="find-inp" type="text" maxlength="9" autocomplete="off" spellcheck="false"
+          style="text-transform:uppercase;max-width:9rem" oninput="this.dataset.dirty='1'" placeholder="e.g. KD8PGK">
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
+          onclick="m17SetCallsign()">Save callsign</button>
       </div>
     </div>
 
@@ -9958,9 +9965,23 @@ async function loadM17() {
   _m17RenderHosts("m17-body-hosts", "m17-badge-hosts", d.hosts || {});
   _m17RenderSample("m17-body-sample",  d.sample_stanza || "");
   _m17IniPath = (d.config && d.config.ini_path) || "";
+  const _csInp = document.getElementById("m17-callsign-inp");
+  if (_csInp && !_csInp.dataset.dirty) _csInp.value = (d.config && d.config.callsign) || "";
 }
 
 // ---- card: Edit USRP2M17.ini ----
+async function m17SetCallsign() {
+  const inp = document.getElementById("m17-callsign-inp");
+  const cs = (inp ? inp.value : "").trim().toUpperCase();
+  if (!cs) { toast("Type a callsign first", "err"); return; }
+  if (!await confirm(`Set the M17 callsign to ${cs}?\n\nThis writes USRP2M17.ini and restarts usrp2m17.`)) return;
+  const d = await api("/api/m17", "POST", {action: "set_callsign", callsign: cs});
+  if (!d || !d.ok) { toast(d?.message || "Save failed", "err"); return; }
+  if (inp) inp.dataset.dirty = "";
+  toast(d.message, "ok");
+  loadM17();
+}
+
 async function m17Save() {
   const ta = document.getElementById("m17-textarea");
   if (!ta || !_m17IniPath) return;
@@ -20769,6 +20790,7 @@ def _build_m17_payload() -> dict:
             "ini_path": cfg["ini_path"],
             "fields":  fields,
             "error":   cfg.get("error", ""),
+            "callsign": cfg.get("callsign", ""),
         },
         "compat":        compat,
         "sample_stanza": _m17_sample_stanza(cfg),
@@ -20778,6 +20800,38 @@ def _build_m17_payload() -> dict:
 
 def _route_m17_get(h: Handler) -> None:
     h.send_json(_build_m17_payload())
+
+_M17_CALLSIGN_RE = re.compile(r"[A-Z0-9/-]{3,9}")
+
+def _m17_set_callsign(cs: str) -> dict:
+    if not _M17_CALLSIGN_RE.fullmatch(cs):
+        return {"ok": False, "message": "Callsign: 3 to 9 letters, digits, / or -"}
+    path = next((c for c in _M17_INI_CANDIDATES if c.exists()), None)
+    if path is None:
+        return {"ok": False, "message": "USRP2M17.ini not found"}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "message": f"Could not read {path}: {exc}"}
+    out, in_sec, done = [], False, False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_sec = stripped[1:-1].strip().upper() == "M17 NETWORK"
+        elif in_sec and not done and "=" in stripped and stripped.split("=", 1)[0].strip().lower() == "callsign":
+            line = "Callsign=" + cs + "\n"
+            done = True
+        out.append(line)
+    if not done:
+        return {"ok": False, "message": "No Callsign line in the [M17 NETWORK] section of USRP2M17.ini"}
+    ok, msg = write_path_file(path, "".join(out))
+    if not ok:
+        return {"ok": False, "message": msg}
+    try:
+        _run(["systemctl", "restart", _M17_SERVICE_NAME], timeout=10)
+    except Exception as exc:
+        return {"ok": False, "message": f"Callsign saved, but usrp2m17 did not restart: {exc}"}
+    return {"ok": True, "message": f"Callsign set to {cs}; usrp2m17 restarted"}
 
 def _route_m17_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
@@ -20791,6 +20845,10 @@ def _route_m17_post(h: Handler, data: dict) -> None:
             h.send_json({"ok": True, "message": "usrp2m17 restarted"})
         except Exception as exc:
             h.send_json({"ok": False, "message": str(exc)})
+        return
+
+    if action == "set_callsign":
+        h.send_json(_m17_set_callsign(str(data.get("callsign", "")).strip().upper()))
         return
 
     if action == "update_hosts":

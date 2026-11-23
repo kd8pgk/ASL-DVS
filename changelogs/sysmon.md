@@ -1,6 +1,11 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_107_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_108_20261123.py`. Newest entries first.
+
+## 6.13.108 (2026-11-23)
+
+The M17 Installation card has a Callsign field and a Save callsign button. Saving writes the Callsign in the [M17 NETWORK] section of USRP2M17.ini and restarts usrp2m17. This is a release: a new action and a file write.
+- Nothing else changes.
 
 ## 6.13.107 (2026-11-23)
 
