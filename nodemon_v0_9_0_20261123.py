@@ -593,10 +593,11 @@ def ami_credentials(conf_path, user="", secret=""):
     return "", ""
 
 
-def _ami_msg(**fields):
+def ami_msg(**fields):
     return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
 
-def _ami_read(fh):
+
+def ami_read(fh, max_bytes=1000000):
     lines = []
     size = 0
     while True:
@@ -604,7 +605,7 @@ def _ami_read(fh):
         if not raw:
             raise OSError("AMI closed the connection")
         size += len(raw)
-        if size > AMI_MAX_BYTES:
+        if size > max_bytes:
             raise OSError("AMI sent too much without finishing a reply")
         ln = raw.decode("utf-8", "replace").rstrip("\r\n")
         if not ln:
@@ -613,12 +614,25 @@ def _ami_read(fh):
             continue
         lines.append(ln)
 
-def _ami_read_many(fh, action_ids, seconds=None):
-    end = time.monotonic() + (seconds or AMI_REPLY_SEC * 2)
+
+def ami_read_for(fh, action_id, seconds=5.0):
+    import time
+    end = time.monotonic() + seconds
+    while True:
+        lines = ami_read(fh)
+        if f"ActionID: {action_id}" in lines:
+            return lines
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
+
+
+def ami_read_many(fh, action_ids, seconds=10.0):
+    import time
+    end = time.monotonic() + seconds
     want = set(action_ids)
     got = {}
     while len(got) < len(want):
-        lines = _ami_read(fh)
+        lines = ami_read(fh)
         for aid in want:
             if aid not in got and f"ActionID: {aid}" in lines:
                 got[aid] = lines
@@ -627,14 +641,51 @@ def _ami_read_many(fh, action_ids, seconds=None):
             raise OSError("AMI did not answer in time")
     return got
 
-def _ami_read_for(fh, action_id):
-    end = time.monotonic() + AMI_REPLY_SEC
-    while True:
-        lines = _ami_read(fh)
-        if f"ActionID: {action_id}" in lines:
-            return lines
-        if time.monotonic() > end:
-            raise OSError("AMI did not answer in time")
+
+def ami_output(lines):
+    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
+    if out:
+        return "\n".join(out)
+    if any(ln.startswith("Response: Follows") for ln in lines):
+        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
+        return "\n".join(body)
+    return ""
+
+
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
 
 def login_ui_html(input_id, nonce=""):
     import json
@@ -1248,8 +1299,8 @@ class Monitor:
         guard = _cap_time(sock, AMI_REPLY_SEC * 2)
         try:
             for aid, fields in batch:
-                sock.sendall(_ami_msg(ActionID=aid, **fields))
-            got = _ami_read_many(fh, [aid for aid, _ in batch])
+                sock.sendall(ami_msg(ActionID=aid, **fields))
+            got = ami_read_many(fh, [aid for aid, _ in batch])
         finally:
             guard.cancel()
         loaded = parse_localnodes(got["nmlocal"])
@@ -1285,8 +1336,8 @@ class Monitor:
         log_event("A page is open again: polling Asterisk again", "info")
         guard = _cap_time(sock, AMI_REPLY_SEC)
         try:
-            sock.sendall(_ami_msg(Action="Ping", ActionID="nmping"))
-            _ami_read_for(fh, "nmping")
+            sock.sendall(ami_msg(Action="Ping", ActionID="nmping"))
+            ami_read_for(fh, "nmping")
         except (OSError, ValueError):
             raise AmiParked()
         finally:
@@ -1300,8 +1351,8 @@ class Monitor:
             banner = fh.readline(256).decode("utf-8", "replace").strip()
             if not banner.startswith("Asterisk Call Manager"):
                 raise ValueError("that port is not the Asterisk manager")
-            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="nmlogin"))
-            reply = _ami_read_for(fh, "nmlogin")
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="nmlogin"))
+            reply = ami_read_for(fh, "nmlogin")
             if "Response: Success" not in reply:
                 if "Response: Error" in reply:
                     raise AmiRefused("Asterisk refused the AMI login")
@@ -1726,13 +1777,13 @@ def ami_command(line):
             fh = sock.makefile("rb")
             if not fh.readline(256).startswith(b"Asterisk Call Manager"):
                 raise OSError("that port is not the Asterisk manager")
-            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="nclogin"))
-            if "Response: Success" not in _ami_read_for(fh, "nclogin"):
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="nclogin"))
+            if "Response: Success" not in ami_read_for(fh, "nclogin"):
                 raise OSError("Asterisk refused the AMI login")
-            sock.sendall(_ami_msg(Action="Command", Command=line, ActionID="nccmd"))
-            reply = _ami_read_for(fh, "nccmd")
+            sock.sendall(ami_msg(Action="Command", Command=line, ActionID="nccmd"))
+            reply = ami_read_for(fh, "nccmd")
             try:
-                sock.sendall(_ami_msg(Action="Logoff", ActionID="nclogoff"))
+                sock.sendall(ami_msg(Action="Logoff", ActionID="nclogoff"))
             except OSError:
                 pass
             return reply
@@ -2537,6 +2588,7 @@ def _status_view(authed):
     return dict(build_status(authed), ok=True, seq=seq)
 
 
+@with_work_ms
 class Handler(BaseHTTPRequestHandler):
     server_version = "nodemon/" + VERSION
     sys_version = ""

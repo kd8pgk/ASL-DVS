@@ -13,6 +13,7 @@ The page feels faster: changes are pushed to it as they happen, commands show th
 - **Slow reads off the request.** A background thread keeps the gateway states (DVSwitch, M17, SvxLink, including the `systemctl is-active` checks) and the Links card current while a page is open, so a status request no longer waits on a subprocess or a port probe. The SvxLink log is read again only when it changes, and `rpt.conf` is parsed again only when its text changes.
 - **Lighter page.** Only the open tab is drawn; the others are drawn when opened. A status that did not change is not drawn again. While a command bar has focus the update waits and is drawn when focus leaves, instead of being dropped.
 - **Smaller costs.** The snapshot is no longer deep-copied through JSON on every request. A browser tab that closes or goes to the background drops its waiting request.
+- **Shared code.** The AMI helpers (`ami_msg`, `ami_read`, `ami_read_for`, `ami_read_many`, `ami_output`) and `with_work_ms` come from `shared/confio.py`; every GET reply carries `X-Work-Ms`, the server's own time.
 - Nothing else changes: the same login, the same status fields (plus `seq`), the same commands.
 
 ## 0.8.1 (2026-11-22)

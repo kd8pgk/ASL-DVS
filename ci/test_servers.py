@@ -28,7 +28,7 @@ SERVERS = {
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_92_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
     "nodetalker": {"file": "nodetalker_v0_14_0_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "noderecorder": {"file": "noderecorder_v0_17_9_20261122.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
+    "noderecorder": {"file": "noderecorder_v0_18_0_20261123.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "piper_dashboard": {"file": "piper_dashboard_v0_8_1_20261121.py", "port": 8765, "scheme": "http", "health": "/api/status", "health_expect": b"engine_ok"},
     "pibrary": {"file": "pibrary_v0_17_3_20261115.py", "port": 9000, "scheme": "http", "health": "/api/health",
                 "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
@@ -54,8 +54,8 @@ SERVERS = {
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
 
-WORK_MS = {"sysmon_pi02w", "nodecontrol_pi02w"}
-PAGE_ETAG = {"sysmon_pi02w", "nodecontrol_pi02w"}
+WORK_MS = {"sysmon_pi02w", "nodecontrol_pi02w", "nodemon", "nodetalker", "noderecorder"}
+PAGE_ETAG = {"sysmon_pi02w", "nodecontrol_pi02w", "nodetalker", "noderecorder"}
 
 ALWAYS_PUBLIC_PREFIXES = ("/static/", "/favicon")
 ALWAYS_PUBLIC_PATHS = {"/", "/index.html", "/healthz", "/api/ping"}

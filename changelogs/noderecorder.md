@@ -1,6 +1,20 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_17_9_20261122.py`. Newest entries first.
+Current file: `noderecorder_v0_18_0_20261123.py`. Newest entries first.
+
+## 0.18.0 (2026-11-23)
+
+The page answers faster and feels less laggy, with the same changes Node Talker 0.14.0 got. This is a release: the status route, the page's polling and its page logic changed.
+
+- **The slow reads left the request.** While a page is open, a background thread builds the full status once a second, so the Asterisk link list, the bridge nodes, the open-port checks and the Node Controller tuning state are kept current. A status request takes the kept answer (up to 8 s old) instead of starting a process or an HTTP call itself; after an action it reads on the spot.
+- **No process per link check.** `rpt lstats` goes through one kept Asterisk manager (AMI) connection instead of starting `asterisk -rx` each time, with the command line as the fallback.
+- **A steady status costs almost nothing.** The tag of `/api/status` ignores `uptime`, `last_rx_age` and `listener_list`, so an unchanged status answers 304; the ticking values come back in the `X-Volatile` header. The body still carries every field.
+- **A busy node is not a slow network.** Every GET reply carries `X-Work-Ms`; the page subtracts it before it judges the link.
+- **Polled faster.** The status is asked every 1 s (was 1.5 s) while busy.
+- **Less work on the page.** Text and classes are written only when they changed.
+- **The page is cached by tag.** `/` carries an ETag and `Cache-Control: no-cache` and answers 304.
+- Shared code: the AMI helpers, `AmiCmd`, `Warm`, `etag_of`, `etag_match`, `etag_stable` and `with_work_ms` come from `shared/confio.py`; the private `_ami_*` copies are gone.
+- Nothing else changes.
 
 ## 0.17.9 (2026-11-22)
 

@@ -1769,11 +1769,11 @@ def ami_credentials(conf_path, user="", secret=""):
     return "", ""
 
 
-def _ami_msg(**fields):
+def ami_msg(**fields):
     return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
 
 
-def _ami_read(fh):
+def ami_read(fh, max_bytes=1000000):
     lines = []
     size = 0
     while True:
@@ -1781,7 +1781,7 @@ def _ami_read(fh):
         if not raw:
             raise OSError("AMI closed the connection")
         size += len(raw)
-        if size > AMI_MAX_BYTES:
+        if size > max_bytes:
             raise OSError("AMI sent too much without finishing a reply")
         ln = raw.decode("utf-8", "replace").rstrip("\r\n")
         if not ln:
@@ -1791,14 +1791,205 @@ def _ami_read(fh):
         lines.append(ln)
 
 
-def _ami_read_for(fh, action_id):
-    end = time.monotonic() + AMI_REPLY_SEC
+def ami_read_for(fh, action_id, seconds=5.0):
+    import time
+    end = time.monotonic() + seconds
     while True:
-        lines = _ami_read(fh)
+        lines = ami_read(fh)
         if f"ActionID: {action_id}" in lines:
             return lines
         if time.monotonic() > end:
             raise OSError("AMI did not answer in time")
+
+
+def ami_output(lines):
+    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
+    if out:
+        return "\n".join(out)
+    if any(ln.startswith("Response: Follows") for ln in lines):
+        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
+        return "\n".join(body)
+    return ""
+
+
+def ami_or_cli(amicmd, command, timeout, fallback):
+    r = amicmd.run(command, timeout)
+    if r is not None:
+        return r
+    return fallback(command, timeout)
+
+
+class Warm:
+    def __init__(self, work, every=1.0, idle=30.0, stale=8.0):
+        import threading
+        self.work = work
+        self.every = every
+        self.idle = idle
+        self.stale = stale
+        self.on = False
+        self.quit = False
+        self.t = -1e9
+        self.event = threading.Event()
+        self.local = threading.local()
+
+    def asked(self):
+        import time
+        now = time.monotonic()
+        was_idle = now - self.t > self.idle
+        self.t = now
+        if was_idle:
+            self.event.set()
+
+    def kick(self):
+        self.event.set()
+
+    def wanted(self):
+        import time
+        return time.monotonic() - self.t <= self.idle
+
+    def stale_ok(self, stamp):
+        import time
+        return self.on and getattr(self.local, "fast", False) and time.monotonic() - stamp < self.stale
+
+    def fast(self, call, *args):
+        self.local.fast = True
+        try:
+            return call(*args)
+        finally:
+            self.local.fast = False
+
+    def loop(self, log=None):
+        self.on = True
+        while not self.quit:
+            if not self.wanted():
+                self.event.clear()
+                if not self.wanted():
+                    self.event.wait(5.0)
+                continue
+            try:
+                self.work()
+            except Exception as exc:
+                if log:
+                    log(f"Background refresh failed: {exc.__class__.__name__}", "warn")
+            self.event.wait(self.every)
+            self.event.clear()
+
+
+def etag_of(body):
+    import hashlib
+    return 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
+
+def etag_match(header, etag):
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in header.split(","))
+
+
+def etag_stable(obj, skip=()):
+    import json
+    return json.dumps({k: v for k, v in obj.items() if k not in skip}).encode("utf-8")
+
+
+def with_work_ms(cls):
+    import time
+    parse = cls.parse_request
+    end = cls.end_headers
+
+    def parse_request(self):
+        self._t0 = time.perf_counter()
+        return parse(self)
+
+    def end_headers(self):
+        t0 = getattr(self, "_t0", None)
+        if t0 is not None and getattr(self, "command", "") == "GET":
+            self._t0 = None
+            self.send_header("X-Work-Ms", str(int((time.perf_counter() - t0) * 1000)))
+        end(self)
+
+    cls.parse_request = parse_request
+    cls.end_headers = end_headers
+    return cls
+
+
+class AmiCmd:
+    def __init__(self, conf_path, host="127.0.0.1", port=5038, idle_sec=60.0):
+        import threading
+        self.conf_path = conf_path
+        self.host = host
+        self.port = port
+        self.idle_sec = idle_sec
+        self.lock = threading.Lock()
+        self.sock = None
+        self.fh = None
+        self.n = 0
+        self.used = 0.0
+        self.refused = None
+        self.skip_until = 0.0
+
+    def close(self):
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except OSError:
+            pass
+        self.sock = self.fh = None
+
+    def open(self):
+        import socket
+        user, secret = ami_credentials(self.conf_path)
+        if not user or not secret:
+            raise ValueError("no AMI login")
+        if self.refused == (user, secret):
+            raise ValueError("AMI login refused")
+        sock = socket.create_connection((self.host, self.port), timeout=3)
+        try:
+            sock.settimeout(5.0)
+            fh = sock.makefile("rb")
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
+                raise ValueError("that port is not the Asterisk manager")
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="cmdlogin"))
+            reply = ami_read_for(fh, "cmdlogin")
+            if "Response: Success" not in reply:
+                if "Response: Error" in reply:
+                    self.refused = (user, secret)
+                raise ValueError("AMI login failed")
+        except BaseException:
+            sock.close()
+            raise
+        self.sock, self.fh = sock, fh
+
+    def run(self, command, timeout=6.0):
+        import time
+        now = time.monotonic()
+        if now < self.skip_until or not self.lock.acquire(timeout=timeout):
+            return None
+        try:
+            if self.sock is not None and now - self.used > self.idle_sec:
+                self.close()
+            for _ in range(2):
+                fresh = self.sock is None
+                try:
+                    if fresh:
+                        self.open()
+                    self.n += 1
+                    aid = f"cmd{self.n}"
+                    self.sock.settimeout(timeout)
+                    self.sock.sendall(ami_msg(Action="Command", Command=command, ActionID=aid))
+                    lines = ami_read_for(self.fh, aid, timeout)
+                    self.used = time.monotonic()
+                    return "Response: Error" not in lines, ami_output(lines)
+                except (OSError, ValueError):
+                    self.close()
+                    if fresh:
+                        break
+            self.skip_until = time.monotonic() + (300.0 if self.refused else 30.0)
+            return None
+        finally:
+            self.lock.release()
 
 
 def _ami_parse_keyed(lines):
@@ -1889,8 +2080,8 @@ class KeyedWatch:
             fh = sock.makefile("rb")
             if not fh.readline(256).startswith(b"Asterisk Call Manager"):
                 raise ValueError("that port is not the Asterisk manager")
-            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="ntlogin"))
-            reply = _ami_read_for(fh, "ntlogin")
+            sock.sendall(ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="ntlogin"))
+            reply = ami_read_for(fh, "ntlogin")
             if "Response: Success" not in reply:
                 if "Response: Error" in reply:
                     raise AmiRefused("Asterisk refused the AMI login")
@@ -1903,8 +2094,8 @@ class KeyedWatch:
                 if n % 20 == 0 and node != main_node():
                     return
                 aid = f"nt{n}"
-                sock.sendall(_ami_msg(Action="RptStatus", Command="XStat", Node=node, ActionID=aid))
-                lines = _ami_read_for(fh, aid)
+                sock.sendall(ami_msg(Action="RptStatus", Command="XStat", Node=node, ActionID=aid))
+                lines = ami_read_for(fh, aid)
                 if not any(ln.startswith("Var: RPT_RXKEYED=") for ln in lines):
                     raise ValueError(f"XStat for node {node} did not report RPT_RXKEYED")
                 keyed, who = _ami_parse_keyed(lines)
@@ -3894,7 +4085,7 @@ _RECORDING_DIGITAL = frozenset(("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR"))
 
 
 def recorder_busy():
-    if time.monotonic() - _recorder_cache["t"] < 2.0 or _stale_ok(_recorder_cache["t"]):
+    if time.monotonic() - _recorder_cache["t"] < 2.0 or WARM.stale_ok(_recorder_cache["t"]):
         return _recorder_cache["v"]
     with _recorder_lock:
         return _recorder_probe()
@@ -3902,7 +4093,7 @@ def recorder_busy():
 
 def _recorder_probe():
     now = time.monotonic()
-    if now - _recorder_cache["t"] < 2.0 or _stale_ok(_recorder_cache["t"]):
+    if now - _recorder_cache["t"] < 2.0 or WARM.stale_ok(_recorder_cache["t"]):
         return _recorder_cache["v"]
     busy = None
     info = None
@@ -4152,144 +4343,16 @@ def tx_nodes_line():
     return f"{TX_NODE} = radio@{host}/{TX_NODE},NONE"
 
 
-_WARM = {"on": False}
-_fast = threading.local()
-_STATUS_ASK = {"t": -1e9}
-WARM_EVENT = threading.Event()
 WARM_SEC = 1.0
 WARM_IDLE_SEC = 30.0
 WARM_STALE_SEC = 8.0
-
-
-def _stale_ok(stamp):
-    return _WARM["on"] and getattr(_fast, "on", False) and time.monotonic() - stamp < WARM_STALE_SEC
-
-
-def status_asked():
-    now = time.monotonic()
-    idle = now - _STATUS_ASK["t"] > WARM_IDLE_SEC
-    _STATUS_ASK["t"] = now
-    if idle:
-        WARM_EVENT.set()
-
-
-def build_status_fast(full):
-    _fast.on = True
-    try:
-        return build_status(full)
-    finally:
-        _fast.on = False
-
-
-def _warm_loop():
-    _WARM["on"] = True
-    while not _WARM.get("quit"):
-        if time.monotonic() - _STATUS_ASK["t"] > WARM_IDLE_SEC:
-            WARM_EVENT.clear()
-            if time.monotonic() - _STATUS_ASK["t"] > WARM_IDLE_SEC:
-                WARM_EVENT.wait(5.0)
-            continue
-        try:
-            build_status(True)
-        except Exception as exc:
-            log_event(f"Background status refresh failed: {exc.__class__.__name__}", "warn")
-        WARM_EVENT.wait(WARM_SEC)
-        WARM_EVENT.clear()
-
-
-AMI_CMD_IDLE_SEC = 60.0
-AMI_CMD_RETRY_SEC = 300.0
-
-
-def _ami_output(lines):
-    out = [ln[8:] for ln in lines if ln.startswith("Output: ")]
-    if out:
-        return "\n".join(out)
-    if any(ln.startswith("Response: Follows") for ln in lines):
-        body = [ln for ln in lines if not ln.startswith(("Response:", "ActionID:", "Privilege:", "--END COMMAND--"))]
-        return "\n".join(body)
-    return ""
-
-
-class AmiCmd:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.sock = None
-        self.fh = None
-        self.n = 0
-        self.used = 0.0
-        self.refused = None
-        self.skip_until = 0.0
-
-    def _close(self):
-        try:
-            if self.sock is not None:
-                self.sock.close()
-        except OSError:
-            pass
-        self.sock = self.fh = None
-
-    def _open(self):
-        user, secret = ami_credentials(AMI_CONF)
-        if not user or not secret:
-            raise ValueError("no AMI login")
-        if self.refused == (user, secret):
-            raise ValueError("AMI login refused")
-        sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=3)
-        try:
-            sock.settimeout(AMI_REPLY_SEC)
-            fh = sock.makefile("rb")
-            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
-                raise ValueError("that port is not the Asterisk manager")
-            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="ntcmdlogin"))
-            reply = _ami_read_for(fh, "ntcmdlogin")
-            if "Response: Success" not in reply:
-                if "Response: Error" in reply:
-                    self.refused = (user, secret)
-                raise ValueError("AMI login failed")
-        except BaseException:
-            sock.close()
-            raise
-        self.sock, self.fh = sock, fh
-
-    def run(self, command, timeout=6):
-        now = time.monotonic()
-        if now < self.skip_until or not self.lock.acquire(timeout=timeout):
-            return None
-        try:
-            if self.sock is not None and now - self.used > AMI_CMD_IDLE_SEC:
-                self._close()
-            for _ in range(2):
-                fresh = self.sock is None
-                try:
-                    if fresh:
-                        self._open()
-                    self.n += 1
-                    aid = f"ntc{self.n}"
-                    self.sock.settimeout(timeout)
-                    self.sock.sendall(_ami_msg(Action="Command", Command=command, ActionID=aid))
-                    lines = _ami_read_for(self.fh, aid)
-                    self.used = time.monotonic()
-                    ok = "Response: Error" not in lines
-                    return ok, _ami_output(lines)
-                except (OSError, ValueError):
-                    self._close()
-                    if fresh:
-                        break
-            self.skip_until = time.monotonic() + (AMI_CMD_RETRY_SEC if self.refused else 30.0)
-            return None
-        finally:
-            self.lock.release()
-
-
-AMICMD = AmiCmd()
+AMICMD = AmiCmd(AMI_CONF, AMI_HOST, AMI_PORT)
+WARM = Warm(lambda: build_status(True), every=WARM_SEC, idle=WARM_IDLE_SEC, stale=WARM_STALE_SEC)
 
 
 def ast_cli_fast(command, timeout=6):
-    r = AMICMD.run(command, timeout)
-    if r is not None:
-        return r
-    return ast_cli(command, timeout=timeout)
+    AMICMD.conf_path, AMICMD.port = AMI_CONF, AMI_PORT
+    return ami_or_cli(AMICMD, command, timeout, ast_cli)
 
 
 def ast_cli(command, timeout=8):
@@ -4330,7 +4393,7 @@ def rpt_links(node, max_age=2.0):
         return False, []
     with _lstats_lock:
         c = _lstats_cache
-        if c["node"] == node and (time.monotonic() - c["t"] < max_age or _stale_ok(c["t"])):
+        if c["node"] == node and (time.monotonic() - c["t"] < max_age or WARM.stale_ok(c["t"])):
             return c["ok"], list(c["links"])
     ok, out = ast_cli_fast(f"rpt lstats {node}", timeout=6)
     links = []
@@ -4349,7 +4412,7 @@ def rpt_links(node, max_age=2.0):
 def _lstats_invalidate():
     with _lstats_lock:
         _lstats_cache["t"] = -1e9
-    WARM_EVENT.set()
+    WARM.kick()
 
 
 MODE_LABEL = {"DSTAR": "D-STAR"}
@@ -5000,7 +5063,7 @@ _bridge_cache = {"t": -60.0, "v": None}
 
 
 def bridge_nodes(max_age=30.0):
-    if _bridge_cache["v"] is not None and (time.monotonic() - _bridge_cache["t"] < max_age or _stale_ok(_bridge_cache["t"])):
+    if _bridge_cache["v"] is not None and (time.monotonic() - _bridge_cache["t"] < max_age or WARM.stale_ok(_bridge_cache["t"])):
         return _bridge_cache["v"]
     setv = ([x.strip() for x in str(favcfg().get("bridge_nodes", "")).split(",")] + ["", ""])[:2]
     usrp = _usrp_nodes()
@@ -5063,7 +5126,7 @@ _probe_cache = {}
 def port_open_cached(port, ttl=15.0):
     now = time.monotonic()
     hit = _probe_cache.get(port)
-    if hit and (now - hit[0] < ttl or _stale_ok(hit[0])):
+    if hit and (now - hit[0] < ttl or WARM.stale_ok(hit[0])):
         return hit[1]
     val = port_open(port)
     _probe_cache[port] = (now, val)
@@ -5134,7 +5197,7 @@ _m17_status = {"t": -M17_STATUS_TTL, "v": ""}
 
 def m17_current(max_age=M17_STATUS_TTL):
     now = time.monotonic()
-    if now - _m17_status["t"] < max_age or _stale_ok(_m17_status["t"]):
+    if now - _m17_status["t"] < max_age or WARM.stale_ok(_m17_status["t"]):
         return _m17_status["v"]
     r = dash_call({"action": "m17-status"}, timeout=3)
     v = r["message"].strip().upper() if r and r["ok"] else ""
@@ -5686,7 +5749,7 @@ def nc_dvs(f, node, net_action=None):
 
 def nc_dvs_current(max_age=M17_STATUS_TTL):
     now = time.monotonic()
-    if now - _nc_dvs_status["t"] < max_age or _stale_ok(_nc_dvs_status["t"]):
+    if now - _nc_dvs_status["t"] < max_age or WARM.stale_ok(_nc_dvs_status["t"]):
         return _nc_dvs_status["v"]
     r = dash_call({"action": "dvs-status"}, timeout=3)
     v = None
@@ -6634,7 +6697,7 @@ _svx_cache = {"t": -1e9, "v": ""}
 
 def svx_now():
     now = time.monotonic()
-    if now - _svx_cache["t"] < SVX_TTL_SEC or _stale_ok(_svx_cache["t"]):
+    if now - _svx_cache["t"] < SVX_TTL_SEC or WARM.stale_ok(_svx_cache["t"]):
         return _svx_cache["v"]
     text = svx_text()
     _svx_cache.update(t=now, v=text)
@@ -13124,6 +13187,7 @@ def net_status():
             "warnings": warnings}
 
 
+@with_work_ms
 class Handler(BaseHTTPRequestHandler):
     server_version = "nodetalker/" + VERSION
     sys_version = ""
@@ -13199,13 +13263,7 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _etag_matches(self, etag):
-        raw = self.headers.get("If-None-Match", "")
-        if not raw:
-            return False
-        if raw.strip() == "*":
-            return True
-        bare = etag[2:] if etag.startswith("W/") else etag
-        return any((i.strip()[2:] if i.strip().startswith("W/") else i.strip()) == bare for i in raw.split(","))
+        return etag_match(self.headers.get("If-None-Match", ""), etag)
 
     def _cookie_is(self, name, value):
         return any(part.strip() == name + "=" + value for part in self.headers.get("Cookie", "").split(";"))
@@ -13217,7 +13275,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = dict(headers or {})
         if ctype.startswith("application/json") and "Content-Encoding" not in headers:
             if self.command == "GET" and code == 200:
-                etag = 'W/"' + hashlib.sha1(body if etag_body is None else etag_body).hexdigest()[:24] + '"'
+                etag = etag_of(body if etag_body is None else etag_body)
                 if self._etag_matches(etag):
                     self._head(304, ctype, dict({k: v for k, v in headers.items() if k.startswith("X-")},
                                                 ETag=etag, Vary="Accept-Encoding"))
@@ -13237,7 +13295,7 @@ class Handler(BaseHTTPRequestHandler):
         body = render_page(lite, packed)
         etag = _page_etags.get((bool(lite), bool(packed)))
         if etag is None:
-            etag = _page_etags[(bool(lite), bool(packed))] = 'W/"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+            etag = _page_etags[(bool(lite), bool(packed))] = etag_of(body)
         headers = {"Vary": "Accept-Encoding, Cookie", "Cache-Control": "no-cache", "ETag": etag}
         if self._etag_matches(etag):
             self._head(304, "text/html; charset=utf-8", headers)
@@ -13255,7 +13313,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode("utf-8")
         stable = None
         if etag_skip and isinstance(obj, dict):
-            stable = json.dumps({k: v for k, v in obj.items() if k not in etag_skip}).encode("utf-8")
+            stable = etag_stable(obj, etag_skip)
         self._send(code, body, "application/json", headers, stable)
 
     def _read_json(self):
@@ -13295,7 +13353,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/health":
                 self._json(200, {"ok": True, "version": VERSION})
             elif path == "/api/whoami":
-                status_asked()
+                WARM.asked()
                 dport = dashboard_conf()["port"]
                 dash = port_open_cached(dport, ttl=5.0)
                 self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
@@ -13305,12 +13363,10 @@ class Handler(BaseHTTPRequestHandler):
                                  "links": quick_links() if authed else {},
                                  "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
-                status_asked()
-                t0 = time.perf_counter()
-                st = dict(build_status_fast(authed), ok=True)
+                WARM.asked()
+                st = dict(WARM.fast(build_status, authed), ok=True)
                 vol = {k: st[k] for k in STATUS_VOLATILE if k in st}
-                self._json(200, st, {"X-Volatile": json.dumps(vol, separators=(",", ":")),
-                                     "X-Work-Ms": str(int((time.perf_counter() - t0) * 1000))}, STATUS_VOLATILE)
+                self._json(200, st, {"X-Volatile": json.dumps(vol, separators=(",", ":"))}, STATUS_VOLATILE)
             elif path == "/api/internet":
                 self._json(200, dict(net_status(), ok=True))
             elif path == "/api/rxhealth":
@@ -13599,7 +13655,7 @@ def run_server():
     _kc_init()
     _kc_refresh()
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
-    threading.Thread(target=_warm_loop, name="status-warm", daemon=True).start()
+    threading.Thread(target=WARM.loop, args=(log_event,), name="status-warm", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=rxh_netstats_loop, name="rxh-net", daemon=True).start()
     threading.Thread(target=rxh_outq_loop, name="rxh-outq", daemon=True).start()
