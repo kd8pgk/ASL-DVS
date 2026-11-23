@@ -129,7 +129,17 @@ class WriterTests:
 
     def test_a_half_finished_sign_in_is_no_longer_registered(self):
         out = "register.allstarlink.org 27342 - 180 Request Sent\n"
-        self.assertEqual(self.mod.reg_parse(out, "27342"), "unknown")
+        if hasattr(self.mod, "reg_nodes"):
+            self.assertEqual(self.mod.reg_verdict(self.mod.reg_nodes(out), "27342"), "unknown")
+        else:
+            self.assertEqual(self.mod.reg_parse(out, "27342"), "unknown")
+
+    def test_every_listed_node_counts_in_the_shared_reader(self):
+        if not hasattr(self.mod, "reg_nodes"):
+            self.skipTest("the full build keeps reg_parse")
+        out = "h:443 27342 44.1.2.3:4569 180 Registered\nh:443 27343 - 0 Rejected\n"
+        self.assertEqual(self.mod.reg_verdict(self.mod.reg_nodes(out), "27342"), "unregistered")
+        self.assertEqual(self.mod.reg_verdict(self.mod.reg_nodes(out.splitlines()[0]), "27342"), "registered")
 
 
 class NodeTalkerReadsItTests:
@@ -200,7 +210,7 @@ class BuildsAgree(unittest.TestCase):
         for name in ("SVC_STATUS_FILE",):
             self.assertEqual(getattr(ncf, name), getattr(ncp, name))
         out = "register.allstarlink.org 27342 - 180 Request Sent\n"
-        self.assertEqual(ncf.reg_parse(out, "27342"), ncp.reg_parse(out, "27342"))
+        self.assertEqual(ncf.reg_parse(out, "27342"), ncp.reg_verdict(ncp.reg_nodes(out), "27342"))
 
 
 if __name__ == "__main__":

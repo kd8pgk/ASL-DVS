@@ -23,9 +23,9 @@ SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
     "nodecontrol": {"file": "nodecontrol_v9_3_116_20261123.py", "port": 8989, "scheme": "http"},
-    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_121_20261123.py", "port": 8989, "scheme": "https", "plain_loopback": True},
-    "sysmon": {"file": "sysmon_v6_13_105_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
-    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_94_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_122_20261123.py", "port": 8989, "scheme": "https", "plain_loopback": True},
+    "sysmon": {"file": "sysmon_v6_13_106_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
+    "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_95_20261123.py", "port": 9999, "scheme": "https", "plain_loopback": True},
     "nodetalker": {"file": "nodetalker_v0_14_2_20261123.py", "port": 8993, "scheme": "https", "health": "/api/health", "plain_loopback": True},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_18_0_20261123.py", "port": 8995, "scheme": "https", "health": "/api/health", "plain_loopback": True},

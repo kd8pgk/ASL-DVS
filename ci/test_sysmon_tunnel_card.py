@@ -30,7 +30,7 @@ class Card:
         self.dir = tempfile.mkdtemp(prefix="tunnel_card_")
         self.conf = os.path.join(self.dir, "wg0.conf")
 
-    def info(self, present, conf_text=None, wg=WG):
+    def info(self, present, conf_text=None, wg=WG, stamp="pub\t1000000000\n"):
         if conf_text is not None:
             with open(self.conf, "w") as fh:
                 fh.write(conf_text)
@@ -40,7 +40,8 @@ class Card:
             return real_path(self.conf if str(p) == "/etc/wireguard/wg0.conf" else p)
         with mock.patch.object(self.mod.os.path, "isdir", lambda p: present if p == "/sys/class/net/wg0" else real_isdir(p)), \
                 mock.patch.object(self.mod, "Path", fake_path), \
-                mock.patch.object(self.mod, "_run", lambda cmd, timeout=5: wg):
+                mock.patch.object(self.mod.time, "time", lambda: 1000000012.0), \
+                mock.patch.object(self.mod, "_run", lambda cmd, timeout=5: stamp if "latest-handshakes" in cmd else wg):
             return self.mod._tunnel_card_info()
 
     def test_no_wireguard_hides_the_card(self):
@@ -49,16 +50,17 @@ class Card:
     def test_up(self):
         r = self.info(True, "[Interface]\nAddress = 44.1.2.3/32\nPrivateKey = k\n")
         self.assertEqual(r, {"present": True, "address": "44.1.2.3/32", "handshake": "12 seconds ago",
-                             "transfer": "1.20 MiB received, 340 KiB sent"})
+                             "transfer": "1.20 MiB received, 340 KiB sent", "handshake_age": 12})
 
     def test_conf_only_shows_not_present(self):
         r = self.info(False, "[Interface]\nAddress = 44.1.2.3/32\n", wg="")
-        self.assertEqual(r, {"present": False, "address": "44.1.2.3/32", "handshake": "", "transfer": ""})
+        self.assertEqual(r, {"present": False, "address": "44.1.2.3/32", "handshake": "", "transfer": "", "handshake_age": None})
 
     def test_up_without_a_handshake_yet(self):
-        r = self.info(True, "[Interface]\nAddress = 44.1.2.3/32\n", wg="interface: wg0\n")
+        r = self.info(True, "[Interface]\nAddress = 44.1.2.3/32\n", wg="interface: wg0\n", stamp="pub\t0\n")
         self.assertTrue(r["present"])
         self.assertEqual(r["handshake"], "")
+        self.assertIsNone(r["handshake_age"])
 
 
 class Pi02w(Card, unittest.TestCase):

@@ -1,6 +1,13 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_105_20261123.py`. Newest entries first.
+Current file: `sysmon_v6_13_106_20261123.py`. Newest entries first.
+
+## 6.13.106 (2026-11-23)
+
+Status dots on the Tunnel card. This is a release: a route gains a field and the page logic changed.
+
+- **Status dots on the Tunnel card.** The `wg0` line is green when the interface is present and red when it is not. The Handshake line is green up to 3 minutes old, amber up to 15 minutes, red when older or when there has been none (it then reads `Handshake: none`). Address and Transfer carry no dot.
+- `/api/overview` `tunnel` gains `handshake_age` (seconds, or `null`).
 
 ## 6.13.105 (2026-11-23)
 
