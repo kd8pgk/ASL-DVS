@@ -50,7 +50,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_109_20261123.py` | `sysmon_pi02w_v6_13_97_20261123.py` | `instmon_v2_120_0_20261123.py` |
+| File name | `sysmon_v6_13_110_20261123.py` | `sysmon_pi02w_v6_13_98_20261123.py` | `instmon_v2_120_0_20261123.py` |
 | `VERSION` | `6.13.96` | `6.13.84-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -154,7 +154,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_14_6_20261123.py --install
+  sudo python3 nodetalker_v0_14_7_20261123.py --install
   ```
 
 Then:
@@ -523,19 +523,19 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_118_20261123.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_123_20261123.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_109_20261123.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_97_20261123.py` | SysMon, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_119_20261123.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_124_20261123.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_110_20261123.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_98_20261123.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_120_0_20261123.py` | common |
-| `wifimon_v5_58_0_20261123.py` | common |
+| `wifimon_v5_59_0_20261123.py` | common |
 | `44helper_v0_1_77_20261123.py` | common |
-| `nodetalker_v0_14_6_20261123.py` | common |
-| `noderecorder_v0_18_2_20261123.py` | common |
+| `nodetalker_v0_14_7_20261123.py` | common |
+| `noderecorder_v0_18_3_20261123.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone). Archived 2026-11-13: no development for now |
 | `pibrary_v0_17_5_20261123.py` | common |
 | `termon_v0_2_6_20261123.py` | common (stands alone for now) |
-| `nodemon_v0_9_3_20261123.py` | common |
+| `nodemon_v0_9_4_20261123.py` | common |
 | `piper_dashboard_v0_8_2_20261123.py` | common |
 | `install_all_v8_0_0_20261123.sh` | common |
 | `uninstall_all_v1_11_0_20261116.sh` | common |

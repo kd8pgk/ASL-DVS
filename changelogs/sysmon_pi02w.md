@@ -1,6 +1,11 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_97_20261123.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_98_20261123.py`. Newest entries first.
+
+## 6.13.98-pi02w (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
 
 ## 6.13.97-pi02w (2026-11-23)
 

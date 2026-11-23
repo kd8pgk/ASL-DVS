@@ -44,7 +44,7 @@ class QuickLinks(unittest.TestCase):
             self.assertIn("function setQuickLinks() {", s, pat)
             self.assertIn('set("lnk-nodemon", "https://" + h + ":7777/");', s, pat)
             self.assertIn('set("lnk-cockpit", "https://" + h + ":9090/");', s, pat)
-            self.assertIn('set("lnk-wifimon", "http://" + h + ":8991/");', s, pat)
+            self.assertIn('set("lnk-wifimon", "https://" + h + ":8991/");', s, pat)
             self.assertIn('set("lnk-dvswitch", "http://" + h + "/dvswitch");', s, pat)
             self.assertIn('set("lnk-m17", "http://" + h + "/m17");', s, pat)
             self.assertIn('document.addEventListener("DOMContentLoaded", () => {\n  setQuickLinks();', s, pat)
@@ -58,14 +58,14 @@ class QuickLinks(unittest.TestCase):
     def test_talker_and_recorder_links(self):
         for pat in ("nodetalker_v*.py", "noderecorder_v*.py"):
             s = src(pat)
-            self.assertIn("q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://'", s, pat)
+            self.assertIn("q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' || q.dataset.qlPort === '8991' ? 'https://' : 'http://'", s, pat)
             self.assertIn("Open https://<pi-address>", s, pat)
         self.assertIn("$('tune-sysmon-link').href = 'https://'", src("nodetalker_v*.py"))
 
     def test_nodemon_links(self):
         s = src("nodemon_v*.py")
         body = s[s.index("TOOL_LINKS = ("):s.index(")\nWEB_PAGES")]
-        for key, scheme in (("nodecontrol", "http"), ("sysmon", "https"), ("instmon", "http"), ("wifimon", "http"),
+        for key, scheme in (("nodecontrol", "https"), ("sysmon", "https"), ("instmon", "http"), ("wifimon", "https"),
                             ("44helper", "http"), ("nodetalker", "https"), ("noderecorder", "https"),
                             ("pibrary", "http"), ("termon", "https"), ("cockpit", "https")):
             self.assertRegex(body, r'\("%s", "[^"]+", \d+, "%s"' % (key, scheme))

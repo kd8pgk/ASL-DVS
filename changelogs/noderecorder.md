@@ -1,6 +1,11 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_2_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_18_3_20261123.py`. Newest entries first.
+
+## 0.18.3 (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
 
 ## 0.18.2 (2026-11-23)
 

@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.14.6"
+VERSION = "0.14.7"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
@@ -8748,7 +8748,7 @@ function hostLinks(d) {
   const L = d.links || {};
   let any = false;
   document.querySelectorAll('.ql[data-ql]').forEach((q) => {
-    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
+    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : (q.dataset.qlPort === '7777' || q.dataset.qlPort === '9090' || q.dataset.qlPort === '8991' ? 'https://' : 'http://') + location.hostname + ':' + q.dataset.qlPort + '/';
     const on = !!L[q.dataset.ql];
     q.classList.toggle('hidden', !on);
     any = any || on;

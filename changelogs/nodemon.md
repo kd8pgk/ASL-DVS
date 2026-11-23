@@ -1,6 +1,11 @@
 # Node Monitor (nodemon) changelog
 
-Current file: `nodemon_v0_9_3_20261123.py`. Newest entries first.
+Current file: `nodemon_v0_9_4_20261123.py`. Newest entries first.
+
+## 0.9.4 (2026-11-23)
+
+The tool links use https for the Node Controller and WiFi Monitor, which now serve https. This is a release.
+- Nothing else changes.
 
 ## 0.9.3 (2026-11-23)
 

@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.97-pi02w"
+VERSION      = "6.13.98-pi02w"
 BUILD_DATE   = "20261121"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2816,7 +2816,7 @@ body.tab-edit #zone-content{
      title="Cockpit admin UI">Cockpit</a>
   <a id="lnk-m17" class="ql-btn" href="/m17" target="_blank" rel="noopener"
      title="USRP2M17">USRP2M17</a>
-  <a id="lnk-wifimon" class="ql-btn" href="http://localhost:8991/" target="_blank" rel="noopener"
+  <a id="lnk-wifimon" class="ql-btn" href="https://localhost:8991/" target="_blank" rel="noopener"
      title="WifiMon">WifiMon</a>
   <a id="lnk-dashboard" class="ql-btn" href="http://localhost:8989/" 
      title="Return to ASL-DVS Dashboard" target="_self" onclick="pauseAllPolling()">Node Controller</a>
@@ -7501,7 +7501,7 @@ function setQuickLinks() {
   set("lnk-dashboard", "https://" + h + ":8989/");
   set("lnk-nodemon", "https://" + h + ":7777/");
   set("lnk-cockpit", "https://" + h + ":9090/");
-  set("lnk-wifimon", "http://" + h + ":8991/");
+  set("lnk-wifimon", "https://" + h + ":8991/");
   set("lnk-dvswitch", "http://" + h + "/dvswitch");
   set("lnk-m17", "http://" + h + "/m17");
 }

@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_6_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_14_7_20261123.py`. Newest entries first.
+
+## 0.14.7 (2026-11-23)
+
+The WiFi Monitor quick link opens over https. This is a release.
+- Nothing else changes.
 
 ## 0.14.6 (2026-11-23)
 

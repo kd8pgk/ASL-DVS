@@ -26,7 +26,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.3"
+VERSION = "0.9.4"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Monitor"
@@ -1575,10 +1575,10 @@ def _link_view(link, kinds, gateways):
 
 
 TOOL_LINKS = (
-    ("nodecontrol", "Node Controller", 8989, "http", "/"),
+    ("nodecontrol", "Node Controller", 8989, "https", "/"),
     ("sysmon", "SysMon", 9999, "https", "/"),
     ("instmon", "instmon", 8990, "http", "/"),
-    ("wifimon", "wifimon", 8991, "http", "/"),
+    ("wifimon", "wifimon", 8991, "https", "/"),
     ("44helper", "44helper", 9997, "http", "/"),
     ("nodetalker", "Node Talker", 8993, "https", "/"),
     ("noderecorder", "Node Recorder", 8995, "https", "/"),
