@@ -119,13 +119,13 @@
    "version": "6.13.100"
   },
   "sysmon_pi02w": {
-   "blob": "5f881615e0f5df24b077ea2e2b1a0bb687f5f68e",
-   "commit": "c7002ed00b4837ca4caf9c23839024c0b7b170bf",
-   "file": "sysmon_pi02w_v6_13_88_20261113.py",
-   "landed": "2026-11-13T11:39:43Z",
-   "promoted": "2026-11-23T08:21:58Z",
+   "blob": "5cdb730d4d88da2b302d3bc9d3c62d27620a51c0",
+   "commit": "80d8ddba2774e8de2d91e25975b589fe31b6fa00",
+   "file": "sysmon_pi02w_v6_13_89_20261116.py",
+   "landed": "2026-11-16T17:10:04Z",
+   "promoted": "2026-11-23T14:55:27Z",
    "reason": "count",
-   "version": "6.13.88-pi02w"
+   "version": "6.13.89-pi02w"
   },
   "termon": {
    "blob": "d3f4d73ade58a7dd6efa4b2b731dbcbc01cad745",
