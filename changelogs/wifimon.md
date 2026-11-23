@@ -1,6 +1,15 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_57_0_20261115.py`. Newest entries first.
+Current file: `wifimon_v5_58_0_20261123.py`. Newest entries first.
+
+## 5.58.0 (2026-11-23)
+
+New **Find nodes on the network** card on the Devices tab. This is a release: there are new routes and a new page script.
+
+- **What it does.** The Scan network button checks every address on the node's own network for the tool ports (Node Controller 8989, SysMon 9999, instmon 8990, wifimon 8991, 44helper 9997, Node Talker 8993, Node Recorder 8995, Pibrary 9000, Node Monitor 7777, Pi-Piper TTS 8765, Terminal Monitor 7878). Each host that answers is listed with the tools found on it and, where the tool answers `/api/whoami`, its version and an Open link. The node itself is marked "(this node)".
+- **Kept small and local.** Only a private network is scanned: the subnet of the interface that holds the default route, cut down to its /24 when it is larger than about 1000 addresses. VPN (`wg*`) interfaces are skipped. It makes plain TCP connections (no raw packets, nothing installed), 16 at a time with a 0.5 s timeout, one scan at a time, and the version check never uses a proxy.
+- **Routes.** `POST /api/lanscan/start` (login, and from this machine or the local network only, like the other control routes) and `POST /api/lanscan/status` (login).
+- **Nothing else changes.**
 
 ## 5.57.0 (2026-11-15)
 
