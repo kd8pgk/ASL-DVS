@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_11_1_20261122.py`. Newest entries first.
+Current file: `nodetalker_v0_12_0_20261123.py`. Newest entries first.
+
+## 0.12.0 (2026-11-23)
+
+Listen gets three ideas from the Ampersand linking project's notes on jitter buffers, packet-loss concealment and kerchunk filtering. This is a release: Listen's buffering, its gap handling and the kerchunk filter changed, and there are three new settings (Setup tab, Listen).
+
+- **The Listen buffer adapts.** The page measures how evenly the audio chunks arrive (the same smoothed deviation RFC 3550 uses) and sets the buffer from it. It starts at the Listen buffer (`jitter_ms`), which is now the most it will grow to, and settles lower on a steady link, down to 0.12 s, after about 3 seconds of audio. It changes only when the channel is silent: a silent chunk is dropped to shrink the buffer, or a short silence is added to grow it, so no speech is cut or stretched. After a real gap it starts again at the size the measurement now suggests. Setting **Adapt the Listen buffer to the connection** (`jitter_adapt`, on by default) turns it off, which gives back the old fixed buffer.
+- **Short gaps are filled.** After every stretch of speech, Listen also queues up to 60 ms of a continuation of the last sound, found by matching the last pitch period (66 to 200 Hz) and fading out after 10 ms. If the next chunk arrives on time, the continuation is cancelled before it starts. If the chunk is late by less than 60 ms, the continuation covers the gap and the audio resumes 12 ms after the chunk arrives, instead of waiting for a full buffer. Noise and unvoiced sounds are not continued, and a gap longer than 60 ms is silent as before. Setting **Fill short gaps in Listen audio** (`rx_plc`, on by default).
+- **Kerchunk filter that waits only when it must.** New setting `kerchunk_quiet_sec` (0, or 5 to 600; the page offers Always, 10 s, 30 s, 1 min, 5 min). With 0 (the default) every transmission waits, as before. With a quiet time, only the first transmission after that much silence waits and is checked; a reply that starts sooner plays at once with no added lag. A transmission that lasts past the check plays in full.
+- **Page status.** `/api/status` carries `jitter_adapt` and `rx_plc` so the page, including a public Listen page, follows the settings.
+- **Android.** The app's own listening has the same three changes in Node Talker Mobile 0.12.0; the app uses its Buffer setting as the most the buffer will grow to.
+- Nothing else changes. Not copied to any other tool.
 
 ## 0.11.1 (2026-11-22)
 

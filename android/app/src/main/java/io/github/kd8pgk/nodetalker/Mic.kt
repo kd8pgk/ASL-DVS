@@ -65,16 +65,14 @@ class Mic(
     private fun round2(v: Double) = (v * 100).roundToInt() / 100.0
 
     private fun loop(rec: AudioRecord) {
-        val step = rec.sampleRate / 8000
         val buf = ShortArray(rec.sampleRate / 50)
         val frame = ByteArray(FRAME * 2)
-        val fir = Fir(rec.sampleRate, 3400.0, 63)
+        val dec = Decimator(rec.sampleRate / 8000)
         val fixed = if (preset) VoiceChain(8000) else null
         val dyn = if (!preset && opts != null) MicDyn(opts.hp, opts.eq, opts.gate, opts.lev) else null
         val gateOn = opts != null && opts.gate != 0
         var rows = JSONArray()
         var n = 0
-        var cnt = 0
         var peak = 0
         var frames = 0
         var fss = 0.0
@@ -86,9 +84,7 @@ class Mic(
                 if (got < 0) break
                 if (got == 0) continue
                 for (k in 0 until got) {
-                    val y = fir.run(buf[k].toDouble() / 32768.0)
-                    if (++cnt < step) continue
-                    cnt = 0
+                    val y = dec.push(buf[k].toDouble() / 32768.0) ?: continue
                     var x = y * gain
                     if (fixed != null) x = fixed.run(x) else if (dyn != null) x = dyn.run(x)
                     val a = abs(x)

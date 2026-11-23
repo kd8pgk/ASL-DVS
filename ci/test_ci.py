@@ -1300,7 +1300,7 @@ class ConfgetterTests(unittest.TestCase):
 class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "cfg-balancer_off", "setup-save"],
-        "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
+        "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "cfg-kerchunk_quiet_sec", "cfg-jitter_adapt", "cfg-rx_plc", "play-spec", "hs-out", "ap-out", "hs-names",
                   "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-notch-auto", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
                   "hs-mic", "hs-btn", "mic-gain", "tx-add", "tune-save"],

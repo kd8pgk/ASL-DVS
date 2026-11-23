@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.11.1"
+VERSION = "0.12.0"
 DATE_STR = "2026-11-21"
 APP_NAME = "Node Talker"
 
@@ -247,10 +247,13 @@ DEFAULT_CONFIG = {
     "tot_sec": 120,
     "busy_lockout": True,
     "kerchunk_delay_ms": 0,
+    "kerchunk_quiet_sec": 0,
     "tune_enabled": False,
     "tx_gain_db": 0,
     "rx_gain_db": 0,
     "jitter_ms": 250,
+    "jitter_adapt": True,
+    "rx_plc": True,
     "tx_buffer_ms": 120,
     "allow_wan": False,
     "rx_hpf": True,
@@ -289,6 +292,13 @@ _norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
 _norm_tot = _norm_int(30, 600, "tot_sec must be 30-600")
 _norm_txbuf = _norm_int(40, 400, "tx_buffer_ms must be 40-400")
 _norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
+
+
+def _norm_kc_quiet(value):
+    v = int(str(value).strip())
+    if v != 0 and not 5 <= v <= 600:
+        raise ValueError("kerchunk_quiet_sec must be 0 (always) or 5-600")
+    return v
 
 
 def _norm_kc_delay(value):
@@ -361,10 +371,13 @@ _NORMALIZERS = {
     "tot_sec": _norm_tot,
     "busy_lockout": _parse_bool,
     "kerchunk_delay_ms": _norm_kc_delay,
+    "kerchunk_quiet_sec": _norm_kc_quiet,
     "tune_enabled": _parse_bool,
     "tx_gain_db": _norm_gain,
     "rx_gain_db": _norm_gain,
     "jitter_ms": _norm_jitter,
+    "jitter_adapt": _parse_bool,
+    "rx_plc": _parse_bool,
     "tx_buffer_ms": _norm_txbuf,
     "allow_wan": _parse_bool,
     "ptt_mode": _norm_ptt_mode,
@@ -2767,6 +2780,8 @@ class Hub:
         self.burst_own = False
         self.burst_seq = 0
         self.kc_seqs = deque(maxlen=64)
+        self.gated = deque(maxlen=64)
+        self.last_end = -1e9
         self.delayed = deque()
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
@@ -2819,6 +2834,7 @@ class Hub:
             return
         secs = self.burst_last - self.burst_start
         peak = self.burst_peak
+        self.last_end = self.burst_last
         self.burst_last = -1e9
         if self.burst_own:
             return
@@ -2860,6 +2876,9 @@ class Hub:
                 if now - self.burst_last > ACTIVE_HOLD_SEC:
                     self._close_burst()
                     self.burst_seq += 1
+                    quiet_sec = _cfg_get("kerchunk_quiet_sec")
+                    if quiet_sec <= 0 or now - self.last_end >= quiet_sec:
+                        self.gated.append(self.burst_seq)
                     self.burst_start = now
                     self.burst_peak = -120.0
                     self.burst_own = False
@@ -2890,9 +2909,14 @@ class Hub:
         with self.cond:
             sent = False
             overruns = 0
-            while self.delayed and now - self.delayed[0][0] >= delay:
+            quiet_on = _cfg_get("kerchunk_quiet_sec") > 0
+            while self.delayed:
+                stamp, seq, _pcm = self.delayed[0]
+                hold = delay if not quiet_on or seq in self.gated else 0.0
+                if now - stamp < hold:
+                    break
                 _, seq, pcm = self.delayed.popleft()
-                if delay > 0 and seq in self.kc_seqs:
+                if delay > 0 and seq in self.kc_seqs and (not quiet_on or seq in self.gated):
                     continue
                 enc = None
                 for lst in self.listeners:
@@ -3946,7 +3970,8 @@ def recording_text(rec):
 def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
-               "jitter_ms": tune_value("jitter_ms"), "usrp_forward": True})
+               "jitter_ms": tune_value("jitter_ms"), "jitter_adapt": _cfg_get("jitter_adapt"),
+               "rx_plc": _cfg_get("rx_plc"), "usrp_forward": True})
     st["ptt_lock"] = ptt_lock_state()
     if full:
         st["recording"] = recorder_busy()
@@ -8586,6 +8611,8 @@ async function pollStatus() {
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
   if (!talking) $('st-level').textContent = fmtDb(d.peak_db);
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
+  if (d.jitter_adapt !== undefined) jitAdapt = !!d.jitter_adapt;
+  if (d.rx_plc !== undefined) plcOn = !!d.rx_plc;
   if (!playing && !talking) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (chk && chk.running) chkPoll(d);
   if (!authed) return;
@@ -8639,13 +8666,104 @@ async function pollStatus() {
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
 }
 
+let jitAdapt = true, plcOn = true, plcTail = null, plcU = null;
+const JIT = {last: 0, J: 0, n: 0};
+const PLC_HIST = 480, PLC_LEN = 480, PLC_MIN_LAG = 40, PLC_MAX_LAG = 120, PLC_WIN = 80;
+const plcHist = new Float32Array(PLC_HIST);
+
+function jitNote(nowMs) {
+  if (JIT.last) {
+    const gap = nowMs - JIT.last;
+    if (gap < 1500) { JIT.J += (Math.abs(gap - 100) - JIT.J) / 16; JIT.n++; }
+  }
+  JIT.last = nowMs;
+}
+
+function jitReset() { JIT.last = 0; JIT.J = 0; JIT.n = 0; plcTail = null; plcHist.fill(0); }
+
+function leadSec() {
+  if (!jitAdapt || JIT.n < 30) return jitterSec;
+  return Math.max(0.12, Math.min(jitterSec, 0.04 + 4 * JIT.J / 1000));
+}
+
+function plcHistPush(x) {
+  if (x.length >= PLC_HIST) { plcHist.set(x.subarray(x.length - PLC_HIST)); return; }
+  plcHist.copyWithin(0, x.length);
+  plcHist.set(x, PLC_HIST - x.length);
+}
+
+function plcConceal(h, n) {
+  const N = h.length;
+  if (N < PLC_MAX_LAG + PLC_WIN + 1) return null;
+  let e0 = 0;
+  for (let i = N - PLC_WIN; i < N; i++) e0 += h[i] * h[i];
+  if (e0 / PLC_WIN < 1e-5) return null;
+  let best = 0, bestL = 0;
+  for (let L = PLC_MIN_LAG; L <= PLC_MAX_LAG; L++) {
+    let c = 0, e1 = 0;
+    for (let i = N - PLC_WIN; i < N; i++) { c += h[i] * h[i - L]; e1 += h[i - L] * h[i - L]; }
+    const r = e1 > 0 ? c / Math.sqrt(e0 * e1) : 0;
+    if (r > best) { best = r; bestL = L; }
+  }
+  if (best < 0.5) return null;
+  const out = new Float32Array(n), fadeFrom = 80, g = bestL >= 2 ? 1 : 0;
+  for (let i = 0; i < n; i++) {
+    const gain = i < fadeFrom ? g : g * Math.max(0, 1 - (i - fadeFrom) / (n - fadeFrom));
+    out[i] = h[N - bestL + (i % bestL)] * gain;
+  }
+  return out;
+}
+
+function plcBuffer(x8) {
+  if (smoothFor(ctx)) {
+    if (!plcU || plcU.rate !== ctx.sampleRate) { plcU = makeUpsampler(ctx.sampleRate); plcU.rate = ctx.sampleRate; }
+    plcU.buf = new Float32Array(plcU.taps); plcU.pos = plcU.half - 1;
+  }
+  return makeBuffer(ctx, x8, plcU);
+}
+
+function plcSchedule(at) {
+  if (!plcOn) return;
+  const t8 = plcConceal(plcHist, PLC_LEN);
+  if (!t8) return;
+  const tb = plcBuffer(t8);
+  if (!tb) return;
+  const src = ctx.createBufferSource(), tg = ctx.createGain();
+  src.buffer = tb;
+  src.connect(tg);
+  tg.connect(sessNode || busNode);
+  src.start(at);
+  plcTail = {src: src, gain: tg, start: at, len: tb.duration};
+}
+
+function plcResume(now) {
+  const t = plcTail;
+  plcTail = null;
+  if (!t) return false;
+  try {
+    if (now < t.start) { t.src.stop(t.start); return false; }
+    if (now < t.start + t.len) {
+      t.gain.gain.cancelScheduledValues(now);
+      t.gain.gain.setTargetAtTime(0, now, 0.004);
+      t.src.stop(now + 0.04);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 function flush() {
   if (!pendN || !ctx) return;
+  jitNote(performance.now());
   if (smoothFor(ctx) && !ups) ups = makeUpsampler(ctx.sampleRate);
-  const buf = makeBuffer(ctx, pend.subarray(0, pendN), ups);
+  const x8 = pend.subarray(0, pendN);
+  const silent = peakDb(peakLocal) <= RX_ACTIVE_DB;
+  if (plcOn) plcHistPush(x8);
+  const buf = makeBuffer(ctx, x8, ups);
   pendN = 0;
   if (!buf) return;
   const now = ctx.currentTime;
+  const resumed = plcResume(now);
   // Far ahead (a burst after a stall): drop audio until playback is back at the Listen buffer.
   // Rescheduling here would play the new audio on top of what is already queued.
   if (draining || nextT > now + jitterSec + 1.25) {
@@ -8657,13 +8775,18 @@ function flush() {
   if (nextT < now + 0.05) {
     if (nextT > 0 && playing && performance.now() - listenAt > 3000) rxhCount(Math.max(0, now - nextT));
     if (chk && chk.running && nextT > 0 && playing && performance.now() - listenAt > 3000) chkDrop(Math.max(0, now - nextT));
-    nextT = now + jitterSec;
+    nextT = resumed ? now + 0.012 : now + leadSec();
+  } else if (jitAdapt && silent && JIT.n >= 30) {
+    const want = leadSec(), lead = nextT - now;
+    if (lead > want + 0.12) { peakLocal = 0; return; }
+    if (lead < want - 0.05) nextT += Math.min(0.1, want - lead);
   }
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(sessNode || busNode);
   src.start(nextT);
   nextT += buf.duration;
+  if (!silent) plcSchedule(nextT);
   if (!talking) $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
   if (peakDb(peakLocal) > RX_ACTIVE_DB) rxSeen();
   peakLocal = 0;
@@ -9965,7 +10088,7 @@ async function startListen(src, why) {
   specKick();
   setMediaState();
   wakeLockApply();
-  nextT = 0; pendN = 0; oddByte = -1; ups = null; draining = false;
+  nextT = 0; pendN = 0; oddByte = -1; ups = null; draining = false; jitReset();
   listenSession();
   listenBtnText(true);
   $('listen-btn').classList.remove('connect');
@@ -11716,7 +11839,7 @@ async function ffUpload() {
 }
 
 const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https', 'balancer_off'];
-const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms', 'phone_lead_ms'], AUDIO_BOOL = ['busy_lockout', 'phone_tones'];
+const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms', 'kerchunk_quiet_sec', 'phone_lead_ms'], AUDIO_BOOL = ['busy_lockout', 'phone_tones', 'jitter_adapt', 'rx_plc'];
 const AUDIO_TXT = ['phone_open', 'phone_close'];
 
 async function loadConfig() {
@@ -12291,8 +12414,13 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 </div>
 <h3 style="margin:14px 0 4px">Listen</h3>
 <div class="row"><label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
-<label>Drop kerchunks from Listen <select id="cfg-kerchunk_delay_ms"><option value="0">Off</option><option value="100">0.1 s</option><option value="200">0.2 s</option><option value="300">0.3 s</option><option value="400">0.4 s</option><option value="500">0.5 s</option><option value="600">0.6 s</option><option value="700">0.7 s</option><option value="800">0.8 s</option><option value="900">0.9 s</option><option value="1000">1.0 s</option></select></label></div>
-<p class="muted small">Listen waits this long before it plays audio, so every delay adds the same lag to Listen. A kerchunk is dropped only if it has ended before its audio would play. A kerchunk needs its length plus 0.6 s to be known to be over, so a short wait drops only the shortest kerchunks. Off plays everything.</p>
+<label>Drop kerchunks from Listen <select id="cfg-kerchunk_delay_ms"><option value="0">Off</option><option value="100">0.1 s</option><option value="200">0.2 s</option><option value="300">0.3 s</option><option value="400">0.4 s</option><option value="500">0.5 s</option><option value="600">0.6 s</option><option value="700">0.7 s</option><option value="800">0.8 s</option><option value="900">0.9 s</option><option value="1000">1.0 s</option></select></label>
+<label>Only after the channel has been quiet for <select id="cfg-kerchunk_quiet_sec"><option value="0">Always</option><option value="10">10 s</option><option value="30">30 s</option><option value="60">1 min</option><option value="300">5 min</option></select></label></div>
+<p class="muted small">Listen waits this long before it plays audio, so every delay adds the same lag to Listen. A kerchunk is dropped only if it has ended before its audio would play. A kerchunk needs its length plus 0.6 s to be known to be over, so a short wait drops only the shortest kerchunks. Off plays everything. With a quiet time set, only the first transmission after that much silence waits and is checked; a reply that follows quickly plays at once, with no added lag.</p>
+<div class="row"><label><input type="checkbox" id="cfg-jitter_adapt"> Adapt the Listen buffer to the connection</label></div>
+<p class="muted small">The Listen buffer (set under Tuning) is the most it will grow to. It starts there, then settles lower when the connection is steady and rises again when it is not, only between transmissions so nothing is cut. Off keeps it fixed.</p>
+<div class="row"><label><input type="checkbox" id="cfg-rx_plc"> Fill short gaps in Listen audio</label></div>
+<p class="muted small">When a few milliseconds of audio arrive late, Listen continues the last sound for up to 60 ms, fading out, instead of going silent.</p>
 <h3 style="margin:14px 0 4px">Headset / audio output</h3>
 <div id="cb-hs-out">
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>

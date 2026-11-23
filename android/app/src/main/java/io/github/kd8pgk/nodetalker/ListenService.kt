@@ -127,6 +127,7 @@ class ListenService : Service() {
     @Volatile private var focusLost = false
     private var session: MediaSession? = null
     private val queue = ArrayBlockingQueue<ShortArray>(QUEUE_FRAMES)
+    private val jitter = JitterEst()
     private var wake: PowerManager.WakeLock? = null
     private var wifi: WifiManager.WifiLock? = null
     private var wifiLow: WifiManager.WifiLock? = null
@@ -601,6 +602,7 @@ class ListenService : Service() {
         val bytesPer = if (pcm) FRAME * 2 else FRAME
         val buf = ByteArray(bytesPer)
         var lastAt = 0L
+        jitter.reset()
         while (live(g)) {
             var got = 0
             while (got < bytesPer) {
@@ -611,6 +613,7 @@ class ListenService : Service() {
             val now = SystemClock.elapsedRealtime()
             if (lastAt == 0L) stats.firstByte(now - connectAt) else stats.gap(now - lastAt)
             lastAt = now
+            jitter.note(now)
             val f = ShortArray(FRAME)
             if (pcm) {
                 for (i in 0 until FRAME) f[i] = ((buf[2 * i].toInt() and 0xff) or (buf[2 * i + 1].toInt() shl 8)).toShort()
@@ -681,6 +684,7 @@ class ListenService : Service() {
         var boostMb = -1
         val target = (s.bufferMs / FRAME_MS).coerceAtLeast(2)
         val silence = ShortArray(FRAME)
+        val plc = Plc()
         var filling = true
         var peak = 0
         var n = 0
@@ -690,24 +694,27 @@ class ListenService : Service() {
             track.play()
             playStartedAt = SystemClock.elapsedRealtime()
             lastUnder = track.underrunCount
+            fun closeStall() {
+                if (stallAt == 0L) return
+                val gap = SystemClock.elapsedRealtime() - stallAt
+                val now = track.underrunCount
+                val missed = now - lastUnder
+                lastUnder = now
+                if (counting()) {
+                    stats.stall(gap)
+                    if (missed > 0) stats.underrun(missed, gap)
+                }
+                stallAt = 0L
+            }
             while (live(g) && !Thread.currentThread().isInterrupted) {
+                val want = Adapt.framesFor(jitter.leadMs(s.bufferMs)).coerceAtMost(target)
                 if (filling) {
-                    if (queue.size < target) {
+                    if (queue.size < want) {
                         Thread.sleep(FRAME_MS.toLong())
                         continue
                     }
                     filling = false
-                    if (stallAt != 0L) {
-                        val gap = SystemClock.elapsedRealtime() - stallAt
-                        val now = track.underrunCount
-                        val missed = now - lastUnder
-                        lastUnder = now
-                        if (counting()) {
-                            stats.stall(gap)
-                            if (missed > 0) stats.underrun(missed, gap)
-                        }
-                        stallAt = 0L
-                    }
+                    closeStall()
                 }
                 var trimmed = false
                 while (queue.size > target * 3 + 5) {
@@ -715,15 +722,28 @@ class ListenService : Service() {
                     trimmed = true
                 }
                 if (trimmed && counting()) stats.reset()
-                val raw = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
-                if (raw == null) {
-                    if (stallAt == 0L) stallAt = SystemClock.elapsedRealtime() - FRAME_MS * 4L
-                    filling = true
-                    continue
+                val polled: ShortArray? = queue.poll(FRAME_MS.toLong(), TimeUnit.MILLISECONDS)
+                val raw: ShortArray
+                var concealed = false
+                if (polled == null) {
+                    if (stallAt == 0L) stallAt = SystemClock.elapsedRealtime() - FRAME_MS
+                    val c = plc.next()
+                    if (c == null) {
+                        filling = true
+                        continue
+                    }
+                    raw = c
+                    concealed = true
+                } else {
+                    closeStall()
+                    raw = plc.accept(polled)
+                    val act = Adapt.step(Adapt.quiet(raw), queue.size, want)
+                    if (act == Adapt.DROP) continue
+                    if (act == Adapt.PAD) track.write(silence, 0, FRAME)
                 }
                 val f = chain?.process(raw) ?: raw
                 val statsSink = Listen.statsSink
-                if (statsSink != null && Listen.statsOn && !(Listen.muted || focusLost)) {
+                if (statsSink != null && Listen.statsOn && !concealed && !(Listen.muted || focusLost)) {
                     val r = fstats.of(raw)
                     hum.push(raw)
                     statRows.put(JSONArray().put(r[0]).put(r[1]).put(r[2]).put(r[3]))
