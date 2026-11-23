@@ -36,7 +36,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.18.3"
+VERSION = "0.18.4"
 HOSTNAME = socket.gethostname().split(".")[0]
 DATE_STR = "2026-11-16"
 APP_NAME = "Node Recorder"
@@ -3552,6 +3552,52 @@ def solo_status(node):
     return _solo["target"]
 
 
+HOME_PATH = os.path.join(CONFIG_DIR, "home_channel.json")
+
+def _home_clean(body):
+    f = _tune_fav({"mode": body.get("mode"), "num": body.get("num", ""), "net": body.get("net", ""),
+                   "module": body.get("module", ""), "label": body.get("label", "")})
+    return {"mode": f["mode"], "num": f["num"], "net": f.get("net", "") or "",
+            "module": f.get("module", "") or "", "label": str(f.get("label", "") or "")[:40]}
+
+def home_load():
+    try:
+        with open(HOME_PATH, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return _home_clean(raw) if isinstance(raw, dict) and raw.get("mode") else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+def home_save(body):
+    if not str(body.get("mode", "") or "").strip():
+        try:
+            os.remove(HOME_PATH)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not turn the home channel off: {exc}"}
+        log_event("Home channel turned off", "ok")
+        return {"ok": True, "message": "Home channel turned off. The node is left disconnected after a recording."}
+    try:
+        home = _home_clean(body)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        _atomic_write(HOME_PATH, json.dumps(home, indent=2) + "\n")
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not save: {exc}"}
+    name = home["label"] or f"{home['mode']} {home['num']}"
+    log_event(f"Home channel set: {name}", "ok")
+    return {"ok": True, "message": f"Home channel set to {name}. A recording now ends by connecting it."}
+
+def _same_channel(a, b):
+    try:
+        x, y = _tune_fav(dict(a)), _tune_fav(dict(b))
+    except (ValueError, TypeError):
+        return False
+    return all(str(x.get(k, "") or "") == str(y.get(k, "") or "") for k in ("mode", "num", "net", "module"))
+
 def digital_info():
     b = bridge_nodes(0)
     call, call_src = callsign_now()
@@ -3567,7 +3613,7 @@ def digital_info():
             "set": {"digital_bridge": setv[0], "m17_bridge": setv[1], "callsign": str(cfg.get("callsign", ""))},
             "callsign": call, "callsign_src": call_src, "nets": nets_public(nets_load()), "net_max": DMR_NET_MAX,
             "dash_nets": len(dashboard_conf()["nets"]), "tuned": _solo["name"] if _solo["target"] else "",
-            "file": FAV_CONF_PATH}
+            "home": home_load(), "file": FAV_CONF_PATH}
 
 
 def m17_connect(f, node, op=3):
@@ -5797,7 +5843,16 @@ class RealActions:
 
     def disconnect(self, entry):
         r = tune_disconnect(entry["target"])
-        return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
+        home = home_load()
+        if home is None:
+            return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
+        if _same_channel(home, entry["target"]):
+            return True, "the home channel is the one just recorded; it stays connected", None
+        h = tune_connect(dict(home))
+        name = home["label"] or f"{home['mode']} {home['num']}"
+        if h.get("ok"):
+            return True, f"connected the home channel {name}", None
+        return False, f"could not connect the home channel {name}: " + str(h.get("error") or h.get("message") or ""), None
 
 
 class CurrentLinkActions(RealActions):
@@ -7113,6 +7168,10 @@ async function loadDigital() {
   $('nw-import').disabled = !d.dash_nets;
   sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
   nets = (d.nets || []).map((n) => ({orig: n.name, name: n.name, address: n.address, url: n.url, password: '', has: n.has_password}));
+  const h = d.home || {};
+  $('hc-mode').value = h.mode || ''; $('hc-num').value = h.num || ''; $('hc-net').value = h.net || '';
+  $('hc-module').value = h.module || ''; $('hc-label').value = h.label || '';
+  $('hc-now').textContent = h.mode ? 'Home channel: ' + (h.label || (h.mode + ' ' + h.num)) : 'No home channel: the node is left disconnected after a recording.';
   netMax = d.net_max || 10;
   drawNets();
 }
@@ -7147,6 +7206,12 @@ async function nwImport() {
   const d = await post('/api/dmr-networks/import', {});
   setMsg('nw-msg', d);
   if (d.ok) { loadDigital(); loadTuneInfo(); loadSchedSources(); }
+}
+async function hcSave() {
+  const d = await post('/api/home', {mode: $('hc-mode').value, num: $('hc-num').value.trim(), net: $('hc-net').value.trim(),
+    module: $('hc-module').value.trim(), label: $('hc-label').value.trim()});
+  setMsg('hc-msg', d);
+  if (d.ok) loadDigital();
 }
 async function dgSave() {
   const d = await post('/api/digital', {digital_bridge: $('dg-dbridge').value.trim(), m17_bridge: $('dg-mbridge').value.trim(), callsign: $('dg-call').value.trim()});
@@ -7847,6 +7912,7 @@ function initPage() {
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
+  $('hc-save').addEventListener('click', hcSave);
   $('t-net-add').addEventListener('click', () => netAnswer('add'));
   $('t-net-once').addEventListener('click', () => netAnswer('once'));
   $('t-net-no').addEventListener('click', () => netAnswer(''));
@@ -8156,6 +8222,16 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><button id="nw-add" class="btn" type="button">Add network</button>
 <button id="nw-import" class="btn" type="button">Copy from Node Controller</button></div>
 <div id="nw-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Home channel</h3>
+<p class="muted small">After a recording ends, Node Recorder connects this channel. It is set up like a Node Talker favorite. Leave the mode on Off to leave the node disconnected instead.</p>
+<div class="row"><label>Mode <select id="hc-mode"><option value="">Off</option><option>ASL</option><option>EchoLink</option><option>DMR</option><option>STFU</option><option>YSF</option><option>P25</option><option>NXDN</option><option>DSTAR</option><option>M17</option></select></label>
+<label>Node, talkgroup or room <input id="hc-num" type="text" maxlength="24" autocomplete="off"></label>
+<label>DMR network <input id="hc-net" type="text" maxlength="40" autocomplete="off"></label>
+<label>M17 module <input id="hc-module" type="text" maxlength="1" autocomplete="off"></label>
+<label>Label <input id="hc-label" type="text" maxlength="40" autocomplete="off"></label></div>
+<div class="row"><button id="hc-save" class="btn primary" type="button">Save home channel</button></div>
+<div id="hc-msg" class="msg"></div>
+<p class="muted small" id="hc-now"></p>
 <div class="row"><button id="dig-save" class="btn primary" type="button">Save digital and DMR networks</button></div>
 </div>
 </div>
@@ -8371,6 +8447,7 @@ _POST_ACTIONS = {
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
     "/api/digital": (digital_save, ()),
+    "/api/home": (home_save, ()),
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
 }

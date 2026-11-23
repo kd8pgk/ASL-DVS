@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_18_3_20261123.py`. Newest entries first.
+Current file: `noderecorder_v0_18_4_20261123.py`. Newest entries first.
+
+## 0.18.4 (2026-11-23)
+
+A home channel. This is a release: a recording now ends by connecting the home channel, not by leaving the node disconnected.
+
+- **Digital tab:** a Home channel card sets the channel. It is set up like a Node Talker favorite: mode, node, talkgroup or room, DMR network, M17 module and label. Mode Off turns it off.
+- **After a recording:** the recorded link is disconnected, then the home channel is connected. If the home channel is the one just recorded, it stays connected. If the connect fails, the "Recording finished" line says so.
+- **Stored in** `home_channel.json` in the Node Recorder config folder. Nothing else changes.
 
 ## 0.18.3 (2026-11-23)
 
