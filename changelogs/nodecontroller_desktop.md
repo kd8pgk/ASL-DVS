@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.1 (2026-11-24)
+
+A stuck quit can no longer hang.
+
+- **Quit signals end the app.** Ctrl+C, a terminal closing or a plain `kill` ask the app to quit cleanly; if that has not finished after 3 seconds the app now exits anyway, so a signal that arrives while the app is still starting cannot leave it hanging.
+- **Package check.** The packaged-app check kills the apps it starts with SIGKILL when they run over their time, so a stuck app can no longer hold the check (the 0.11.0 run of it hung until the workflow timed out and the release was not published).
 
 ## 0.11.0 (2026-11-24)
 

@@ -51,11 +51,11 @@ async function main() {
 
   const env = { ...process.env, NODECONTROLLER_DATA: fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ncd-pkg-')) };
   for (const flag of ['--remote-debugging-port=9333', '--inspect=9334', '--js-flags=--expose-gc']) {
-    const r = spawnSync(bin, ['--no-sandbox', flag], { env, encoding: 'utf8', timeout: 20000 });
+    const r = spawnSync(bin, ['--no-sandbox', flag], { env, encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL' });
     assert.equal(r.status, 2, `${flag} should be refused, got ${r.status}`);
     assert.match(r.stderr, /Refused/);
   }
-  const viaEnv = spawnSync(bin, ['--no-sandbox'], { env: { ...env, NODE_OPTIONS: '--inspect=9335', ELECTRON_RUN_AS_NODE: '1' }, input: 'console.log(1)', encoding: 'utf8', timeout: 8000 });
+  const viaEnv = spawnSync(bin, ['--no-sandbox'], { env: { ...env, NODE_OPTIONS: '--inspect=9335', ELECTRON_RUN_AS_NODE: '1' }, input: 'console.log(1)', encoding: 'utf8', timeout: 8000, killSignal: 'SIGKILL' });
   assert.notEqual((viaEnv.stdout || '').trim(), '1', 'ELECTRON_RUN_AS_NODE must not run a script');
 
   const child = spawn(bin, ['--no-sandbox'], { env, stdio: ['ignore', 'ignore', 'pipe'] });

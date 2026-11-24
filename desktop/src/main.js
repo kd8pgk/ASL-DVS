@@ -937,7 +937,12 @@ app.on('second-instance', () => {
   }
 });
 
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => app.quit());
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    app.quit();
+    setTimeout(() => process.exit(0), 3000).unref();
+  });
+}
 
 app.whenReady().then(() => {
   if (crashedLast) logLine('the last run did not exit cleanly: the open pages were not restored');
