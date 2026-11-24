@@ -296,3 +296,35 @@ test('restore of junk gives an empty layout', () => {
   assert.deepEqual(L.restore(null, NODES, PAGES), L.emptyState());
   assert.deepEqual(L.restore({ tabs: 5 }, NODES, PAGES), L.emptyState());
 });
+
+test('Last Heard goes left to right, then down, and never makes a fourth pane', () => {
+  const four = L.openTab(three(), 'b', 'talker');
+  assert.equal(four.tabs.length, 4);
+  let s = L.openLastHeard(four, 'a', 'https://lh.example/x');
+  assert.equal(s.mode, 'cols');
+  assert.equal(s.panes[1], 'lh');
+  assert.equal(s.panes[2], null);
+  s = L.openLastHeard(L.setMode(four, 'cols'), 'a', 'https://lh.example/x');
+  assert.equal(s.mode, 'trio');
+  assert.equal(s.panes[2], 'lh');
+  s = L.openLastHeard(L.setMode(four, 'trio'), 'a', 'https://lh.example/x');
+  assert.equal(s.panes[2], 'lh');
+  for (const m of L.MODES) assert.ok(L.COUNT[m] <= 3);
+  assert.equal(L.shown(s).length, 3);
+});
+
+test('Last Heard from one page keeps that page on the left and puts itself on the right', () => {
+  const one = L.openTab(L.openTab(L.emptyState(), 'a', 'controller'), 'a', 'talker');
+  const s = L.openLastHeard(one, 'a', 'https://lh.example/x');
+  assert.deepEqual(L.shown(s), ['a:talker', 'lh']);
+  assert.equal(L.rects(s, { x: 0, y: 0, w: 1000, h: 600 }).panes[1].x > L.rects(s, { x: 0, y: 0, w: 1000, h: 600 }).panes[0].x, true);
+});
+
+test('Last Heard from two pages keeps both on top and itself below', () => {
+  const s = L.openLastHeard(L.setMode(three(), 'cols'), 'a', 'https://lh.example/x');
+  const before = L.shown(L.setMode(three(), 'cols'));
+  assert.deepEqual(s.panes.slice(0, 2), before);
+  const r = L.rects(s, { x: 0, y: 0, w: 1000, h: 600 });
+  assert.ok(r.panes[2].y > r.panes[0].y);
+  assert.equal(r.panes[2].w, 1000);
+});

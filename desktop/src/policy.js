@@ -94,6 +94,12 @@ function allowShellRequest(url) {
   return /^(file|data):/i.test(url);
 }
 
+const LAST_HEARD_NAMES = { talker: 'nt_lh', controller: 'asl_dvs_lh' };
+
+function isLastHeardWindow(pageId, frameName) {
+  return Object.prototype.hasOwnProperty.call(LAST_HEARD_NAMES, pageId) && LAST_HEARD_NAMES[pageId] === frameName;
+}
+
 function isPrivateHost(host) {
   const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
@@ -152,6 +158,8 @@ module.exports = {
   allowPermission,
   allowRequest,
   allowShellRequest,
+  LAST_HEARD_NAMES,
+  isLastHeardWindow,
   isPrivateHost,
   lastHeardOk,
   allowLastHeardRequest,

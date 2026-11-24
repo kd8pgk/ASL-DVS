@@ -450,6 +450,129 @@ def check_android(base, paths):
         fail(f"{ANDROID_LOG}: the top entry is '{head}', not {version}")
 
 
+JS_PREV_REGEX = set("(,=:[!&|?{};+-*%<>~^")
+JS_REGEX_WORDS = {"return", "typeof", "case", "delete", "void", "throw", "in", "of", "new", "else", "do"}
+
+
+def js_comment_lines(text):
+    n = len(text)
+    lines = []
+    state = {"line": 1}
+
+    def newlines(a, b):
+        state["line"] += text.count("\n", a, b)
+
+    def skip_string(i, q):
+        j = i + 1
+        while j < n and text[j] != q:
+            j += 2 if text[j] == "\\" else 1
+        newlines(i, min(j, n))
+        return min(j + 1, n)
+
+    def skip_regex(i):
+        j = i + 1
+        in_class = False
+        while j < n and text[j] != "\n":
+            c = text[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                break
+            j += 1
+        j += 1
+        while j < n and (text[j].isalpha()):
+            j += 1
+        return min(j, n)
+
+    def skip_template(i):
+        j = i + 1
+        while j < n and text[j] != "`":
+            if text[j] == "\\":
+                j += 2
+            elif text[j] == "$" and j + 1 < n and text[j + 1] == "{":
+                j = scan(j + 2, True)
+            else:
+                if text[j] == "\n":
+                    state["line"] += 1
+                j += 1
+        return min(j + 1, n)
+
+    def scan(i, until_brace):
+        depth = 0
+        prev = ""
+        word = ""
+        while i < n:
+            c = text[i]
+            if c == "\n":
+                state["line"] += 1
+                i += 1
+                continue
+            if c in " \t\r":
+                i += 1
+                continue
+            if c == "/" and i + 1 < n and text[i + 1] == "/":
+                lines.append(state["line"])
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            if c == "/" and i + 1 < n and text[i + 1] == "*":
+                lines.append(state["line"])
+                end = text.find("*/", i + 2)
+                end = n if end < 0 else end + 2
+                newlines(i, end)
+                i = end
+                continue
+            if c in "\"'":
+                i = skip_string(i, c)
+                prev, word = '"', ""
+                continue
+            if c == "`":
+                i = skip_template(i)
+                prev, word = '"', ""
+                continue
+            if c == "/":
+                if prev == "" or prev in JS_PREV_REGEX or word in JS_REGEX_WORDS:
+                    i = skip_regex(i)
+                    prev, word = '"', ""
+                else:
+                    i += 1
+                    prev, word = c, ""
+                continue
+            if c.isalnum() or c in "_$":
+                word = word + c if (prev == "w") else c
+                prev = "w"
+                i += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                if until_brace and depth == 0:
+                    return i + 1
+                depth -= 1
+            prev, word = c, ""
+            i += 1
+        return i
+
+    scan(0, False)
+    return lines
+
+
+def check_desktop_comments(path, text):
+    if path.endswith(".js"):
+        lines = js_comment_lines(text)
+    elif path.endswith(".css"):
+        lines = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"/\*", text)]
+    else:
+        lines = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"<!--", text)]
+    if lines:
+        fail(f"{path}: line {lines[0]} has a comment; desktop files carry no comments (CLAUDE.md)")
+
+
 def check_desktop(base, paths):
     if not any(p.startswith(DESKTOP_DIR) for p in paths):
         return
@@ -566,7 +689,7 @@ def main():
     changed = [p for p in added + modified if os.path.isfile(p)]
     if args.all:
         tracked = git("ls-files").splitlines()
-        changed = sorted(set(changed) | {p for p in tracked if p.endswith((".py", ".sh")) and os.path.isfile(p)
+        changed = sorted(set(changed) | {p for p in tracked if (p.endswith((".py", ".sh")) or (p.startswith(DESKTOP_DIR) and p.endswith((".js", ".css", ".html")))) and os.path.isfile(p)
                                           and not p.startswith(("android/", "docs/"))})
 
     for path in changed:
@@ -578,6 +701,8 @@ def main():
                     note_unused_page_functions(path, text)
         elif path.endswith(".sh"):
             check_shell(path)
+        elif path.startswith(DESKTOP_DIR) and "/node_modules/" not in path and "/dist/" not in path and path.endswith((".js", ".css", ".html")):
+            check_desktop_comments(path, text)
         elif path.startswith("channels/") and path.endswith(".json"):
             if path == STABLE_FILE:
                 fail(f"{STABLE_FILE} is written only by the promotion workflow; leave it out of pull requests")

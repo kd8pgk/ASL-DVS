@@ -152,6 +152,17 @@ function awayTarget(node, page) {
   return { host: node.awayHost, port: node.awayPort, https: node.awayHttps, pin: '', via: 'away' };
 }
 
+function matchPage(url, nodes) {
+  for (const node of nodes) {
+    for (const page of PAGES) {
+      for (const t of [homeTarget(node, page), lanTarget(node, page), awayTarget(node, page)]) {
+        if (t && sameOrigin(url, t)) return { nodeId: node.id, pageId: page.id };
+      }
+    }
+  }
+  return null;
+}
+
 module.exports = {
   PAGES,
   validHost,
@@ -163,4 +174,5 @@ module.exports = {
   homeTarget,
   lanTarget,
   awayTarget,
+  matchPage,
 };

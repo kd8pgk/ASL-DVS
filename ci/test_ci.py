@@ -392,6 +392,40 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "Current version")
 
+    def test_desktop_js_comment_fails(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/src/extra.js", "const a = 1; // note\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "desktop files carry no comments")
+
+    def test_desktop_block_comment_fails(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/src/extra.js", "const a = 1;\n/* note */\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "line 2 has a comment")
+
+    def test_desktop_css_and_html_comments_fail(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/ui/style.css", "a { color: red; } /* x */\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "style.css")
+        self.r.write("desktop/ui/style.css", "a { color: red; }\n")
+        self.r.write("desktop/ui/index.html", "<p>hi</p><!-- x -->\n")
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(False, "index.html")
+
+    def test_desktop_slashes_in_code_are_not_comments(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/src/extra.js", "const a = 'http://x';\nconst b = /a\\/\\/b/;\nconst t = `x ${a + '//'} // y ${`n // m`}`;\nconst d = a / 2 / 3;\nconst e = [/[/]/, \"//\"];\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+
+    def test_desktop_node_modules_are_not_checked(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/node_modules/x/index.js", "// vendor\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+
     def test_desktop_bad_version(self):
         self.desktop("0.1")
         self.r.commit("a", T0 + DAY)

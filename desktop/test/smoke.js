@@ -151,8 +151,29 @@ async function main() {
   assert.deepEqual(probe, { geo: 'denied', microphone: 'granted', camera: 'denied', notifications: 'denied', midi: 'denied', 'clipboard-read': 'denied', audio: 'NotFoundError', ext: 'blocked', sock: 'blocked' });
   assert.deepEqual(ext.hits, []);
 
-  await page(0, 1).click();
-  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${tlkPort}/` && v.visible), 'talker page');
+  await inPage(app, `127.0.0.1:${ctlPort}/`, `window.open('http://127.0.0.1:${lhPort}/lh', 'asl_dvs_lh') && 1`);
+  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${lhPort}/lh` && v.visible), 'Last Heard from Node Controller');
+  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'cols');
+  {
+    const all = await views(app);
+    const c = all.find((v) => v.url === `http://127.0.0.1:${ctlPort}/`);
+    const l = all.find((v) => v.url === `http://127.0.0.1:${lhPort}/lh`);
+    assert.ok(l.bounds.x > c.bounds.x + c.bounds.width, 'Last Heard opens to the right of the single page');
+    assert.equal(l.bounds.y, c.bounds.y);
+  }
+  await win.locator('.tab', { hasText: 'Last Heard' }).locator('.x').click();
+  await waitFor(async () => (await views(app)).length === 1, 'Last Heard closed');
+  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'single');
+
+  await inPage(app, `127.0.0.1:${ctlPort}/`, `window.open('http://127.0.0.1:${tlkPort}/', 'asl_dvs_listen') && 1`);
+  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${tlkPort}/` && v.visible), 'talker page from a link');
+  assert.equal(await win.locator('.tab').count(), 2);
+  assert.deepEqual(await win.locator('.tab .label').allTextContents(), ['Stub · Node Controller', 'Stub · Node Talker']);
+  await inPage(app, `127.0.0.1:${ctlPort}/`, `location.assign('http://127.0.0.1:${tlkPort}/x')`);
+  await new Promise((r) => setTimeout(r, 600));
+  assert.ok((await views(app)).some((v) => v.url === `http://127.0.0.1:${ctlPort}/`), 'the controller page stays where it was');
+  assert.equal(await win.locator('.tab').count(), 2);
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.every((v) => v.webContents.backgroundThrottling === false)), true);
   let vs = await views(app);
   assert.equal(vs.length, 2);
   assert.deepEqual(vs.map((v) => v.visible), [false, true]);
