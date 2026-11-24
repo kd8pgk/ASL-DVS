@@ -36,4 +36,18 @@ function certDecision(req, nodes) {
   };
 }
 
-module.exports = { certFingerprint, formatFingerprint, pinMatches, certDecision };
+function refusedKey(host, port, https) {
+  const p = Number(port) || (https === false ? 80 : 443);
+  return `${String(host || '').toLowerCase().replace(/^\[|\]$/g, '')}:${p}`;
+}
+
+function refusedKeyOfUrl(url) {
+  try {
+    const u = new URL(url);
+    return refusedKey(u.hostname, u.port, u.protocol !== 'http:');
+  } catch {
+    return '';
+  }
+}
+
+module.exports = { certFingerprint, formatFingerprint, pinMatches, certDecision, refusedKey, refusedKeyOfUrl };

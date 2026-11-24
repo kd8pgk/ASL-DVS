@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.10`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.11`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.11 (2026-11-24)
+
+Trusting one tool's certificate no longer fails after another tool's was refused.
+
+- **Refused certificates are kept per host and port.** Each tool on a node has its own self-signed certificate. The app remembered only one refused certificate per host name, so opening SysMon after Node Talker replaced Talker's; clicking "Trust this certificate" on Talker's panel then said "That certificate was not the one refused", and a page's panel could show another tool's fingerprint. Each tool's port now has its own entry.
+- **Tests.** A unit test for the key (host and port, default port, IPv6, a bad address) and, in the real window, two untrusted tools on one host: the second is refused with its own fingerprint, the first still shows its own, and trusting it works (this check fails on 0.11.10).
 
 ## 0.11.10 (2026-11-24)
 

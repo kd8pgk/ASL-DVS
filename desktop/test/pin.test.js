@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { certFingerprint, formatFingerprint, pinMatches, certDecision } = require('../src/pin');
+const { certFingerprint, formatFingerprint, pinMatches, certDecision, refusedKey, refusedKeyOfUrl } = require('../src/pin');
 const { normalizeNode } = require('../src/node');
 
 const der = crypto.randomBytes(300);
@@ -61,4 +61,15 @@ test('a node can trust several certificates, one for each of its tools', () => {
   assert.equal(certDecision({ hostname: 'pi.local', certPem: pem }, n).trust, true);
   assert.equal(certDecision({ hostname: 'pi.local', certPem: otherPem }, n).trust, true);
   assert.equal(certDecision({ hostname: 'pi.local', certPem: otherPem }, nodes({ pins: [hex] })).trust, false);
+});
+
+test('refused certificates are kept per host and port, so two tools on one node do not overwrite each other', () => {
+  assert.equal(refusedKeyOfUrl('https://Pi.local:9999/x'), 'pi.local:9999');
+  assert.equal(refusedKeyOfUrl('https://pi.local:8993/'), 'pi.local:8993');
+  assert.notEqual(refusedKeyOfUrl('https://pi.local:9999/'), refusedKeyOfUrl('https://pi.local:8993/'));
+  assert.equal(refusedKeyOfUrl('https://pi.local/'), 'pi.local:443');
+  assert.equal(refusedKeyOfUrl('https://[::1]:7777/'), '::1:7777');
+  assert.equal(refusedKeyOfUrl('not a url'), '');
+  assert.equal(refusedKey('PI.local', 9999, true), refusedKeyOfUrl('https://pi.local:9999/'));
+  assert.equal(refusedKey('pi.local', undefined, true), 'pi.local:443');
 });
