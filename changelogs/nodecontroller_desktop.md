@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.11`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.12`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.12 (2026-11-24)
+
+A page on plain http added while the app runs asks for a restart.
+
+- **Restart banner.** Pages on plain http are treated as secure (so Node Talker can use the microphone and pages can write to the clipboard) only for the addresses known when the app starts; Chromium cannot add more later. A node added or edited while the app runs, a node list imported, or a page whose scheme is learned as http, used to lose the microphone and clipboard until the next start, with no sign why. An amber banner in the sidebar now says so, with **Restart now**, which reopens the app (the same AppImage, with the same options) so the new address is included. The log notes it once.
+- **Tests.** In the real window: the banner appears when a plain-http node is added and is gone after a restart.
 
 ## 0.11.11 (2026-11-24)
 

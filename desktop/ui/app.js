@@ -568,6 +568,7 @@
   }
 
   function render() {
+    $('restart').hidden = !lay.restart;
     renderTitle();
     renderControls();
     renderSlots();
@@ -724,6 +725,7 @@
       if (t) window.nc.reloadTab(t.key);
     });
     $('save-split').addEventListener('click', openNameDialog);
+    $('restart-now').addEventListener('click', () => window.nc.restartApp());
     for (const b of $('views').querySelectorAll('button')) b.addEventListener('click', () => window.nc.setView(b.dataset.view));
     $('f-cancel').addEventListener('click', closeDialog);
     $('dlg').addEventListener('close', setOverlay);

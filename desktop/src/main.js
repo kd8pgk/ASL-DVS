@@ -85,6 +85,17 @@ function plainOrigins() {
 
 const insecure = plainOrigins();
 if (insecure.length) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', insecure.join(','));
+const securedAtStart = new Set(insecure);
+let restartLogged = false;
+
+function needsRestart() {
+  const need = plainOrigins().some((o) => !securedAtStart.has(o));
+  if (need && !restartLogged) {
+    restartLogged = true;
+    logLine('a page on plain http was added: a restart lets it use the microphone and clipboard');
+  }
+  return need;
+}
 
 const hardened = new WeakSet();
 const partitions = new Map();
@@ -230,6 +241,7 @@ function payload() {
     splits: splits.map((p) => ({ id: p.id, name: p.name, count: PR.count(p) })),
     zones: L.dropZones(g.area),
     overlay,
+    restart: needsRestart(),
     slots: L.SLOTS.map((sl) => ({
       slot: sl,
       label: L.SLOT_LABEL[sl],
@@ -885,6 +897,14 @@ function register() {
       update(L.focusSlot(ls, slot));
       focusView();
     }
+    return { ok: true };
+  });
+  ipcMain.handle('app:restart', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    logLine('restarting at the user\'s request');
+    if (process.env.APPIMAGE) app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
+    else app.relaunch();
+    app.quit();
     return { ok: true };
   });
   ipcMain.handle('ui:overlay', (e, on) => {

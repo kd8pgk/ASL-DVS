@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('nc', {
   focusSlot: (slot) => ipcRenderer.invoke('tabs:focus', slot),
   overlay: (on) => ipcRenderer.invoke('ui:overlay', on),
   trustCert: (nodeId, fingerprint) => ipcRenderer.invoke('cert:trust', nodeId, fingerprint),
+  restartApp: () => ipcRenderer.invoke('app:restart'),
   onLayout: (cb) => listen('layout', cb),
   onNotice: (cb) => listen('notice', cb),
 });

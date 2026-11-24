@@ -100,6 +100,9 @@ input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 1px v
 .bar { display: flex; gap: .4rem; padding: .6rem .8rem; flex-wrap: wrap; flex: none; }
 .notice { margin: 0 .8rem .4rem; padding: .35rem .55rem; border-radius: 4px; background: var(--bg); border: 1px solid var(--green-dim); color: var(--green); flex: none; }
 .notice.bad { color: var(--red); border-color: var(--red-dim); }
+.notice.restart { color: var(--amber); border-color: var(--amber-dim); display: flex; flex-direction: column; gap: .35rem; }
+.notice.restart[hidden] { display: none; }
+.notice.restart button { align-self: flex-start; }
 #side-top { flex: none; max-height: 46%; overflow: auto; }
 #side-mid { flex: 1; min-height: 100px; overflow: auto; border-top: 1px solid var(--border2); }
 #side-foot { flex: none; border-top: 2px solid var(--border2); padding: .4rem .5rem .5rem; background: linear-gradient(90deg, #0f1a2e, #161e2e 50%, #0f1a2e); }
