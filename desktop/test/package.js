@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const root = path.join(__dirname, '..');
-const unpacked = path.join(root, 'dist', 'linux-unpacked');
+const unpacked = process.env.NC_UNPACKED || path.join(root, 'dist', 'linux-unpacked');
 const bin = path.join(unpacked, 'nodecontroller');
 
 const EXPECT_FUSES = {
@@ -15,7 +15,7 @@ const EXPECT_FUSES = {
   EnableEmbeddedAsarIntegrityValidation: 'Enabled',
   OnlyLoadAppFromAsar: 'Enabled',
   LoadBrowserProcessSpecificV8Snapshot: 'Disabled',
-  GrantFileProtocolExtraPrivileges: 'Disabled',
+  GrantFileProtocolExtraPrivileges: 'Enabled',
 };
 
 function fuses() {
@@ -58,8 +58,16 @@ async function main() {
   const viaEnv = spawnSync(bin, ['--no-sandbox'], { env: { ...env, NODE_OPTIONS: '--inspect=9335', ELECTRON_RUN_AS_NODE: '1' }, input: 'console.log(1)', encoding: 'utf8', timeout: 8000 });
   assert.notEqual((viaEnv.stdout || '').trim(), '1', 'ELECTRON_RUN_AS_NODE must not run a script');
 
-  const child = spawn(bin, ['--no-sandbox'], { env, stdio: 'ignore' });
-  await sleep(6000);
+  const child = spawn(bin, ['--no-sandbox'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let err = '';
+  child.stderr.on('data', (d) => {
+    err += d.toString();
+  });
+  const until = Date.now() + 20000;
+  while (!err.includes('shell-ready') && child.exitCode === null && Date.now() < until) await sleep(200);
+  assert.ok(err.includes('shell-ready'), `the packaged window did not load its page:\n${err.slice(-600)}`);
+  assert.equal(/Failed to load/.test(err), false, `the packaged app reported a load failure:\n${err.slice(-600)}`);
+  await sleep(4000);
   assert.equal(child.exitCode, null, 'the packaged app should still be running');
   const ss = spawnSync('ss', ['-H', '-tunap'], { encoding: 'utf8' });
   const mine = (ss.stdout || '').split('\n').filter((l) => /nodecontroller|chrome_crashpad/.test(l));

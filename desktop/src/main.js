@@ -113,6 +113,7 @@ function harden(ses, kind) {
 
 let win = null;
 let overlay = false;
+let shellReady = false;
 let saveTimer = null;
 
 function alive() {
@@ -529,7 +530,14 @@ function persist() {
 function register() {
   const str = (v) => typeof v === 'string';
   ipcMain.handle('app:info', (e) => (fromShell(e) ? { version: app.getVersion(), pages: PAGES } : null));
-  ipcMain.handle('layout:get', (e) => (fromShell(e) ? payload() : null));
+  ipcMain.handle('layout:get', (e) => {
+    if (!fromShell(e)) return null;
+    if (!shellReady) {
+      shellReady = true;
+      process.stderr.write('shell-ready\n');
+    }
+    return payload();
+  });
   ipcMain.handle('nodes:list', (e) => (fromShell(e) ? snapshot() : []));
   ipcMain.handle('nodes:save', (e, raw) => {
     if (!fromShell(e)) return { error: 'Not allowed.' };
@@ -749,6 +757,11 @@ function createWindow() {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
+  win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
+    if (!isMain || code === -3) return;
+    process.stderr.write(`Failed to load the window: ${desc}\n`);
+    app.exit(3);
+  });
   win.webContents.once('did-finish-load', () => sync());
   win.on('resize', sync);
   win.on('closed', () => {
