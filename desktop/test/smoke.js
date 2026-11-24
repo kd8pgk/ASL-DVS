@@ -227,6 +227,16 @@ async function main() {
   await waitFor(async () => (await pageNames()).length === 10, 'every running page is listed');
   assert.deepEqual(await pageNames(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗']);
   assert.deepEqual(await win.locator('#side-foot .entry-main').allTextContents(), ['Install Monitor']);
+
+  const exportFile = path.join(tmp, 'exported.json');
+  await app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: f }); }, exportFile);
+  await win.click('#export');
+  await win.waitForFunction(() => /Nodes exported/.test(document.getElementById('notice').textContent));
+  assert.equal(JSON.parse(fs.readFileSync(exportFile, 'utf8')).nodes.length, 1);
+  await app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: f }); }, tmp);
+  await win.click('#export');
+  await win.waitForFunction(() => /could not be written/.test(document.getElementById('notice').textContent));
+  assert.match(await win.getAttribute('#notice', 'class'), /bad/);
   assert.equal(await page(9).getAttribute('draggable'), 'false');
   assert.equal(await page(7).getAttribute('draggable'), 'false');
   assert.equal(await win.locator('.group-name').textContent(), 'Stub');

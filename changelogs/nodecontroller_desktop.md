@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.16`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.17`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.17 (2026-11-25)
+
+A node export that cannot be written says so.
+
+- **Export errors show.** Exporting the node list to a folder that cannot be written (read-only, full, or a folder picked as the file) threw inside the app and nothing appeared. It now says "The node list could not be written there. Pick another folder." and the reason goes in diagnostics.log.
+- **Tests.** In the real window: an export that works (the file has the node), and one that cannot be written (the message shows). Export had no test before.
 
 ## 0.11.16 (2026-11-24)
 
