@@ -189,6 +189,11 @@ function payload() {
   const list = L.paneList(ls);
   const vis = list.map((p) => p.key);
   const pageOf = (t) => PAGES.find((x) => x.id === t.pageId);
+  const zoomOf = {};
+  list.forEach((p, i) => {
+    const v = L.viewRect(ls, r.panes[i]);
+    zoomOf[p.key] = L.zoomFor(ls, p.key, v.w, v.h);
+  });
   return {
     grid: { sidebar: g.sidebar, header: g.header, strip: g.strip },
     view: ls.view,
@@ -218,6 +223,7 @@ function payload() {
         slot: L.slotOf(ls, t.key),
         singleOnly: Boolean(pg && pg.single),
         shown: vis.includes(t.key),
+        zoom: zoomOf[t.key] === undefined ? 1 : zoomOf[t.key],
         focused: vis.includes(t.key) && L.focusedKey(ls) === t.key,
         status: e ? e.status : 'idle',
         idle: e ? e.idle === true : true,
@@ -233,6 +239,8 @@ function payload() {
         rect,
         view: L.viewRect(ls, rect),
         label: labelOf(ls.tabs.find((t) => t.key === p.key)),
+        zoom: zoomOf[p.key],
+        zoomSet: ls.zooms[p.key] !== undefined,
         stack: p.slot ? ls.slots[p.slot].map((k) => ({ key: k, label: shortLabel(k), selected: k === p.key })) : [],
         status: e ? e.status : 'loading',
         error: e && e.status === 'failed' ? e.error : null,
@@ -265,6 +273,46 @@ function saveNow() {
   }
 }
 
+function applyScale(e, rect) {
+  if (!e.view) return;
+  const wc = e.view.webContents;
+  if (wc.isDestroyed()) return;
+  const z = e.zoom;
+  const tag = z === 1 ? 'off' : `${rect.w}x${rect.h}@${z}`;
+  if (e.emu === tag) return;
+  e.emu = tag;
+  if (z === 1) {
+    wc.disableDeviceEmulation();
+    return;
+  }
+  const vw = Math.max(1, Math.round(rect.w / z));
+  const vh = Math.max(1, Math.round(rect.h / z));
+  wc.enableDeviceEmulation({
+    screenPosition: 'desktop',
+    screenSize: { width: vw, height: vh },
+    viewPosition: { x: 0, y: 0 },
+    viewSize: { width: vw, height: vh },
+    deviceScaleFactor: 0,
+    scale: z,
+  });
+}
+
+function viewRectOf(key) {
+  const list = L.paneList(ls);
+  const i = list.findIndex((p) => p.key === key);
+  if (i < 0) return { w: 0, h: 0 };
+  return L.viewRect(ls, L.rects(ls, area()).panes[i]);
+}
+
+function zoomKey(key, op) {
+  if (!key || !ls.tabs.some((t) => t.key === key)) return;
+  const v = viewRectOf(key);
+  if (op === 'fit') ls = L.fitZoom(ls, key);
+  else if (op === 'in' || op === 'out') ls = L.stepZoom(ls, key, op === 'in' ? 1 : -1, v.w, v.h);
+  else return;
+  sync();
+}
+
 function setIdle(e, idle) {
   if (!e.view || e.idle === idle) return;
   const wc = e.view.webContents;
@@ -287,6 +335,8 @@ function sync() {
     if (i >= 0 && r.panes[i]) {
       const p = L.viewRect(ls, r.panes[i]);
       e.view.setBounds({ x: p.x, y: p.y, width: p.w, height: p.h });
+      e.zoom = L.zoomFor(ls, key, p.w, p.h);
+      applyScale(e, p);
       e.view.setVisible(!overlay && e.status !== 'failed');
     } else {
       e.view.setVisible(false);
@@ -361,6 +411,12 @@ function onKey(event, input) {
     update(L.setView(ls, 'slots'));
   } else if (k === 'w' && key) {
     closeTab(key);
+  } else if ((k === '=' || k === '+') && key) {
+    zoomKey(key, 'in');
+  } else if (k === '-' && key) {
+    zoomKey(key, 'out');
+  } else if (k === '0' && key) {
+    zoomKey(key, 'fit');
   } else if (k === 'r' && key) {
     reloadTab(key);
   } else if (k === 'tab' && ls.tabs.length > 1) {
@@ -737,6 +793,11 @@ function register() {
     if (!key) return { ok: false };
     update(L.unslot(ls, key));
     focusView();
+    return { ok: true };
+  });
+  ipcMain.handle('tabs:zoom', (e, arg) => {
+    if (!fromShell(e) || !arg || !str(arg.op)) return { ok: false };
+    zoomKey(str(arg.key) ? arg.key : L.focusedKey(ls), arg.op);
     return { ok: true };
   });
   ipcMain.handle('tabs:view', (e, view) => {

@@ -176,7 +176,10 @@
   44helper, Install Monitor and Terminal Monitor are always single pages.
   Pages that are not on screen are idle (slowed and muted), except Node
   Talker, which is never idle; pages on screen never are. Last Heard opens as
-  a new single page.
+  a new single page. A page in a small pane is scaled to fit it (the pane's
+  size against 800 by 500, 50% to 100%), per pane, with its own size set by −,
+  + and Ctrl+0 (device emulation, not page zoom, which Chromium shares across
+  a host name).
 - **Title and look.** The window, its page and its logo say "Node Controller
   Desktop" (see Naming above); node page names stay as the nodes serve them.
   The shell uses the shared Node Control look: the Readex Pro files in

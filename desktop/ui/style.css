@@ -196,3 +196,11 @@ dialog label.check { display: flex; align-items: center; gap: .4rem; color: var(
 .entry.down:not(.sel) .entry-main { color: var(--muted); font-style: italic; }
 .entry.ext .entry-main { color: var(--muted); }
 .entry.ext:hover .entry-main { color: var(--text-bright); }
+
+.zoom { display: flex; align-items: center; }
+.zoom button { padding: .05rem .4rem; font-size: var(--fs-xs); margin-left: -1px; border-radius: 0; }
+.zoom button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.zoom button:last-child { border-radius: 0 4px 4px 0; }
+.zoom .zoom-pct { min-width: 3.2rem; color: var(--muted); border-color: var(--border2); text-transform: none; font-weight: normal; letter-spacing: 0; }
+.zoom .zoom-pct.set { color: var(--amber); border-color: var(--amber-dim); }
+.zoom-chip { padding: .05rem .5rem; font-size: var(--fs-xs); color: var(--amber); border-color: var(--amber-dim); text-transform: none; letter-spacing: 0; }

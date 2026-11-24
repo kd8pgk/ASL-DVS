@@ -361,6 +361,53 @@ async function main() {
   assert.equal(await win.locator('.pane-strip').count(), 3);
   assert.equal(await win.locator('.divider.gapline').count(), 1);
   assert.equal(await win.locator('.divider.cols').count(), 1);
+  {
+    const vsz = async (u) => JSON.parse(await inPage(app, u.replace('http://', '').replace(/\/$/, '') + '/', 'JSON.stringify([innerWidth, innerHeight, Math.round(devicePixelRatio * 100) / 100])'));
+    const checks = [['sysmon', ex.views[0]], ['talker', ex.views[1]], ['nodemon', ex.views[2]]];
+    for (const [n, v] of checks) {
+      const z = L.autoZoom(v.w, v.h);
+      assert.ok(z < 1 && z >= 0.5, `${n} is scaled down to fit (${z})`);
+      const [iw, ih] = await vsz(U(n));
+      assert.ok(Math.abs(iw - Math.round(v.w / z)) <= 1 && Math.abs(ih - Math.round(v.h / z)) <= 1, `${n} sees ${iw}x${ih}, expected about ${Math.round(v.w / z)}x${Math.round(v.h / z)}`);
+    }
+    assert.deepEqual(await win.locator('.pane-strip .zoom-pct').allTextContents(), checks.map(([, v]) => `${Math.round(L.autoZoom(v.w, v.h) * 100)}%`));
+    assert.equal(await win.locator('#title .zoom-chip').count(), 1);
+
+    await inPage(app, `127.0.0.1:${P.sysmon}/`, `document.body.insertAdjacentHTML('beforeend', '<button id="cb" style="position:fixed;left:120px;top:90px;width:90px;height:40px" onclick="document.title=\\'clicked\\'">x</button>') || 1`);
+    const zS = L.autoZoom(ex.views[0].w, ex.views[0].h);
+    const box = JSON.parse(await inPage(app, `127.0.0.1:${P.sysmon}/`, 'JSON.stringify(document.getElementById("cb").getBoundingClientRect())'));
+    await app.evaluate(({ BrowserWindow }, a) => {
+      const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes(a.part));
+      const x = Math.round(a.x);
+      const y = Math.round(a.y);
+      v.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      v.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      v.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    }, { part: `127.0.0.1:${P.sysmon}/`, x: (box.left + box.width / 2) * zS, y: (box.top + box.height / 2) * zS });
+    await waitFor(async () => (await inPage(app, `127.0.0.1:${P.sysmon}/`, 'document.title')) === 'clicked', 'a click lands on the right spot in a scaled pane');
+
+    const pct = () => win.locator('.pane-strip').nth(0).locator('.zoom-pct');
+    const before = await pct().textContent();
+    await win.locator('.pane-strip').nth(0).locator('.zoom button', { hasText: '+' }).click();
+    await waitFor(async () => (await pct()).textContent().then((t) => t !== before), 'the plus button makes the pane bigger');
+    assert.ok(Number.parseInt(await pct().textContent(), 10) > Number.parseInt(before, 10));
+    assert.ok((await classes(pct())).includes('set'));
+    const [iw2] = await vsz(U('sysmon'));
+    assert.ok(iw2 < Math.round(ex.views[0].w / zS), 'the page now sees a narrower window');
+    await pct().click();
+    await waitFor(async () => (await pct().textContent()) === before, 'clicking the percentage fits the pane again');
+    assert.ok(!(await classes(pct())).includes('set'));
+
+    await win.locator('.pane-strip').nth(0).click();
+    await chord(app, '-');
+    await waitFor(async () => Number.parseInt(await pct().textContent(), 10) < Number.parseInt(before, 10), 'Ctrl+minus makes it smaller');
+    await chord(app, '0');
+    await waitFor(async () => (await pct().textContent()) === before, 'Ctrl+0 fits it again');
+    await chord(app, '=');
+    await waitFor(async () => Number.parseInt(await pct().textContent(), 10) > Number.parseInt(before, 10), 'Ctrl+plus makes it bigger');
+    await win.locator('#title .zoom-chip').click();
+    await waitFor(async () => (await pct().textContent()) === before, 'the chip in the title bar fits it again');
+  }
 
   await page(4).click({ button: 'right' });
   assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Show alone', 'Put in Left slot', 'Put in Right slot', 'Put in Lower slot']);

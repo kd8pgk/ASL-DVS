@@ -6,6 +6,12 @@ const SLOT_LABEL = { left: 'Left', right: 'Right', lower: 'Lower' };
 const SINGLE_ONLY = new Set(['h44', 'instmon', 'termon']);
 const MAX_SAVED_PAGES = 12;
 const LH_KEY = 'lh';
+const REF_W = 800;
+const REF_H = 500;
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 1.6;
+const AUTO_MIN = 0.5;
+const ZOOM_STEP = 0.1;
 const UNITS = 15;
 const SIDEBAR_UNITS = 3;
 
@@ -24,6 +30,7 @@ function emptyState() {
     view: 'single',
     focus: 'left',
     ratio: 0.5,
+    zooms: {},
   };
 }
 
@@ -62,13 +69,15 @@ function settle(s) {
   }
   const sel = { left: null, right: null, lower: null };
   for (const sl of SLOTS) sel[sl] = slots[sl].includes(s.sel && s.sel[sl]) ? s.sel[sl] : slots[sl][0] || null;
-  if (!tabs.length) return { ...s, tabs, slots, sel, single: null, view: 'single', focus: 'left' };
+  const zooms = {};
+  for (const k of Object.keys(s.zooms || {})) if (hasTab(s, k) && Number.isFinite(s.zooms[k])) zooms[k] = s.zooms[k];
+  if (!tabs.length) return { ...s, tabs, slots, sel, zooms: {}, single: null, view: 'single', focus: 'left' };
   const occ = SLOTS.filter((sl) => sel[sl]);
   let view = s.view === 'slots' && occ.length ? 'slots' : 'single';
   let single = hasTab(s, s.single) ? s.single : null;
   if (view === 'single' && !single) single = (occ.length ? sel[occ[0]] : null) || tabs[0].key;
   const focus = SLOTS.includes(s.focus) && sel[s.focus] ? s.focus : occ[0] || 'left';
-  return { ...s, tabs, slots, sel, single, view, focus };
+  return { ...s, tabs, slots, sel, zooms, single, view, focus };
 }
 
 function paneList(s) {
@@ -219,6 +228,37 @@ function applyArrangement(s, spec, selSpec, ratio) {
   return settle({ ...s, slots, sel, ratio: r, view: 'slots', focus: first });
 }
 
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+function autoZoom(w, h) {
+  if (!(w > 0) || !(h > 0)) return 1;
+  return round2(Math.min(1, Math.max(AUTO_MIN, Math.min(w / REF_W, h / REF_H))));
+}
+
+function zoomFor(s, key, w, h) {
+  const z = s.zooms && s.zooms[key];
+  return Number.isFinite(z) ? z : autoZoom(w, h);
+}
+
+function setZoom(s, key, z) {
+  if (!hasTab(s, key) || !Number.isFinite(z)) return s;
+  return { ...s, zooms: { ...s.zooms, [key]: round2(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))) } };
+}
+
+function fitZoom(s, key) {
+  if (!s.zooms || s.zooms[key] === undefined) return s;
+  const zooms = { ...s.zooms };
+  delete zooms[key];
+  return { ...s, zooms };
+}
+
+function stepZoom(s, key, dir, w, h) {
+  if (!hasTab(s, key) || (dir !== 1 && dir !== -1)) return s;
+  return setZoom(s, key, zoomFor(s, key, w, h) + dir * ZOOM_STEP);
+}
+
 function clampRatio(ratio, total) {
   const usable = total - GAP;
   if (usable < MIN_PANE * 2) return 0.5;
@@ -287,6 +327,7 @@ function serialize(s) {
     slots,
     sel,
     single: ok(s.single) ? s.single : null,
+    zooms: Object.fromEntries(Object.entries(s.zooms || {}).filter(([k]) => ok(k))),
     view: s.view,
     focus: s.focus,
     ratio: s.ratio,
@@ -329,6 +370,7 @@ function restore(saved, nodes, pages) {
     slots,
     sel,
     single: typeof src.single === 'string' ? src.single : null,
+    zooms: src.zooms && typeof src.zooms === 'object' ? Object.fromEntries(Object.entries(src.zooms).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => [k, round2(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v)))])) : {},
     view: src.view === 'slots' ? 'slots' : 'single',
     focus: src.focus,
     ratio: Number.isFinite(src.ratio) ? Math.min(0.9, Math.max(0.1, src.ratio)) : 0.5,
@@ -344,6 +386,17 @@ module.exports = {
   SINGLE_ONLY,
   MAX_SAVED_PAGES,
   LH_KEY,
+  REF_W,
+  REF_H,
+  ZOOM_MIN,
+  ZOOM_MAX,
+  AUTO_MIN,
+  ZOOM_STEP,
+  autoZoom,
+  zoomFor,
+  setZoom,
+  fitZoom,
+  stepZoom,
   grid,
   emptyState,
   keyOf,
