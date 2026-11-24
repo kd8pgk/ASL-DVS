@@ -195,6 +195,7 @@ async function main() {
   assert.deepEqual(await win.locator('.slot .sec-head').allTextContents(), ['Left slot', 'Right slot', 'Lower slot']);
   assert.equal(await win.locator('.slot .hint').count(), 3);
   assert.equal(await win.locator('#save-split').isDisabled(), true);
+  assert.equal(await win.locator('#restart').isHidden(), true);
 
   await win.click('#add');
   await win.fill('#f-name', 'Stub');
@@ -206,6 +207,8 @@ async function main() {
   await win.fill('#f-lan', '');
   await win.click('#f-save');
   await win.waitForSelector('#pages .group');
+  await win.waitForSelector('#restart:not([hidden])');
+  assert.match(await win.textContent('#restart'), /plain http was added/);
   const nodesFile = path.join(data, 'nodes.json');
   const savedNodes = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes;
   assert.deepEqual(savedNodes[0].ports, P);
@@ -583,6 +586,7 @@ async function main() {
     win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
     await waitFor(async () => (await visible()).length === 3, 'after a clean exit the pages come back as before');
+    assert.equal(await win.locator('#restart').isHidden(), true, 'after a restart the plain http pages are set up, so the banner is gone');
     assert.equal(await win.locator('#notice:not([hidden])').count(), 0);
   }
 
