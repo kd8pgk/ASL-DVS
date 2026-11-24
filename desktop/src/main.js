@@ -441,6 +441,13 @@ function closeRt(key) {
 function onKey(event, input) {
   if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
   const k = String(input.key).toLowerCase();
+  const shift = Boolean(input.shift);
+  if (!['1', '2', 'w', '=', '+', '-', '0', 'r', 'tab'].includes(k)) return;
+  event.preventDefault();
+  setImmediate(() => runKey(k, shift));
+}
+
+function runKey(k, shift) {
   const key = L.focusedKey(ls);
   if (k === '1') {
     update(L.setView(ls, 'single'));
@@ -458,13 +465,10 @@ function onKey(event, input) {
     reloadTab(key);
   } else if (k === 'tab' && ls.tabs.length > 1) {
     const i = ls.tabs.findIndex((t) => t.key === key);
-    const step = input.shift ? -1 : 1;
+    const step = shift ? -1 : 1;
     update(L.openKey(ls, ls.tabs[(i + step + ls.tabs.length) % ls.tabs.length].key));
     focusView();
-  } else {
-    return;
   }
-  event.preventDefault();
 }
 
 function openLastHeard(nodeId, url) {
@@ -638,8 +642,11 @@ async function ensureView(key) {
         logLine(`scheme for ${key}: ${now} -> ${next}`);
         flips.set(key, { at: Date.now(), from: now });
         emitNotice(`${page.label} on ${node.name || node.host} answers on ${next}, not ${now}. That is what will be used for it from now on.`, false);
-        closeRt(key);
-        sync();
+        setImmediate(() => {
+          if (rt.get(key) !== e) return;
+          closeRt(key);
+          sync();
+        });
         return;
       }
       if (idx >= 0 && decision === 'revert') {
