@@ -15,11 +15,29 @@ const ZOOM_STEP = 0.1;
 const UNITS = 15;
 const SIDEBAR_UNITS = 2.25;
 const HEADER = 44;
+const SIDEBAR_MIN = 176;
 
 function grid(w, h) {
-  const sidebar = Math.round((w * SIDEBAR_UNITS) / UNITS);
+  const sidebar = Math.min(w, Math.max(SIDEBAR_MIN, Math.round((w * SIDEBAR_UNITS) / UNITS)));
   const header = HEADER;
   return { sidebar, header, strip: STRIP, area: { x: sidebar, y: header, w: Math.max(0, w - sidebar), h: Math.max(0, h - header) } };
+}
+
+const WIN_W = 1280;
+const WIN_H = 800;
+const WIN_MIN_W = 900;
+const WIN_MIN_H = 560;
+
+function windowSize(work) {
+  const ww = Math.max(1, Math.floor(Number(work && work.width) || WIN_W));
+  const wh = Math.max(1, Math.floor(Number(work && work.height) || WIN_H));
+  return {
+    width: Math.min(WIN_W, ww),
+    height: Math.min(WIN_H, wh),
+    minWidth: Math.min(WIN_MIN_W, ww),
+    minHeight: Math.min(WIN_MIN_H, wh),
+    maximize: ww < WIN_W || wh < WIN_H,
+  };
 }
 
 function emptyState() {
@@ -383,6 +401,7 @@ module.exports = {
   GAP,
   STRIP,
   HEADER,
+  windowSize,
   SLOTS,
   SLOT_LABEL,
   SINGLE_ONLY,
