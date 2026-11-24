@@ -1,6 +1,12 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.2`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.3`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.3 (2026-11-24)
+
+A trace of what a page does as it opens, to find a crash.
+
+- **diagnostics.log** now also records, in order, each page's loading steps (start, navigation, DOM ready, finished, title and icon changes) and each permission a page asks for or checks. If the app dies while a page opens, the last line says what it was doing. Only the names of the steps and permissions are written, never addresses or page content.
 
 ## 0.11.2 (2026-11-24)
 

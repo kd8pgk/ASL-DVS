@@ -120,11 +120,14 @@ function harden(ses, kind) {
     return n ? P.hostsOfNode(n) : [];
   };
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    logLine(`trace ${kind} permission asked: ${permission}`);
     const origin = (details && details.requestingUrl) || (wc && !wc.isDestroyed() ? wc.getURL() : '');
     callback(P.allowPermission(permission, origin, hostsFor(), details && details.mediaTypes));
   });
-  ses.setPermissionCheckHandler((wc, permission, origin, details) =>
-    P.allowPermission(permission, origin, hostsFor(), details && details.mediaType));
+  ses.setPermissionCheckHandler((wc, permission, origin, details) => {
+    logLine(`trace ${kind} permission checked: ${permission}`);
+    return P.allowPermission(permission, origin, hostsFor(), details && details.mediaType);
+  });
   ses.setDevicePermissionHandler(() => false);
   ses.setSpellCheckerEnabled(false);
   ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
@@ -484,6 +487,9 @@ async function ensureLastHeard(key, tab) {
     }
   };
   wc.on('focus', focused);
+  for (const ev of ['did-start-loading', 'did-start-navigation', 'did-navigate', 'dom-ready', 'did-finish-load', 'did-stop-loading', 'page-favicon-updated', 'page-title-updated', 'did-create-window', 'unresponsive', 'responsive']) {
+    wc.on(ev, () => logLine(`trace ${key} ${ev}`));
+  }
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });
