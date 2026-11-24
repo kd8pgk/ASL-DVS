@@ -1,6 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog, screen } = require('electron');
 const { PAGES, MAX_PINS, SCHEME_FLIP_CODES, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
@@ -908,11 +908,13 @@ function register() {
 }
 
 function createWindow() {
+  const size = L.windowSize(screen.getPrimaryDisplay().workAreaSize);
   win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 1100,
-    minHeight: 700,
+    width: size.width,
+    height: size.height,
+    minWidth: size.minWidth,
+    minHeight: size.minHeight,
+    center: true,
     title: 'Node Controller Desktop',
     backgroundColor: '#0d1117',
     webPreferences: {
@@ -925,6 +927,7 @@ function createWindow() {
   win.webContents.on('before-input-event', onKey);
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  if (size.maximize) win.maximize();
   win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
   win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;

@@ -27,8 +27,8 @@ function example() {
   return s;
 }
 
-test('grid: sidebar is 15% of the width and the header is a thin fixed bar', () => {
-  for (const [w, sidebar, header] of [[1280, 192, 44], [1600, 240, 44], [1920, 288, 44], [1500, 225, 44]]) {
+test('grid: sidebar is 15% of the width (at least 176 px) and the header is a thin fixed bar', () => {
+  for (const [w, sidebar, header] of [[1280, 192, 44], [1600, 240, 44], [1920, 288, 44], [1500, 225, 44], [1100, 176, 44], [900, 176, 44]]) {
     const g = L.grid(w, 800);
     assert.deepEqual([g.sidebar, g.header, g.strip], [sidebar, header, 28], `at ${w}`);
     assert.deepEqual(g.area, { x: sidebar, y: header, w: w - sidebar, h: 800 - header });
@@ -427,4 +427,12 @@ test('zooms are kept for open pages only, saved and restored, and Last Heard is 
   assert.deepEqual(odd.zooms, {});
   const wide = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], zooms: { 'a:controller': 9 } }, NODES, PAGES);
   assert.equal(wide.zooms['a:controller'], L.ZOOM_MAX);
+});
+
+test('the window fits the screen: never bigger than the work area, maximized when the screen is small', () => {
+  assert.deepEqual(L.windowSize({ width: 1920, height: 1040 }), { width: 1280, height: 800, minWidth: 900, minHeight: 560, maximize: false });
+  assert.deepEqual(L.windowSize({ width: 1366, height: 738 }), { width: 1280, height: 738, minWidth: 900, minHeight: 560, maximize: true });
+  assert.deepEqual(L.windowSize({ width: 1024, height: 552 }), { width: 1024, height: 552, minWidth: 900, minHeight: 552, maximize: true });
+  assert.deepEqual(L.windowSize({ width: 800, height: 480 }), { width: 800, height: 480, minWidth: 800, minHeight: 480, maximize: true });
+  assert.deepEqual(L.windowSize(null), { width: 1280, height: 800, minWidth: 900, minHeight: 560, maximize: false });
 });

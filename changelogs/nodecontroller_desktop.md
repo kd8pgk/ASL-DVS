@@ -1,6 +1,15 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.9`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.10`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.10 (2026-11-24)
+
+The window fits the screen.
+
+- **Opens inside the screen.** The window opened at 1280 by 800 on every screen, so on a laptop screen (1366 by 768, less the panel) the bottom was cut off. It now opens at the screen's usable size, never bigger than 1280 by 800, centred, and maximized when the screen is smaller than that.
+- **Maximize works on small screens.** The smallest window was 1100 by 700; on XFCE (Peppermint) the window manager will not maximize a window whose minimum size does not fit the screen. The minimum is now 900 by 560, or the screen size if that is smaller.
+- **Sidebar at least 176 px.** On a narrow window the sidebar stays 176 px wide so the logo, slots and page names still read; from about 1170 px wide it is 15% as before.
+- **Tests.** The window-size rules (large screen, 1366 by 768, 1024 by 600, a tiny screen, no screen) and the sidebar floor.
 
 ## 0.11.9 (2026-11-24)
 
