@@ -164,8 +164,8 @@
   and a change that strengthens it updates them in the same pull request.
   `check-package` must see the packaged window report `shell-ready`: running
   from the source does not prove the AppImage works.
-- **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
-  12. The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
+- **Layout.** The window is 15 units wide: sidebar 3, pages 12; the header is a
+  thin fixed bar (44 px, since 0.11.7). The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
   Recorder, WifiMon, 44helper, Install Monitor and Terminal Monitor, and Last
   Heard; Pi-Piper and Pibrary have a sidebar entry but open in the system web
   browser, never in the app. There are no title bar tabs: the sidebar lists

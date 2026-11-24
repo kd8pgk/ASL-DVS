@@ -1,6 +1,14 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.6`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.7`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.7 (2026-11-24)
+
+A thinner title bar.
+
+- **Title bar 44 px.** The bar above the pages (and the logo block above the sidebar) was one grid unit tall, a fifteenth of the window width: 85 px at 1280 wide, 128 px at 1920. It is now a fixed 44 px at every width, so the pages get that height back. The sidebar keeps its 3 of 15 units.
+- **Logo on one line.** "Node Controller Desktop" now fits on a single line in the thinner block, with the version under it.
+- **Still on Electron 44.11.5.** 0.11.6 confirmed the SysMon crash was a bug in Electron 45.4.1: with 44.11.5 SysMon opens on the Debian machine that crashed.
 
 ## 0.11.6 (2026-11-24)
 

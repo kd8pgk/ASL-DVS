@@ -14,10 +14,11 @@ const AUTO_MIN = 0.5;
 const ZOOM_STEP = 0.1;
 const UNITS = 15;
 const SIDEBAR_UNITS = 3;
+const HEADER = 44;
 
 function grid(w, h) {
   const sidebar = Math.round((w * SIDEBAR_UNITS) / UNITS);
-  const header = Math.round(w / UNITS);
+  const header = HEADER;
   return { sidebar, header, strip: STRIP, area: { x: sidebar, y: header, w: Math.max(0, w - sidebar), h: Math.max(0, h - header) } };
 }
 
@@ -381,6 +382,7 @@ module.exports = {
   MIN_PANE,
   GAP,
   STRIP,
+  HEADER,
   SLOTS,
   SLOT_LABEL,
   SINGLE_ONLY,
