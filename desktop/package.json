@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
-  "productName": "Node Controller",
-  "version": "0.7.1",
+  "productName": "Node Controller Desktop",
+  "version": "0.8.0",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",
@@ -21,7 +21,7 @@
   "license": "SEE LICENSE IN ../LICENSE",
   "build": {
     "appId": "io.github.kd8pgk.nodecontroller",
-    "productName": "Node Controller",
+    "productName": "Node Controller Desktop",
     "copyright": "kd8pgk",
     "asar": true,
     "electronLanguages": [

@@ -189,6 +189,16 @@ class PromoteTests(unittest.TestCase):
         self.assertEqual(t["blob"], blob)
 
 
+DESKTOP_LOOK = (
+    '@font-face{font-family:"Readex Pro";font-style:normal;font-weight:400;src:url(a.woff2)}\n'
+    ':root{--sans:"Readex Pro",Arial,Helvetica,sans-serif;\n'
+    '--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;\n'
+    '--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;\n'
+    '--amber:#ffd040;--amber-dim:#6b4800;}\n'
+    'textarea,pre,code{font-family:var(--mono)!important}\n'
+)
+
+
 class CheckTests(unittest.TestCase):
     def setUp(self):
         self.r = Repo()
@@ -424,6 +434,15 @@ class CheckTests(unittest.TestCase):
         self.desktop("0.1.0")
         self.r.write("desktop/node_modules/x/index.js", "// vendor\n")
         self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+
+    def test_desktop_style_needs_the_shared_look(self):
+        self.desktop("0.1.0")
+        self.r.write("desktop/ui/style.css", "body { color: red; }\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "shared Node Control look")
+        self.r.write("desktop/ui/style.css", DESKTOP_LOOK)
+        self.r.commit("b", T0 + 2 * DAY)
         self.assertCheck(True)
 
     def test_desktop_bad_version(self):

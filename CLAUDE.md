@@ -170,8 +170,12 @@
   Pages that are not on screen are idle (slowed and muted), except Node
   Talker, which is never idle; pages on screen never are. Last Heard opens as
   a new single page.
-- **Window titles** say "Node Controller" (see Naming above); node page names
-  stay as the nodes serve them.
+- **Title and look.** The window, its page and its logo say "Node Controller
+  Desktop" (see Naming above); node page names stay as the nodes serve them.
+  The shell uses the shared Node Control look: the Readex Pro files in
+  `desktop/ui/fonts/` (the same woff2 data the tools embed) and the shared
+  variables in `desktop/ui/style.css`; `ci/check_repo.py` checks the shared
+  lines. The data folder keeps the name `Node Controller`.
 - **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after
   `npm run dist`, `xvfb-run -a npm run check-package` in `desktop/`, plus
   `python3 ci/check_repo.py --base origin/main`. The `desktop` workflow builds

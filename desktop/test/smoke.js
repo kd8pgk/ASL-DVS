@@ -168,7 +168,7 @@ async function main() {
   const state = async (url) => (await views(app)).find((v) => v.url === url);
   const Lb = (t) => t;
 
-  assert.equal(await win.title(), 'Node Controller');
+  assert.equal(await win.title(), 'Node Controller Desktop');
   assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);
   assert.equal(await win.locator('#views button[data-view="single"]').isDisabled(), true);
   assert.equal(await win.locator('#views button[data-view="slots"]').isDisabled(), true);

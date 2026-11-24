@@ -41,7 +41,7 @@ async function main() {
   for (const [k, v] of Object.entries(EXPECT_FUSES)) assert.equal(got[k], v, `fuse ${k}`);
 
   const files = asarFiles().filter((f) => !f.endsWith('/') && f !== '/');
-  const allowed = /^\/(package\.json|src|ui|src\/[a-z]+\.js|ui\/(app\.js|index\.html|style\.css))$/;
+  const allowed = /^\/(package\.json|src|ui|src\/[a-z]+\.js|ui\/(app\.js|index\.html|style\.css|fonts|fonts\/readex-pro-(400|700)\.woff2))$/;
   for (const f of files) assert.match(f, allowed, `unexpected file in the app archive: ${f}`);
   assert.ok(files.includes('/src/main.js') && files.includes('/ui/index.html'));
   assert.equal(files.some((f) => f.includes('node_modules') || f.includes('/test/')), false);

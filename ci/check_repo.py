@@ -562,6 +562,16 @@ def js_comment_lines(text):
     return lines
 
 
+DESKTOP_STYLE = "desktop/ui/style.css"
+
+
+def check_desktop_look(path, text):
+    missing = [s for s in SHARED_LOOK_LINES if s not in text]
+    if missing:
+        fail(f"{path}: not on the shared Node Control look (missing {missing[0]!r}"
+             f"{f' and {len(missing) - 1} more' if len(missing) > 1 else ''})")
+
+
 def check_desktop_comments(path, text):
     if path.endswith(".js"):
         lines = js_comment_lines(text)
@@ -703,6 +713,8 @@ def main():
             check_shell(path)
         elif path.startswith(DESKTOP_DIR) and "/node_modules/" not in path and "/dist/" not in path and path.endswith((".js", ".css", ".html")):
             check_desktop_comments(path, text)
+            if path == DESKTOP_STYLE:
+                check_desktop_look(path, text)
         elif path.startswith("channels/") and path.endswith(".json"):
             if path == STABLE_FILE:
                 fail(f"{STABLE_FILE} is written only by the promotion workflow; leave it out of pull requests")
