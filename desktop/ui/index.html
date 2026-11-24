@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node Controller</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside id="side">
+  <div class="brand">Node Controller</div>
+  <div class="bar">
+    <button id="add" type="button" class="primary">Add node</button>
+    <button id="import" type="button">Import</button>
+    <button id="export" type="button">Export</button>
+  </div>
+  <div id="notice" class="notice" hidden></div>
+  <ul id="nodes"></ul>
+  <div id="ver" class="ver"></div>
+</aside>
+<main id="main">
+  <header id="head">
+    <div id="title">Pick a page</div>
+    <div class="spacer"></div>
+    <button id="reload" type="button" disabled>Reload</button>
+    <button id="close" type="button" disabled>Close</button>
+  </header>
+  <section id="stage">
+    <div id="empty" class="msg">Add a node, then open Node Controller or Node Talker from the list.</div>
+    <div id="fail" class="msg" hidden>
+      <h2 id="fail-title"></h2>
+      <p id="fail-text"></p>
+      <p id="fail-cert" class="mono" hidden></p>
+      <div class="row">
+        <button id="fail-trust" type="button" class="primary" hidden>Trust this certificate</button>
+        <button id="fail-retry" type="button">Try again</button>
+      </div>
+    </div>
+  </section>
+</main>
+<dialog id="dlg">
+  <form id="form" method="dialog" autocomplete="off">
+    <h2 id="dlg-title">Add node</h2>
+    <label>Name<input id="f-name" type="text" maxlength="80"></label>
+    <label>Address<input id="f-host" type="text" placeholder="pi.local or https://pi.local" required></label>
+    <label class="check"><input id="f-https" type="checkbox"> Use https</label>
+    <div class="two">
+      <label>Node Controller port<input id="f-port-controller" type="number" min="1" max="65535"></label>
+      <label>Node Talker port<input id="f-port-talker" type="number" min="1" max="65535"></label>
+    </div>
+    <label>Away address (Node Talker only)<input id="f-away" type="text" placeholder="https://node.example.com"></label>
+    <label>LAN address (IPv4, optional)<input id="f-lan" type="text" placeholder="192.168.1.50"></label>
+    <div id="f-pin-row" class="pin" hidden>
+      <span>Trusted certificate</span>
+      <span id="f-pin" class="mono"></span>
+      <button id="f-pin-clear" type="button">Forget</button>
+    </div>
+    <p id="f-error" class="error" hidden></p>
+    <div class="row end">
+      <button id="f-delete" type="button" class="danger" hidden>Delete</button>
+      <div class="spacer"></div>
+      <button id="f-cancel" type="button">Cancel</button>
+      <button id="f-save" type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<script src="app.js"></script>
+</body>
+</html>

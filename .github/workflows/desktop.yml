@@ -1,0 +1,49 @@
+name: desktop
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+      - name: Syntax check
+        working-directory: desktop
+        run: |
+          for f in src/*.js ui/*.js test/*.js; do node --check "$f"; done
+      - name: Unit tests
+        working-directory: desktop
+        run: npm test
+      - name: Playwright
+        run: npm install --no-save --prefix "$RUNNER_TEMP/pw" playwright@1.52.0
+      - name: Smoke test
+        working-directory: desktop
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+        run: xvfb-run -a npm run smoke

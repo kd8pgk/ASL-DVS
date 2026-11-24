@@ -25,6 +25,10 @@ ANDROID_DIR = "android/"
 ANDROID_GRADLE = "android/app/build.gradle.kts"
 ANDROID_LOG = "changelogs/nodetalker_android.md"
 ANDROID_VERSION_RE = re.compile(r'^val appVersion = "([^"]+)"', re.M)
+DESKTOP_DIR = "desktop/"
+DESKTOP_PACKAGE = "desktop/package.json"
+DESKTOP_LOG = "changelogs/nodecontroller_desktop.md"
+DESKTOP_VERSION_RE = re.compile(r'^\s*"version":\s*"([^"]+)"', re.M)
 CODING_RE = re.compile(r"^#.*coding[:=]")
 SH_TITLE_RE = re.compile(r"^#\s*\S+\.sh\s+v\S+")
 JS_FUNC_RE = re.compile(r"(\(\s*(?:async\s+)?)?\bfunction\s+([A-Za-z_][\w]*)\s*\(")
@@ -446,6 +450,35 @@ def check_android(base, paths):
         fail(f"{ANDROID_LOG}: the top entry is '{head}', not {version}")
 
 
+def check_desktop(base, paths):
+    if not any(p.startswith(DESKTOP_DIR) for p in paths):
+        return
+    m = DESKTOP_VERSION_RE.search(read(DESKTOP_PACKAGE) if os.path.isfile(DESKTOP_PACKAGE) else "")
+    if not m:
+        fail(f'{DESKTOP_PACKAGE}: no "version": "X.Y.Z" line found')
+        return
+    version = m.group(1)
+    vt, suffix = split_version(version)
+    if vt is None or suffix or len(vt) != 3:
+        fail(f"{DESKTOP_PACKAGE}: version '{version}' must be X.Y.Z")
+        return
+    om = DESKTOP_VERSION_RE.search(show(base, DESKTOP_PACKAGE) or "")
+    if om:
+        ot, _ = split_version(om.group(1))
+        if ot is not None and vt <= ot:
+            fail(f"{DESKTOP_PACKAGE}: desktop/ changed but version {version} is not newer than {om.group(1)}")
+    if not os.path.isfile(DESKTOP_LOG):
+        fail(f"desktop/: {DESKTOP_LOG} is missing")
+        return
+    lines = read(DESKTOP_LOG).splitlines()
+    cur = next((ln for ln in lines if ln.startswith("Current version:")), "")
+    if f"`{version}`" not in cur:
+        fail(f"{DESKTOP_LOG}: the 'Current version' line does not name `{version}`")
+    head = next((ln for ln in lines if ln.startswith("## ")), "")
+    if version not in head.split():
+        fail(f"{DESKTOP_LOG}: the top entry is '{head}', not {version}")
+
+
 def check_launchers():
     texts = {}
     for name in sorted(os.listdir(".")):
@@ -638,6 +671,7 @@ def main():
 
     check_launchers()
     check_android(base, added + modified + deleted)
+    check_desktop(base, [p for p in added + modified + deleted if not p.startswith("desktop/node_modules/")])
 
     for n in notes:
         print(f"note: {n}")

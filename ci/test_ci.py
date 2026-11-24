@@ -367,6 +367,36 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "must be X.Y.Z")
 
+    def desktop(self, ver, log_ver=None, extra="x"):
+        self.r.write("desktop/package.json", '{\n  "name": "x",\n  "version": "%s"\n}\n' % ver)
+        self.r.write("desktop/src/main.js", extra + "\n")
+        v = log_ver or ver
+        self.r.write("changelogs/nodecontroller_desktop.md", f"# log\n\nCurrent version: `{v}`.\n\n## {v} (2026-10-01)\n\n- x\n")
+
+    def test_desktop_first_and_bump(self):
+        self.desktop("0.1.0")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+        self.r.git("checkout", "-q", "main")
+        self.r.git("merge", "-q", "pr")
+        self.r.git("checkout", "-q", "pr")
+        self.desktop("0.1.0", extra="y")
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(False, "not newer than 0.1.0")
+        self.desktop("0.1.1", extra="y")
+        self.r.commit("c", T0 + 3 * DAY)
+        self.assertCheck(True)
+
+    def test_desktop_changelog(self):
+        self.desktop("0.1.0", log_ver="0.0.9")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "Current version")
+
+    def test_desktop_bad_version(self):
+        self.desktop("0.1")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "must be X.Y.Z")
+
     def shared(self, tool_def):
         self.r.write("shared/confio.py", SHARED_REF)
         name = self.r.build("foo", "1.0.1", None, self.prev)

@@ -19,6 +19,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Recorder | `noderecorder_v*.py` | 8995 | Records an ASL node's audio from the private node 1921 (shared with Node Talker, which owns it when installed). Schedule (set on the Connect tab with a favorite picker that reads Node Talker's and Node Controller's favorites), recording to u-law or PCM WAV, then compressed to MP3, Opus or FLAC by lame, sox, shine, opusenc or flac (installable from the Setup tab; the WAV is deleted after a good conversion), stored on USB in preference to the SD card within an MB limit and a status route for the other tools. Forked from Node Talker. |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
+| Node Controller Desktop | `desktop/` | - | Optional Linux desktop client (Electron, early build, no installer yet): your nodes in a list, with the Node Controller and Node Talker pages of each opened in the app. Remembers a node's certificate and falls back from the home address to a LAN or away address. Run it from the source for now. |
 | Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
 | Node Monitor (nodemon) | `nodemon_v*.py` | 7777 | Allmon3-style status page for the node: an Overview of every node and links to the node's other tools, its ASL3 registration, every link on the main public node and on each private node (state, mode, direction, time connected), and what the DVSwitch, M17 and SvxLink gateways are tuned to, each read from the service's own status. Link state is polled from Asterisk's manager interface (AMI). Link commands (every ilink operation) from drop-down menus. Installed by the installer or instmon. |
 | Pi-Piper TTS | `piper_dashboard_v*.py` | 8765 | Text-to-speech dashboard for a Piper TTS install: pick a voice, run a file or pasted text, stream or save WAV, export 8 kHz audio, and optionally play on the node or store output in a Pibrary drive. Installs its own engine and voices from the Config tab. Stands alone. |
@@ -580,6 +581,7 @@ per tool and build:
 | [`termon.md`](changelogs/termon.md) | `termon_v*.py` |
 | [`nodemon.md`](changelogs/nodemon.md) | `nodemon_v*.py` |
 | [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker Mobile) |
+| [`nodecontroller_desktop.md`](changelogs/nodecontroller_desktop.md) | `desktop/` (Node Controller Desktop) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`confgetter.md`](changelogs/confgetter.md) | `confgetter_v*.sh` |
