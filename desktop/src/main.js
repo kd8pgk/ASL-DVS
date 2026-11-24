@@ -4,6 +4,7 @@ const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dial
 const { PAGES, MAX_PINS, SCHEME_FLIP_CODES, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
+const { createSessionMarker } = require('./session');
 const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
@@ -28,6 +29,10 @@ for (const sw of P.SWITCHES) app.commandLine.appendSwitch(sw);
 
 const userData = process.env.NODECONTROLLER_DATA || app.getPath('userData');
 if (process.env.NODECONTROLLER_DATA) app.setPath('userData', userData);
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.exit(0);
+const marker = createSessionMarker(path.join(userData, 'running.json'));
+const crashedLast = primary ? marker.begin().crashed : false;
 const store = createStore(path.join(userData, 'nodes.json'));
 const layoutFile = path.join(userData, 'layout.json');
 const presetStore = PR.createPresetStore(path.join(userData, 'splits.json'));
@@ -54,7 +59,17 @@ function readJson(file) {
 }
 
 const INTERNAL = PAGES.filter((p) => !p.external);
-let ls = L.restore(readJson(layoutFile), nodes, INTERNAL);
+let ls = crashedLast ? L.emptyState() : L.restore(readJson(layoutFile), nodes, INTERNAL);
+if (crashedLast) {
+  try {
+    fs.unlinkSync(layoutFile);
+  } catch {
+    ls = L.emptyState();
+  }
+}
+let startupNotice = crashedLast
+  ? 'The app closed unexpectedly last time, so it started with no pages open. Your nodes, saved splits and trusted certificates are kept.'
+  : '';
 
 function plainOrigins() {
   const out = new Set();
@@ -658,6 +673,11 @@ function register() {
     if (!shellReady) {
       shellReady = true;
       process.stderr.write('shell-ready\n');
+      if (startupNotice) {
+        const text = startupNotice;
+        startupNotice = '';
+        setTimeout(() => emitNotice(text, true), 400);
+      }
     }
     return payload();
   });
@@ -910,7 +930,17 @@ app.on('web-contents-created', (e, contents) => {
   contents.on('will-attach-webview', (ev) => ev.preventDefault());
 });
 
+app.on('second-instance', () => {
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => app.quit());
+
 app.whenReady().then(() => {
+  if (crashedLast) logLine('the last run did not exit cleanly: the open pages were not restored');
   Menu.setApplicationMenu(null);
   harden(session.defaultSession, 'shell');
   register();
@@ -932,6 +962,7 @@ process.on('unhandledRejection', (err) => {
 
 app.on('before-quit', () => {
   logLine('quitting');
+  marker.end();
   monitor.stop();
   if (saveTimer) saveNow();
 });

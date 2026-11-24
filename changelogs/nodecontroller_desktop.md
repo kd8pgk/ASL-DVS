@@ -1,6 +1,17 @@
 # Node Controller Desktop changelog
 
-Current version: `0.10.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.0 (2026-11-24)
+
+After a crash the app starts clean.
+
+- **A crash resets what was open.** The app notes when it starts and clears the note when it quits normally. If the note is still there at the next start, the last run did not exit cleanly (it crashed, was killed or the machine lost power), so the open pages, the slots, the view and the sizes are **not** restored: it starts with nothing open, so a page that was misbehaving cannot take it down again straight away. A message in the sidebar says so. Nodes, saved splits, trusted certificates and remembered schemes are kept.
+- **After a normal exit nothing changes:** everything comes back as it was, as before.
+- **Closing from the terminal counts as a normal exit.** Ctrl+C, the terminal closing and a plain `kill` all quit cleanly, so they do not trigger the reset.
+- **One copy at a time.** Starting a second copy now brings the first one to the front and the second quits, so two copies cannot overwrite each other's saved layout or be mistaken for a crash.
+- **diagnostics.log** records "the last run did not exit cleanly" when the reset happens.
+- **Tests.** The marker (first run, clean exit, left behind, ending twice, an unwritable folder) and, in the real window: a second copy handing over, the app killed hard with six pages open, then the restart with nothing open, the message, nodes and saved splits kept, a saved split still opening, and a clean exit restoring everything.
 
 ## 0.10.0 (2026-11-24)
 

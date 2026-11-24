@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const L = require('../src/layout');
 
@@ -514,10 +514,12 @@ async function main() {
   assert.equal(await view(), 'slots');
 
   await app.close();
+  assert.equal(fs.existsSync(path.join(data, 'running.json')), false, 'a clean exit removes the marker');
   app = await launch();
   win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
   await waitFor(async () => (await visible()).length === 3, 'restored slots');
+  assert.equal(await win.locator('#notice:not([hidden])').count(), 0);
   assert.equal(await view(), 'slots');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('Node Recorder'), Lb('WifiMon')]);
@@ -533,6 +535,56 @@ async function main() {
   await win.click('.split-name');
   await waitFor(async () => (await visible()).length === 3, 'saved split opens its pages');
   assert.equal(await openCount(), 6);
+
+  {
+    const running = path.join(data, 'running.json');
+    const nodesBefore = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0];
+    const second = spawn(require('electron'), [root, '--no-sandbox'], { env: { ...process.env, NODECONTROLLER_DATA: data }, stdio: 'ignore' });
+    const code = await new Promise((res) => {
+      second.on('exit', res);
+      setTimeout(() => {
+        second.kill();
+        res('timeout');
+      }, 25000);
+    });
+    assert.equal(code, 0, 'a second copy hands over and quits');
+    assert.equal(await win.title(), 'Node Controller Desktop');
+    assert.ok(fs.existsSync(running), 'the first copy keeps its marker');
+    assert.equal(await openCount(), 6);
+
+    const pid = app.process().pid;
+    app.process().kill('SIGKILL');
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the app is gone');
+    assert.ok(fs.existsSync(running), 'a hard kill leaves the marker');
+    app = await launch();
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await win.waitForFunction(() => /closed unexpectedly last time/.test(document.getElementById('notice').textContent));
+    assert.equal(await openCount(), 0);
+    assert.equal((await views(app)).length, 0);
+    assert.equal(await win.locator('.slot .entry').count(), 0);
+    assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);
+    assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0], nodesBefore);
+    assert.match(fs.readFileSync(path.join(data, 'diagnostics.log'), 'utf8'), /did not exit cleanly/);
+    await win.click('.split-name');
+    await waitFor(async () => (await visible()).length === 3, 'a saved split still opens after the reset');
+    assert.equal(await openCount(), 6);
+    await app.close();
+    assert.equal(fs.existsSync(running), false);
+    app = await launch();
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await waitFor(async () => (await visible()).length === 3, 'after a clean exit the pages come back as before');
+    assert.equal(await win.locator('#notice:not([hidden])').count(), 0);
+  }
 
   await chord(app, '1');
   await waitFor(async () => (await view()) === 'single', 'single');
