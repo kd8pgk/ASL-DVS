@@ -1,6 +1,14 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.13`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.14`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.14 (2026-11-24)
+
+A page is no longer closed from inside its own event.
+
+- **Closing waits a moment.** When a page switched scheme, the app closed that page's view from inside the page's own "failed to load" event, and Ctrl+W and Ctrl+R did the same from inside the page's own key event. Destroying a page while Electron is still handing it an event is a known way to crash Electron. All three now act a moment later, once the event is finished.
+- **The app's shortcuts are always the app's.** Ctrl+1, Ctrl+2, Ctrl+W, Ctrl+R, Ctrl+plus, Ctrl+minus, Ctrl+0 and Ctrl+Tab are always taken by the app now. Before, with no page open, Ctrl+R reloaded the app's own sidebar and Ctrl+plus or minus could reach Chromium's page zoom (which a host shares).
+- **Tests.** The real-window tests drive every shortcut and the scheme switch, unchanged, and pass.
 
 ## 0.11.13 (2026-11-24)
 
