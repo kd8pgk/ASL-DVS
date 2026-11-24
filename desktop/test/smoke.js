@@ -269,6 +269,22 @@ async function main() {
   assert.deepEqual(probe, { geo: 'denied', microphone: 'granted', camera: 'denied', notifications: 'denied', midi: 'denied', 'clipboard-read': 'denied', audio: 'NotFoundError', ext: 'blocked', sock: 'blocked' });
   assert.deepEqual(ext.hits, []);
 
+  await app.evaluate(({ BrowserWindow }, part) => {
+    const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes(part));
+    v.webContents.forcefullyCrashRenderer();
+  }, `127.0.0.1:${P.controller}/`);
+  await win.waitForSelector('.pane-msg h2');
+  assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Controller/);
+  assert.match(await win.textContent('.pane-msg p'), /stopped working/);
+  assert.ok((await classes(page(0))).includes('failed'));
+  const diag = path.join(data, 'diagnostics.log');
+  await waitFor(() => fs.existsSync(diag) && /page process gone: .*:controller reason=/.test(fs.readFileSync(diag, 'utf8')), 'the crash is written to diagnostics.log');
+  assert.equal(await win.title(), 'Node Controller Desktop');
+  await win.click('.pane-msg button:has-text("Try again")');
+  await showing(U('controller'));
+  await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'the page is back after a crash');
+  assert.ok(!(await classes(page(0))).includes('failed'));
+
   await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${LHU}', 'asl_dvs_lh') && 1`);
   await showing(LHU);
   assert.equal(await view(), 'single');

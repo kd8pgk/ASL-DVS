@@ -143,6 +143,27 @@ function area() {
   return gridNow().area;
 }
 
+const diagFile = path.join(userData, 'diagnostics.log');
+const DIAG_MAX = 200000;
+
+function logLine(text) {
+  const line = `${new Date().toISOString()} ${text}\n`;
+  process.stderr.write(line);
+  try {
+    fs.mkdirSync(userData, { recursive: true });
+    let size = 0;
+    try {
+      size = fs.statSync(diagFile).size;
+    } catch {
+      size = 0;
+    }
+    if (size > DIAG_MAX) fs.writeFileSync(diagFile, '');
+    fs.appendFileSync(diagFile, line);
+  } catch {
+    return;
+  }
+}
+
 function emitNotice(text, bad) {
   if (alive()) win.webContents.send('notice', { text, bad: Boolean(bad) });
 }
@@ -421,6 +442,13 @@ async function ensureLastHeard(key, tab) {
       push();
     }
   });
+  wc.on('render-process-gone', (ev, details) => {
+    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
+    if (rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: 'home', nodeId: tab.nodeId, cert: null };
+    sync();
+  });
   wc.loadURL(tab.url);
   sync();
 }
@@ -531,6 +559,13 @@ async function ensureView(key) {
       e.status = 'ok';
       push();
     }
+  });
+  wc.on('render-process-gone', (ev, details) => {
+    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
+    if (rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: target.via, nodeId: node.id, cert: null };
+    sync();
   });
   wc.loadURL(`${originOf(target)}/`);
   sync();
@@ -799,6 +834,11 @@ function createWindow() {
   });
   win.webContents.once('did-finish-load', () => sync());
   win.on('resize', sync);
+  win.webContents.on('render-process-gone', (ev, details) => {
+    logLine(`window process gone: reason=${details.reason} exit=${details.exitCode}`);
+    if (alive()) win.webContents.reload();
+  });
+  win.on('close', () => logLine('window closed by the user or the system'));
   win.on('closed', () => {
     win = null;
     rt.clear();
@@ -817,7 +857,20 @@ app.whenReady().then(() => {
   monitor.start();
 });
 
+app.on('child-process-gone', (ev, details) => {
+  logLine(`helper process gone: type=${details.type} name=${details.name || ''} reason=${details.reason} exit=${details.exitCode}`);
+});
+
+process.on('uncaughtException', (err) => {
+  logLine(`error in the main process: ${err && err.stack ? err.stack : err}`);
+});
+
+process.on('unhandledRejection', (err) => {
+  logLine(`unhandled promise rejection: ${err && err.stack ? err.stack : err}`);
+});
+
 app.on('before-quit', () => {
+  logLine('quitting');
   monitor.stop();
   if (saveTimer) saveNow();
 });

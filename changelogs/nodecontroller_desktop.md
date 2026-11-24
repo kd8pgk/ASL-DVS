@@ -1,6 +1,16 @@
 # Node Controller Desktop changelog
 
-Current version: `0.9.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.9.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.9.1 (2026-11-24)
+
+Crashes leave a trace and no longer take the app down. Added after a report that the app closed after logging in to Node Talker and Node Monitor on a real node (cause not yet known).
+
+- **A page that crashes is shown as stopped, not lost.** If a page's process dies, its pane says "The page stopped working (reason)" with **Try again**, its sidebar entry is marked failed, and nothing else in the app is affected.
+- **If the window's own page crashes** it is reloaded.
+- **Everything that dies is written down.** A page process, a helper process (graphics, audio, network), an error in the main process, a window closing and the app quitting each add a line to `diagnostics.log` in the data folder (`~/.config/Node Controller/`) and to the terminal's error output. The file keeps its last 200 KB. Nothing is sent anywhere.
+- **Errors in the main process no longer end the app silently.** They are written down and the app keeps running.
+- **Tests.** In the real window a page's process is killed on purpose: the app stays up, the pane and entry say so, the line is in `diagnostics.log`, and Try again brings the page back.
 
 ## 0.9.0 (2026-11-24)
 
