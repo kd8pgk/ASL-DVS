@@ -136,6 +136,17 @@ async function main() {
   const tls2 = pageServer('stub tls controller');
   const tlsSrv2 = https.createServer({ key: fs.readFileSync(key2), cert: fs.readFileSync(crt2) }, tls2.handler);
   const tlsPort2 = await listen(tlsSrv2);
+  let resetTls2 = 0;
+  const tls2Socks = new Set();
+  tlsSrv2.on('connection', (sock) => {
+    if (resetTls2 > 0) {
+      resetTls2 -= 1;
+      sock.resetAndDestroy();
+      return;
+    }
+    tls2Socks.add(sock);
+    sock.on('close', () => tls2Socks.delete(sock));
+  });
 
   const data = path.join(tmp, 'data');
   const extLog = path.join(tmp, 'external.log');
@@ -651,6 +662,14 @@ async function main() {
   await waitFor(async () => (await visible()).some((v) => v.url === `https://127.0.0.1:${tlsPort2}/`), 'a TLS page on an http node is learned as https and the trusted certificate is accepted');
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.nodemon, 'https');
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.sysmon, 'http');
+  resetTls2 = 50;
+  for (const sock of tls2Socks) sock.destroy();
+  await chord(app, 'r');
+  await win.waitForSelector('.pane-msg h2');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.nodemon, 'https', 'a reset on a page that loaded keeps its scheme');
+  resetTls2 = 0;
+  await win.click('text=Try again');
+  await waitFor(async () => (await visible()).some((v) => v.url === `https://127.0.0.1:${tlsPort2}/`), 'after the reset the page loads on https again');
   await closeAll();
 
   await win.click('.group-head button');

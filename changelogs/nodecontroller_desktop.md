@@ -1,6 +1,14 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.12`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.13`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.13 (2026-11-24)
+
+A page keeps the scheme it loaded on.
+
+- **No flip-back after a reset.** When a page failed on the wrong scheme the app tried the other one and remembered it, and if the other one also failed within 30 s it went back. That window stayed open after the page had loaded, so a node restart (a connection reset or an empty reply) in the next 30 s put the wrong scheme back. A successful load now closes the window.
+- **A page that loaded keeps its scheme through a reset.** A connection reset or an empty reply on an address that has already loaded in this session no longer switches its scheme; the page shows "Could not open" and Try again. A wrong-scheme error (for example SSL protocol error) still switches, and a page moved to another port is learned again.
+- **Tests.** The decision rule as a unit test, and in the real window a working https page whose connection is reset: it keeps https and loads again on Try again (this check fails on 0.11.12).
 
 ## 0.11.12 (2026-11-24)
 

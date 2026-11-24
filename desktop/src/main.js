@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog, screen } = require('electron');
-const { PAGES, MAX_PINS, SCHEME_FLIP_CODES, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
+const { PAGES, MAX_PINS, flipDecision, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
 const { createSessionMarker } = require('./session');
@@ -41,6 +41,7 @@ let nodes = store.load();
 const router = createRouter();
 const refused = new Map();
 const flips = new Map();
+const confirmed = new Set();
 const rt = new Map();
 const probeMs = !app.isPackaged && Number(process.env.NODECONTROLLER_PROBE_MS) >= 100 ? Number(process.env.NODECONTROLLER_PROBE_MS) : undefined;
 const monitor = createMonitor({
@@ -624,11 +625,12 @@ async function ensureView(key) {
     if (!isMain || code === -3 || rt.get(key) !== e) return;
     logLine(`load failed: ${key} ${desc} (${code}) ${url} via=${target.via} scheme=${target.https ? 'https' : 'http'}`);
     router.forget(node.id);
-    if (SCHEME_FLIP_CODES.includes(code) && target.via !== 'away') {
+    const last = flips.get(key);
+    const recent = Boolean(last && Date.now() - last.at < FLIP_WINDOW_MS);
+    const decision = flipDecision({ code, via: target.via, recent, confirmed: confirmed.has(`${key} ${originOf(target)}`) });
+    if (decision !== 'none') {
       const idx = nodes.findIndex((n) => n.id === node.id);
-      const last = flips.get(key);
-      const recent = last && Date.now() - last.at < FLIP_WINDOW_MS;
-      if (idx >= 0 && !recent) {
+      if (idx >= 0 && decision === 'flip') {
         const now = target.https ? 'https' : 'http';
         const next = otherScheme(now);
         nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: next };
@@ -640,7 +642,7 @@ async function ensureView(key) {
         sync();
         return;
       }
-      if (idx >= 0 && recent) {
+      if (idx >= 0 && decision === 'revert') {
         nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: last.from };
         persist();
         logLine(`scheme for ${key}: back to ${last.from}, the other one failed too`);
@@ -661,6 +663,8 @@ async function ensureView(key) {
   wc.on('did-finish-load', () => {
     if (rt.get(key) === e && e.status === 'loading') {
       e.status = 'ok';
+      flips.delete(key);
+      confirmed.add(`${key} ${originOf(target)}`);
       push();
     }
   });
