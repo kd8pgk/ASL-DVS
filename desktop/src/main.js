@@ -219,7 +219,8 @@ function sync() {
   for (const [key, e] of rt) {
     if (!e.view) continue;
     const i = vis.indexOf(key);
-    setIdle(e, i < 0);
+    const tab = ls.tabs.find((t) => t.key === key);
+    setIdle(e, i < 0 && !(tab && P.neverIdle(tab.pageId)));
     if (i >= 0 && r.panes[i]) {
       const p = L.viewRect(ls, r.panes[i]);
       e.view.setBounds({ x: p.x, y: p.y, width: p.w, height: p.h });

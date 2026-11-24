@@ -159,8 +159,9 @@
   buttons. Places fill left, then right, then down. Never more than three
   panes (no quarters). Clicking a page that is in the split brings back the
   whole split with focus on it; one that is not shows alone, with Back to
-  split. Pages that are not on screen are idle (slowed and muted); pages on
-  screen never are. Last Heard opens as a new single page.
+  split. Pages that are not on screen are idle (slowed and muted), except
+  Node Talker, which is never idle; pages on screen never are. Last Heard
+  opens as a new single page.
 - **Window titles** say "Node Controller" (see Naming above); node page names
   stay as the nodes serve them.
 - **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after

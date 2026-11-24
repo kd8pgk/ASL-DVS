@@ -225,6 +225,16 @@ async function main() {
   assert.deepEqual([hiddenV.throttled, hiddenV.muted], [true, true]);
   assert.equal(await win.locator('.tab', { hasText: 'Node Controller' }).locator('.dot.idle').count(), 1);
   assert.equal(await win.locator('.tab', { hasText: 'Node Talker' }).locator('.dot.idle').count(), 0);
+  await page(0, 0).click();
+  await showing(url(cp));
+  {
+    const t = (await views(app)).find((v) => v.url === url(tp));
+    assert.equal(t.visible, false);
+    assert.deepEqual([t.throttled, t.muted], [false, false]);
+    assert.equal(await win.locator('.tab', { hasText: 'Node Talker' }).locator('.dot.idle').count(), 0);
+  }
+  await page(0, 1).click();
+  await showing(url(tp));
   assert.equal(await win.locator('#modes button[data-mode="trio"]').isDisabled(), true);
 
   await dragToZone(win, tab('Node Controller'), 'right');
@@ -243,7 +253,8 @@ async function main() {
   assert.equal(await mode(), 'single');
   assert.equal(await win.locator('#back').isVisible(), true);
   vs = await views(app);
-  assert.deepEqual(vs.filter((v) => v.throttled && v.muted).map((v) => v.url).sort(), [url(cp), url(tp)].sort());
+  assert.deepEqual(vs.filter((v) => v.throttled && v.muted).map((v) => v.url), [url(cp)]);
+  assert.deepEqual(vs.filter((v) => !v.visible).map((v) => [v.url, v.throttled, v.muted]).sort(), [[url(cp), true, true], [url(tp), false, false]].sort());
   assert.equal(await win.locator('.pages button.on').count(), 1);
   assert.equal(await win.locator('.pages button.open').count(), 2);
 
