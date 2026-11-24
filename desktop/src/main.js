@@ -4,6 +4,7 @@ const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dial
 const { PAGES, MAX_PINS, SCHEME_FLIP_CODES, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
+const { createSessionMarker } = require('./session');
 const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
@@ -28,6 +29,10 @@ for (const sw of P.SWITCHES) app.commandLine.appendSwitch(sw);
 
 const userData = process.env.NODECONTROLLER_DATA || app.getPath('userData');
 if (process.env.NODECONTROLLER_DATA) app.setPath('userData', userData);
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.exit(0);
+const marker = createSessionMarker(path.join(userData, 'running.json'));
+const crashedLast = primary ? marker.begin().crashed : false;
 const store = createStore(path.join(userData, 'nodes.json'));
 const layoutFile = path.join(userData, 'layout.json');
 const presetStore = PR.createPresetStore(path.join(userData, 'splits.json'));
@@ -54,7 +59,17 @@ function readJson(file) {
 }
 
 const INTERNAL = PAGES.filter((p) => !p.external);
-let ls = L.restore(readJson(layoutFile), nodes, INTERNAL);
+let ls = crashedLast ? L.emptyState() : L.restore(readJson(layoutFile), nodes, INTERNAL);
+if (crashedLast) {
+  try {
+    fs.unlinkSync(layoutFile);
+  } catch {
+    ls = L.emptyState();
+  }
+}
+let startupNotice = crashedLast
+  ? 'The app closed unexpectedly last time, so it started with no pages open. Your nodes, saved splits and trusted certificates are kept.'
+  : '';
 
 function plainOrigins() {
   const out = new Set();
@@ -143,6 +158,27 @@ function area() {
   return gridNow().area;
 }
 
+const diagFile = path.join(userData, 'diagnostics.log');
+const DIAG_MAX = 200000;
+
+function logLine(text) {
+  const line = `${new Date().toISOString()} ${text}\n`;
+  process.stderr.write(line);
+  try {
+    fs.mkdirSync(userData, { recursive: true });
+    let size = 0;
+    try {
+      size = fs.statSync(diagFile).size;
+    } catch {
+      size = 0;
+    }
+    if (size > DIAG_MAX) fs.writeFileSync(diagFile, '');
+    fs.appendFileSync(diagFile, line);
+  } catch {
+    return;
+  }
+}
+
 function emitNotice(text, bad) {
   if (alive()) win.webContents.send('notice', { text, bad: Boolean(bad) });
 }
@@ -168,6 +204,11 @@ function payload() {
   const list = L.paneList(ls);
   const vis = list.map((p) => p.key);
   const pageOf = (t) => PAGES.find((x) => x.id === t.pageId);
+  const zoomOf = {};
+  list.forEach((p, i) => {
+    const v = L.viewRect(ls, r.panes[i]);
+    zoomOf[p.key] = L.zoomFor(ls, p.key, v.w, v.h);
+  });
   return {
     grid: { sidebar: g.sidebar, header: g.header, strip: g.strip },
     view: ls.view,
@@ -197,6 +238,7 @@ function payload() {
         slot: L.slotOf(ls, t.key),
         singleOnly: Boolean(pg && pg.single),
         shown: vis.includes(t.key),
+        zoom: zoomOf[t.key] === undefined ? 1 : zoomOf[t.key],
         focused: vis.includes(t.key) && L.focusedKey(ls) === t.key,
         status: e ? e.status : 'idle',
         idle: e ? e.idle === true : true,
@@ -212,6 +254,8 @@ function payload() {
         rect,
         view: L.viewRect(ls, rect),
         label: labelOf(ls.tabs.find((t) => t.key === p.key)),
+        zoom: zoomOf[p.key],
+        zoomSet: ls.zooms[p.key] !== undefined,
         stack: p.slot ? ls.slots[p.slot].map((k) => ({ key: k, label: shortLabel(k), selected: k === p.key })) : [],
         status: e ? e.status : 'loading',
         error: e && e.status === 'failed' ? e.error : null,
@@ -244,6 +288,46 @@ function saveNow() {
   }
 }
 
+function applyScale(e, rect) {
+  if (!e.view) return;
+  const wc = e.view.webContents;
+  if (wc.isDestroyed()) return;
+  const z = e.zoom;
+  const tag = z === 1 ? 'off' : `${rect.w}x${rect.h}@${z}`;
+  if (e.emu === tag) return;
+  e.emu = tag;
+  if (z === 1) {
+    wc.disableDeviceEmulation();
+    return;
+  }
+  const vw = Math.max(1, Math.round(rect.w / z));
+  const vh = Math.max(1, Math.round(rect.h / z));
+  wc.enableDeviceEmulation({
+    screenPosition: 'desktop',
+    screenSize: { width: vw, height: vh },
+    viewPosition: { x: 0, y: 0 },
+    viewSize: { width: vw, height: vh },
+    deviceScaleFactor: 0,
+    scale: z,
+  });
+}
+
+function viewRectOf(key) {
+  const list = L.paneList(ls);
+  const i = list.findIndex((p) => p.key === key);
+  if (i < 0) return { w: 0, h: 0 };
+  return L.viewRect(ls, L.rects(ls, area()).panes[i]);
+}
+
+function zoomKey(key, op) {
+  if (!key || !ls.tabs.some((t) => t.key === key)) return;
+  const v = viewRectOf(key);
+  if (op === 'fit') ls = L.fitZoom(ls, key);
+  else if (op === 'in' || op === 'out') ls = L.stepZoom(ls, key, op === 'in' ? 1 : -1, v.w, v.h);
+  else return;
+  sync();
+}
+
 function setIdle(e, idle) {
   if (!e.view || e.idle === idle) return;
   const wc = e.view.webContents;
@@ -266,6 +350,8 @@ function sync() {
     if (i >= 0 && r.panes[i]) {
       const p = L.viewRect(ls, r.panes[i]);
       e.view.setBounds({ x: p.x, y: p.y, width: p.w, height: p.h });
+      e.zoom = L.zoomFor(ls, key, p.w, p.h);
+      applyScale(e, p);
       e.view.setVisible(!overlay && e.status !== 'failed');
     } else {
       e.view.setVisible(false);
@@ -340,6 +426,12 @@ function onKey(event, input) {
     update(L.setView(ls, 'slots'));
   } else if (k === 'w' && key) {
     closeTab(key);
+  } else if ((k === '=' || k === '+') && key) {
+    zoomKey(key, 'in');
+  } else if (k === '-' && key) {
+    zoomKey(key, 'out');
+  } else if (k === '0' && key) {
+    zoomKey(key, 'fit');
   } else if (k === 'r' && key) {
     reloadTab(key);
   } else if (k === 'tab' && ls.tabs.length > 1) {
@@ -420,6 +512,13 @@ async function ensureLastHeard(key, tab) {
       e.status = 'ok';
       push();
     }
+  });
+  wc.on('render-process-gone', (ev, details) => {
+    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
+    if (rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: 'home', nodeId: tab.nodeId, cert: null };
+    sync();
   });
   wc.loadURL(tab.url);
   sync();
@@ -532,6 +631,13 @@ async function ensureView(key) {
       push();
     }
   });
+  wc.on('render-process-gone', (ev, details) => {
+    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
+    if (rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: target.via, nodeId: node.id, cert: null };
+    sync();
+  });
   wc.loadURL(`${originOf(target)}/`);
   sync();
 }
@@ -567,6 +673,11 @@ function register() {
     if (!shellReady) {
       shellReady = true;
       process.stderr.write('shell-ready\n');
+      if (startupNotice) {
+        const text = startupNotice;
+        startupNotice = '';
+        setTimeout(() => emitNotice(text, true), 400);
+      }
     }
     return payload();
   });
@@ -704,6 +815,11 @@ function register() {
     focusView();
     return { ok: true };
   });
+  ipcMain.handle('tabs:zoom', (e, arg) => {
+    if (!fromShell(e) || !arg || !str(arg.op)) return { ok: false };
+    zoomKey(str(arg.key) ? arg.key : L.focusedKey(ls), arg.op);
+    return { ok: true };
+  });
   ipcMain.handle('tabs:view', (e, view) => {
     if (fromShell(e) && str(view)) {
       update(L.setView(ls, view));
@@ -799,6 +915,11 @@ function createWindow() {
   });
   win.webContents.once('did-finish-load', () => sync());
   win.on('resize', sync);
+  win.webContents.on('render-process-gone', (ev, details) => {
+    logLine(`window process gone: reason=${details.reason} exit=${details.exitCode}`);
+    if (alive()) win.webContents.reload();
+  });
+  win.on('close', () => logLine('window closed by the user or the system'));
   win.on('closed', () => {
     win = null;
     rt.clear();
@@ -809,7 +930,17 @@ app.on('web-contents-created', (e, contents) => {
   contents.on('will-attach-webview', (ev) => ev.preventDefault());
 });
 
+app.on('second-instance', () => {
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => app.quit());
+
 app.whenReady().then(() => {
+  if (crashedLast) logLine('the last run did not exit cleanly: the open pages were not restored');
   Menu.setApplicationMenu(null);
   harden(session.defaultSession, 'shell');
   register();
@@ -817,7 +948,21 @@ app.whenReady().then(() => {
   monitor.start();
 });
 
+app.on('child-process-gone', (ev, details) => {
+  logLine(`helper process gone: type=${details.type} name=${details.name || ''} reason=${details.reason} exit=${details.exitCode}`);
+});
+
+process.on('uncaughtException', (err) => {
+  logLine(`error in the main process: ${err && err.stack ? err.stack : err}`);
+});
+
+process.on('unhandledRejection', (err) => {
+  logLine(`unhandled promise rejection: ${err && err.stack ? err.stack : err}`);
+});
+
 app.on('before-quit', () => {
+  logLine('quitting');
+  marker.end();
   monitor.stop();
   if (saveTimer) saveNow();
 });

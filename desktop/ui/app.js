@@ -333,6 +333,13 @@
     box.append(el('span', `dot ${t.status}${t.idle ? ' idle' : ''}`));
     const via = t.via === 'away' ? ' (away)' : t.via === 'lan' ? ' (LAN address)' : '';
     box.append(el('span', 'title-text', `${t.label}${via}`));
+    if (t.zoom && t.zoom !== 1) {
+      const chip = el('button', 'zoom-chip', `${Math.round(t.zoom * 100)}%`);
+      chip.type = 'button';
+      chip.title = 'This page is scaled to fit its pane. Click to fit it again (Ctrl+0).';
+      chip.addEventListener('click', () => window.nc.zoomTab({ key: t.key, op: 'fit' }));
+      box.append(chip);
+    }
   }
 
   function renderControls() {
@@ -427,6 +434,30 @@
       stack.append(el('span', 'strip-title', tabText(pane.label)));
     }
     s.append(stack);
+    const zoom = el('div', 'zoom');
+    const zm = el('button', '', '−');
+    zm.type = 'button';
+    zm.title = 'Smaller (Ctrl+minus)';
+    zm.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      window.nc.zoomTab({ key: pane.key, op: 'out' });
+    });
+    const zp = el('button', '', '+');
+    zp.type = 'button';
+    zp.title = 'Bigger (Ctrl+plus)';
+    zp.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      window.nc.zoomTab({ key: pane.key, op: 'in' });
+    });
+    const zf = el('button', `zoom-pct${pane.zoomSet ? ' set' : ''}`, `${Math.round(pane.zoom * 100)}%`);
+    zf.type = 'button';
+    zf.title = pane.zoomSet ? 'Fit the pane again (Ctrl+0)' : 'Scaled to fit the pane. Click to keep it as it is.';
+    zf.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      window.nc.zoomTab({ key: pane.key, op: 'fit' });
+    });
+    zoom.append(zm, zf, zp);
+    s.append(zoom);
     const alone = el('button', '', 'Alone');
     alone.type = 'button';
     alone.title = 'Show this page by itself';
@@ -473,7 +504,7 @@
   }
 
   function sigOf() {
-    return JSON.stringify([lay.view, lay.overlay, Boolean(drag), lay.dividers.length, lay.focus, lay.strips, lay.panes.map((p) => [p.slot, p.status, p.key, p.label, p.error && p.error.message, p.stack.map((x) => `${x.key}:${x.selected}`)])]);
+    return JSON.stringify([lay.view, lay.overlay, Boolean(drag), lay.dividers.length, lay.focus, lay.strips, lay.panes.map((p) => [p.slot, p.status, p.key, p.label, p.error && p.error.message, p.zoom, p.zoomSet, p.stack.map((x) => `${x.key}:${x.selected}`)])]);
   }
 
   function positionPanes() {

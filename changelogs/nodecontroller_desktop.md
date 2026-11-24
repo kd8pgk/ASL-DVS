@@ -1,6 +1,36 @@
 # Node Controller Desktop changelog
 
-Current version: `0.9.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.0 (2026-11-24)
+
+After a crash the app starts clean.
+
+- **A crash resets what was open.** The app notes when it starts and clears the note when it quits normally. If the note is still there at the next start, the last run did not exit cleanly (it crashed, was killed or the machine lost power), so the open pages, the slots, the view and the sizes are **not** restored: it starts with nothing open, so a page that was misbehaving cannot take it down again straight away. A message in the sidebar says so. Nodes, saved splits, trusted certificates and remembered schemes are kept.
+- **After a normal exit nothing changes:** everything comes back as it was, as before.
+- **Closing from the terminal counts as a normal exit.** Ctrl+C, the terminal closing and a plain `kill` all quit cleanly, so they do not trigger the reset.
+- **One copy at a time.** Starting a second copy now brings the first one to the front and the second quits, so two copies cannot overwrite each other's saved layout or be mistaken for a crash.
+- **diagnostics.log** records "the last run did not exit cleanly" when the reset happens.
+- **Tests.** The marker (first run, clean exit, left behind, ending twice, an unwritable folder) and, in the real window: a second copy handing over, the app killed hard with six pages open, then the restart with nothing open, the message, nodes and saved splits kept, a saved split still opening, and a clean exit restoring everything.
+
+## 0.10.0 (2026-11-24)
+
+Pages scale to fit their pane.
+
+- **Scaled to fit.** In a small pane (the two top panes and the lower third of the three page layout, or each pane of two pages) the page is no longer cut off: it is laid out as if the window were bigger and drawn smaller, so more of it shows. The scale is the pane's size against 800 by 500 (never above 100% and never below 50%). At 1280 pixels wide, a one page view stays at 100%; the top panes of three pages come out at about 64%, and the lower third at about 65%. It follows the divider and the window size.
+- **Your own size.** In a pane's strip, **−** and **+** change the size of that page by a tenth (40% to 160%), and the percentage between them shows it. A size you set is kept for that page (and saved with the layout) until you click the percentage, or press Ctrl+0, to fit the pane again. Ctrl+plus and Ctrl+minus do the same from the keyboard for the focused page, in a single page view too. In the title bar a small percentage appears when the focused page is not at 100%; clicking it fits the pane again.
+- **Each pane has its own.** Chromium ties page zoom to the host name, so two panes showing the same node would have shared one zoom; the scaling here is done on each pane separately, so the Left, Right and Lower pages can each have their own size. Clicks and typing land where they should in a scaled pane (tested).
+- **Tests.** The scaling rules (the sizes, the limits, steps, Fit, saving and restoring, closing a page) and, in the real window, the size each page actually sees in the three page layout, a click on a button in a scaled pane, the + and − buttons, the percentage, the keyboard and the title bar chip.
+
+## 0.9.1 (2026-11-24)
+
+Crashes leave a trace and no longer take the app down. Added after a report that the app closed after logging in to Node Talker and Node Monitor on a real node (cause not yet known).
+
+- **A page that crashes is shown as stopped, not lost.** If a page's process dies, its pane says "The page stopped working (reason)" with **Try again**, its sidebar entry is marked failed, and nothing else in the app is affected.
+- **If the window's own page crashes** it is reloaded.
+- **Everything that dies is written down.** A page process, a helper process (graphics, audio, network), an error in the main process, a window closing and the app quitting each add a line to `diagnostics.log` in the data folder (`~/.config/Node Controller/`) and to the terminal's error output. The file keeps its last 200 KB. Nothing is sent anywhere.
+- **Errors in the main process no longer end the app silently.** They are written down and the app keeps running.
+- **Tests.** In the real window a page's process is killed on purpose: the app stays up, the pane and entry say so, the line is in `diagnostics.log`, and Try again brings the page back.
 
 ## 0.9.0 (2026-11-24)
 

@@ -135,6 +135,10 @@
   it holds no node tool and no Python. Linux
   first (AppImage); Windows later, after the owner approves the look. It is not
   on the stable/testing channels.
+- **Crash reset.** The app writes `running.json` in its data folder at start and
+  removes it on a normal quit; if it is there at the next start the last run
+  did not exit cleanly and the layout is not restored (nodes, saved splits,
+  certificates and learned schemes are kept). One copy runs at a time.
 - **Schemes.** The tools on one node do not all use the same scheme (Node
   Controller is plain http; Node Talker, SysMon, Node Monitor and others are
   https with a self-signed certificate each), so each page has its own scheme,
@@ -176,7 +180,10 @@
   44helper, Install Monitor and Terminal Monitor are always single pages.
   Pages that are not on screen are idle (slowed and muted), except Node
   Talker, which is never idle; pages on screen never are. Last Heard opens as
-  a new single page.
+  a new single page. A page in a small pane is scaled to fit it (the pane's
+  size against 800 by 500, 50% to 100%), per pane, with its own size set by −,
+  + and Ctrl+0 (device emulation, not page zoom, which Chromium shares across
+  a host name).
 - **Title and look.** The window, its page and its logo say "Node Controller
   Desktop" (see Naming above); node page names stay as the nodes serve them.
   The shell uses the shared Node Control look: the Readex Pro files in

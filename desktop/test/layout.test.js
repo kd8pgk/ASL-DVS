@@ -367,3 +367,64 @@ test('restore of junk gives an empty layout', () => {
   assert.equal(s.view, 'single');
   assert.equal(s.single, 'a:controller');
 });
+
+test('auto zoom scales a page down to fit a small pane, never up, never below the floor', () => {
+  assert.equal(L.autoZoom(1024, 715), 1);
+  assert.equal(L.autoZoom(800, 500), 1);
+  assert.equal(L.autoZoom(509, 325), 0.64);
+  assert.equal(L.autoZoom(1024, 325), 0.65);
+  assert.equal(L.autoZoom(509, 687), 0.64);
+  assert.equal(L.autoZoom(300, 200), 0.5);
+  assert.equal(L.autoZoom(0, 100), 1);
+  assert.equal(L.autoZoom(NaN, 100), 1);
+  assert.equal(L.AUTO_MIN, 0.5);
+});
+
+test('the three page layout at 1280 wide scales the top panes and the lower pane to fit', () => {
+  const g = L.grid(1280, 800);
+  const st = L.putInSlot(L.putInSlot(L.putInSlot(many(), 'a:controller', 'left'), 'a:talker', 'right'), 'a:nodemon', 'lower');
+  const r = L.rects(st, g.area);
+  const sizes = r.panes.map((p) => L.viewRect(st, p)).map((v) => L.autoZoom(v.w, v.h));
+  assert.ok(sizes.every((z) => z < 1 && z >= 0.5), JSON.stringify(sizes));
+  const one = L.showAlone(st, 'a:controller');
+  const v = L.rects(one, g.area).panes[0];
+  assert.equal(L.zoomFor(one, 'a:controller', v.w, v.h), 1);
+});
+
+test('a manual zoom wins over the automatic one, steps by a tenth within limits, and Fit clears it', () => {
+  let s = open(open(L.emptyState(), 'a', 'controller'), 'a', 'talker');
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), 0.64);
+  s = L.stepZoom(s, 'a:talker', 1, 509, 325);
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), 0.74);
+  assert.equal(L.zoomFor(s, 'a:controller', 509, 325), 0.64);
+  s = L.stepZoom(s, 'a:talker', -1, 509, 325);
+  s = L.stepZoom(s, 'a:talker', -1, 509, 325);
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), 0.54);
+  for (let i = 0; i < 20; i += 1) s = L.stepZoom(s, 'a:talker', -1, 509, 325);
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), L.ZOOM_MIN);
+  for (let i = 0; i < 40; i += 1) s = L.stepZoom(s, 'a:talker', 1, 509, 325);
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), L.ZOOM_MAX);
+  s = L.fitZoom(s, 'a:talker');
+  assert.equal(L.zoomFor(s, 'a:talker', 509, 325), 0.64);
+  assert.equal(L.fitZoom(s, 'a:talker'), s);
+  assert.equal(L.stepZoom(s, 'nope', 1, 1, 1), s);
+  assert.equal(L.stepZoom(s, 'a:talker', 2, 1, 1), s);
+  assert.equal(L.setZoom(s, 'a:talker', 'x'), s);
+  assert.equal(L.setZoom(s, 'a:talker', 99).zooms['a:talker'], L.ZOOM_MAX);
+});
+
+test('zooms are kept for open pages only, saved and restored, and Last Heard is not saved', () => {
+  let s = L.setZoom(L.setZoom(example(), 'a:controller', 0.8), 'a:talker', 0.55);
+  s = L.setZoom(L.openLastHeard(s, 'a', 'https://lh.example/x'), 'lh', 0.7);
+  const saved = L.serialize(s);
+  assert.deepEqual(saved.zooms, { 'a:controller': 0.8, 'a:talker': 0.55 });
+  const back = L.restore(JSON.parse(JSON.stringify(saved)), NODES, PAGES);
+  assert.deepEqual(back.zooms, { 'a:controller': 0.8, 'a:talker': 0.55 });
+  const closed = L.closeTab(s, 'a:controller');
+  assert.equal(closed.zooms['a:controller'], undefined);
+  assert.equal(closed.zooms['a:talker'], 0.55);
+  const odd = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], zooms: { 'a:controller': 'x', 'a:gone': 0.6, 'a:talker': 0.5 } }, NODES, PAGES);
+  assert.deepEqual(odd.zooms, {});
+  const wide = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], zooms: { 'a:controller': 9 } }, NODES, PAGES);
+  assert.equal(wide.zooms['a:controller'], L.ZOOM_MAX);
+});

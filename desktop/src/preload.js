@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('nc', {
   addNext: (arg) => ipcRenderer.invoke('tabs:next', arg),
   showAlone: (arg) => ipcRenderer.invoke('tabs:alone', arg),
   unslot: (arg) => ipcRenderer.invoke('tabs:unslot', arg),
+  zoomTab: (arg) => ipcRenderer.invoke('tabs:zoom', arg),
   setView: (view) => ipcRenderer.invoke('tabs:view', view),
   saveSplit: (name) => ipcRenderer.invoke('splits:save', name),
   applySplit: (id) => ipcRenderer.invoke('splits:apply', id),

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const L = require('../src/layout');
 
@@ -269,6 +269,22 @@ async function main() {
   assert.deepEqual(probe, { geo: 'denied', microphone: 'granted', camera: 'denied', notifications: 'denied', midi: 'denied', 'clipboard-read': 'denied', audio: 'NotFoundError', ext: 'blocked', sock: 'blocked' });
   assert.deepEqual(ext.hits, []);
 
+  await app.evaluate(({ BrowserWindow }, part) => {
+    const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes(part));
+    v.webContents.forcefullyCrashRenderer();
+  }, `127.0.0.1:${P.controller}/`);
+  await win.waitForSelector('.pane-msg h2');
+  assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Controller/);
+  assert.match(await win.textContent('.pane-msg p'), /stopped working/);
+  assert.ok((await classes(page(0))).includes('failed'));
+  const diag = path.join(data, 'diagnostics.log');
+  await waitFor(() => fs.existsSync(diag) && /page process gone: .*:controller reason=/.test(fs.readFileSync(diag, 'utf8')), 'the crash is written to diagnostics.log');
+  assert.equal(await win.title(), 'Node Controller Desktop');
+  await win.click('.pane-msg button:has-text("Try again")');
+  await showing(U('controller'));
+  await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'the page is back after a crash');
+  assert.ok(!(await classes(page(0))).includes('failed'));
+
   await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${LHU}', 'asl_dvs_lh') && 1`);
   await showing(LHU);
   assert.equal(await view(), 'single');
@@ -345,6 +361,53 @@ async function main() {
   assert.equal(await win.locator('.pane-strip').count(), 3);
   assert.equal(await win.locator('.divider.gapline').count(), 1);
   assert.equal(await win.locator('.divider.cols').count(), 1);
+  {
+    const vsz = async (u) => JSON.parse(await inPage(app, u.replace('http://', '').replace(/\/$/, '') + '/', 'JSON.stringify([innerWidth, innerHeight, Math.round(devicePixelRatio * 100) / 100])'));
+    const checks = [['sysmon', ex.views[0]], ['talker', ex.views[1]], ['nodemon', ex.views[2]]];
+    for (const [n, v] of checks) {
+      const z = L.autoZoom(v.w, v.h);
+      assert.ok(z < 1 && z >= 0.5, `${n} is scaled down to fit (${z})`);
+      const [iw, ih] = await vsz(U(n));
+      assert.ok(Math.abs(iw - Math.round(v.w / z)) <= 1 && Math.abs(ih - Math.round(v.h / z)) <= 1, `${n} sees ${iw}x${ih}, expected about ${Math.round(v.w / z)}x${Math.round(v.h / z)}`);
+    }
+    assert.deepEqual(await win.locator('.pane-strip .zoom-pct').allTextContents(), checks.map(([, v]) => `${Math.round(L.autoZoom(v.w, v.h) * 100)}%`));
+    assert.equal(await win.locator('#title .zoom-chip').count(), 1);
+
+    await inPage(app, `127.0.0.1:${P.sysmon}/`, `document.body.insertAdjacentHTML('beforeend', '<button id="cb" style="position:fixed;left:120px;top:90px;width:90px;height:40px" onclick="document.title=\\'clicked\\'">x</button>') || 1`);
+    const zS = L.autoZoom(ex.views[0].w, ex.views[0].h);
+    const box = JSON.parse(await inPage(app, `127.0.0.1:${P.sysmon}/`, 'JSON.stringify(document.getElementById("cb").getBoundingClientRect())'));
+    await app.evaluate(({ BrowserWindow }, a) => {
+      const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes(a.part));
+      const x = Math.round(a.x);
+      const y = Math.round(a.y);
+      v.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      v.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      v.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    }, { part: `127.0.0.1:${P.sysmon}/`, x: (box.left + box.width / 2) * zS, y: (box.top + box.height / 2) * zS });
+    await waitFor(async () => (await inPage(app, `127.0.0.1:${P.sysmon}/`, 'document.title')) === 'clicked', 'a click lands on the right spot in a scaled pane');
+
+    const pct = () => win.locator('.pane-strip').nth(0).locator('.zoom-pct');
+    const before = await pct().textContent();
+    await win.locator('.pane-strip').nth(0).locator('.zoom button', { hasText: '+' }).click();
+    await waitFor(async () => (await pct()).textContent().then((t) => t !== before), 'the plus button makes the pane bigger');
+    assert.ok(Number.parseInt(await pct().textContent(), 10) > Number.parseInt(before, 10));
+    assert.ok((await classes(pct())).includes('set'));
+    const [iw2] = await vsz(U('sysmon'));
+    assert.ok(iw2 < Math.round(ex.views[0].w / zS), 'the page now sees a narrower window');
+    await pct().click();
+    await waitFor(async () => (await pct().textContent()) === before, 'clicking the percentage fits the pane again');
+    assert.ok(!(await classes(pct())).includes('set'));
+
+    await win.locator('.pane-strip').nth(0).click();
+    await chord(app, '-');
+    await waitFor(async () => Number.parseInt(await pct().textContent(), 10) < Number.parseInt(before, 10), 'Ctrl+minus makes it smaller');
+    await chord(app, '0');
+    await waitFor(async () => (await pct().textContent()) === before, 'Ctrl+0 fits it again');
+    await chord(app, '=');
+    await waitFor(async () => Number.parseInt(await pct().textContent(), 10) > Number.parseInt(before, 10), 'Ctrl+plus makes it bigger');
+    await win.locator('#title .zoom-chip').click();
+    await waitFor(async () => (await pct().textContent()) === before, 'the chip in the title bar fits it again');
+  }
 
   await page(4).click({ button: 'right' });
   assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Show alone', 'Put in Left slot', 'Put in Right slot', 'Put in Lower slot']);
@@ -451,10 +514,12 @@ async function main() {
   assert.equal(await view(), 'slots');
 
   await app.close();
+  assert.equal(fs.existsSync(path.join(data, 'running.json')), false, 'a clean exit removes the marker');
   app = await launch();
   win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
   await waitFor(async () => (await visible()).length === 3, 'restored slots');
+  assert.equal(await win.locator('#notice:not([hidden])').count(), 0);
   assert.equal(await view(), 'slots');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('Node Recorder'), Lb('WifiMon')]);
@@ -470,6 +535,56 @@ async function main() {
   await win.click('.split-name');
   await waitFor(async () => (await visible()).length === 3, 'saved split opens its pages');
   assert.equal(await openCount(), 6);
+
+  {
+    const running = path.join(data, 'running.json');
+    const nodesBefore = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0];
+    const second = spawn(require('electron'), [root, '--no-sandbox'], { env: { ...process.env, NODECONTROLLER_DATA: data }, stdio: 'ignore' });
+    const code = await new Promise((res) => {
+      second.on('exit', res);
+      setTimeout(() => {
+        second.kill();
+        res('timeout');
+      }, 25000);
+    });
+    assert.equal(code, 0, 'a second copy hands over and quits');
+    assert.equal(await win.title(), 'Node Controller Desktop');
+    assert.ok(fs.existsSync(running), 'the first copy keeps its marker');
+    assert.equal(await openCount(), 6);
+
+    const pid = app.process().pid;
+    app.process().kill('SIGKILL');
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the app is gone');
+    assert.ok(fs.existsSync(running), 'a hard kill leaves the marker');
+    app = await launch();
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await win.waitForFunction(() => /closed unexpectedly last time/.test(document.getElementById('notice').textContent));
+    assert.equal(await openCount(), 0);
+    assert.equal((await views(app)).length, 0);
+    assert.equal(await win.locator('.slot .entry').count(), 0);
+    assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);
+    assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0], nodesBefore);
+    assert.match(fs.readFileSync(path.join(data, 'diagnostics.log'), 'utf8'), /did not exit cleanly/);
+    await win.click('.split-name');
+    await waitFor(async () => (await visible()).length === 3, 'a saved split still opens after the reset');
+    assert.equal(await openCount(), 6);
+    await app.close();
+    assert.equal(fs.existsSync(running), false);
+    app = await launch();
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await waitFor(async () => (await visible()).length === 3, 'after a clean exit the pages come back as before');
+    assert.equal(await win.locator('#notice:not([hidden])').count(), 0);
+  }
 
   await chord(app, '1');
   await waitFor(async () => (await view()) === 'single', 'single');
