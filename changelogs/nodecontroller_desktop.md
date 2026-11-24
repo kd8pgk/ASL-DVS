@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.8`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.9`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.9 (2026-11-24)
+
+Faster start.
+
+- **Lighter compression.** The AppImage was packed at maximum compression (xz), so every start unpacked about 97 MB again; on a slow disk or CPU the window stayed black for several seconds. It is now packed at normal compression: about 123 MB to download (+26%), and unpacking the whole image takes 1.5 s instead of 10.5 s on the build machine, about seven times faster.
+- **Electron stays on 44.x.** `CLAUDE.md` now says so: Electron 45.4.1 crashed when SysMon opened on a Debian machine (0.11.0 to 0.11.5), and 44.11.5 does not (0.11.6).
 
 ## 0.11.8 (2026-11-24)
 

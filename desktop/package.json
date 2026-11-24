@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
   "productName": "Node Controller Desktop",
-  "version": "0.11.8",
+  "version": "0.11.9",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",
@@ -59,7 +59,7 @@
       "grantFileProtocolExtraPrivileges": true
     },
     "publish": null,
-    "compression": "maximum"
+    "compression": "normal"
   },
   "desktopName": "nodecontroller.desktop",
   "repository": {

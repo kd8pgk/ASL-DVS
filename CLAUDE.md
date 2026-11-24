@@ -152,6 +152,12 @@
   by `ci/check_repo.py`), like the scripts.
 - **No runtime libraries.** `package.json` has no `dependencies`; only
   `electron`, `electron-builder` and `@electron/fuses` as dev dependencies.
+- **Electron stays on 44.x.** Electron 45.4.1 crashed the whole app (a
+  segfault inside Electron) when SysMon opened on a Debian machine; 44.11.5
+  does not (0.11.6). Move to 45 or later only after SysMon, Node Talker and
+  Node Monitor open on a Debian test machine with that version.
+- **Packed at normal compression** (since 0.11.9): about 123 MB, but it
+  starts about seven times faster than at maximum compression.
 - **The lockdown is the contract.** Pages get only the audio-only microphone,
   speaker choice and clipboard writes, and only from their node; they may
   request only their own node; Last Heard is the one tile that may use the
