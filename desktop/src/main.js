@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog } = require('electron');
-const { PAGES, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget } = require('./node');
+const { PAGES, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
@@ -234,6 +234,16 @@ function externalOpen(url) {
   }
 }
 
+function openLink(url) {
+  const m = matchPage(url, nodes);
+  if (!m) {
+    externalOpen(url);
+    return;
+  }
+  update(L.openTab(ls, m.nodeId, m.pageId));
+  focusView();
+}
+
 function closeRt(key) {
   const e = rt.get(key);
   rt.delete(key);
@@ -360,6 +370,7 @@ async function ensureView(key) {
       nodeIntegration: false,
       webviewTag: false,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   });
   e.view = view;
@@ -380,14 +391,14 @@ async function ensureView(key) {
     if (input && input.type === 'mouseDown') focused();
   });
   wc.setWindowOpenHandler(({ url, frameName }) => {
-    if (page.id === 'talker' && frameName === 'nt_lh') openLastHeard(node.id, url);
-    else externalOpen(url);
+    if (P.isLastHeardWindow(page.id, frameName)) openLastHeard(node.id, url);
+    else openLink(url);
     return { action: 'deny' };
   });
   wc.on('will-navigate', (ev, url) => {
     if (!sameOrigin(url, target)) {
       ev.preventDefault();
-      externalOpen(url);
+      openLink(url);
     }
   });
   wc.on('certificate-error', (event, url, error, certificate, callback) => {

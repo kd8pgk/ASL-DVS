@@ -146,3 +146,13 @@ test('the Last Heard tile may load from the public web but not from the private 
     assert.equal(P.allowLastHeardRequest(u, nodeHosts), false, u);
   }
 });
+
+test('each page has its own Last Heard window name', () => {
+  assert.equal(P.isLastHeardWindow('talker', 'nt_lh'), true);
+  assert.equal(P.isLastHeardWindow('controller', 'asl_dvs_lh'), true);
+  assert.equal(P.isLastHeardWindow('controller', 'nt_lh'), false);
+  assert.equal(P.isLastHeardWindow('talker', 'asl_dvs_lh'), false);
+  assert.equal(P.isLastHeardWindow('talker', ''), false);
+  assert.equal(P.isLastHeardWindow('constructor', 'nt_lh'), false);
+  assert.equal(P.isLastHeardWindow('__proto__', 'nt_lh'), false);
+});

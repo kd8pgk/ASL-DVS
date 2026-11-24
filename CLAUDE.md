@@ -128,6 +128,45 @@
   `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z.apk`
   (check the release exists first).
 
+## Desktop app (`desktop/`)
+
+- **Node Controller Desktop** is an Electron client in `desktop/`, written in
+  JavaScript (not Python). It only shows the pages that nodes serve (Node
+  Controller and Node Talker); it holds no node tool and no Python. Linux
+  first (AppImage); Windows later, after the owner approves the look. It is not
+  on the stable/testing channels.
+- **Version** is `version` in `desktop/package.json` (`X.Y.Z`, no cosmetic
+  fourth part). Any change under `desktop/` raises it and adds an entry at the
+  top of `changelogs/nodecontroller_desktop.md` with its "Current version"
+  line updated (`ci/check_repo.py` checks this).
+- **No comments** in the `.js`, `.css` or `.html` files of `desktop/` (checked
+  by `ci/check_repo.py`), like the scripts.
+- **No runtime libraries.** `package.json` has no `dependencies`; only
+  `electron`, `electron-builder` and `@electron/fuses` as dev dependencies.
+- **The lockdown is the contract.** Pages get only the audio-only microphone,
+  speaker choice and clipboard writes, and only from their node; they may
+  request only their own node; Last Heard is the one tile that may use the
+  public internet, never private addresses unless a saved node. No devtools,
+  remote debugging, updater, telemetry or crash reporter; the Chromium sandbox
+  stays on; the packaged app refuses debugging switches. `desktop/test/policy.test.js`
+  and `desktop/test/package.js` hold this: a change that weakens it fails them,
+  and a change that strengthens it updates them in the same pull request.
+- **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
+  12. Layouts are 1 page, 2 pages (6 + 6) and 3 pages (two over a full-width
+  third, equal rows). Last Heard fills left, then right, then down: beside a
+  single page, below two pages, in place of the bottom pane of three. Never
+  more than three panes (no quarters).
+- **Window titles** say "Node Controller" (see Naming above); node page names
+  stay as the nodes serve them.
+- **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after
+  `npm run dist`, `xvfb-run -a npm run check-package` in `desktop/`, plus
+  `python3 ci/check_repo.py --base origin/main`. The `desktop` workflow builds
+  and tests every change and, on `main`, publishes the AppImage as a
+  pre-release `desktop-vX.Y.Z` (unsigned).
+- **After a desktop build is merged, post its AppImage link** (check the
+  release exists first):
+  `https://github.com/kd8pgk/ASL-DVS/releases/download/desktop-vX.Y.Z/NodeController-X.Y.Z.AppImage`
+
 ## Workflow
 
 - After a build is pushed, open the pull request and merge it, without

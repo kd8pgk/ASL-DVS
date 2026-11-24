@@ -99,3 +99,22 @@ test('sameOrigin compares scheme, host and port', () => {
   assert.equal(N.sameOrigin('https://other.example/', t), false);
   assert.equal(N.sameOrigin('not a url', t), false);
 });
+
+test('matchPage finds the hardwired page a link points at, on any of the node addresses', () => {
+  const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true, ports: { controller: 8989, talker: 8993 }, lanIp: '192.168.1.5', awayHost: 'node.example.com', pin: 'ab'.repeat(32) }).node;
+  const b = N.normalizeNode({ id: 'b', host: '10.1.1.1' }).node;
+  const nodes = [a, b];
+  assert.deepEqual(N.matchPage('https://pi.local:8993/', nodes), { nodeId: 'a', pageId: 'talker' });
+  assert.deepEqual(N.matchPage('https://pi.local:8989/x?y=1', nodes), { nodeId: 'a', pageId: 'controller' });
+  assert.deepEqual(N.matchPage('https://192.168.1.5:8993/', nodes), { nodeId: 'a', pageId: 'talker' });
+  assert.deepEqual(N.matchPage('https://node.example.com/', nodes), { nodeId: 'a', pageId: 'talker' });
+  assert.deepEqual(N.matchPage('http://10.1.1.1:8989/', nodes), { nodeId: 'b', pageId: 'controller' });
+});
+
+test('matchPage ignores other tools, other schemes and other hosts', () => {
+  const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true }).node;
+  for (const u of ['https://pi.local:9999/', 'https://pi.local:8990/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
+    assert.equal(N.matchPage(u, [a]), null, u);
+  }
+  assert.equal(N.matchPage('https://node.example.com/', [a]), null);
+});

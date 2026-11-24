@@ -1,6 +1,16 @@
 # Node Controller Desktop changelog
 
-Current version: `0.3.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.4.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.4.0 (2026-11-24)
+
+Fixes from reading the pages' own code: hidden pages keep running, Node Controller's Last Heard works, and links between a node's pages stay in the app.
+
+- **Hidden pages are not slowed down.** Chromium normally slows a page you cannot see. Node pages are now exempt, so Node Talker's audio and timers keep their pace in a tab behind another. Last Heard is not exempt. Not yet heard on a real node.
+- **Node Controller's Last Heard.** Its LH button (`asl_dvs_lh`) now opens the Last Heard tile like Node Talker's (`nt_lh`), with the same rules. Placement is left to right, then down: beside a single page, below two pages, in place of the bottom pane of three. There is never a fourth pane.
+- **Links between the two pages stay in the app.** A link or window from one page to the other page of a node (for example Node Controller's Listen link to Node Talker), on the node's home, LAN or away address, now opens or focuses that tab instead of the system browser, so the login is shared. Links to anything else (other tools, other hosts) still open in the system browser. The path in such a link is dropped: the page opens at its start.
+- **Tests.** Link matching, the Last Heard window names, the placement rule (one page, two pages, three pages, four tabs) and, in the smoke test against the real window, Last Heard from Node Controller on the right of a single page, Controller linking to Talker, and hidden pages not being slowed.
+- **Repo.** `CLAUDE.md` has a section for `desktop/`. `ci/check_repo.py` fails a comment in the `.js`, `.css` or `.html` files of `desktop/` (with tests).
 
 ## 0.3.0 (2026-11-24)
 
