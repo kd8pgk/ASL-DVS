@@ -87,6 +87,7 @@ function allowRequest(url, hosts) {
   }
   if (u.protocol === 'data:' || u.protocol === 'blob:') return true;
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return false;
+  if (u.pathname.toLowerCase() === '/favicon.ico') return false;
   return hosts.includes(u.hostname.replace(/^\[|\]$/g, '').toLowerCase());
 }
 

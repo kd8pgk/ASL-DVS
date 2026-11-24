@@ -1,6 +1,12 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.4`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.5`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.5 (2026-11-24)
+
+Pages no longer fetch the node's default icon.
+
+- **No favicon requests.** A page that declares no icon makes the browser engine ask the node for `/favicon.ico`. On one Debian machine, Electron crashed right after SysMon loaded, at exactly that step (the log's last line was the icon update). The app never shows page icons, so requests for `/favicon.ico` are now refused before they connect, like any other request outside the allow-list. The policy test lists the new refusal.
 
 ## 0.11.4 (2026-11-24)
 

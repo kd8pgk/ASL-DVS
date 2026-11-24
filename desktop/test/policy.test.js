@@ -43,7 +43,7 @@ test('requests go only to the node, and data or blob', () => {
   for (const u of ['https://pi.local:8993/x', 'http://192.168.1.5/y', 'wss://node.example.com/ws', 'ws://pi.local:8993/ws', 'data:text/plain,hi', 'blob:https://pi.local/abc']) {
     assert.equal(P.allowRequest(u, hosts), true, u);
   }
-  for (const u of ['https://example.org/', 'http://pi.local.evil.example/', 'file:///etc/passwd', 'ftp://pi.local/', 'chrome://gpu', 'devtools://devtools/', 'junk', 'https://pi.local@evil.example/']) {
+  for (const u of ['https://example.org/', 'http://pi.local.evil.example/', 'file:///etc/passwd', 'ftp://pi.local/', 'chrome://gpu', 'devtools://devtools/', 'junk', 'https://pi.local@evil.example/', 'https://pi.local:9999/favicon.ico', 'http://pi.local/FAVICON.ICO']) {
     assert.equal(P.allowRequest(u, hosts), false, u);
   }
 });
