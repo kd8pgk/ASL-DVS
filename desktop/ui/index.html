@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Node Controller</title>
+<title>Node Controller Desktop</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <aside id="side">
-  <div class="brand">Node Controller</div>
+  <div class="brand">
+    <div class="logo">Node Controller Desktop</div>
+    <div class="logo-sub" id="ver"></div>
+  </div>
   <div class="bar">
     <button id="add" type="button" class="primary">Add node</button>
     <button id="import" type="button">Import</button>
@@ -33,7 +36,6 @@
       <ul id="splits"></ul>
     </div>
   </div>
-  <div id="ver" class="ver"></div>
 </aside>
 <main id="main">
   <header id="head">

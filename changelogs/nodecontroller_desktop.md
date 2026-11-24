@@ -1,6 +1,15 @@
 # Node Controller Desktop changelog
 
-Current version: `0.7.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.8.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.8.0 (2026-11-24)
+
+The shared Node Control look, and the title "Node Controller Desktop".
+
+- **The shared look.** The window now uses the same style sheet as the node tools: the embedded Readex Pro font (the same weights 400 and 700 the tools embed, as two files in the app), the same colours, text sizes and mono font, the dark surface and border colours, the gradient header with the amber underline and the glowing amber logo, uppercase bold tabs and buttons (the focused tab glows amber), amber for the selected page and the focused slot, green for the main action and red for dangers, and dim text `#aab8cc`. The light theme is gone: the tools have none.
+- **Title.** The window, the page and the logo say **Node Controller Desktop**; the logo's second line shows the version. The sidebar's top block is as tall as the title bar, so the amber line runs across the whole window. The launcher name in the package is Node Controller Desktop too. Your nodes and layout stay where they were (`~/.config/Node Controller`).
+- **Kept to the look by a check.** `ci/check_repo.py` fails if `desktop/ui/style.css` loses a line of the shared look (the font-face, the `--sans` and `--mono` variables, the text sizes, the amber pair and the mono rule) as it does for the tools, with a test; the window's policy allows the two font files from its own folder and nothing else.
+- Nothing else changes: the same pages, slots, splits and rules.
 
 ## 0.7.1 (2026-11-24)
 

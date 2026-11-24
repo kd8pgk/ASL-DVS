@@ -162,3 +162,26 @@ test('only Node Talker is never idle', () => {
   assert.equal(P.neverIdle('talker'), true);
   for (const id of ['controller', 'sysmon', 'nodemon', 'lasthard', '', 'constructor', '__proto__']) assert.equal(P.neverIdle(id), false, id);
 });
+
+test('the window page and the stylesheet carry the shared Node Control look, from local files only', () => {
+  const ui = path.join(__dirname, '..', 'ui');
+  const css = fs.readFileSync(path.join(ui, 'style.css'), 'utf8');
+  const html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8');
+  for (const line of [
+    '@font-face{font-family:"Readex Pro";',
+    '--sans:"Readex Pro",Arial,Helvetica,sans-serif;',
+    '--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;',
+    '--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;',
+    '--amber:#ffd040;--amber-dim:#6b4800;',
+    'textarea,pre,code{font-family:var(--mono)!important}',
+  ]) assert.ok(css.includes(line), line);
+  assert.match(html, /font-src 'self'/);
+  assert.doesNotMatch(css, /url\((?!fonts\/)/);
+  assert.match(html, /<title>Node Controller Desktop<\/title>/);
+  assert.match(html, /class="logo">Node Controller Desktop</);
+  for (const w of ['400', '700']) {
+    const data = fs.readFileSync(path.join(ui, 'fonts', `readex-pro-${w}.woff2`));
+    assert.equal(data.subarray(0, 4).toString('latin1'), 'wOF2', w);
+    assert.ok(css.includes(`fonts/readex-pro-${w}.woff2`), w);
+  }
+});
