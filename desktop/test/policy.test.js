@@ -117,3 +117,32 @@ test('ordinary arguments are not flagged', () => {
   assert.deepEqual(P.unsafeSwitches([]), []);
   assert.deepEqual(P.unsafeSwitches(['--no-sandbox', '--disable-gpu', '/home/u/file.json', '--inspector-not-a-switch']), []);
 });
+
+test('private, loopback and local names are recognised', () => {
+  for (const h of ['localhost', 'a.localhost', 'pi.local', 'router.lan', 'x.internal', 'nas', '10.1.2.3', '127.0.0.1', '172.16.0.1', '172.31.255.1', '192.168.1.5', '169.254.1.1', '100.64.0.1', '0.0.0.0', '224.0.0.1', '::1', '::', 'fe80::1', 'fd00::1', '::ffff:192.168.1.5', '']) {
+    assert.equal(P.isPrivateHost(h), true, h);
+  }
+  for (const h of ['example.com', 'www.allstarlink.org', '8.8.8.8', '44.1.2.3', '172.32.0.1', '172.15.0.1', '100.63.0.1', '2606:4700::1111', '::ffff:8.8.8.8']) {
+    assert.equal(P.isPrivateHost(h), false, h);
+  }
+});
+
+test('a Last Heard address must be a plain public web address, or a saved node', () => {
+  const nodeHosts = ['192.168.1.50', 'pi.local'];
+  for (const u of ['https://stats.example.org/lh', 'http://www.example.com/x?y=1', 'http://192.168.1.50/supermon', 'http://pi.local/lh']) {
+    assert.equal(P.lastHeardOk(u, nodeHosts), true, u);
+  }
+  for (const u of ['http://192.168.1.51/', 'http://localhost:8080/', 'http://10.0.0.1/', 'file:///etc/passwd', 'javascript:alert(1)', 'ftp://example.com/', 'https://user:pw@example.com/', 'not a url', '', `https://example.com/${'a'.repeat(2100)}`]) {
+    assert.equal(P.lastHeardOk(u, nodeHosts), false, u.slice(0, 40));
+  }
+});
+
+test('the Last Heard tile may load from the public web but not from the private network', () => {
+  const nodeHosts = ['192.168.1.50'];
+  for (const u of ['https://cdn.example.net/app.js', 'wss://live.example.org/s', 'data:text/css,a', 'blob:https://x/y', 'http://192.168.1.50/y']) {
+    assert.equal(P.allowLastHeardRequest(u, nodeHosts), true, u);
+  }
+  for (const u of ['http://192.168.1.99/', 'http://127.0.0.1:9999/', 'ws://localhost/x', 'ftp://example.com/', 'file:///x', 'junk']) {
+    assert.equal(P.allowLastHeardRequest(u, nodeHosts), false, u);
+  }
+});

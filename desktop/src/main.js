@@ -8,8 +8,6 @@ const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
 const P = require('./policy');
 
-const SIDEBAR = 300;
-const HEADER = 48;
 const CONNECTION_FIELDS = ['host', 'https', 'ports', 'pin', 'lanIp', 'lanPin', 'awayHost', 'awayPort', 'awayHttps'];
 
 app.setName('Node Controller');
@@ -60,27 +58,36 @@ const insecure = plainOrigins();
 if (insecure.length) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', insecure.join(','));
 
 const hardened = new WeakSet();
+const partitions = new Map();
+const LH_PARTITION = 'lasthard';
 
 function nodeOfPartition(ses) {
-  const hit = [...partitions].find(([, s]) => s === ses);
+  const hit = [...partitions].find(([, v]) => v === ses);
   return hit ? nodes.find((n) => n.id === hit[0]) : null;
 }
 
-const partitions = new Map();
+function allNodeHosts() {
+  return nodes.flatMap((n) => P.hostsOfNode(n));
+}
 
 function nodeSession(node) {
-  const name = `persist:node-${node.id}`;
-  const ses = session.fromPartition(name);
+  const ses = session.fromPartition(`persist:node-${node.id}`);
   partitions.set(node.id, ses);
-  harden(ses, true);
+  harden(ses, 'node');
   return ses;
 }
 
-function harden(ses, forNode) {
+function lastHeardSession() {
+  const ses = session.fromPartition(LH_PARTITION);
+  harden(ses, 'lh');
+  return ses;
+}
+
+function harden(ses, kind) {
   if (hardened.has(ses)) return;
   hardened.add(ses);
   const hostsFor = () => {
-    const n = forNode ? nodeOfPartition(ses) : null;
+    const n = kind === 'node' ? nodeOfPartition(ses) : null;
     return n ? P.hostsOfNode(n) : [];
   };
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -92,7 +99,10 @@ function harden(ses, forNode) {
   ses.setDevicePermissionHandler(() => false);
   ses.setSpellCheckerEnabled(false);
   ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
-    const ok = forNode ? P.allowRequest(details.url, hostsFor()) : P.allowShellRequest(details.url);
+    let ok;
+    if (kind === 'node') ok = P.allowRequest(details.url, hostsFor());
+    else if (kind === 'lh') ok = P.allowLastHeardRequest(details.url, allNodeHosts());
+    else ok = P.allowShellRequest(details.url);
     callback({ cancel: !ok });
   });
 }
@@ -109,25 +119,36 @@ function fromShell(e) {
   return alive() && e.sender === win.webContents;
 }
 
-function area() {
+function gridNow() {
   const [w, h] = win.getContentSize();
-  return { x: SIDEBAR, y: HEADER, w: Math.max(0, w - SIDEBAR), h: Math.max(0, h - HEADER) };
+  return L.grid(w, h);
+}
+
+function area() {
+  return gridNow().area;
+}
+
+function emitNotice(text, bad) {
+  if (alive()) win.webContents.send('notice', { text, bad: Boolean(bad) });
 }
 
 function labelOf(tab) {
+  if (tab.kind === 'lh') return 'Last Heard';
   const n = nodes.find((x) => x.id === tab.nodeId);
   const p = PAGES.find((x) => x.id === tab.pageId);
   return `${n ? n.name || n.host : '?'} · ${p ? p.label : '?'}`;
 }
 
 function payload() {
-  const r = L.rects(ls, area());
+  const g = gridNow();
+  const r = L.rects(ls, g.area);
   const vis = L.shown(ls);
   return {
+    grid: { sidebar: g.sidebar, header: g.header },
     mode: ls.mode,
     ratio: ls.ratio,
     focus: ls.focus,
-    canSplit: ls.tabs.length >= 2,
+    counts: { cols: ls.tabs.length >= 2, trio: ls.tabs.length >= 3 },
     overlay,
     tabs: ls.tabs.map((t) => {
       const e = rt.get(t.key);
@@ -135,6 +156,7 @@ function payload() {
         key: t.key,
         nodeId: t.nodeId,
         pageId: t.pageId,
+        kind: t.kind || 'page',
         label: labelOf(t),
         shown: vis.indexOf(t.key),
         status: e ? e.status : 'idle',
@@ -146,7 +168,7 @@ function payload() {
       const e = key ? rt.get(key) : null;
       return { rect, key, status: e ? e.status : key ? 'loading' : 'empty', error: e && e.status === 'failed' ? e.error : null };
     }),
-    divider: r.divider,
+    dividers: r.dividers,
   };
 }
 
@@ -242,9 +264,85 @@ function onKey(event, input) {
   event.preventDefault();
 }
 
+function openLastHeard(nodeId, url) {
+  if (!P.lastHeardOk(url, allNodeHosts())) {
+    emitNotice('That Last Heard address was refused: only web addresses on the public internet, or on one of your nodes, are opened here.', true);
+    return;
+  }
+  const had = ls.tabs.find((t) => t.key === L.LH_KEY);
+  ls = L.openLastHeard(ls, nodeId, url);
+  if (had && had.url !== url) closeRt(L.LH_KEY);
+  sync();
+  focusView();
+}
+
+async function ensureLastHeard(key, tab) {
+  const e = { view: null, status: 'loading', error: null, via: 'home', origin: '' };
+  rt.set(key, e);
+  const view = new WebContentsView({
+    webPreferences: {
+      session: lastHeardSession(),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
+    },
+  });
+  e.view = view;
+  win.contentView.addChildView(view);
+  const wc = view.webContents;
+  wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  wc.on('before-input-event', onKey);
+  const focused = () => {
+    const i = L.shown(ls).indexOf(key);
+    if (i >= 0 && i !== ls.focus) {
+      ls = L.focusPane(ls, i);
+      push();
+      saveSoon();
+    }
+  };
+  wc.on('focus', focused);
+  wc.on('input-event', (ev, input) => {
+    if (input && input.type === 'mouseDown') focused();
+  });
+  wc.setWindowOpenHandler(({ url }) => {
+    externalOpen(url);
+    return { action: 'deny' };
+  });
+  wc.on('will-navigate', (ev, url) => {
+    if (!P.lastHeardOk(url, allNodeHosts())) {
+      ev.preventDefault();
+      emitNotice('The Last Heard page tried to go somewhere that is not allowed.', true);
+    }
+  });
+  wc.on('certificate-error', (event, url, error, certificate, callback) => {
+    event.preventDefault();
+    callback(false);
+  });
+  wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
+    if (!isMain || code === -3 || rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: desc, code, via: 'home', nodeId: tab.nodeId, cert: null };
+    sync();
+  });
+  wc.on('did-finish-load', () => {
+    if (rt.get(key) === e && e.status === 'loading') {
+      e.status = 'ok';
+      push();
+    }
+  });
+  wc.loadURL(tab.url);
+  sync();
+}
+
 async function ensureView(key) {
   if (rt.has(key)) return;
   const tab = ls.tabs.find((t) => t.key === key);
+  if (tab && tab.kind === 'lh') {
+    await ensureLastHeard(key, tab);
+    return;
+  }
   const node = tab && nodes.find((n) => n.id === tab.nodeId);
   const page = tab && PAGES.find((p) => p.id === tab.pageId);
   if (!node || !page) return;
@@ -281,8 +379,9 @@ async function ensureView(key) {
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });
-  wc.setWindowOpenHandler(({ url }) => {
-    externalOpen(url);
+  wc.setWindowOpenHandler(({ url, frameName }) => {
+    if (page.id === 'talker' && frameName === 'nt_lh') openLastHeard(node.id, url);
+    else externalOpen(url);
     return { action: 'deny' };
   });
   wc.on('will-navigate', (ev, url) => {
@@ -370,7 +469,7 @@ function register() {
       nodes.push(r.node);
     }
     persist();
-    if (changed) for (const t of ls.tabs) if (t.nodeId === r.node.id) closeRt(t.key);
+    if (changed) for (const t of ls.tabs) if (t.nodeId === r.node.id && t.kind !== 'lh') closeRt(t.key);
     sync();
     return { node: r.node, nodes: snapshot() };
   });
@@ -470,7 +569,7 @@ function register() {
     refused.delete(hit.hostname);
     router.forget(nodeId);
     persist();
-    for (const t of ls.tabs) if (t.nodeId === nodeId) closeRt(t.key);
+    for (const t of ls.tabs) if (t.nodeId === nodeId && t.kind !== 'lh') closeRt(t.key);
     sync();
     return { nodes: snapshot() };
   });
@@ -480,8 +579,8 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 900,
-    minHeight: 520,
+    minWidth: 1100,
+    minHeight: 700,
     title: 'Node Controller',
     backgroundColor: '#14171c',
     webPreferences: {
@@ -509,7 +608,7 @@ app.on('web-contents-created', (e, contents) => {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-  harden(session.defaultSession, false);
+  harden(session.defaultSession, 'shell');
   register();
   createWindow();
 });

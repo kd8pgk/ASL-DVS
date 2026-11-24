@@ -24,4 +24,5 @@ contextBridge.exposeInMainWorld('nc', {
   overlay: (on) => ipcRenderer.invoke('ui:overlay', on),
   trustCert: (nodeId, fingerprint) => ipcRenderer.invoke('cert:trust', nodeId, fingerprint),
   onLayout: (cb) => listen('layout', cb),
+  onNotice: (cb) => listen('notice', cb),
 });

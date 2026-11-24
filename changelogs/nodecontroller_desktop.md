@@ -1,6 +1,17 @@
 # Node Controller Desktop changelog
 
-Current version: `0.2.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.3.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.3.0 (2026-11-24)
+
+The 3 : 12 / 3 : 6 : 6 layout, three page layouts and the Last Heard tile. Rows mode is gone.
+
+- **Grid.** The window is 15 units wide. The sidebar is 3 units, the header is 1 unit tall, and the page area is the other 12. At 1280 pixels wide that is a 256 pixel sidebar, an 85 pixel header and 1024 pixels of pages. The main process works the sizes out and the page follows them, so they always agree. The smallest window is now 1100 by 700.
+- **1 page, 2 pages, 3 pages.** Three buttons (Ctrl+1, Ctrl+2, Ctrl+3). One page fills the 12 units. Two pages are 6 and 6 side by side. Three pages are two side by side over a third that takes the full 12, with the two rows the same height. Any tab can go in any pane, and tabs open in the pane you last used. A mode needs that many tabs open.
+- **Divider.** The line between the two top panes drags and double-clicks back to 6 : 6. The line between the rows is fixed at equal height.
+- **Last Heard tile.** The LH button in Node Talker opens its page as a tab called Last Heard, in the bottom pane of three pages (beside the page that asked, or as the third page when two are showing). A second LH click reuses the tab. It is not saved across restarts. It runs in its own session that is never kept, with every permission refused, and it may load from the public internet but not from private addresses (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, localhost, `.local` and single-word names), unless the address is one of your saved nodes. An address that is not plain http or https, has a login in it, or is on a private network that is not your node is refused with a message. Links inside the tile stay in it under the same rules; windows it opens go to the system browser.
+- **Header.** Tabs wrap onto a second row when there are many, instead of shrinking.
+- **Tests.** The layout tests cover the grid at several widths, the three modes and how they change, the Last Heard rules and the pane sizes; the policy tests cover the private-address and Last Heard rules; the smoke test checks the real window against the ratios in every mode, the Last Heard tile, its refusal and its blocking.
 
 ## 0.2.0 (2026-11-24)
 

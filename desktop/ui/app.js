@@ -87,7 +87,7 @@
     for (const b of $('modes').querySelectorAll('button')) {
       const m = b.dataset.mode;
       b.classList.toggle('on', lay.mode === m);
-      b.disabled = m !== 'single' && !lay.canSplit && lay.mode === 'single';
+      b.disabled = m !== 'single' && !lay.counts[m] && lay.mode !== m;
     }
     $('reload').disabled = !lay.tabs.length;
   }
@@ -123,11 +123,10 @@
 
   function startDrag(ev, divider) {
     ev.preventDefault();
-    const rows = lay.mode === 'rows';
     const p0 = lay.panes[0].rect;
     const p1 = lay.panes[1].rect;
-    const start = rows ? p0.y : p0.x;
-    const total = rows ? p0.h + GAP + p1.h : p0.w + GAP + p1.w;
+    const start = p0.x;
+    const total = p0.w + GAP + p1.w;
     divider.classList.add('drag');
     divider.setPointerCapture(ev.pointerId);
     let queued = null;
@@ -137,7 +136,7 @@
       queued = null;
     };
     const move = (m) => {
-      const pos = (rows ? m.clientY : m.clientX) - start - GAP / 2;
+      const pos = m.clientX - start - GAP / 2;
       const ratio = pos / (total - GAP);
       if (queued === null) requestAnimationFrame(flush);
       queued = ratio;
@@ -155,12 +154,12 @@
   }
 
   function sigOf() {
-    return JSON.stringify([lay.mode, lay.overlay, Boolean(lay.divider), lay.panes.map((p) => [p.status, p.key, p.error && p.error.message])]);
+    return JSON.stringify([lay.mode, lay.overlay, lay.dividers.length, lay.panes.map((p) => [p.status, p.key, p.error && p.error.message])]);
   }
 
   function positionPanes() {
     for (const c of $('panes').children) {
-      if (c.classList.contains('divider')) placeRect(c, lay.divider);
+      if (c.dataset.divider !== undefined) placeRect(c, lay.dividers[Number(c.dataset.divider)].rect);
       else placeRect(c, lay.panes[Number(c.dataset.pane)].rect);
     }
   }
@@ -183,19 +182,22 @@
       } else {
         m = el('div', 'pane-msg');
         placeRect(m, pane.rect);
-        if (pane.status === 'empty') m.append(el('p', '', 'Add a node, then open Node Controller or Node Talker from the list. Open two pages and pick Columns or Rows to see them side by side.'));
+        if (pane.status === 'empty') m.append(el('p', '', 'Add a node, then open Node Controller or Node Talker from the list. Open two or three pages and pick 2 pages or 3 pages to see them together.'));
         else m.append(el('p', '', 'Connecting…'));
       }
       m.dataset.pane = String(i);
       box.append(m);
     });
-    if (lay.divider && lay.panes.length === 2) {
-      const d = el('div', `divider ${lay.mode}`);
-      placeRect(d, lay.divider);
-      d.addEventListener('pointerdown', (ev) => startDrag(ev, d));
-      d.addEventListener('dblclick', () => window.nc.setRatio(0.5));
+    lay.dividers.forEach((dv, i) => {
+      const d = el('div', dv.drag ? 'divider cols' : 'divider gapline');
+      placeRect(d, dv.rect);
+      d.dataset.divider = String(i);
+      if (dv.drag) {
+        d.addEventListener('pointerdown', (ev) => startDrag(ev, d));
+        d.addEventListener('dblclick', () => window.nc.setRatio(0.5));
+      }
       box.append(d);
-    }
+    });
   }
 
   function render() {
@@ -206,6 +208,9 @@
 
   function onLayout(next) {
     lay = next;
+    const root = document.documentElement.style;
+    root.setProperty('--sidebar', `${lay.grid.sidebar}px`);
+    root.setProperty('--header', `${lay.grid.header}px`);
     render();
   }
 
@@ -307,6 +312,7 @@
       $('f-pin-row').hidden = true;
     });
     window.nc.onLayout(onLayout);
+    window.nc.onNotice((n) => notice(n.text, n.bad));
     onLayout(await window.nc.getLayout());
   }
 

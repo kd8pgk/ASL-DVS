@@ -94,6 +94,51 @@ function allowShellRequest(url) {
   return /^(file|data):/i.test(url);
 }
 
+function isPrivateHost(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.lan') || h.endsWith('.home.arpa')) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (h.includes(':')) {
+    if (h === '::' || h === '::1') return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
+    if (mapped) return isPrivateHost(mapped[1]);
+    return /^f[cd]/.test(h) || /^fe[89ab]/.test(h);
+  }
+  if (!h.includes('.')) return true;
+  return false;
+}
+
+function lastHeardOk(url, nodeHosts) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  if (u.username || u.password || String(url).length > 2048) return false;
+  const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return !isPrivateHost(host) || nodeHosts.includes(host);
+}
+
+function allowLastHeardRequest(url, nodeHosts) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'data:' || u.protocol === 'blob:') return true;
+  if (!['http:', 'https:', 'ws:', 'wss:'].includes(u.protocol)) return false;
+  const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return !isPrivateHost(host) || nodeHosts.includes(host);
+}
+
 function hostsOfNode(node) {
   return [node.host, node.lanIp, node.awayHost].filter(Boolean).map((h) => h.toLowerCase());
 }
@@ -107,5 +152,8 @@ module.exports = {
   allowPermission,
   allowRequest,
   allowShellRequest,
+  isPrivateHost,
+  lastHeardOk,
+  allowLastHeardRequest,
   hostsOfNode,
 };
