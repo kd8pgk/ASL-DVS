@@ -1,6 +1,12 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.5`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.6`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.6 (2026-11-24)
+
+A test build on Electron 44.11.5, the newest release before 45.
+
+- **Electron 44.11.5** (was 45.4.1). On one Debian machine the app segfaults inside Electron (a text pointer that was never set, read on the main thread) right after SysMon finishes loading. The crash is not in the app's own code, and nothing tried so far stops it: not the certificate, the keyring, the GPU, the sandbox, the icon, the permission checks or the input method. It does not happen on the test machines. This build checks whether it is an Electron 45 bug. Nothing else changes; the fuses, the lockdown and every test are the same.
 
 ## 0.11.5 (2026-11-24)
 
