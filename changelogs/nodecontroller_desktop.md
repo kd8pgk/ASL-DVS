@@ -1,6 +1,17 @@
 # Node Controller Desktop changelog
 
-Current version: `0.8.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.9.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.9.0 (2026-11-24)
+
+The sidebar is the whole menu. The title bar tabs are gone; every page is listed in the sidebar as a single page; what is stopped is hidden; Install Monitor stays at the bottom.
+
+- **No title bar tabs.** The title bar now shows what you are looking at (the focused page, with a dot for its state and "(away)" or "(LAN address)") and the Single, Slots, Save split and Reload buttons. Pi-Piper and Pibrary, which were tabs there, are entries in the sidebar like the rest (marked with an arrow; they still open your web browser).
+- **Everything is in the sidebar, as single pages, by default.** Under the three slots, **Single pages** lists every page of every node (one group for each node, with its Edit button), with no need to open anything first. Click one to show it by itself; drag it into a slot. A page you have open is marked (a dashed outline, a solid amber one while it is on screen) and has a **×** that closes it. Last Heard appears in its own group while it is open. A page in a slot is listed in that slot, not twice.
+- **Stopped pages are hidden.** The app looks at each page's port on every node every 15 seconds (a plain connection, nothing is sent). A page whose tool is stopped or not installed is not listed. A page you have open stays listed, in italics and dimmed, while its tool is stopped, and normal again when it runs. A node with nothing running says so. Pages show at once before the first look.
+- **Install Monitor is always at the bottom** of the sidebar, on its own line for each node, and cannot be hidden: it is always there, even when it is stopped (then dimmed, so you can see it is down) and it has no ×. It is a single page like 44helper; its right-click menu can close it.
+- **Closing pages.** With no tabs, a page is closed with the × on its entry (a page in a slot: first take it out with its ×, then close it), or from the right-click menu.
+- **Tests.** The monitor (up, down, change, LAN and away addresses, a node that goes, overlapping looks, the timer) and, in the smoke test, the sidebar-first layout in the real window: every running page listed, stopped pages gone and back, an open stopped page kept, Install Monitor pinned and unhideable, and all the earlier slot, split, drag, saved split, restart and certificate flows.
 
 ## 0.8.0 (2026-11-24)
 

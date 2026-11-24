@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog } = require('electron');
 const { PAGES, MAX_PINS, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
+const { createMonitor } = require('./status');
 const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
@@ -34,6 +35,13 @@ let nodes = store.load();
 const router = createRouter();
 const refused = new Map();
 const rt = new Map();
+const probeMs = !app.isPackaged && Number(process.env.NODECONTROLLER_PROBE_MS) >= 100 ? Number(process.env.NODECONTROLLER_PROBE_MS) : undefined;
+const monitor = createMonitor({
+  getNodes: () => nodes,
+  getPages: () => PAGES,
+  onChange: () => push(),
+  interval: probeMs,
+});
 
 function readJson(file) {
   try {
@@ -163,6 +171,7 @@ function payload() {
     view: ls.view,
     ratio: ls.ratio,
     focus: ls.focus,
+    down: monitor.snapshot().down,
     canSplit: L.canSplit(ls),
     canBack: L.canBack(ls),
     canSave: L.SLOTS.reduce((n, sl) => n + ls.slots[sl].length, 0) >= 2,
@@ -556,6 +565,7 @@ function register() {
     persist();
     if (changed) for (const t of ls.tabs) if (t.nodeId === r.node.id && t.kind !== 'lh') closeRt(t.key);
     sync();
+    monitor.refresh();
     return { node: r.node, nodes: snapshot() };
   });
   ipcMain.handle('nodes:remove', async (e, id) => {
@@ -568,6 +578,7 @@ function register() {
     router.forget(id);
     persist();
     sync();
+    monitor.refresh();
     try {
       await (partitions.get(id) || session.fromPartition(`persist:node-${id}`)).clearStorageData();
     } catch {
@@ -601,6 +612,7 @@ function register() {
     for (const n of nodes) router.forget(n.id);
     persist();
     sync();
+    monitor.refresh();
     return { nodes: snapshot(), added: res.added, replaced: res.replaced, skipped: res.skipped };
   });
   ipcMain.handle('tabs:open', (e, nodeId, pageId) => {
@@ -779,9 +791,11 @@ app.whenReady().then(() => {
   harden(session.defaultSession, 'shell');
   register();
   createWindow();
+  monitor.start();
 });
 
 app.on('before-quit', () => {
+  monitor.stop();
   if (saveTimer) saveNow();
 });
 
