@@ -64,7 +64,20 @@ input[type="text"], input[type="number"] {
 .bar { display: flex; gap: 6px; padding: 8px 16px 12px; flex-wrap: wrap; }
 .notice { margin: 0 16px 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg); color: var(--ok); }
 .notice.bad { color: var(--danger); }
-#nodes { list-style: none; margin: 0; padding: 0 8px; overflow: auto; flex: 1; }
+#nodes { list-style: none; margin: 0; padding: 0 8px; }
+#side-scroll { flex: 1; min-height: 0; overflow: auto; }
+.sec { padding: 2px 8px 6px; }
+.sec-head { color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 4px 2px; }
+.entries { list-style: none; margin: 0; padding: 0; }
+.entry { display: flex; align-items: center; gap: 2px; margin-bottom: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+.entry-main { flex: 1; min-width: 0; text-align: left; border: none; background: none; padding: 3px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.entry .x { border: none; background: none; color: var(--muted); padding: 0 6px; }
+.entry .x:hover { color: var(--danger); }
+.hint { color: var(--muted); font-size: 12px; padding: 2px 8px; }
+.slot { margin: 2px 8px 4px; padding: 2px 6px 6px; border: 1px dashed var(--line); border-radius: 8px; }
+.slot.focus { border-color: var(--accent); border-style: solid; }
+.sec.over, .slot.over { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); }
 .node { padding: 8px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px; }
 .node-top { display: flex; align-items: center; gap: 6px; }
 .node-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -135,3 +148,9 @@ dialog label.check { display: flex; align-items: center; gap: 6px; color: var(--
 .split-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split-row .x { border: none; background: none; color: var(--muted); }
 .split-row .x:hover { color: var(--danger); }
+
+.strip-slot { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.strip-stack { flex: 1; min-width: 0; display: flex; gap: 4px; overflow: hidden; align-items: center; }
+.strip-stack button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+#side .splits { padding-top: 6px; }
+dialog { max-height: 92vh; overflow: auto; }

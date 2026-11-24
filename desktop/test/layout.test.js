@@ -1,273 +1,230 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const L = require('../src/layout');
+const { PAGES } = require('../src/node');
 
-const PAGES = [{ id: 'controller' }, { id: 'talker' }, { id: 'sysmon' }, { id: 'nodemon' }];
 const NODES = [{ id: 'a' }, { id: 'b' }];
 const AREA = { x: 256, y: 85, w: 1024, h: 715 };
 
-function two() {
-  return L.openTab(L.openTab(L.emptyState(), 'a', 'controller'), 'a', 'talker');
+function open(s, n, p) {
+  return L.openTab(s, n, p);
 }
 
-function three() {
-  return L.openTab(two(), 'a', 'sysmon');
+function many() {
+  let s = L.emptyState();
+  for (const [n, p] of [['a', 'controller'], ['a', 'talker'], ['a', 'sysmon'], ['a', 'nodemon'], ['a', 'recorder'], ['a', 'wifimon'], ['a', 'h44']]) s = L.addTab(s, n, p);
+  return s;
 }
 
-function split3() {
-  let s = three();
-  s = L.dropKey(s, 'a:controller', 'right');
-  return L.dropKey(s, 'a:talker', 'below');
+function example() {
+  let s = many();
+  s = L.putInSlot(s, 'a:controller', 'left');
+  s = L.putInSlot(s, 'a:sysmon', 'left');
+  s = L.putInSlot(s, 'a:talker', 'right');
+  s = L.putInSlot(s, 'a:recorder', 'right');
+  s = L.putInSlot(s, 'a:wifimon', 'right');
+  s = L.putInSlot(s, 'a:nodemon', 'lower');
+  return s;
 }
 
 test('grid: sidebar is 3 of 15 units and the header is 1 unit', () => {
   for (const [w, sidebar, header] of [[1280, 256, 85], [1600, 320, 107], [1920, 384, 128], [1500, 300, 100]]) {
     const g = L.grid(w, 800);
-    assert.equal(g.sidebar, sidebar, `sidebar at ${w}`);
-    assert.equal(g.header, header, `header at ${w}`);
-    assert.equal(g.strip, 28);
+    assert.deepEqual([g.sidebar, g.header, g.strip], [sidebar, header, 28], `at ${w}`);
     assert.deepEqual(g.area, { x: sidebar, y: header, w: w - sidebar, h: 800 - header });
   }
+  assert.equal(L.grid(10, 1).area.h, 0);
 });
 
-test('grid never gives a negative area', () => {
-  const g = L.grid(10, 1);
-  assert.equal(g.area.h, 0);
-  assert.ok(g.area.w >= 0);
-});
-
-test('every opened page is a single page tab', () => {
-  const s = two();
+test('every page opens by itself as a single page', () => {
+  let s = open(open(L.emptyState(), 'a', 'controller'), 'a', 'talker');
   assert.deepEqual(s.tabs.map((t) => t.key), ['a:controller', 'a:talker']);
-  assert.equal(s.mode, 'single');
-  assert.deepEqual(s.panes, ['a:talker', null, null]);
-  assert.equal(L.openTab(s, 'a', 'talker').tabs.length, 2);
+  assert.equal(s.view, 'single');
+  assert.equal(s.single, 'a:talker');
+  assert.deepEqual(L.shown(s), ['a:talker']);
+  assert.equal(open(s, 'a', 'talker').tabs.length, 2);
+  assert.equal(L.canSplit(s), false);
 });
 
-test('dropping a tab on the right of a single page makes two pages: shown page left, dropped page right', () => {
-  const s = L.dropKey(two(), 'a:controller', 'right');
-  assert.equal(s.mode, 'cols');
-  assert.deepEqual(L.shown(s), ['a:talker', 'a:controller']);
-  assert.equal(s.focus, 1);
+test('putting a page in a slot shows the slots, a lone slot is a one page view', () => {
+  let s = open(open(L.emptyState(), 'a', 'controller'), 'a', 'talker');
+  s = L.putInSlot(s, 'a:controller', 'left');
+  assert.equal(s.view, 'slots');
+  assert.deepEqual(s.slots.left, ['a:controller']);
+  assert.deepEqual(L.shown(s), ['a:controller']);
+  assert.equal(L.paneList(s).length, 1);
+  assert.deepEqual(L.rects(s, AREA), { panes: [AREA], dividers: [] });
+  assert.deepEqual(L.viewRect(s, AREA), AREA);
 });
 
-test('dropping on the shown page itself does nothing to a single page', () => {
-  const s = two();
-  assert.equal(L.dropKey(s, 'a:talker', 'right'), s);
+test('the layout grows as slots fill: left, then right, then lower', () => {
+  let s = many();
+  s = L.putInSlot(s, 'a:controller', 'left');
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['left']);
+  s = L.putInSlot(s, 'a:talker', 'right');
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['left', 'right']);
+  s = L.putInSlot(s, 'a:sysmon', 'lower');
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['left', 'right', 'lower']);
+  assert.deepEqual(L.shown(s), ['a:controller', 'a:talker', 'a:sysmon']);
 });
 
-test('dropping below two pages makes three, with the two on top kept', () => {
-  const two2 = L.dropKey(three(), 'a:controller', 'right');
-  const s = L.dropKey(two2, 'a:talker', 'below');
-  assert.equal(s.mode, 'trio');
-  assert.deepEqual(s.panes.slice(0, 2), two2.panes.slice(0, 2));
-  assert.equal(s.panes[2], 'a:talker');
-  assert.equal(new Set(s.panes).size, 3);
-  assert.equal(s.focus, 2);
+test('your example: Controller and SysMon left, Talker, Recorder and WifiMon right, Node Monitor lower', () => {
+  const s = example();
+  assert.deepEqual(s.slots, { left: ['a:controller', 'a:sysmon'], right: ['a:talker', 'a:recorder', 'a:wifimon'], lower: ['a:nodemon'] });
+  assert.deepEqual(s.sel, { left: 'a:sysmon', right: 'a:wifimon', lower: 'a:nodemon' });
+  assert.equal(s.view, 'slots');
+  assert.equal(s.focus, 'lower');
 });
 
-test('dropping below with a page that is already showing is refused', () => {
-  const s = L.dropKey(two(), 'a:controller', 'right');
-  assert.equal(L.dropKey(s, 'a:talker', 'below'), s);
+test('clicking a page in a slot selects it, focuses its slot and keeps the others showing', () => {
+  let s = example();
+  s = L.showAlone(s, 'a:h44');
+  assert.equal(s.view, 'single');
+  s = L.openKey(s, 'a:recorder');
+  assert.equal(s.view, 'slots');
+  assert.equal(s.focus, 'right');
+  assert.deepEqual(L.shown(s), ['a:sysmon', 'a:recorder', 'a:nodemon']);
+  s = L.openKey(s, 'a:controller');
+  assert.deepEqual(L.shown(s), ['a:controller', 'a:recorder', 'a:nodemon']);
+  assert.equal(s.focus, 'left');
+  assert.equal(L.focusedKey(s), 'a:controller');
 });
 
-test('dropping on a pane replaces it, or swaps when the page is already in another pane', () => {
-  let s = split3();
-  const before = [...s.panes];
-  s = L.dropKey(s, before[2], 'pane0');
-  assert.deepEqual(s.panes, [before[2], before[1], before[0]]);
-  assert.equal(s.focus, 0);
-  const t = L.addTab(split3(), 'b', 'controller');
-  const u = L.dropKey(t, 'b:controller', 'pane1');
-  assert.equal(u.panes[1], 'b:controller');
-  assert.equal(u.mode, 'trio');
-});
-
-test('dropping on the pane the page is already in only moves focus', () => {
-  const s = split3();
-  const r = L.dropKey(s, s.panes[1], 'pane1');
-  assert.deepEqual(r.panes, s.panes);
-  assert.equal(r.focus, 1);
-});
-
-test('three pages are the most: a fourth place does not exist and unknown places are refused', () => {
-  const s = split3();
-  assert.deepEqual(L.zoneIds(s), ['pane0', 'pane1', 'pane2']);
-  assert.deepEqual(L.zoneIds(L.dropKey(two(), 'a:controller', 'right')), ['pane0', 'pane1', 'below']);
-  assert.deepEqual(L.zoneIds(two()), ['pane0', 'right']);
-  assert.equal(L.dropKey(s, 'a:controller', 'right'), s);
-  assert.equal(L.dropKey(s, 'a:controller', 'pane3'), s);
-  assert.equal(L.dropKey(s, 'nope', 'pane0'), s);
-});
-
-test('clicking a tab inside the split shows the whole split and focuses that pane', () => {
-  let s = split3();
-  const keys = [...s.panes];
-  s = L.showAlone(s, 'a:talker' === keys[0] ? keys[1] : keys[0]);
-  assert.equal(s.mode, 'single');
-  s = L.openKey(s, keys[2]);
-  assert.equal(s.mode, 'trio');
-  assert.deepEqual(s.panes, keys);
-  assert.equal(s.focus, 2);
-});
-
-test('clicking a tab that is not in the split shows it alone and keeps the split to come back to', () => {
-  let s = L.openTab(split3(), 'b', 'nodemon');
-  s = L.openKey(s, 'b:nodemon');
-  assert.equal(s.mode, 'single');
-  assert.deepEqual(s.panes, ['b:nodemon', null, null]);
+test('clicking a page that is not in a slot shows it alone and the slots stay', () => {
+  let s = example();
+  s = L.addTab(s, 'b', 'talker');
+  s = L.openKey(s, 'b:talker');
+  assert.equal(s.view, 'single');
+  assert.deepEqual(L.shown(s), ['b:talker']);
+  assert.deepEqual(s.slots.left, ['a:controller', 'a:sysmon']);
   assert.equal(L.canBack(s), true);
-  const back = L.backToSplit(s);
-  assert.equal(back.mode, 'trio');
-  assert.equal(L.canBack(back), false);
-  assert.equal(L.canBack(L.emptyState()), false);
-  assert.equal(L.backToSplit(back), back);
+  const back = L.setView(s, 'slots');
+  assert.equal(back.view, 'slots');
+  assert.deepEqual(L.shown(back), ['a:sysmon', 'a:wifimon', 'a:nodemon']);
 });
 
-test('clicking a tab that is already shown only moves focus', () => {
-  const s = split3();
-  const r = L.openKey(s, s.panes[1]);
-  assert.equal(r.focus, 1);
-  assert.equal(r.mode, 'trio');
-  assert.deepEqual(r.panes, s.panes);
+test('any page can go in any slot, and moving it takes it out of the old one', () => {
+  let s = example();
+  s = L.putInSlot(s, 'a:nodemon', 'left');
+  assert.deepEqual(s.slots.lower, []);
+  assert.equal(s.sel.lower, null);
+  assert.deepEqual(s.slots.left, ['a:controller', 'a:sysmon', 'a:nodemon']);
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['left', 'right']);
+  s = L.putInSlot(s, 'a:controller', 'lower');
+  assert.deepEqual(s.slots.left, ['a:sysmon', 'a:nodemon']);
+  assert.equal(s.sel.left, 'a:nodemon');
+  assert.deepEqual(s.slots.lower, ['a:controller']);
 });
 
-test('Last Heard opens as its own single page and Back to split returns', () => {
-  const s0 = split3();
-  const s = L.openLastHeard(s0, 'a', 'https://lh.example/x');
-  assert.equal(s.mode, 'single');
-  assert.deepEqual(s.panes, ['lh', null, null]);
-  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/x');
-  assert.equal(L.canBack(s), true);
-  assert.deepEqual(L.backToSplit(s).panes, s0.panes);
+test('dropping on the slot a page is already in only selects it', () => {
+  let s = example();
+  s = L.putInSlot(s, 'a:sysmon', 'left');
+  assert.deepEqual(s.slots.left, ['a:controller', 'a:sysmon']);
+  assert.equal(s.sel.left, 'a:sysmon');
 });
 
-test('a second Last Heard click reuses the tab and takes the new address', () => {
-  let s = L.openLastHeard(split3(), 'a', 'https://lh.example/1');
-  s = L.openLastHeard(s, 'a', 'https://lh.example/2');
-  assert.equal(s.tabs.filter((t) => t.key === 'lh').length, 1);
-  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/2');
-  assert.equal(s.mode, 'single');
+test('44helper is always a single page and never goes in a slot', () => {
+  const s = many();
+  assert.equal(L.putInSlot(s, 'a:h44', 'left'), s);
+  assert.equal(L.addNext(s, 'a:h44').view, 'single');
+  assert.equal(L.addNext(s, 'a:h44').single, 'a:h44');
+  assert.ok(L.SINGLE_ONLY.has('h44'));
+  assert.deepEqual(PAGES.filter((p) => p.single).map((p) => p.id), [...L.SINGLE_ONLY]);
+  const t = L.openTab(example(), 'a', 'h44');
+  assert.equal(t.view, 'single');
+  assert.deepEqual(L.shown(t), ['a:h44']);
 });
 
-test('Last Heard can be stacked into a split like any tab', () => {
-  let s = L.openLastHeard(two(), 'a', 'https://lh.example/x');
-  s = L.dropKey(s, 'a:talker', 'right');
-  assert.deepEqual(L.shown(s), ['lh', 'a:talker']);
-  s = L.dropKey(L.addTab(s, 'a', 'sysmon'), 'a:sysmon', 'below');
-  assert.equal(s.mode, 'trio');
-  assert.equal(s.panes[2], 'a:sysmon');
+test('Ctrl+click puts a page in the next empty slot, then in the focused one', () => {
+  let s = many();
+  s = L.addNext(s, 'a:controller');
+  assert.deepEqual(s.slots.left, ['a:controller']);
+  s = L.addNext(s, 'a:talker');
+  assert.deepEqual(s.slots.right, ['a:talker']);
+  s = L.addNext(s, 'a:sysmon');
+  assert.deepEqual(s.slots.lower, ['a:sysmon']);
+  s = L.focusSlot(s, 'right');
+  s = L.addNext(s, 'a:nodemon');
+  assert.deepEqual(s.slots.right, ['a:talker', 'a:nodemon']);
+  const again = L.addNext(s, 'a:controller');
+  assert.equal(again.focus, 'left');
+  assert.deepEqual(again.slots, s.slots);
 });
 
-test('closing the Last Heard page returns to the split', () => {
-  const s0 = split3();
-  const s = L.closeTab(L.openLastHeard(s0, 'a', 'https://lh.example/x'), 'lh');
-  assert.equal(s.mode, 'trio');
-  assert.deepEqual(s.panes, s0.panes);
+test('taking a page out of a slot returns it to the single pages', () => {
+  let s = example();
+  s = L.unslot(s, 'a:talker');
+  assert.deepEqual(s.slots.right, ['a:recorder', 'a:wifimon']);
+  assert.equal(s.sel.right, 'a:wifimon');
+  assert.equal(L.slotOf(s, 'a:talker'), null);
+  assert.ok(s.tabs.some((t) => t.key === 'a:talker'));
+  let t = L.unslot(L.unslot(L.putInSlot(L.addTab(L.emptyState(), 'a', 'controller'), 'a:controller', 'left'), 'a:controller'), 'a:controller');
+  assert.equal(t.view, 'single');
+  assert.equal(t.single, 'a:controller');
+  assert.equal(L.unslot(s, 'a:h44'), s);
 });
 
-test('closing a shown tab in a split compacts it, and a pair becomes a single page', () => {
-  let s = L.closeTab(split3(), split3().panes[1]);
-  assert.equal(s.mode, 'cols');
-  assert.equal(s.panes.filter(Boolean).length, 2);
-  s = L.closeTab(s, s.panes[0]);
-  assert.equal(s.mode, 'single');
-  assert.equal(s.panes.filter(Boolean).length, 1);
+test('closing a page takes it out of its slot; the slot shows the next one; empty slots disappear', () => {
+  let s = example();
+  s = L.closeTab(s, 'a:nodemon');
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['left', 'right']);
+  s = L.closeTab(s, 'a:controller');
+  assert.equal(s.sel.left, 'a:sysmon');
+  s = L.closeTab(s, 'a:sysmon');
+  assert.deepEqual(L.paneList(s).map((p) => p.slot), ['right']);
+  assert.equal(s.view, 'slots');
 });
 
-test('closing a tab that is only in the saved split shrinks the split to come back to', () => {
-  let s = L.openTab(split3(), 'b', 'nodemon');
-  s = L.openKey(s, 'b:nodemon');
-  s = L.closeTab(s, split3().panes[2]);
-  const back = L.backToSplit(s);
-  assert.equal(back.mode, 'cols');
-  const gone = L.closeTab(s, split3().panes[1]);
-  assert.equal(L.canBack(gone), false);
+test('closing the page shown alone goes back to the slots, or to another page', () => {
+  let s = L.showAlone(example(), 'a:h44');
+  s = L.closeTab(s, 'a:h44');
+  assert.equal(s.view, 'slots');
+  let t = L.closeTab(open(open(L.emptyState(), 'a', 'controller'), 'a', 'talker'), 'a:talker');
+  assert.equal(t.single, 'a:controller');
+  assert.deepEqual(L.closeTab(open(L.emptyState(), 'a', 'controller'), 'a:controller'), L.emptyState());
 });
 
-test('closing the last tab empties everything', () => {
-  const s = L.closeTab(L.openTab(L.emptyState(), 'a', 'controller'), 'a:controller');
-  assert.deepEqual(s, { tabs: [], panes: [null, null, null], mode: 'single', saved: null, ratio: 0.5, focus: 0 });
-});
-
-test('closing a node closes all its tabs, Last Heard from it included', () => {
-  let s = L.openTab(L.openLastHeard(two(), 'a', 'https://lh.example/x'), 'b', 'talker');
+test('closing a node closes all its pages, Last Heard from it too', () => {
+  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x');
+  s = L.openTab(s, 'b', 'talker');
   s = L.closeNode(s, 'a');
   assert.deepEqual(s.tabs.map((t) => t.key), ['b:talker']);
-  assert.deepEqual(s.panes, ['b:talker', null, null]);
+  assert.deepEqual(s.slots, { left: [], right: [], lower: [] });
 });
 
-test('removing a pane shrinks the split and the last pair becomes one page', () => {
-  let s = L.removePane(split3(), 2);
-  assert.equal(s.mode, 'cols');
-  s = L.removePane(s, 0);
-  assert.equal(s.mode, 'single');
-  assert.equal(L.removePane(s, 0), s);
-  assert.equal(L.removePane(split3(), 5).mode, 'trio');
+test('the view buttons: single shows the focused page alone, slots brings the slots back', () => {
+  let s = example();
+  s = L.focusSlot(s, 'right');
+  s = L.setView(s, 'single');
+  assert.deepEqual(L.shown(s), ['a:wifimon']);
+  assert.equal(L.setView(s, 'single'), s);
+  s = L.setView(s, 'slots');
+  assert.equal(L.paneList(s).length, 3);
+  const none = open(L.emptyState(), 'a', 'controller');
+  assert.equal(L.setView(none, 'slots'), none);
 });
 
-test('1 page keeps the focused tab and the split to come back to; 2 and 3 pages restore a matching split', () => {
-  let s = split3();
-  const keys = [...s.panes];
-  s = L.focusPane(s, 1);
-  s = L.setMode(s, 'single');
-  assert.deepEqual(s.panes, [keys[1], null, null]);
-  s = L.setMode(s, 'trio');
-  assert.deepEqual(s.panes, keys);
-  assert.equal(s.focus, 1);
+test('Last Heard opens as a single page and can be put in a slot like any page', () => {
+  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x');
+  assert.equal(s.view, 'single');
+  assert.deepEqual(L.shown(s), ['lh']);
+  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/x');
+  s = L.openLastHeard(s, 'a', 'https://lh.example/y');
+  assert.equal(s.tabs.filter((t) => t.key === 'lh').length, 1);
+  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/y');
+  s = L.putInSlot(s, 'lh', 'lower');
+  assert.deepEqual(s.slots.lower, ['a:nodemon', 'lh']);
+  assert.equal(s.sel.lower, 'lh');
 });
 
-test('a mode needs as many tabs as panes', () => {
-  const one = L.openTab(L.emptyState(), 'a', 'controller');
-  assert.equal(L.setMode(one, 'cols'), one);
-  assert.equal(L.setMode(one, 'trio'), one);
-  assert.equal(L.setMode(two(), 'trio').mode, 'single');
-  assert.equal(L.setMode(two(), 'cols').mode, 'cols');
-  assert.equal(L.setMode(three(), 'trio').mode, 'trio');
-  assert.equal(L.setMode(two(), 'rows').mode, 'single');
-});
-
-test('2 pages from one page uses the first tabs in tab order and focuses the page you were on', () => {
-  const s = L.setMode(two(), 'cols');
-  assert.deepEqual(L.shown(s), ['a:controller', 'a:talker']);
-  assert.equal(s.focus, 1);
-  const t = L.setMode(three(), 'trio');
-  assert.deepEqual(t.panes, ['a:controller', 'a:talker', 'a:sysmon']);
-  assert.equal(t.focus, 2);
-});
-
-test('3 pages to 2 keeps the focused page, 2 to 3 adds another tab below', () => {
-  let s = L.focusPane(L.setMode(three(), 'trio'), 2);
-  s = L.setMode(s, 'cols');
-  assert.deepEqual(L.shown(s), ['a:controller', 'a:sysmon']);
-  assert.equal(s.focus, 1);
-  const c = L.setMode(L.addTab(L.setMode(two(), 'cols'), 'b', 'talker'), 'trio');
-  assert.equal(c.mode, 'trio');
-  assert.deepEqual(c.panes, ['a:controller', 'a:talker', 'b:talker']);
-});
-
-test('Ctrl+click adds a page to the next free place: right, then below, then the bottom', () => {
-  let s = L.openTab(L.openTab(L.openTab(L.openTab(L.emptyState(), 'a', 'controller'), 'a', 'talker'), 'a', 'sysmon'), 'a', 'nodemon');
-  s = L.showAlone(s, 'a:controller');
-  s = L.addNext(s, 'a:talker');
-  assert.deepEqual(L.shown(s), ['a:controller', 'a:talker']);
-  s = L.addNext(s, 'a:sysmon');
-  assert.deepEqual(L.shown(s), ['a:controller', 'a:talker', 'a:sysmon']);
-  s = L.addNext(s, 'a:nodemon');
-  assert.deepEqual(L.shown(s), ['a:controller', 'a:talker', 'a:nodemon']);
-  const f = L.addNext(s, 'a:controller');
-  assert.equal(f.focus, 0);
-});
-
-test('applyArrangement sets a split of the right size from existing tabs only', () => {
-  const s = three();
-  const a = L.applyArrangement(s, 'trio', ['a:sysmon', 'a:talker', 'a:controller'], 0.3);
-  assert.deepEqual(a.panes, ['a:sysmon', 'a:talker', 'a:controller']);
-  assert.equal(a.ratio, 0.3);
-  assert.equal(L.applyArrangement(s, 'cols', ['a:sysmon'], 0.5), s);
-  assert.equal(L.applyArrangement(s, 'cols', ['a:sysmon', 'a:sysmon'], 0.5), s);
-  assert.equal(L.applyArrangement(s, 'cols', ['a:sysmon', 'b:talker'], 0.5), s);
-  assert.equal(L.applyArrangement(s, 'single', ['a:sysmon'], 0.5), s);
+test('focus follows the page that was clicked into, only for the selected page of a slot', () => {
+  let s = example();
+  s = L.focusKey(s, 'a:sysmon');
+  assert.equal(s.focus, 'left');
+  const same = L.focusKey(s, 'a:controller');
+  assert.equal(same, s);
+  assert.equal(L.focusKey(s, 'a:h44'), s);
+  assert.equal(L.focusSlot(s, 'nowhere'), s);
 });
 
 test('ratio is kept between 0.1 and 0.9 and ignores junk', () => {
@@ -277,27 +234,17 @@ test('ratio is kept between 0.1 and 0.9 and ignores junk', () => {
   assert.equal(L.setRatio(s, 'x'), s);
 });
 
-test('focusPane stays within the shown panes and never lands on an empty one', () => {
-  assert.equal(L.focusPane(two(), 1).focus, 0);
-  const s = split3();
-  assert.equal(L.focusPane(s, 2).focus, 2);
-  assert.equal(L.focusPane(s, 'x'), s);
-  assert.equal(L.focusPane(s, -1), s);
-  const c = L.dropKey(two(), 'a:controller', 'right');
-  assert.equal(L.focusPane(c, 2), c);
-});
-
-test('rects: one page fills the area, two pages are 6 and 6 at 1280 wide', () => {
-  assert.deepEqual(L.rects({ mode: 'single' }, AREA), { panes: [AREA], dividers: [] });
-  const r = L.rects({ mode: 'cols', ratio: 0.5 }, AREA);
+test('rects: left and right are 6 and 6, with a gap and a drag handle', () => {
+  let s = L.putInSlot(L.putInSlot(many(), 'a:controller', 'left'), 'a:talker', 'right');
+  const r = L.rects(s, AREA);
   assert.equal(r.panes[0].w + L.GAP + r.panes[1].w, 1024);
   assert.equal(r.panes[0].w, 509);
-  assert.equal(r.panes[1].x, r.panes[0].x + r.panes[0].w + L.GAP);
+  assert.deepEqual(r.panes.map((p) => p.h), [715, 715]);
   assert.deepEqual(r.dividers, [{ rect: { x: 256 + 509, y: 85, w: L.GAP, h: 715 }, axis: 'x', drag: true }]);
 });
 
-test('rects: three pages are two over one with equal rows', () => {
-  const r = L.rects({ mode: 'trio', ratio: 0.5 }, AREA);
+test('rects: left, right and lower are two over one with equal rows', () => {
+  const r = L.rects(example(), AREA);
   const [a, b, c] = r.panes;
   assert.equal(a.y, b.y);
   assert.equal(a.h, b.h);
@@ -308,82 +255,115 @@ test('rects: three pages are two over one with equal rows', () => {
   assert.deepEqual(r.dividers.map((d) => [d.axis, d.drag]), [['x', true], ['y', false]]);
 });
 
+test('rects: any mix of slots fills the area: one over one when only one of left or right and lower are used', () => {
+  let s = L.putInSlot(L.putInSlot(many(), 'a:controller', 'right'), 'a:talker', 'lower');
+  let r = L.rects(s, AREA);
+  assert.equal(L.paneList(s).map((p) => p.slot).join(), 'right,lower');
+  assert.deepEqual([r.panes[0].x, r.panes[0].w, r.panes[1].x, r.panes[1].w], [AREA.x, AREA.w, AREA.x, AREA.w]);
+  assert.equal(r.panes[0].h + L.GAP + r.panes[1].h, AREA.h);
+  assert.deepEqual(r.dividers.map((d) => d.axis), ['y']);
+  s = L.putInSlot(many(), 'a:talker', 'lower');
+  assert.deepEqual(L.rects(s, AREA), { panes: [AREA], dividers: [] });
+  s = L.putInSlot(L.putInSlot(many(), 'a:controller', 'right'), 'a:talker', 'left');
+  r = L.rects(s, AREA);
+  assert.equal(r.panes[0].x < r.panes[1].x, true);
+});
+
 test('rects: the ratio moves only the top row, and a pane keeps its minimum width', () => {
-  const r = L.rects({ mode: 'trio', ratio: 0.3 }, AREA);
-  assert.ok(r.panes[0].w < r.panes[1].w);
-  assert.equal(r.panes[2].w, AREA.w);
-  const area = { x: 0, y: 0, w: 1000, h: 700 };
-  for (const mode of ['cols', 'trio']) {
-    assert.ok(L.rects({ mode, ratio: 0.1 }, area).panes[0].w >= L.MIN_PANE);
-    assert.ok(L.rects({ mode, ratio: 0.95 }, area).panes[1].w >= L.MIN_PANE);
-  }
+  const r = L.rects(example(), { x: 0, y: 0, w: 1000, h: 700 });
+  assert.ok(r.panes[0].w >= L.MIN_PANE && r.panes[1].w >= L.MIN_PANE);
+  const lo = L.rects(L.setRatio(example(), 0.1), { x: 0, y: 0, w: 1000, h: 700 });
+  const hi = L.rects(L.setRatio(example(), 0.95), { x: 0, y: 0, w: 1000, h: 700 });
+  assert.ok(lo.panes[0].w >= L.MIN_PANE);
+  assert.ok(hi.panes[1].w >= L.MIN_PANE);
+  assert.equal(lo.panes[2].w, 1000);
 });
 
-test('viewRect leaves a strip above each pane of a split but none for one page', () => {
+test('viewRect leaves a strip above each pane when two or more show, none for one', () => {
   const r = { x: 10, y: 20, w: 300, h: 400 };
-  assert.deepEqual(L.viewRect({ mode: 'single' }, r), r);
-  assert.deepEqual(L.viewRect({ mode: 'cols' }, r), { x: 10, y: 20 + L.STRIP, w: 300, h: 400 - L.STRIP });
-  assert.equal(L.viewRect({ mode: 'trio' }, { x: 0, y: 0, w: 5, h: 10 }).h, 0);
+  assert.deepEqual(L.viewRect(example(), r), { x: 10, y: 20 + L.STRIP, w: 300, h: 400 - L.STRIP });
+  assert.deepEqual(L.viewRect(L.showAlone(example(), 'a:h44'), r), r);
+  assert.equal(L.viewRect(example(), { x: 0, y: 0, w: 5, h: 10 }).h, 0);
 });
 
-test('drop zones: halves for one page, top two thirds and a bottom third for two, the panes for three', () => {
-  const s1 = L.dropZones(two(), AREA);
-  assert.deepEqual(s1.map((z) => z.id), ['pane0', 'right']);
-  assert.equal(s1[0].rect.w + s1[1].rect.w, AREA.w);
-  assert.equal(s1[1].rect.x, s1[0].rect.x + s1[0].rect.w);
-  const s2 = L.dropZones(L.dropKey(two(), 'a:controller', 'right'), AREA);
-  assert.deepEqual(s2.map((z) => z.id), ['pane0', 'pane1', 'below']);
-  assert.equal(s2[2].rect.w, AREA.w);
-  assert.equal(s2[2].rect.y + s2[2].rect.h, AREA.y + AREA.h);
-  assert.ok(Math.abs(s2[2].rect.h - AREA.h / 3) <= 1);
-  assert.equal(s2[0].rect.h + s2[2].rect.h, AREA.h);
-  const s3 = L.dropZones(split3(), AREA);
-  assert.deepEqual(s3.map((z) => z.id), ['pane0', 'pane1', 'pane2']);
-  assert.deepEqual(s3.map((z) => z.id), L.zoneIds(split3()));
-  assert.deepEqual(s3.map((z) => z.rect), L.rects(split3(), AREA).panes);
+test('drop zones are always left, right and lower: halves on top, a third below', () => {
+  const z = L.dropZones(AREA);
+  assert.deepEqual(z.map((x) => x.id), ['left', 'right', 'lower']);
+  assert.equal(z[0].rect.w + z[1].rect.w, AREA.w);
+  assert.equal(z[1].rect.x, z[0].rect.x + z[0].rect.w);
+  assert.deepEqual([z[2].rect.x, z[2].rect.w], [AREA.x, AREA.w]);
+  assert.equal(z[0].rect.h + z[2].rect.h, AREA.h);
+  assert.ok(Math.abs(z[2].rect.h - AREA.h / 3) <= 1);
+  assert.equal(z[2].rect.y, z[0].rect.y + z[0].rect.h);
 });
 
-test('serialize then restore gives the same layout and split to come back to', () => {
-  let s = L.setRatio(split3(), 0.3);
-  s = L.openTab(s, 'b', 'nodemon');
-  s = L.openKey(s, 'b:nodemon');
+test('applyArrangement sets the slots from existing pages only', () => {
+  const s = many();
+  const a = L.applyArrangement(s, { left: ['a:controller', 'a:sysmon'], right: ['a:talker'], lower: [] }, { left: 'a:sysmon' }, 0.3);
+  assert.deepEqual(a.slots.left, ['a:controller', 'a:sysmon']);
+  assert.equal(a.sel.left, 'a:sysmon');
+  assert.equal(a.sel.right, 'a:talker');
+  assert.equal(a.ratio, 0.3);
+  assert.equal(a.view, 'slots');
+  assert.equal(L.applyArrangement(s, { left: [], right: [], lower: [] }, {}, 0.5), s);
+  assert.equal(L.applyArrangement(s, { left: ['a:controller', 'a:controller'] }, {}, 0.5), s);
+  assert.equal(L.applyArrangement(s, { left: ['b:talker'] }, {}, 0.5), s);
+  assert.equal(L.applyArrangement(s, { left: ['a:h44'] }, {}, 0.5), s);
+});
+
+test('serialize then restore gives the same layout', () => {
+  let s = L.setRatio(example(), 0.3);
+  s = L.focusSlot(L.openKey(s, 'a:recorder'), 'right');
+  s = L.showAlone(s, 'a:h44');
   const back = L.restore(JSON.parse(JSON.stringify(L.serialize(s))), NODES, PAGES);
   assert.deepEqual(back.tabs, s.tabs);
-  assert.deepEqual([back.panes, back.mode, back.ratio, back.focus, back.saved], [s.panes, s.mode, s.ratio, s.focus, s.saved]);
+  for (const k of ['slots', 'sel', 'single', 'view', 'focus', 'ratio']) assert.deepEqual(back[k], s[k], k);
 });
 
-test('Last Heard is not saved, and a split that held it shrinks', () => {
-  let s = L.dropKey(L.openLastHeard(two(), 'a', 'https://lh.example/x'), 'a:talker', 'right');
-  s = L.dropKey(L.addTab(s, 'a', 'sysmon'), 'a:sysmon', 'below');
+test('Last Heard is not saved', () => {
+  let s = L.putInSlot(L.openLastHeard(example(), 'a', 'https://lh.example/x'), 'lh', 'lower');
   const saved = L.serialize(s);
+  assert.equal(JSON.stringify(saved).includes('lh'), false);
   assert.equal(saved.tabs.some((t) => t.pageId === 'lasthard'), false);
-  assert.equal(JSON.stringify(saved).includes('"lh"'), false);
   const back = L.restore(JSON.parse(JSON.stringify(saved)), NODES, PAGES);
   assert.equal(back.tabs.some((t) => t.key === 'lh'), false);
-  assert.equal(back.mode, 'cols');
+  assert.equal(back.sel.lower, 'a:nodemon');
 });
 
-test('restore drops tabs for missing nodes or pages and repairs the panes', () => {
+test('restore drops pages of missing nodes or pages and repairs the rest', () => {
   const saved = {
     tabs: [{ nodeId: 'a', pageId: 'controller' }, { nodeId: 'gone', pageId: 'talker' }, { nodeId: 'a', pageId: 'nope' }, { nodeId: 'a', pageId: 'controller' }],
-    panes: ['gone:talker', 'a:controller', null],
-    mode: 'trio',
-    saved: { mode: 'trio', panes: ['a:controller', 'gone:talker', null] },
+    slots: { left: ['gone:talker', 'a:controller'], right: ['a:nope'], lower: [] },
+    sel: { left: 'gone:talker', right: 'a:nope', lower: null },
+    single: 'gone:talker',
+    view: 'slots',
+    focus: 'right',
     ratio: 7,
-    focus: 2,
   };
   const s = L.restore(saved, NODES, PAGES);
   assert.deepEqual(s.tabs.map((t) => t.key), ['a:controller']);
-  assert.equal(s.mode, 'single');
-  assert.deepEqual(s.panes, ['a:controller', null, null]);
-  assert.equal(s.saved, null);
+  assert.deepEqual(s.slots, { left: ['a:controller'], right: [], lower: [] });
+  assert.equal(s.sel.left, 'a:controller');
+  assert.equal(s.focus, 'left');
   assert.equal(s.ratio, 0.9);
-  assert.equal(s.focus, 0);
+  assert.equal(s.view, 'slots');
+});
+
+test('restore reads the 0.5.0 layout file: two or three panes become left, right and lower', () => {
+  const old = { tabs: [{ nodeId: 'a', pageId: 'controller' }, { nodeId: 'a', pageId: 'talker' }, { nodeId: 'a', pageId: 'sysmon' }], panes: ['a:talker', 'a:controller', 'a:sysmon'], mode: 'trio', ratio: 0.4, focus: 1 };
+  const s = L.restore(old, NODES, PAGES);
+  assert.deepEqual(s.slots, { left: ['a:talker'], right: ['a:controller'], lower: ['a:sysmon'] });
+  assert.equal(s.view, 'slots');
+  assert.equal(s.ratio, 0.4);
+  const one = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], panes: ['a:controller', null, null], mode: 'single' }, NODES, PAGES);
+  assert.equal(one.view, 'single');
+  assert.equal(one.single, 'a:controller');
 });
 
 test('restore of junk gives an empty layout', () => {
   assert.deepEqual(L.restore(null, NODES, PAGES), L.emptyState());
   assert.deepEqual(L.restore({ tabs: 5 }, NODES, PAGES), L.emptyState());
-  const s = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], saved: 7, panes: 'x', mode: 'weird' }, NODES, PAGES);
-  assert.equal(s.mode, 'single');
+  const s = L.restore({ tabs: [{ nodeId: 'a', pageId: 'controller' }], slots: 7, sel: 3, view: 'weird' }, NODES, PAGES);
+  assert.equal(s.view, 'single');
+  assert.equal(s.single, 'a:controller');
 });

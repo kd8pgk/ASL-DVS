@@ -26,6 +26,12 @@
     noticeTimer = setTimeout(() => { n.hidden = true; }, 6000);
   }
 
+  function tabText(label) {
+    if (nodes.length > 1) return label;
+    const i = String(label).indexOf(' · ');
+    return i >= 0 ? label.slice(i + 3) : label;
+  }
+
   function nodeLabel(n) {
     return n.name || n.host;
   }
@@ -72,12 +78,10 @@
     if (lay) render();
   }
 
+  const SLOT_NAMES = { left: 'Left slot', right: 'Right slot', lower: 'Lower slot' };
+
   function zoneLabel(id) {
-    const mode = lay ? lay.mode : 'single';
-    if (id === 'right') return 'Add beside';
-    if (id === 'below') return 'Add below';
-    if (mode === 'single') return 'Show alone';
-    return { pane0: 'Replace left', pane1: 'Replace right', pane2: 'Replace bottom' }[id] || id;
+    return SLOT_NAMES[id] || id;
   }
 
   function closeMenu() {
@@ -87,11 +91,25 @@
     setOverlay();
   }
 
-  function showMenu(ev, src, isTab) {
+  function tabFor(src) {
+    if (!lay) return null;
+    if (src.key) return lay.tabs.find((t) => t.key === src.key) || null;
+    return lay.tabs.find((t) => t.nodeId === src.nodeId && t.pageId === src.pageId) || null;
+  }
+
+  function isSingleOnly(src) {
+    const t = tabFor(src);
+    if (t) return t.singleOnly;
+    const p = pages.find((x) => x.id === src.pageId);
+    return Boolean(p && p.single);
+  }
+
+  function showMenu(ev, src) {
     ev.preventDefault();
     if (!lay) return;
     const menu = $('menu');
     menu.textContent = '';
+    const tab = tabFor(src);
     const add = (label, fn) => {
       const b = el('button', 'menu-item', label);
       b.type = 'button';
@@ -102,16 +120,106 @@
       menu.append(b);
     };
     add('Show alone', () => window.nc.showAlone(argOf(src)));
-    for (const z of lay.zones) {
-      if (lay.mode === 'single' && z.id === 'pane0') continue;
-      add(zoneLabel(z.id), () => window.nc.dropTab({ ...argOf(src), zone: z.id }));
+    if (!isSingleOnly(src)) {
+      for (const z of lay.zones) {
+        if (tab && tab.slot === z.id) continue;
+        add(`Put in ${SLOT_NAMES[z.id]}`, () => window.nc.dropTab({ ...argOf(src), slot: z.id }));
+      }
     }
-    if (isTab) add('Close tab', () => window.nc.closeTab(src.key));
+    if (tab && tab.slot) add('Take out of its slot', () => window.nc.unslot({ key: tab.key }));
+    if (tab) add('Close tab', () => window.nc.closeTab(tab.key));
     menu.hidden = false;
-    menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 200)}px`;
+    menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 220)}px`;
     menu.style.top = `${Math.min(ev.clientY, window.innerHeight - 40 - menu.children.length * 30)}px`;
     menuOpen = true;
     setOverlay();
+  }
+
+  function entry(src, label, cls, extra) {
+    const li = el('li', `entry ${cls || ''}`.trim());
+    const b = el('button', 'entry-main', label);
+    b.type = 'button';
+    li.draggable = true;
+    b.addEventListener('click', (ev) => activate(src, ev));
+    li.addEventListener('contextmenu', (ev) => showMenu(ev, src));
+    li.addEventListener('dragstart', (ev) => startDrag(ev, src));
+    li.addEventListener('dragend', endDrag);
+    li.append(b);
+    if (extra) li.append(extra);
+    return li;
+  }
+
+  function smallButton(text, title, fn) {
+    const x = el('button', 'x', text);
+    x.type = 'button';
+    x.title = title;
+    x.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      fn();
+    });
+    return x;
+  }
+
+  function dropTarget(node, onDrop) {
+    node.addEventListener('dragenter', (ev) => {
+      if (!drag) return;
+      ev.preventDefault();
+      node.classList.add('over');
+    });
+    node.addEventListener('dragover', (ev) => {
+      if (!drag) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'move';
+      node.classList.add('over');
+    });
+    node.addEventListener('dragleave', (ev) => {
+      if (!node.contains(ev.relatedTarget)) node.classList.remove('over');
+    });
+    node.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      const src = drag;
+      node.classList.remove('over');
+      endDrag();
+      if (src) onDrop(src);
+    });
+  }
+
+  function renderSlots() {
+    const box = $('slots-box');
+    box.textContent = '';
+    if (!lay) return;
+    for (const sl of lay.slots) {
+      const sec = el('section', `sec slot${lay.view === 'slots' && lay.focus === sl.slot ? ' focus' : ''}`);
+      sec.dataset.slot = sl.slot;
+      sec.append(el('div', 'sec-head', `${sl.label} slot`));
+      const ul = el('ul', 'entries');
+      if (!sl.pages.length) ul.append(el('li', 'hint', 'Drop a page here'));
+      for (const pg of sl.pages) {
+        const src = { key: pg.key };
+        const out = smallButton('×', 'Take out of this slot', () => window.nc.unslot(src));
+        ul.append(entry(src, tabText(pg.label), pg.selected ? 'sel' : '', out));
+      }
+      sec.append(ul);
+      dropTarget(sec, (src) => window.nc.dropTab({ ...argOf(src), slot: sl.slot }));
+      box.append(sec);
+    }
+  }
+
+  function renderSingles() {
+    const ul = $('singles');
+    ul.textContent = '';
+    const list = lay ? lay.tabs.filter((t) => !t.slot) : [];
+    if (!list.length) ul.append(el('li', 'hint', 'Pages you open appear here'));
+    for (const t of list) {
+      const src = { key: t.key };
+      const cls = lay.view === 'single' && t.shown ? 'sel' : '';
+      ul.append(entry(src, tabText(t.label), cls, smallButton('×', 'Close', () => window.nc.closeTab(t.key))));
+    }
+    dropTarget($('singles-box'), (src) => {
+      const t = tabFor(src);
+      if (t && t.slot) window.nc.unslot({ key: t.key });
+      else if (!t) window.nc.showAlone(argOf(src));
+    });
   }
 
   function renderNodes() {
@@ -130,12 +238,12 @@
       const box = el('div', 'pages');
       for (const p of pages) {
         const tab = lay && lay.tabs.find((t) => t.nodeId === n.id && t.pageId === p.id);
-        const b = el('button', tab ? (tab.shown >= 0 ? 'on' : 'open') : '', p.label);
+        const b = el('button', tab ? (tab.shown ? 'on' : 'open') : '', p.label);
         b.type = 'button';
-        b.draggable = true;
+        b.draggable = !p.single;
         const src = { nodeId: n.id, pageId: p.id };
         b.addEventListener('click', (ev) => activate(src, ev));
-        b.addEventListener('contextmenu', (ev) => showMenu(ev, src, false));
+        b.addEventListener('contextmenu', (ev) => showMenu(ev, src));
         b.addEventListener('dragstart', (ev) => startDrag(ev, src));
         b.addEventListener('dragend', endDrag);
         box.append(b);
@@ -174,13 +282,13 @@
     if (!lay) return;
     for (const t of lay.tabs) {
       const cls = ['tab'];
-      if (t.shown >= 0) cls.push('shown');
-      if (t.shown >= 0 && t.shown === lay.focus) cls.push('focus');
+      if (t.shown) cls.push('shown');
+      if (t.focused) cls.push('focus');
       const tab = el('div', cls.join(' '));
       tab.setAttribute('role', 'tab');
       tab.draggable = true;
       tab.append(el('span', `dot ${t.status}${t.idle ? ' idle' : ''}`));
-      tab.append(el('span', 'label', t.via === 'away' ? `${t.label} (away)` : t.via === 'lan' ? `${t.label} (LAN address)` : t.label));
+      tab.append(el('span', 'label', t.via === 'away' ? `${tabText(t.label)} (away)` : t.via === 'lan' ? `${tabText(t.label)} (LAN address)` : tabText(t.label)));
       const x = el('button', 'x', '×');
       x.type = 'button';
       x.title = 'Close (Ctrl+W)';
@@ -191,17 +299,16 @@
       tab.append(x);
       const src = { key: t.key };
       tab.addEventListener('click', (ev) => activate(src, ev));
-      tab.addEventListener('contextmenu', (ev) => showMenu(ev, src, true));
+      tab.addEventListener('contextmenu', (ev) => showMenu(ev, src));
       tab.addEventListener('dragstart', (ev) => startDrag(ev, src));
       tab.addEventListener('dragend', endDrag);
       box.append(tab);
     }
-    for (const b of $('modes').querySelectorAll('button')) {
-      const m = b.dataset.mode;
-      b.classList.toggle('on', lay.mode === m);
-      b.disabled = m !== 'single' && !lay.counts[m] && lay.mode !== m;
+    for (const b of $('views').querySelectorAll('button')) {
+      const v = b.dataset.view;
+      b.classList.toggle('on', lay.view === v);
+      b.disabled = v === 'slots' ? !lay.canSplit : !lay.tabs.length;
     }
-    $('back').hidden = !lay.canBack;
     $('save-split').disabled = !lay.canSave;
     $('reload').disabled = !lay.tabs.length;
   }
@@ -267,10 +374,25 @@
   }
 
   function strip(pane, i) {
-    const s = el('div', `pane-strip${lay.focus === i ? ' focus' : ''}`);
+    const s = el('div', `pane-strip${lay.focus === pane.slot ? ' focus' : ''}`);
     placeRect(s, { x: pane.rect.x, y: pane.rect.y, w: pane.rect.w, h: lay.grid.strip });
     s.dataset.strip = String(i);
-    s.append(el('span', 'strip-title', pane.label));
+    s.append(el('span', 'strip-slot', SLOT_NAMES[pane.slot] ? SLOT_NAMES[pane.slot].replace(' slot', '') : ''));
+    const stack = el('div', 'strip-stack');
+    if (pane.stack.length > 1) {
+      for (const item of pane.stack) {
+        const b = el('button', item.selected ? 'on' : '', item.label);
+        b.type = 'button';
+        b.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          window.nc.activateTab(item.key);
+        });
+        stack.append(b);
+      }
+    } else {
+      stack.append(el('span', 'strip-title', tabText(pane.label)));
+    }
+    s.append(stack);
     const alone = el('button', '', 'Alone');
     alone.type = 'button';
     alone.title = 'Show this page by itself';
@@ -278,15 +400,15 @@
       ev.stopPropagation();
       window.nc.showAlone({ key: pane.key });
     });
-    const out = el('button', '', 'Remove');
+    const out = el('button', '', 'Out');
     out.type = 'button';
-    out.title = 'Take this page out of the split';
+    out.title = 'Take this page out of its slot';
     out.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      window.nc.removePane(i);
+      window.nc.unslot({ key: pane.key });
     });
     s.append(alone, out);
-    s.addEventListener('click', () => window.nc.focusPane(i));
+    s.addEventListener('click', () => window.nc.focusSlot(pane.slot));
     return s;
   }
 
@@ -310,19 +432,22 @@
         ev.preventDefault();
         const src = drag;
         endDrag();
-        if (src) window.nc.dropTab({ ...argOf(src), zone: z.id });
+        if (src) window.nc.dropTab({ ...argOf(src), slot: z.id });
       });
       box.append(d);
     }
   }
 
   function sigOf() {
-    return JSON.stringify([lay.mode, lay.overlay, Boolean(drag), lay.dividers.length, lay.zones.map((z) => z.id), lay.focus, lay.panes.map((p) => [p.status, p.key, p.label, p.error && p.error.message])]);
+    return JSON.stringify([lay.view, lay.overlay, Boolean(drag), lay.dividers.length, lay.focus, lay.strips, lay.panes.map((p) => [p.slot, p.status, p.key, p.label, p.error && p.error.message, p.stack.map((x) => `${x.key}:${x.selected}`)])]);
   }
 
   function positionPanes() {
     for (const c of $('panes').children) {
-      if (c.dataset.divider !== undefined) placeRect(c, lay.dividers[Number(c.dataset.divider)].rect);
+      if (c.dataset.empty !== undefined) {
+        const a = lay.zones;
+        placeRect(c, { x: a[0].rect.x, y: a[0].rect.y, w: a[2].rect.w, h: a[0].rect.h + a[2].rect.h });
+      } else if (c.dataset.divider !== undefined) placeRect(c, lay.dividers[Number(c.dataset.divider)].rect);
       else if (c.dataset.strip !== undefined) placeRect(c, { x: lay.panes[Number(c.dataset.strip)].rect.x, y: lay.panes[Number(c.dataset.strip)].rect.y, w: lay.panes[Number(c.dataset.strip)].rect.w, h: lay.grid.strip });
       else if (c.dataset.pane !== undefined) placeRect(c, lay.panes[Number(c.dataset.pane)].view);
       else if (c.dataset.zone !== undefined) placeRect(c, lay.zones.find((z) => z.id === c.dataset.zone).rect);
@@ -343,8 +468,16 @@
       return;
     }
     if (lay.overlay) return;
+    if (!lay.panes.length) {
+      const a = lay.zones;
+      const m = el('div', 'pane-msg');
+      placeRect(m, { x: a[0].rect.x, y: a[0].rect.y, w: a[2].rect.w, h: a[0].rect.h + a[2].rect.h });
+      m.append(el('p', '', 'Add a node, then open a page from the list. Drag a page into the Left, Right or Lower slot, or onto this area, to show pages together.'));
+      m.dataset.empty = '1';
+      box.append(m);
+    }
     lay.panes.forEach((pane, i) => {
-      if (lay.mode !== 'single' && pane.key) box.append(strip(pane, i));
+      if (lay.strips && pane.key) box.append(strip(pane, i));
       if (pane.status === 'ok') return;
       let m;
       if (pane.status === 'failed') {
@@ -352,8 +485,7 @@
       } else {
         m = el('div', 'pane-msg');
         placeRect(m, pane.view);
-        if (pane.status === 'empty') m.append(el('p', '', 'Add a node, then open a page from the list. Drag a tab onto this area, or right-click it, to show two or three pages together.'));
-        else m.append(el('p', '', 'Connecting…'));
+        m.append(el('p', '', 'Connecting…'));
       }
       m.dataset.pane = String(i);
       box.append(m);
@@ -372,6 +504,8 @@
 
   function render() {
     renderTabs();
+    renderSlots();
+    renderSingles();
     renderNodes();
     renderSplits();
     renderPanes();
@@ -514,13 +648,11 @@
     $('import').addEventListener('click', importNodes);
     $('export').addEventListener('click', exportNodes);
     $('reload').addEventListener('click', () => {
-      if (!lay) return;
-      const key = lay.panes[lay.focus] && lay.panes[lay.focus].key;
-      if (key) window.nc.reloadTab(key);
+      const t = lay && lay.tabs.find((x) => x.focused);
+      if (t) window.nc.reloadTab(t.key);
     });
-    $('back').addEventListener('click', () => window.nc.backToSplit());
     $('save-split').addEventListener('click', openNameDialog);
-    for (const b of $('modes').querySelectorAll('button')) b.addEventListener('click', () => window.nc.setMode(b.dataset.mode));
+    for (const b of $('views').querySelectorAll('button')) b.addEventListener('click', () => window.nc.setView(b.dataset.view));
     $('f-cancel').addEventListener('click', closeDialog);
     $('dlg').addEventListener('close', setOverlay);
     $('form').addEventListener('submit', saveDialog);

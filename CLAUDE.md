@@ -131,8 +131,8 @@
 ## Desktop app (`desktop/`)
 
 - **Node Controller Desktop** is an Electron client in `desktop/`, written in
-  JavaScript (not Python). It only shows the pages that nodes serve (Node
-  Controller and Node Talker); it holds no node tool and no Python. Linux
+  JavaScript (not Python). It only shows the pages that nodes serve (see Layout);
+  it holds no node tool and no Python. Linux
   first (AppImage); Windows later, after the owner approves the look. It is not
   on the stable/testing channels.
 - **Version** is `version` in `desktop/package.json` (`X.Y.Z`, no cosmetic
@@ -152,16 +152,17 @@
   and `desktop/test/package.js` hold this: a change that weakens it fails them,
   and a change that strengthens it updates them in the same pull request.
 - **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
-  12. Every page opens as a single-page tab (Node Controller, Node Talker,
-  SysMon, Node Monitor, Last Heard); a split is an arrangement of open tabs: 1
-  page, 2 pages (6 + 6) or 3 pages (two over a full-width third, equal rows),
-  made by dragging a tab onto the page area, the tab menu, Ctrl+click or the
-  buttons. Places fill left, then right, then down. Never more than three
-  panes (no quarters). Clicking a page that is in the split brings back the
-  whole split with focus on it; one that is not shows alone, with Back to
-  split. Pages that are not on screen are idle (slowed and muted), except
-  Node Talker, which is never idle; pages on screen never are. Last Heard
-  opens as a new single page.
+  12. The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
+  Recorder, WifiMon and 44helper, and Last Heard. Every page opens as a single
+  page first. The sidebar has three slots, Left, Right and Lower, each a
+  stacked list of pages (any page in any slot, one selected per slot); the
+  slots decide what the page area shows: one slot is one page, Left and Right
+  are 6 and 6, adding Lower puts a full-width third under them (equal rows).
+  Never more than three panes (no quarters). Clicking a page in a slot selects
+  it and shows all the slots with focus on it; a page in no slot shows alone.
+  44helper is always a single page. Pages that are not on screen are idle
+  (slowed and muted), except Node Talker, which is never idle; pages on screen
+  never are. Last Heard opens as a new single page.
 - **Window titles** say "Node Controller" (see Naming above); node page names
   stay as the nodes serve them.
 - **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after

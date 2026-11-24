@@ -1,8 +1,10 @@
 const MIN_PANE = 240;
 const GAP = 6;
 const STRIP = 28;
-const MODES = ['single', 'cols', 'trio'];
-const COUNT = { single: 1, cols: 2, trio: 3 };
+const SLOTS = ['left', 'right', 'lower'];
+const SLOT_LABEL = { left: 'Left', right: 'Right', lower: 'Lower' };
+const SINGLE_ONLY = new Set(['h44']);
+const MAX_SAVED_PAGES = 12;
 const LH_KEY = 'lh';
 const UNITS = 15;
 const SIDEBAR_UNITS = 3;
@@ -14,7 +16,15 @@ function grid(w, h) {
 }
 
 function emptyState() {
-  return { tabs: [], panes: [null, null, null], mode: 'single', saved: null, ratio: 0.5, focus: 0 };
+  return {
+    tabs: [],
+    slots: { left: [], right: [], lower: [] },
+    sel: { left: null, right: null, lower: null },
+    single: null,
+    view: 'single',
+    focus: 'left',
+    ratio: 0.5,
+  };
 }
 
 function keyOf(nodeId, pageId) {
@@ -25,47 +35,55 @@ function hasTab(s, k) {
   return Boolean(k) && s.tabs.some((t) => t.key === k);
 }
 
-function arrangement(s, mode, panes) {
-  const list = [];
-  for (let i = 0; i < COUNT[mode]; i += 1) if (hasTab(s, panes[i]) && !list.includes(panes[i])) list.push(panes[i]);
-  if (list.length >= 3 && mode === 'trio') return { mode: 'trio', panes: list.slice(0, 3) };
-  if (list.length >= 2) return { mode: 'cols', panes: [list[0], list[1], null] };
-  return null;
+function isSingleOnly(s, k) {
+  const t = s.tabs.find((x) => x.key === k);
+  return Boolean(t) && SINGLE_ONLY.has(t.pageId);
 }
 
-function savedOf(s) {
-  if (!s.saved) return null;
-  const a = arrangement(s, s.saved.mode, s.saved.panes);
-  return a ? { mode: a.mode, panes: [a.panes[0], a.panes[1], a.panes[2] || null] } : null;
+function slotOf(s, k) {
+  return SLOTS.find((sl) => s.slots[sl].includes(k)) || null;
+}
+
+function occupied(s) {
+  return SLOTS.filter((sl) => s.sel[sl]);
 }
 
 function settle(s) {
   const tabs = s.tabs;
-  if (!tabs.length) return { ...s, tabs, panes: [null, null, null], mode: 'single', saved: null, focus: 0 };
-  let mode = MODES.includes(s.mode) ? s.mode : 'single';
-  let panes = [null, null, null];
-  if (mode === 'single') {
-    panes[0] = hasTab(s, s.panes[0]) ? s.panes[0] : tabs[0].key;
-  } else {
-    const a = arrangement(s, mode, s.panes);
-    if (a) {
-      mode = a.mode;
-      panes = [a.panes[0], a.panes[1], a.panes[2] || null];
-    } else {
-      mode = 'single';
-      const keep = s.panes.find((k) => hasTab(s, k));
-      panes[0] = keep || tabs[0].key;
+  const slots = { left: [], right: [], lower: [] };
+  const seen = new Set();
+  for (const sl of SLOTS) {
+    for (const k of (s.slots && s.slots[sl]) || []) {
+      if (hasTab(s, k) && !seen.has(k) && !isSingleOnly(s, k)) {
+        seen.add(k);
+        slots[sl].push(k);
+      }
     }
   }
-  let focus = Number.isInteger(s.focus) ? s.focus : 0;
-  if (focus < 0 || focus >= COUNT[mode] || !panes[focus]) focus = 0;
-  const next = { ...s, tabs, panes, mode, focus };
-  next.saved = mode === 'single' ? savedOf(next) : { mode, panes: [...panes] };
-  return next;
+  const sel = { left: null, right: null, lower: null };
+  for (const sl of SLOTS) sel[sl] = slots[sl].includes(s.sel && s.sel[sl]) ? s.sel[sl] : slots[sl][0] || null;
+  if (!tabs.length) return { ...s, tabs, slots, sel, single: null, view: 'single', focus: 'left' };
+  const occ = SLOTS.filter((sl) => sel[sl]);
+  let view = s.view === 'slots' && occ.length ? 'slots' : 'single';
+  let single = hasTab(s, s.single) ? s.single : null;
+  if (view === 'single' && !single) single = (occ.length ? sel[occ[0]] : null) || tabs[0].key;
+  const focus = SLOTS.includes(s.focus) && sel[s.focus] ? s.focus : occ[0] || 'left';
+  return { ...s, tabs, slots, sel, single, view, focus };
+}
+
+function paneList(s) {
+  if (s.view === 'slots' && occupied(s).length) return occupied(s).map((sl) => ({ slot: sl, key: s.sel[sl] }));
+  return s.single ? [{ slot: null, key: s.single }] : [];
 }
 
 function shown(s) {
-  return s.panes.slice(0, COUNT[s.mode]);
+  return paneList(s).map((p) => p.key);
+}
+
+function focusedKey(s) {
+  const list = paneList(s);
+  const hit = list.find((p) => p.slot === s.focus) || list[0];
+  return hit ? hit.key : null;
 }
 
 function addTab(s, nodeId, pageId) {
@@ -76,22 +94,13 @@ function addTab(s, nodeId, pageId) {
 
 function showAlone(s, key) {
   if (!hasTab(s, key)) return s;
-  return settle({ ...s, mode: 'single', panes: [key, null, null], focus: 0 });
-}
-
-function restoreSaved(s, focusKey) {
-  const sv = savedOf(s);
-  if (!sv) return null;
-  const at = focusKey ? sv.panes.indexOf(focusKey) : -1;
-  return settle({ ...s, mode: sv.mode, panes: sv.panes, focus: at >= 0 ? at : 0 });
+  return settle({ ...s, single: key, view: 'single' });
 }
 
 function openKey(s, key) {
   if (!hasTab(s, key)) return s;
-  const at = shown(s).indexOf(key);
-  if (at >= 0) return { ...s, focus: at };
-  const back = savedOf(s);
-  if (back && back.panes.includes(key)) return restoreSaved(s, key);
+  const sl = slotOf(s, key);
+  if (sl) return settle({ ...s, sel: { ...s.sel, [sl]: key }, focus: sl, view: 'slots' });
   return showAlone(s, key);
 }
 
@@ -104,27 +113,70 @@ function openLastHeard(s, nodeId, url) {
   const tabs = has
     ? s.tabs.map((t) => (t.key === LH_KEY ? { ...t, nodeId, url } : t))
     : [...s.tabs, { key: LH_KEY, nodeId, pageId: 'lasthard', kind: 'lh', url }];
-  return openKey({ ...s, tabs }, LH_KEY);
+  return showAlone({ ...s, tabs }, LH_KEY);
 }
 
-function backToSplit(s) {
-  if (s.mode !== 'single') return s;
-  return restoreSaved(s, null) || s;
+function putInSlot(s, key, slot) {
+  if (!hasTab(s, key) || !SLOTS.includes(slot) || isSingleOnly(s, key)) return s;
+  const slots = {};
+  for (const sl of SLOTS) slots[sl] = s.slots[sl].filter((k) => k !== key);
+  slots[slot] = [...slots[slot], key];
+  return settle({ ...s, slots, sel: { ...s.sel, [slot]: key }, focus: slot, view: 'slots' });
+}
+
+function dropKey(s, key, slot) {
+  return putInSlot(s, key, slot);
+}
+
+function unslot(s, key) {
+  const sl = slotOf(s, key);
+  if (!sl) return s;
+  const slots = { ...s.slots, [sl]: s.slots[sl].filter((k) => k !== key) };
+  const next = settle({ ...s, slots });
+  if (next.view === 'slots' && !occupied(next).length) return settle({ ...next, view: 'single', single: key });
+  return { ...next, single: next.single || key };
+}
+
+function nextSlot(s) {
+  const free = SLOTS.find((sl) => !s.slots[sl].length);
+  return free || s.focus;
+}
+
+function addNext(s, key) {
+  if (!hasTab(s, key) || isSingleOnly(s, key)) return openKey(s, key);
+  if (slotOf(s, key)) return openKey(s, key);
+  return putInSlot(s, key, nextSlot(s));
+}
+
+function setView(s, view) {
+  if (view === 'single') {
+    if (s.view === 'single') return s;
+    return settle({ ...s, view: 'single', single: s.sel[s.focus] || s.single });
+  }
+  if (view === 'slots') {
+    if (!occupied(s).length || s.view === 'slots') return s;
+    return settle({ ...s, view: 'slots' });
+  }
+  return s;
+}
+
+function canSplit(s) {
+  return occupied(s).length >= 1;
 }
 
 function canBack(s) {
-  return s.mode === 'single' && savedOf(s) !== null;
+  return s.view === 'single' && canSplit(s);
 }
 
 function closeTab(s, key) {
   if (!hasTab(s, key)) return s;
-  const wasShown = shown(s).includes(key);
   const tabs = s.tabs.filter((t) => t.key !== key);
-  const panes = s.panes.map((k) => (k === key ? null : k));
-  const next = { ...s, tabs, panes };
-  if (wasShown && s.mode === 'single') {
-    const back = restoreSaved({ ...next, saved: s.saved }, null);
-    if (back && back.mode !== 'single') return back;
+  const slots = {};
+  for (const sl of SLOTS) slots[sl] = s.slots[sl].filter((k) => k !== key);
+  let next = { ...s, tabs, slots };
+  if (s.view === 'single' && s.single === key) {
+    const any = SLOTS.some((sl) => slots[sl].some((k) => tabs.some((t) => t.key === k)));
+    next = { ...next, single: null, view: any ? 'slots' : 'single' };
   }
   return settle(next);
 }
@@ -135,52 +187,36 @@ function closeNode(s, nodeId) {
   return out;
 }
 
-function removePane(s, i) {
-  if (s.mode === 'single' || !Number.isInteger(i) || i < 0 || i >= COUNT[s.mode]) return s;
-  const panes = [...s.panes];
-  panes[i] = null;
-  return settle({ ...s, panes, focus: 0 });
-}
-
-function applyArrangement(s, mode, keys, ratio) {
-  if (!['cols', 'trio'].includes(mode) || keys.length !== COUNT[mode] || keys.some((k) => !hasTab(s, k)) || new Set(keys).size !== keys.length) return s;
-  const r = Number.isFinite(ratio) ? Math.min(0.9, Math.max(0.1, ratio)) : s.ratio;
-  return settle({ ...s, mode, panes: [keys[0], keys[1], keys[2] || null], ratio: r, focus: 0 });
-}
-
-function setMode(s, mode) {
-  if (!MODES.includes(mode) || mode === s.mode) return s;
-  const n = COUNT[mode];
-  if (n > s.tabs.length) return s;
-  if (mode === 'single') return showAlone(s, s.panes[s.focus] || s.panes[0]);
-  const back = savedOf(s);
-  if (back && back.mode === mode) return restoreSaved(s, s.panes[s.focus]);
-  const cur = shown(s);
-  if (s.mode === 'single') {
-    const key = cur[0];
-    const at = (k) => s.tabs.findIndex((t) => t.key === k);
-    let pick = s.tabs.slice(0, n).map((t) => t.key);
-    if (!pick.includes(key)) pick[n - 1] = key;
-    pick = pick.sort((a, b) => at(a) - at(b));
-    return settle({ ...s, mode, panes: [pick[0], pick[1], pick[2] || null], focus: pick.indexOf(key) });
-  }
-  if (mode === 'cols') {
-    if (s.focus === 2) return settle({ ...s, mode, panes: [cur[0], cur[2], null], focus: 1 });
-    return settle({ ...s, mode, panes: [cur[0], cur[1], null] });
-  }
-  const third = s.tabs.find((t) => !cur.includes(t.key));
-  return settle({ ...s, mode, panes: [cur[0], cur[1], third ? third.key : null] });
-}
-
 function setRatio(s, r) {
   const n = Number(r);
   if (!Number.isFinite(n)) return s;
   return { ...s, ratio: Math.min(0.9, Math.max(0.1, n)) };
 }
 
-function focusPane(s, i) {
-  if (!Number.isInteger(i) || i < 0 || i >= COUNT[s.mode]) return s;
-  return s.panes[i] ? { ...s, focus: i } : s;
+function focusSlot(s, slot) {
+  if (!SLOTS.includes(slot) || !s.sel[slot]) return s;
+  return { ...s, focus: slot };
+}
+
+function focusKey(s, key) {
+  const sl = slotOf(s, key);
+  if (!sl || s.view !== 'slots' || s.sel[sl] !== key) return s;
+  return { ...s, focus: sl };
+}
+
+function applyArrangement(s, spec, selSpec, ratio) {
+  const all = SLOTS.flatMap((sl) => (spec[sl] || []));
+  if (!all.length || all.length > MAX_SAVED_PAGES || new Set(all).size !== all.length) return s;
+  if (all.some((k) => !hasTab(s, k) || isSingleOnly(s, k))) return s;
+  const slots = {};
+  const sel = {};
+  for (const sl of SLOTS) {
+    slots[sl] = [...(spec[sl] || [])];
+    sel[sl] = selSpec && slots[sl].includes(selSpec[sl]) ? selSpec[sl] : slots[sl][0] || null;
+  }
+  const r = Number.isFinite(ratio) ? Math.min(0.9, Math.max(0.1, ratio)) : s.ratio;
+  const first = SLOTS.find((sl) => slots[sl].length);
+  return settle({ ...s, slots, sel, ratio: r, view: 'slots', focus: first });
 }
 
 function clampRatio(ratio, total) {
@@ -192,102 +228,81 @@ function clampRatio(ratio, total) {
 
 function rects(s, area) {
   const f = { x: area.x, y: area.y, w: Math.max(0, area.w), h: Math.max(0, area.h) };
-  if (s.mode === 'single') return { panes: [f], dividers: [] };
-  const usable = f.w - GAP;
-  const a = Math.floor(usable * clampRatio(s.ratio, f.w));
-  const top = s.mode === 'cols' ? f.h : Math.floor((f.h - GAP) / 2);
-  const left = { x: f.x, y: f.y, w: a, h: top };
-  const right = { x: f.x + a + GAP, y: f.y, w: Math.max(0, usable - a), h: top };
-  const vertical = { rect: { x: f.x + a, y: f.y, w: GAP, h: top }, axis: 'x', drag: true };
-  if (s.mode === 'cols') return { panes: [left, right], dividers: [vertical] };
-  const bottom = { x: f.x, y: f.y + top + GAP, w: f.w, h: Math.max(0, f.h - GAP - top) };
-  const horizontal = { rect: { x: f.x, y: f.y + top, w: f.w, h: GAP }, axis: 'y', drag: false };
-  return { panes: [left, right, bottom], dividers: [vertical, horizontal] };
+  const list = paneList(s);
+  if (list.length <= 1) return { panes: list.map(() => f), dividers: [] };
+  const top = list.filter((p) => p.slot === 'left' || p.slot === 'right');
+  const low = list.find((p) => p.slot === 'lower');
+  const rowH = low && top.length ? Math.floor((f.h - GAP) / 2) : f.h;
+  const rect = {};
+  const dividers = [];
+  if (top.length === 2) {
+    const usable = f.w - GAP;
+    const a = Math.floor(usable * clampRatio(s.ratio, f.w));
+    rect[top[0].slot] = { x: f.x, y: f.y, w: a, h: rowH };
+    rect[top[1].slot] = { x: f.x + a + GAP, y: f.y, w: Math.max(0, usable - a), h: rowH };
+    dividers.push({ rect: { x: f.x + a, y: f.y, w: GAP, h: rowH }, axis: 'x', drag: true });
+  } else if (top.length === 1) {
+    rect[top[0].slot] = { x: f.x, y: f.y, w: f.w, h: rowH };
+  }
+  if (low) {
+    if (top.length) {
+      rect.lower = { x: f.x, y: f.y + rowH + GAP, w: f.w, h: Math.max(0, f.h - GAP - rowH) };
+      dividers.push({ rect: { x: f.x, y: f.y + rowH, w: f.w, h: GAP }, axis: 'y', drag: false });
+    } else {
+      rect.lower = f;
+    }
+  }
+  return { panes: list.map((p) => rect[p.slot]), dividers };
 }
 
 function viewRect(s, rect) {
-  if (s.mode === 'single') return rect;
+  if (paneList(s).length < 2) return rect;
   return { x: rect.x, y: rect.y + STRIP, w: rect.w, h: Math.max(0, rect.h - STRIP) };
 }
 
-function dropZones(s, area) {
+function dropZones(area) {
   const f = { x: area.x, y: area.y, w: Math.max(0, area.w), h: Math.max(0, area.h) };
-  if (s.mode === 'single') {
-    const half = Math.floor(f.w / 2);
-    return [
-      { id: 'pane0', rect: { x: f.x, y: f.y, w: half, h: f.h } },
-      { id: 'right', rect: { x: f.x + half, y: f.y, w: f.w - half, h: f.h } },
-    ];
-  }
-  const r = rects(s, area);
-  if (s.mode === 'cols') {
-    const bottom = Math.floor(f.h / 3);
-    const top = f.h - bottom;
-    return [
-      { id: 'pane0', rect: { x: r.panes[0].x, y: f.y, w: r.panes[0].w, h: top } },
-      { id: 'pane1', rect: { x: r.panes[1].x, y: f.y, w: r.panes[1].w, h: top } },
-      { id: 'below', rect: { x: f.x, y: f.y + top, w: f.w, h: bottom } },
-    ];
-  }
-  return r.panes.map((rect, i) => ({ id: `pane${i}`, rect }));
-}
-
-function zoneIds(s) {
-  if (s.mode === 'single') return ['pane0', 'right'];
-  if (s.mode === 'cols') return ['pane0', 'pane1', 'below'];
-  return ['pane0', 'pane1', 'pane2'];
-}
-
-function dropKey(s, key, zone) {
-  if (!hasTab(s, key) || !zoneIds(s).includes(zone)) return s;
-  const cur = shown(s);
-  if (zone === 'right') {
-    if (cur[0] === key) return s;
-    return settle({ ...s, mode: 'cols', panes: [cur[0], key, null], focus: 1 });
-  }
-  if (zone === 'below') {
-    if (cur.includes(key)) return s;
-    return settle({ ...s, mode: 'trio', panes: [cur[0], cur[1], key], focus: 2 });
-  }
-  const i = Number(zone.slice(4));
-  if (s.mode === 'single') return showAlone(s, key);
-  const panes = [...s.panes];
-  const j = cur.indexOf(key);
-  if (j === i) return { ...s, focus: i };
-  if (j >= 0) {
-    panes[j] = panes[i];
-    panes[i] = key;
-  } else {
-    panes[i] = key;
-  }
-  return settle({ ...s, panes, focus: i });
-}
-
-function nextZone(s) {
-  if (s.mode === 'single') return 'right';
-  if (s.mode === 'cols') return 'below';
-  return 'pane2';
-}
-
-function addNext(s, key) {
-  if (!hasTab(s, key)) return s;
-  const at = shown(s).indexOf(key);
-  if (at >= 0) return { ...s, focus: at };
-  return dropKey(s, key, nextZone(s));
+  const bottom = Math.floor(f.h / 3);
+  const top = f.h - bottom;
+  const half = Math.floor(f.w / 2);
+  return [
+    { id: 'left', rect: { x: f.x, y: f.y, w: half, h: top } },
+    { id: 'right', rect: { x: f.x + half, y: f.y, w: f.w - half, h: top } },
+    { id: 'lower', rect: { x: f.x, y: f.y + top, w: f.w, h: bottom } },
+  ];
 }
 
 function serialize(s) {
   const keep = s.tabs.filter((t) => t.kind !== 'lh');
   const ok = (k) => keep.some((t) => t.key === k);
-  const sv = s.saved ? { mode: s.saved.mode, panes: s.saved.panes.map((k) => (ok(k) ? k : null)) } : null;
+  const slots = {};
+  const sel = {};
+  for (const sl of SLOTS) {
+    slots[sl] = s.slots[sl].filter(ok);
+    sel[sl] = ok(s.sel[sl]) ? s.sel[sl] : null;
+  }
   return {
+    version: 2,
     tabs: keep.map((t) => ({ nodeId: t.nodeId, pageId: t.pageId })),
-    panes: s.panes.map((k) => (ok(k) ? k : null)),
-    mode: s.mode,
-    saved: sv,
-    ratio: s.ratio,
+    slots,
+    sel,
+    single: ok(s.single) ? s.single : null,
+    view: s.view,
     focus: s.focus,
+    ratio: s.ratio,
   };
+}
+
+function fromOldPanes(saved) {
+  const list = Array.isArray(saved.panes) ? saved.panes.filter((k) => typeof k === 'string') : [];
+  const slots = { left: [], right: [], lower: [] };
+  const mode = saved.mode;
+  if (mode === 'cols' || mode === 'trio') {
+    if (typeof saved.panes[0] === 'string') slots.left = [saved.panes[0]];
+    if (typeof saved.panes[1] === 'string') slots.right = [saved.panes[1]];
+    if (mode === 'trio' && typeof saved.panes[2] === 'string') slots.lower = [saved.panes[2]];
+  }
+  return { slots, single: list[0] || null, view: mode === 'cols' || mode === 'trio' ? 'slots' : 'single' };
 }
 
 function restore(saved, nodes, pages) {
@@ -303,20 +318,20 @@ function restore(saved, nodes, pages) {
     seen.add(key);
     tabs.push({ key, nodeId: t.nodeId, pageId: t.pageId });
   }
-  const list = (v) => {
-    const a = Array.isArray(v) ? v.slice(0, 3) : [];
-    while (a.length < 3) a.push(null);
-    return a.map((k) => (typeof k === 'string' ? k : null));
-  };
-  const sv = saved.saved && typeof saved.saved === 'object' && MODES.includes(saved.saved.mode) ? { mode: saved.saved.mode, panes: list(saved.saved.panes) } : null;
+  const src = saved.slots && typeof saved.slots === 'object' ? saved : { ...saved, ...fromOldPanes(saved) };
+  const slots = {};
+  for (const sl of SLOTS) slots[sl] = Array.isArray(src.slots && src.slots[sl]) ? src.slots[sl].filter((k) => typeof k === 'string') : [];
+  const sel = {};
+  for (const sl of SLOTS) sel[sl] = src.sel && typeof src.sel[sl] === 'string' ? src.sel[sl] : null;
   return settle({
     ...base,
     tabs,
-    panes: list(saved.panes),
-    mode: saved.mode,
-    saved: sv,
-    ratio: Number.isFinite(saved.ratio) ? Math.min(0.9, Math.max(0.1, saved.ratio)) : 0.5,
-    focus: saved.focus,
+    slots,
+    sel,
+    single: typeof src.single === 'string' ? src.single : null,
+    view: src.view === 'slots' ? 'slots' : 'single',
+    focus: src.focus,
+    ratio: Number.isFinite(src.ratio) ? Math.min(0.9, Math.max(0.1, src.ratio)) : 0.5,
   });
 }
 
@@ -324,35 +339,41 @@ module.exports = {
   MIN_PANE,
   GAP,
   STRIP,
-  MODES,
-  COUNT,
+  SLOTS,
+  SLOT_LABEL,
+  SINGLE_ONLY,
+  MAX_SAVED_PAGES,
   LH_KEY,
   grid,
   emptyState,
   keyOf,
+  slotOf,
+  occupied,
+  paneList,
   shown,
+  focusedKey,
   addTab,
   showAlone,
-  openTab,
   openKey,
+  openTab,
   openLastHeard,
-  backToSplit,
+  putInSlot,
+  dropKey,
+  unslot,
+  addNext,
+  setView,
+  canSplit,
   canBack,
-  savedOf,
   closeTab,
   closeNode,
-  removePane,
-  applyArrangement,
-  setMode,
   setRatio,
-  focusPane,
+  focusSlot,
+  focusKey,
+  applyArrangement,
   clampRatio,
   rects,
   viewRect,
   dropZones,
-  zoneIds,
-  dropKey,
-  addNext,
   serialize,
   restore,
 };

@@ -1,6 +1,24 @@
 # Node Controller Desktop changelog
 
-Current version: `0.5.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.6.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.6.0 (2026-11-24)
+
+Slots. The sidebar has a Left, a Right and a Lower slot, each a stacked list of pages; what is in the slots is what the page area shows. Node Recorder, WifiMon and 44helper join the pages.
+
+- **Three slots.** Each slot holds a stack of pages, in any order, and any page can go in any slot. One page of each slot is selected and shown. A page is in one slot at most. The layout appears as the slots fill: a lone slot is a one page view; Left and Right are 6 and 6; adding Lower makes two over a full-width third with equal rows. A slot that is empty takes no room; a Lower slot with only one of Left or Right is one over one. The divider between Left and Right still drags (double-click centres it).
+- **Putting a page in a slot.** Drag it (from a tab, the Single pages list, a slot, or the Open a page list) onto the slot in the sidebar, or onto Left, Right or Lower on the page area (zones show while you drag). Or right-click it and pick Put in Left, Right or Lower slot, or Ctrl+click it to put it in the next empty slot, then in the focused slot. A page dropped in a slot becomes its selected page. **×** on a slot's page, or dropping it on the Single pages list, takes it out again.
+- **Clicking a page in a slot** selects it, focuses its slot and shows all the slots. A page that is in no slot shows alone, and the slots stay as they are; **Slots** (Ctrl+2) or any slot page returns to them. **Single** (Ctrl+1) shows the focused page alone.
+- **Single pages.** Every page opens by itself first and sits in the Single pages list under the slots, with Last Heard and any page not in a slot. Closing the page shown alone goes back to the slots.
+- **Pane strips.** When two or more panes show, each has a strip: its slot name, the slot's stacked pages as buttons when it holds more than one (click one to select it), **Alone** and **Out** (take it out of its slot).
+- **44helper is always a single page.** It cannot go in a slot, has no drag, and its menu has only Show alone.
+- **More pages.** Node Recorder (8995), WifiMon (8991) and 44helper (9997). The Edit window has seven ports; nodes saved before get the defaults. The lockdown covers them like the others.
+- **Saved splits** now save the slots: the pages of each slot, which one is selected, and the divider. Splits saved in 0.5.0 read as Left, Right and Lower. A split with Last Heard in a slot cannot be saved (the Save split button says why).
+- **Layout file.** 0.5.0's layout file is read and converted.
+- **Shorter labels with one node.** With a single node, tabs and list entries drop the repeated node name ("Node Talker", not "Shack Node · Node Talker"), so seven open pages fit the header in two rows. With two or more nodes the full names return.
+- **Idle pages.** Unchanged: a page that is not on screen is idle (slowed and muted), Node Talker never.
+- **Removed.** The 1, 2 and 3 page buttons and Ctrl+3: the slots decide how many pages show. Ctrl+1 and Ctrl+2 switch between Single and Slots.
+- **Tests.** The layout tests cover the slots (growing, any page in any slot, your example layout of Controller and SysMon, Talker, Recorder and WifiMon, and Node Monitor), the one page view, selecting, taking out, closing, 44helper, Ctrl+click, the rectangles for every mix of slots, the drop zones, saving and restoring and reading 0.5.0 files; the saved splits have their own tests; the smoke test does it in the real window with real mouse drags between the sidebar lists and onto the page area.
 
 ## 0.5.0 (2026-11-24)
 
