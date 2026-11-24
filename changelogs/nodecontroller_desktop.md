@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.7`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.8`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.8 (2026-11-24)
+
+A narrower sidebar.
+
+- **Sidebar 15% of the width** (was 20%, 3 of 15 units, now 2.25): 192 px at 1280 wide, 288 px at 1920, 165 px at the 1100 px minimum. The pages get the width back.
+- **Logo on two lines.** "Node Controller Desktop" wraps to two lines in the 44 px block; the version moved to the bottom of the sidebar, under Install Monitor.
 
 ## 0.11.7 (2026-11-24)
 

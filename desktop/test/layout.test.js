@@ -27,8 +27,8 @@ function example() {
   return s;
 }
 
-test('grid: sidebar is 3 of 15 units and the header is a thin fixed bar', () => {
-  for (const [w, sidebar, header] of [[1280, 256, 44], [1600, 320, 44], [1920, 384, 44], [1500, 300, 44]]) {
+test('grid: sidebar is 15% of the width and the header is a thin fixed bar', () => {
+  for (const [w, sidebar, header] of [[1280, 192, 44], [1600, 240, 44], [1920, 288, 44], [1500, 225, 44]]) {
     const g = L.grid(w, 800);
     assert.deepEqual([g.sidebar, g.header, g.strip], [sidebar, header, 28], `at ${w}`);
     assert.deepEqual(g.area, { x: sidebar, y: header, w: w - sidebar, h: 800 - header });
