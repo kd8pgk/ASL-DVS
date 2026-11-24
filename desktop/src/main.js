@@ -5,6 +5,7 @@ const { PAGES, MAX_PINS, flipDecision, otherScheme, normalizeNode, originOf, sam
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
 const { createSessionMarker } = require('./session');
+const { createLog } = require('./diag');
 const { certDecision, formatFingerprint, refusedKey, refusedKeyOfUrl } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
@@ -124,6 +125,15 @@ function lastHeardSession() {
   return ses;
 }
 
+const refusedSeen = new Set();
+
+function logRefused(kind, permission) {
+  const k = `${kind}:${permission}`;
+  if (refusedSeen.has(k)) return;
+  refusedSeen.add(k);
+  logLine(`permission refused: ${permission} (${kind} pages)`);
+}
+
 function harden(ses, kind) {
   if (hardened.has(ses)) return;
   hardened.add(ses);
@@ -132,18 +142,16 @@ function harden(ses, kind) {
     return n ? P.hostsOfNode(n) : [];
   };
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    logLine(`trace ${kind} permission asked: ${permission}`);
     const origin = (details && details.requestingUrl) || (wc && !wc.isDestroyed() ? wc.getURL() : '');
     const media = permission === 'media' && details ? details.mediaTypes : undefined;
     const ok = P.allowPermission(permission, origin, hostsFor(), media);
-    logLine(`trace ${kind} permission answered: ${permission} ${ok}`);
+    if (!ok) logRefused(kind, permission);
     callback(ok);
   });
   ses.setPermissionCheckHandler((wc, permission, origin, details) => {
-    logLine(`trace ${kind} permission checked: ${permission}`);
     const media = permission === 'media' && details ? details.mediaType : undefined;
     const ok = P.allowPermission(permission, origin, hostsFor(), media);
-    logLine(`trace ${kind} permission answered: ${permission} ${ok}`);
+    if (!ok) logRefused(kind, permission);
     return ok;
   });
   ses.setDevicePermissionHandler(() => false);
@@ -179,25 +187,10 @@ function area() {
   return gridNow().area;
 }
 
-const diagFile = path.join(userData, 'diagnostics.log');
-const DIAG_MAX = 200000;
+const diag = createLog(path.join(userData, 'diagnostics.log'));
 
 function logLine(text) {
-  const line = `${new Date().toISOString()} ${text}\n`;
-  process.stderr.write(line);
-  try {
-    fs.mkdirSync(userData, { recursive: true });
-    let size = 0;
-    try {
-      size = fs.statSync(diagFile).size;
-    } catch {
-      size = 0;
-    }
-    if (size > DIAG_MAX) fs.writeFileSync(diagFile, '');
-    fs.appendFileSync(diagFile, line);
-  } catch {
-    return;
-  }
+  diag.write(text);
 }
 
 function emitNotice(text, bad) {
@@ -510,9 +503,6 @@ async function ensureLastHeard(key, tab) {
     }
   };
   wc.on('focus', focused);
-  for (const ev of ['did-start-loading', 'did-start-navigation', 'did-navigate', 'dom-ready', 'did-finish-load', 'did-stop-loading', 'page-favicon-updated', 'page-title-updated', 'did-create-window', 'unresponsive', 'responsive']) {
-    wc.on(ev, () => logLine(`trace ${key} ${ev}`));
-  }
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });
@@ -532,6 +522,7 @@ async function ensureLastHeard(key, tab) {
   });
   wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
     if (!isMain || code === -3 || rt.get(key) !== e) return;
+    logLine(`load failed: ${key} ${desc} (${code}) ${url}`);
     e.status = 'failed';
     e.error = { message: desc, code, via: 'home', nodeId: tab.nodeId, cert: null };
     sync();
@@ -593,9 +584,6 @@ async function ensureView(key) {
     }
   };
   wc.on('focus', focused);
-  for (const ev of ['did-start-loading', 'did-start-navigation', 'did-navigate', 'dom-ready', 'did-finish-load', 'did-stop-loading', 'page-favicon-updated', 'page-title-updated', 'did-create-window', 'unresponsive', 'responsive']) {
-    wc.on(ev, () => logLine(`trace ${key} ${ev}`));
-  }
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });

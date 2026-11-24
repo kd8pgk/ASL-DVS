@@ -1,6 +1,14 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.14`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.15`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.15 (2026-11-24)
+
+A quieter log that keeps its history.
+
+- **No more step-by-step trace.** The page trace added in 0.11.3 to find the SysMon crash (found: Electron 45, 0.11.6) is gone; it wrote about a dozen lines for every page load and two for every permission check. The log keeps what helps: pages that fail to load (now Last Heard too), scheme changes, helper processes that crash, and each refused permission once per run.
+- **A full log is kept, not wiped.** At 200 KB `diagnostics.log` becomes `diagnostics.log.1` and a new one starts, so the lines just before a crash are not lost. The folder is made once instead of on every line.
+- **Tests.** The log on its own: time stamps and the folder, keeping the old log at the limit, and an unwritable log never throwing.
 
 ## 0.11.14 (2026-11-24)
 
