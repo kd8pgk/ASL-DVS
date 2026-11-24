@@ -26,6 +26,12 @@
     noticeTimer = setTimeout(() => { n.hidden = true; }, 6000);
   }
 
+  function tabText(label) {
+    if (nodes.length > 1) return label;
+    const i = String(label).indexOf(' · ');
+    return i >= 0 ? label.slice(i + 3) : label;
+  }
+
   function nodeLabel(n) {
     return n.name || n.host;
   }
@@ -191,7 +197,7 @@
       for (const pg of sl.pages) {
         const src = { key: pg.key };
         const out = smallButton('×', 'Take out of this slot', () => window.nc.unslot(src));
-        ul.append(entry(src, pg.label, pg.selected ? 'sel' : '', out));
+        ul.append(entry(src, tabText(pg.label), pg.selected ? 'sel' : '', out));
       }
       sec.append(ul);
       dropTarget(sec, (src) => window.nc.dropTab({ ...argOf(src), slot: sl.slot }));
@@ -207,7 +213,7 @@
     for (const t of list) {
       const src = { key: t.key };
       const cls = lay.view === 'single' && t.shown ? 'sel' : '';
-      ul.append(entry(src, t.label, cls, smallButton('×', 'Close', () => window.nc.closeTab(t.key))));
+      ul.append(entry(src, tabText(t.label), cls, smallButton('×', 'Close', () => window.nc.closeTab(t.key))));
     }
     dropTarget($('singles-box'), (src) => {
       const t = tabFor(src);
@@ -282,7 +288,7 @@
       tab.setAttribute('role', 'tab');
       tab.draggable = true;
       tab.append(el('span', `dot ${t.status}${t.idle ? ' idle' : ''}`));
-      tab.append(el('span', 'label', t.via === 'away' ? `${t.label} (away)` : t.via === 'lan' ? `${t.label} (LAN address)` : t.label));
+      tab.append(el('span', 'label', t.via === 'away' ? `${tabText(t.label)} (away)` : t.via === 'lan' ? `${tabText(t.label)} (LAN address)` : tabText(t.label)));
       const x = el('button', 'x', '×');
       x.type = 'button';
       x.title = 'Close (Ctrl+W)';
@@ -384,7 +390,7 @@
         stack.append(b);
       }
     } else {
-      stack.append(el('span', 'strip-title', pane.label));
+      stack.append(el('span', 'strip-title', tabText(pane.label)));
     }
     s.append(stack);
     const alone = el('button', '', 'Alone');

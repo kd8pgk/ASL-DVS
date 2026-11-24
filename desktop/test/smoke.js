@@ -156,7 +156,7 @@ async function main() {
     }, `showing ${urls.join(', ')}`);
   };
   const state = async (url) => (await views(app)).find((v) => v.url === url);
-  const Lb = (t) => `Stub · ${t}`;
+  const Lb = (t) => t;
 
   assert.equal(await win.title(), 'Node Controller');
   assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);

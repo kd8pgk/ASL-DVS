@@ -15,6 +15,7 @@ Slots. The sidebar has a Left, a Right and a Lower slot, each a stacked list of 
 - **More pages.** Node Recorder (8995), WifiMon (8991) and 44helper (9997). The Edit window has seven ports; nodes saved before get the defaults. The lockdown covers them like the others.
 - **Saved splits** now save the slots: the pages of each slot, which one is selected, and the divider. Splits saved in 0.5.0 read as Left, Right and Lower. A split with Last Heard in a slot cannot be saved (the Save split button says why).
 - **Layout file.** 0.5.0's layout file is read and converted.
+- **Shorter labels with one node.** With a single node, tabs and list entries drop the repeated node name ("Node Talker", not "Shack Node · Node Talker"), so seven open pages fit the header in two rows. With two or more nodes the full names return.
 - **Idle pages.** Unchanged: a page that is not on screen is idle (slowed and muted), Node Talker never.
 - **Removed.** The 1, 2 and 3 page buttons and Ctrl+3: the slots decide how many pages show. Ctrl+1 and Ctrl+2 switch between Single and Slots.
 - **Tests.** The layout tests cover the slots (growing, any page in any slot, your example layout of Controller and SysMon, Talker, Recorder and WifiMon, and Node Monitor), the one page view, selecting, taking out, closing, 44helper, Ctrl+click, the rectangles for every mix of slots, the drop zones, saving and restoring and reading 0.5.0 files; the saved splits have their own tests; the smoke test does it in the real window with real mouse drags between the sidebar lists and onto the page area.
