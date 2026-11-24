@@ -9,6 +9,7 @@
   let drag = null;
   let menuOpen = false;
   let paneSig = '';
+  let sideSig = '';
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -74,6 +75,7 @@
   function endDrag() {
     if (!drag) return;
     drag = null;
+    sideSig = '';
     setOverlay();
     if (lay) render();
   }
@@ -567,14 +569,30 @@
     });
   }
 
+  function sideSigOf() {
+    return JSON.stringify([
+      lay.view,
+      lay.focus,
+      lay.slots,
+      lay.down,
+      lay.splits,
+      lay.tabs.map((t) => [t.key, t.slot, t.shown, t.idle, t.status]),
+      nodes.map((n) => [n.id, n.name, n.host]),
+    ]);
+  }
+
   function render() {
     $('restart').hidden = !lay.restart;
     renderTitle();
     renderControls();
-    renderSlots();
-    renderPages();
-    renderFoot();
-    renderSplits();
+    const sig = sideSigOf();
+    if (sig !== sideSig) {
+      sideSig = sig;
+      renderSlots();
+      renderPages();
+      renderFoot();
+      renderSplits();
+    }
     renderPanes();
   }
 
