@@ -511,6 +511,36 @@ async function main() {
   await page(1).locator('.entry-main').click();
   await waitFor(async () => (await visible()).some((v) => v.url.startsWith('https://127.0.0.1:') && v.url.includes(String(tlsPort))), 'the first certificate is still trusted');
 
+  await closeAll();
+  await waitFor(async () => (await views(app)).length === 0, 'pages closed before the scheme checks');
+  await page(2).locator('.entry-main').click();
+  await showing(U('sysmon'));
+  await waitFor(() => JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.sysmon === 'http', 'a plain page on an https node is learned as http');
+  await win.waitForFunction(() => /SysMon on Stub answers on http, not https/.test(document.getElementById('notice').textContent));
+  await closeAll();
+
+  await win.click('.group-head button');
+  await win.uncheck('#f-https');
+  await win.fill('#f-port-nodemon', String(tlsPort2));
+  await win.click('#f-save');
+  await win.waitForFunction(() => !document.getElementById('dlg').open);
+  await page(3).locator('.entry-main').click();
+  await waitFor(async () => (await visible()).some((v) => v.url === `https://127.0.0.1:${tlsPort2}/`), 'a TLS page on an http node is learned as https and the trusted certificate is accepted');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.nodemon, 'https');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.sysmon, 'http');
+  await closeAll();
+
+  await win.click('.group-head button');
+  assert.equal(await win.locator('#f-scheme-row').isVisible(), true);
+  const remembered = await win.textContent('#f-schemes');
+  assert.match(remembered, /SysMon on http/);
+  assert.match(remembered, /Node Monitor on https/);
+  await win.click('#f-scheme-clear');
+  assert.equal(await win.locator('#f-scheme-row').isHidden(), true);
+  await win.click('#f-save');
+  await win.waitForFunction(() => !document.getElementById('dlg').open);
+  assert.deepEqual(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes, {});
+
   await win.click('.group-head button');
   await win.click('#f-delete');
   await win.waitForFunction(() => document.querySelectorAll('#pages .group').length === 0);

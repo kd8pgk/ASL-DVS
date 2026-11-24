@@ -15,6 +15,7 @@
 button,input,select{font-family:var(--sans)}
 textarea,pre,code{font-family:var(--mono)!important}
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   display: grid;

@@ -120,9 +120,9 @@ test('matchPage finds the hardwired page a link points at, on any of the node ad
   assert.deepEqual(N.matchPage('http://10.1.1.1:8989/', nodes), { nodeId: 'b', pageId: 'controller' });
 });
 
-test('matchPage ignores other tools, other schemes and other hosts', () => {
+test('matchPage ignores other tools, other hosts and other protocols', () => {
   const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true }).node;
-  for (const u of ['https://pi.local:9998/', 'https://pi.local:8999/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
+  for (const u of ['https://pi.local:9998/', 'https://pi.local:8999/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
     assert.equal(N.matchPage(u, [a]), null, u);
   }
   assert.equal(N.matchPage('https://node.example.com/', [a]), null);
@@ -175,4 +175,37 @@ test('links to the new pages stay in the app, on any of the node addresses', () 
   assert.deepEqual(N.matchPage('http://pi.local:8765/', [n]), { nodeId: 'a', pageId: 'piper' });
   assert.deepEqual(N.matchPage('http://pi.local:9000/', [n]), { nodeId: 'a', pageId: 'pibrary' });
   assert.equal(N.matchPage('http://pi.local:9001/', [n]), null);
+});
+
+test('each page uses its own scheme: the one learned for it, else the node default', () => {
+  const n = N.normalizeNode({ id: 'a', host: 'pi.local', https: true, schemes: { controller: 'http', talker: 'bogus', nope: 'https' } }).node;
+  assert.deepEqual(n.schemes, { controller: 'http' });
+  const by = (id) => N.PAGES.find((p) => p.id === id);
+  assert.equal(N.schemeOf(n, by('controller')), 'http');
+  assert.equal(N.schemeOf(n, by('talker')), 'https');
+  assert.equal(N.originOf(N.homeTarget(n, by('controller'))), 'http://pi.local:8989');
+  assert.equal(N.originOf(N.homeTarget(n, by('talker'))), 'https://pi.local:8993');
+  const plain = N.normalizeNode({ id: 'b', host: 'pi.local', schemes: { talker: 'https' } }).node;
+  assert.equal(N.originOf(N.homeTarget(plain, by('talker'))), 'https://pi.local:8993');
+  assert.equal(N.originOf(N.homeTarget(plain, by('controller'))), 'http://pi.local:8989');
+  assert.equal(N.otherScheme('http'), 'https');
+  assert.equal(N.otherScheme('https'), 'http');
+});
+
+test('the LAN address needs a trusted certificate only for a page that is on https', () => {
+  const n = N.normalizeNode({ id: 'a', host: 'pi.local', https: true, lanIp: '192.168.1.5', schemes: { controller: 'http' } }).node;
+  const by = (id) => N.PAGES.find((p) => p.id === id);
+  assert.equal(N.originOf(N.lanTarget(n, by('controller'))), 'http://192.168.1.5:8989');
+  assert.equal(N.lanTarget(n, by('talker')), null);
+  n.pins = ['ab'.repeat(32)];
+  assert.equal(N.originOf(N.lanTarget(n, by('talker'))), 'https://192.168.1.5:8993');
+});
+
+test('a link to one of the node pages matches on either scheme, and a wrong scheme learned later changes nothing', () => {
+  const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true }).node;
+  assert.deepEqual(N.matchPage('http://pi.local:8993/', [a]), { nodeId: 'a', pageId: 'talker' });
+  assert.deepEqual(N.matchPage('https://pi.local:8993/x', [a]), { nodeId: 'a', pageId: 'talker' });
+  assert.deepEqual(N.matchPage('https://pi.local:8989/', [a]), { nodeId: 'a', pageId: 'controller' });
+  assert.equal(N.matchPage('http://pi.local/', [a]), null);
+  assert.deepEqual(N.SCHEME_FLIP_CODES, [-107, -113, -101, -324]);
 });

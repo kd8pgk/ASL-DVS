@@ -247,7 +247,10 @@
       head.append(el('span', 'group-name', nodeLabel(n)));
       const edit = el('button', '', 'Edit');
       edit.type = 'button';
-      edit.addEventListener('click', () => openDialog(n));
+      edit.addEventListener('click', async () => {
+        nodes = await window.nc.listNodes();
+        openDialog(nodes.find((x) => x.id === n.id) || n);
+      });
       head.append(edit);
       grp.append(head);
       const ul = el('ul', 'entries');
@@ -578,6 +581,9 @@
     for (const p of pages) $(`f-port-${p.id}`).value = n ? n.ports[p.id] : p.port;
     $('f-away').value = n && n.awayHost ? `${n.awayHttps ? 'https' : 'http'}://${n.awayHost}${n.awayPort === (n.awayHttps ? 443 : 80) ? '' : `:${n.awayPort}`}` : '';
     $('f-lan').value = n ? n.lanIp : '';
+    const learned = n ? Object.entries(n.schemes || {}) : [];
+    $('f-scheme-row').hidden = !learned.length;
+    $('f-schemes').textContent = learned.map(([id, v]) => `${(pages.find((p) => p.id === id) || { label: id }).label} on ${v}`).join(' · ');
     const pins = n ? n.pins : [];
     $('f-pin-row').hidden = !pins.length;
     $('f-pin').textContent = pins.map((p) => `${p.slice(0, 8).toUpperCase()}…`).join('  ');
@@ -605,6 +611,7 @@
       awayHost: $('f-away').value,
       lanIp: $('f-lan').value,
       pins: editing ? editing.pins : [],
+      schemes: editing ? editing.schemes : {},
     };
     for (const p of pages) raw.ports[p.id] = $(`f-port-${p.id}`).value;
     const r = await window.nc.saveNode(raw);
@@ -691,6 +698,10 @@
     $('dlg').addEventListener('close', setOverlay);
     $('form').addEventListener('submit', saveDialog);
     $('f-delete').addEventListener('click', removeNode);
+    $('f-scheme-clear').addEventListener('click', () => {
+      if (editing) editing.schemes = {};
+      $('f-scheme-row').hidden = true;
+    });
     $('f-pin-clear').addEventListener('click', () => {
       if (editing) editing.pins = [];
       $('f-pin-row').hidden = true;
