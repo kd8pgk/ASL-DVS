@@ -16,12 +16,14 @@
     <button id="export" type="button">Export</button>
   </div>
   <div id="notice" class="notice" hidden></div>
-  <div id="side-scroll">
+  <div id="side-top">
     <section id="slots-box"></section>
     <section id="singles-box" class="sec">
       <div class="sec-head">Single pages</div>
       <ul id="singles" class="entries"></ul>
     </section>
+  </div>
+  <div id="side-bottom">
     <section class="sec">
       <div class="sec-head">Open a page</div>
       <ul id="nodes"></ul>
@@ -55,9 +57,9 @@
     <label>Away address (Node Talker only)<input id="f-away" type="text" placeholder="https://node.example.com"></label>
     <label>LAN address (IPv4, optional)<input id="f-lan" type="text" placeholder="192.168.1.50"></label>
     <div id="f-pin-row" class="pin" hidden>
-      <span>Trusted certificate</span>
+      <span>Trusted certificates</span>
       <span id="f-pin" class="mono"></span>
-      <button id="f-pin-clear" type="button">Forget</button>
+      <button id="f-pin-clear" type="button">Forget all</button>
     </div>
     <p id="f-error" class="error" hidden></p>
     <div class="row end">

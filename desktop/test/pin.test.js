@@ -38,17 +38,27 @@ test('an unknown certificate on a node is refused and reported with its fingerpr
 });
 
 test('the pinned certificate is trusted on the host name and the LAN address', () => {
-  const n = nodes({ pin: hex });
+  const n = nodes({ pins: [hex] });
   assert.equal(certDecision({ hostname: 'pi.local', certPem: pem }, n).trust, true);
   assert.equal(certDecision({ hostname: '192.168.1.5', certPem: pem }, n).trust, true);
 });
 
 test('a different certificate than the pinned one is refused', () => {
-  const n = nodes({ pin: '11'.repeat(32) });
+  const n = nodes({ pins: ['11'.repeat(32)] });
   assert.equal(certDecision({ hostname: 'pi.local', certPem: pem }, n).trust, false);
 });
 
 test('the away address is never pinned', () => {
-  const n = nodes({ pin: hex, awayHost: 'node.example.com' });
+  const n = nodes({ pins: [hex], awayHost: 'node.example.com' });
   assert.deepEqual(certDecision({ hostname: 'node.example.com', certPem: pem }, n), { trust: false });
+});
+
+test('a node can trust several certificates, one for each of its tools', () => {
+  const other = crypto.randomBytes(280);
+  const otherPem = `-----BEGIN CERTIFICATE-----\n${other.toString('base64').replace(/.{64}/g, '$&\n')}\n-----END CERTIFICATE-----\n`;
+  const otherHex = crypto.createHash('sha256').update(other).digest('hex');
+  const n = nodes({ pins: [hex, otherHex] });
+  assert.equal(certDecision({ hostname: 'pi.local', certPem: pem }, n).trust, true);
+  assert.equal(certDecision({ hostname: 'pi.local', certPem: otherPem }, n).trust, true);
+  assert.equal(certDecision({ hostname: 'pi.local', certPem: otherPem }, nodes({ pins: [hex] })).trust, false);
 });

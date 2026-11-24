@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog } = require('electron');
-const { PAGES, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
+const { PAGES, MAX_PINS, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
@@ -9,7 +9,7 @@ const L = require('./layout');
 const P = require('./policy');
 const PR = require('./presets');
 
-const CONNECTION_FIELDS = ['host', 'https', 'ports', 'pin', 'lanIp', 'lanPin', 'awayHost', 'awayPort', 'awayHttps'];
+const CONNECTION_FIELDS = ['host', 'https', 'ports', 'pins', 'lanIp', 'awayHost', 'awayPort', 'awayHttps'];
 
 app.setName('Node Controller');
 
@@ -43,7 +43,8 @@ function readJson(file) {
   }
 }
 
-let ls = L.restore(readJson(layoutFile), nodes, PAGES);
+const INTERNAL = PAGES.filter((p) => !p.external);
+let ls = L.restore(readJson(layoutFile), nodes, INTERNAL);
 
 function plainOrigins() {
   const out = new Set();
@@ -276,15 +277,31 @@ function focusView() {
 function externalOpen(url) {
   try {
     const u = new URL(url);
-    if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.toString());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+    if (!app.isPackaged && process.env.NODECONTROLLER_EXTERNAL_LOG) {
+      fs.appendFileSync(process.env.NODECONTROLLER_EXTERNAL_LOG, `${u.toString()}\n`);
+      return;
+    }
+    shell.openExternal(u.toString());
   } catch {
     return;
   }
 }
 
+async function openExternalPage(nodeId, pageId) {
+  const node = nodes.find((n) => n.id === nodeId);
+  const page = PAGES.find((p) => p.id === pageId);
+  if (!node || !page || !page.external) return false;
+  const target = await router.pick(node, page);
+  externalOpen(`${originOf(target)}/`);
+  emitNotice(`${page.label} on ${node.name || node.host} opened in your web browser.`, false);
+  return true;
+}
+
 function openLink(url) {
   const m = matchPage(url, nodes);
-  if (!m) {
+  const pg = m && PAGES.find((p) => p.id === m.pageId);
+  if (!m || (pg && pg.external)) {
     externalOpen(url);
     return;
   }
@@ -581,6 +598,10 @@ function register() {
   ipcMain.handle('tabs:open', (e, nodeId, pageId) => {
     if (!fromShell(e) || !str(nodeId) || !str(pageId)) return { ok: false };
     if (!nodes.some((n) => n.id === nodeId) || !PAGES.some((p) => p.id === pageId)) return { ok: false };
+    if (PAGES.find((p) => p.id === pageId).external) {
+      openExternalPage(nodeId, pageId);
+      return { ok: true };
+    }
     update(L.openTab(ls, nodeId, pageId));
     focusView();
     return { ok: true };
@@ -602,7 +623,7 @@ function register() {
   const resolveKey = (arg) => {
     if (!arg || typeof arg !== 'object') return null;
     if (str(arg.key)) return ls.tabs.some((t) => t.key === arg.key) ? arg.key : null;
-    if (str(arg.nodeId) && str(arg.pageId) && nodes.some((n) => n.id === arg.nodeId) && PAGES.some((p) => p.id === arg.pageId)) {
+    if (str(arg.nodeId) && str(arg.pageId) && nodes.some((n) => n.id === arg.nodeId) && INTERNAL.some((p) => p.id === arg.pageId)) {
       ls = L.addTab(ls, arg.nodeId, arg.pageId);
       return L.keyOf(arg.nodeId, arg.pageId);
     }
@@ -662,7 +683,7 @@ function register() {
     if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
     const preset = splits.find((p) => p.id === id);
     if (!preset) return { error: 'That split is gone.' };
-    const r = PR.apply(ls, preset, nodes, PAGES);
+    const r = PR.apply(ls, preset, nodes, INTERNAL);
     if (r.error) return { error: r.error };
     update(r.state);
     focusView();
@@ -699,7 +720,7 @@ function register() {
     const want = String(fingerprint || '').toLowerCase().replace(/[^0-9a-f]/g, '');
     const hit = [...refused.values()].find((r) => r.fingerprint === want && r.nodeIds.includes(nodeId));
     if (!hit) return { error: 'That certificate was not the one refused.' };
-    node.pin = hit.fingerprint;
+    node.pins = [...node.pins.filter((p) => p !== hit.fingerprint), hit.fingerprint].slice(-MAX_PINS);
     refused.delete(hit.hostname);
     router.forget(nodeId);
     persist();

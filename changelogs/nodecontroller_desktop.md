@@ -1,6 +1,17 @@
 # Node Controller Desktop changelog
 
-Current version: `0.6.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.7.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.7.0 (2026-11-24)
+
+Four more pages (two single-only, two that open in the web browser), several trusted certificates for a node, and a sidebar whose slots stay in view.
+
+- **Install Monitor (8990) and Terminal Monitor (7878)** open in the app as single pages only, like 44helper: no slot, no drag, and their menu has only Show alone. Terminal Monitor is the root shell page; it only opens when you click it.
+- **Pi-Piper (8765) and Pibrary (9000)** have a tab in the title bar for each node and a button (marked ↗) in the page list, but clicking one opens the page in your default web browser, not in the app, using the node's home address (or its LAN address when that answers). They are never loaded in the app, have no pane and take no part in the slots. A page of the app that links to them also hands the link to the browser. The notice in the sidebar says what was opened.
+- **Several trusted certificates per node.** Each tool can have its own self-signed certificate (Terminal Monitor keeps its own folder), so trusting one used to push out the one before. A node now keeps up to eight (the oldest goes first); Trust this certificate adds one, and the Edit window shows them with Forget all. A node saved with one certificate keeps it.
+- **The sidebar no longer scrolls the slots away.** The slots and Single pages stay at the top (scrolling by themselves only when they grow past about half the height); Open a page and Saved splits scroll underneath. Before, clicking a page near the bottom of the list could scroll the slots out of reach of a drag.
+- **Edit window.** The page ports now cover all eleven pages.
+- **Tests.** Page table, link matching for the new ports, single-only and browser-only pages, several certificates, and, in the smoke test with the real window, the browser launches (logged through a test hook that does nothing in the packaged app), single-only pages, and trusting two different certificates on one node.
 
 ## 0.6.0 (2026-11-24)
 

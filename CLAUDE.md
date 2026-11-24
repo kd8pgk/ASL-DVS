@@ -153,16 +153,19 @@
   and a change that strengthens it updates them in the same pull request.
 - **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
   12. The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
-  Recorder, WifiMon and 44helper, and Last Heard. Every page opens as a single
+  Recorder, WifiMon, 44helper, Install Monitor and Terminal Monitor, and Last
+  Heard; Pi-Piper and Pibrary have a title-bar tab and a list button but open
+  in the system web browser, never in the app. Every page opens as a single
   page first. The sidebar has three slots, Left, Right and Lower, each a
   stacked list of pages (any page in any slot, one selected per slot); the
   slots decide what the page area shows: one slot is one page, Left and Right
   are 6 and 6, adding Lower puts a full-width third under them (equal rows).
   Never more than three panes (no quarters). Clicking a page in a slot selects
   it and shows all the slots with focus on it; a page in no slot shows alone.
-  44helper is always a single page. Pages that are not on screen are idle
-  (slowed and muted), except Node Talker, which is never idle; pages on screen
-  never are. Last Heard opens as a new single page.
+  44helper, Install Monitor and Terminal Monitor are always single pages.
+  Pages that are not on screen are idle (slowed and muted), except Node
+  Talker, which is never idle; pages on screen never are. Last Heard opens as
+  a new single page.
 - **Window titles** say "Node Controller" (see Naming above); node page names
   stay as the nodes serve them.
 - **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after
