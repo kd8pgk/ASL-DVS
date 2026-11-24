@@ -151,15 +151,18 @@
     setOverlay();
   }
 
-  function entry(src, label, cls, extra) {
+  function entry(src, label, cls, extra, draggable, key) {
     const li = el('li', `entry ${cls || ''}`.trim());
     const b = el('button', 'entry-main', label);
     b.type = 'button';
-    li.draggable = true;
+    li.draggable = draggable !== false;
+    if (key) li.dataset.key = key;
     b.addEventListener('click', (ev) => activate(src, ev));
     li.addEventListener('contextmenu', (ev) => showMenu(ev, src));
-    li.addEventListener('dragstart', (ev) => startDrag(ev, src));
-    li.addEventListener('dragend', endDrag);
+    if (li.draggable) {
+      li.addEventListener('dragstart', (ev) => startDrag(ev, src));
+      li.addEventListener('dragend', endDrag);
+    }
     li.append(b);
     if (extra) li.append(extra);
     return li;
@@ -221,53 +224,79 @@
     }
   }
 
-  function renderSingles() {
-    const ul = $('singles');
-    ul.textContent = '';
-    const list = lay ? lay.tabs.filter((t) => !t.slot) : [];
-    if (!list.length) ul.append(el('li', 'hint', 'Pages you open appear here'));
-    for (const t of list) {
-      const src = { key: t.key };
-      const cls = lay.view === 'single' && t.shown ? 'sel' : '';
-      ul.append(entry(src, tabText(t.label), cls, smallButton('×', 'Close', () => window.nc.closeTab(t.key))));
-    }
-    dropTarget($('singles-box'), (src) => {
-      const t = tabFor(src);
-      if (t && t.slot) window.nc.unslot({ key: t.key });
-      else if (!t) window.nc.showAlone(argOf(src));
-    });
+  function entryClasses(tab, down, p) {
+    const c = [];
+    if (tab) c.push(tab.shown ? 'sel' : 'open');
+    if (tab && tab.idle) c.push('idle');
+    if (tab && tab.status === 'failed') c.push('failed');
+    if (down) c.push('down');
+    if (p.external) c.push('ext');
+    return c.join(' ');
   }
 
-  function renderNodes() {
-    const ul = $('nodes');
-    ul.textContent = '';
+  function renderPages() {
+    const box = $('pages');
+    box.textContent = '';
+    if (!nodes.length) {
+      box.append(el('div', 'hint', 'Add a node to see its pages.'));
+      return;
+    }
     for (const n of nodes) {
-      const li = el('li', 'node');
-      const top = el('div', 'node-top');
-      top.append(el('div', 'node-name', nodeLabel(n)));
+      const grp = el('div', 'group');
+      const head = el('div', 'group-head');
+      head.append(el('span', 'group-name', nodeLabel(n)));
       const edit = el('button', '', 'Edit');
       edit.type = 'button';
-      edit.addEventListener('click', () => openDialog(n));
-      top.append(edit);
-      li.append(top);
-      li.append(el('div', 'node-host', `${n.https ? 'https' : 'http'}://${n.host}`));
-      const box = el('div', 'pages');
+      edit.addEventListener('click', async () => {
+        nodes = await window.nc.listNodes();
+        openDialog(nodes.find((x) => x.id === n.id) || n);
+      });
+      head.append(edit);
+      grp.append(head);
+      const ul = el('ul', 'entries');
+      let count = 0;
       for (const p of pages) {
-        const tab = lay && lay.tabs.find((t) => t.nodeId === n.id && t.pageId === p.id);
-        const b = el('button', p.external ? 'ext' : tab ? (tab.shown ? 'on' : 'open') : '', p.external ? `${p.label} ↗` : p.label);
-        b.type = 'button';
-        b.title = p.label;
-        b.draggable = !p.single && !p.external;
-        const src = { nodeId: n.id, pageId: p.id };
-        b.addEventListener('click', (ev) => activate(src, ev));
-        b.addEventListener('contextmenu', (ev) => showMenu(ev, src));
-        b.addEventListener('dragstart', (ev) => startDrag(ev, src));
-        b.addEventListener('dragend', endDrag);
-        box.append(b);
+        if (p.id === 'instmon') continue;
+        const key = `${n.id}:${p.id}`;
+        const tab = lay && lay.tabs.find((t) => t.key === key);
+        if (tab && tab.slot) continue;
+        const down = Boolean(lay && lay.down.includes(key));
+        if (!tab && down) continue;
+        count += 1;
+        const close = tab ? smallButton('×', 'Close this page', () => window.nc.closeTab(tab.key)) : null;
+        ul.append(entry({ nodeId: n.id, pageId: p.id }, p.external ? `${p.label} ↗` : p.label, entryClasses(tab, down, p), close, !p.single && !p.external, key));
       }
-      li.append(box);
-      ul.append(li);
+      if (!count) ul.append(el('li', 'hint', 'Nothing is running on this node.'));
+      grp.append(ul);
+      box.append(grp);
     }
+    const lh = lay && lay.tabs.find((t) => t.key === 'lh' && !t.slot);
+    if (lh) {
+      const grp = el('div', 'group');
+      const head = el('div', 'group-head');
+      head.append(el('span', 'group-name', 'Last Heard'));
+      grp.append(head);
+      const ul = el('ul', 'entries');
+      ul.append(entry({ key: lh.key }, 'Last Heard', entryClasses(lh, false, {}), smallButton('×', 'Close Last Heard', () => window.nc.closeTab(lh.key)), true, lh.key));
+      grp.append(ul);
+      box.append(grp);
+    }
+  }
+
+  function renderFoot() {
+    const box = $('side-foot');
+    box.textContent = '';
+    const p = pages.find((x) => x.id === 'instmon');
+    if (!p || !nodes.length) return;
+    const ul = el('ul', 'entries');
+    for (const n of nodes) {
+      const key = `${n.id}:${p.id}`;
+      const tab = lay && lay.tabs.find((t) => t.key === key);
+      const down = Boolean(lay && lay.down.includes(key));
+      const label = nodes.length > 1 ? `${nodeLabel(n)} · ${p.label}` : p.label;
+      ul.append(entry({ nodeId: n.id, pageId: p.id }, label, entryClasses(tab, down, p), null, false, key));
+    }
+    box.append(ul);
   }
 
   function renderSplits() {
@@ -293,45 +322,21 @@
     }
   }
 
-  function renderTabs() {
-    const box = $('tabs');
+  function renderTitle() {
+    const box = $('title');
     box.textContent = '';
+    const t = lay && lay.tabs.find((x) => x.focused);
+    if (!t) {
+      box.append(el('span', 'title-text muted', 'Pick a page from the list'));
+      return;
+    }
+    box.append(el('span', `dot ${t.status}${t.idle ? ' idle' : ''}`));
+    const via = t.via === 'away' ? ' (away)' : t.via === 'lan' ? ' (LAN address)' : '';
+    box.append(el('span', 'title-text', `${t.label}${via}`));
+  }
+
+  function renderControls() {
     if (!lay) return;
-    for (const n of nodes) {
-      for (const p of pages) {
-        if (!p.external) continue;
-        const l = el('div', 'tab ext');
-        l.title = `Open ${p.label} in your web browser`;
-        l.append(el('span', 'label', `${nodes.length > 1 ? `${nodeLabel(n)} · ` : ''}${p.label} ↗`));
-        l.addEventListener('click', () => window.nc.openTab(n.id, p.id));
-        l.addEventListener('contextmenu', (ev) => showMenu(ev, { nodeId: n.id, pageId: p.id }));
-        box.append(l);
-      }
-    }
-    for (const t of lay.tabs) {
-      const cls = ['tab'];
-      if (t.shown) cls.push('shown');
-      if (t.focused) cls.push('focus');
-      const tab = el('div', cls.join(' '));
-      tab.setAttribute('role', 'tab');
-      tab.draggable = true;
-      tab.append(el('span', `dot ${t.status}${t.idle ? ' idle' : ''}`));
-      tab.append(el('span', 'label', t.via === 'away' ? `${tabText(t.label)} (away)` : t.via === 'lan' ? `${tabText(t.label)} (LAN address)` : tabText(t.label)));
-      const x = el('button', 'x', '×');
-      x.type = 'button';
-      x.title = 'Close (Ctrl+W)';
-      x.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        window.nc.closeTab(t.key);
-      });
-      tab.append(x);
-      const src = { key: t.key };
-      tab.addEventListener('click', (ev) => activate(src, ev));
-      tab.addEventListener('contextmenu', (ev) => showMenu(ev, src));
-      tab.addEventListener('dragstart', (ev) => startDrag(ev, src));
-      tab.addEventListener('dragend', endDrag);
-      box.append(tab);
-    }
     for (const b of $('views').querySelectorAll('button')) {
       const v = b.dataset.view;
       b.classList.toggle('on', lay.view === v);
@@ -357,7 +362,8 @@
         const r = await window.nc.trustCert(e.nodeId, e.cert.raw);
         if (r.error) return notice(r.error, true);
         nodes = r.nodes;
-        renderNodes();
+        renderPages();
+    renderFoot();
       });
       row.append(trust);
     }
@@ -531,10 +537,11 @@
   }
 
   function render() {
-    renderTabs();
+    renderTitle();
+    renderControls();
     renderSlots();
-    renderSingles();
-    renderNodes();
+    renderPages();
+    renderFoot();
     renderSplits();
     renderPanes();
   }
@@ -574,6 +581,9 @@
     for (const p of pages) $(`f-port-${p.id}`).value = n ? n.ports[p.id] : p.port;
     $('f-away').value = n && n.awayHost ? `${n.awayHttps ? 'https' : 'http'}://${n.awayHost}${n.awayPort === (n.awayHttps ? 443 : 80) ? '' : `:${n.awayPort}`}` : '';
     $('f-lan').value = n ? n.lanIp : '';
+    const learned = n ? Object.entries(n.schemes || {}) : [];
+    $('f-scheme-row').hidden = !learned.length;
+    $('f-schemes').textContent = learned.map(([id, v]) => `${(pages.find((p) => p.id === id) || { label: id }).label} on ${v}`).join(' · ');
     const pins = n ? n.pins : [];
     $('f-pin-row').hidden = !pins.length;
     $('f-pin').textContent = pins.map((p) => `${p.slice(0, 8).toUpperCase()}…`).join('  ');
@@ -601,6 +611,7 @@
       awayHost: $('f-away').value,
       lanIp: $('f-lan').value,
       pins: editing ? editing.pins : [],
+      schemes: editing ? editing.schemes : {},
     };
     for (const p of pages) raw.ports[p.id] = $(`f-port-${p.id}`).value;
     const r = await window.nc.saveNode(raw);
@@ -611,7 +622,8 @@
     }
     nodes = r.nodes;
     closeDialog();
-    renderNodes();
+    renderPages();
+    renderFoot();
     notice('Node saved.');
   }
 
@@ -620,7 +632,8 @@
     const r = await window.nc.removeNode(editing.id);
     nodes = r.nodes || nodes;
     closeDialog();
-    renderNodes();
+    renderPages();
+    renderFoot();
     notice('Node deleted.');
   }
 
@@ -629,7 +642,8 @@
     if (r.canceled) return;
     if (r.error) return notice(r.error, true);
     nodes = r.nodes;
-    renderNodes();
+    renderPages();
+    renderFoot();
     notice(`Imported ${r.added} new, ${r.replaced} updated, ${r.skipped} skipped.`);
   }
 
@@ -684,6 +698,10 @@
     $('dlg').addEventListener('close', setOverlay);
     $('form').addEventListener('submit', saveDialog);
     $('f-delete').addEventListener('click', removeNode);
+    $('f-scheme-clear').addEventListener('click', () => {
+      if (editing) editing.schemes = {};
+      $('f-scheme-row').hidden = true;
+    });
     $('f-pin-clear').addEventListener('click', () => {
       if (editing) editing.pins = [];
       $('f-pin-row').hidden = true;
@@ -703,6 +721,11 @@
     document.addEventListener('dragend', endDrag);
     document.addEventListener('drop', () => setTimeout(endDrag, 0));
     window.addEventListener('blur', closeMenu);
+    dropTarget($('side-mid'), (src) => {
+      const t = tabFor(src);
+      if (t && t.slot) window.nc.unslot({ key: t.key });
+      else if (!t) window.nc.showAlone(argOf(src));
+    });
     window.nc.onLayout(onLayout);
     window.nc.onNotice((n) => notice(n.text, n.bad));
     onLayout(await window.nc.getLayout());

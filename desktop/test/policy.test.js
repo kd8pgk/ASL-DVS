@@ -185,3 +185,8 @@ test('the window page and the stylesheet carry the shared Node Control look, fro
     assert.ok(css.includes(`fonts/readex-pro-${w}.woff2`), w);
   }
 });
+
+test('the stylesheet lets the hidden attribute win, so a row that should be hidden is', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'ui', 'style.css'), 'utf8');
+  assert.ok(css.includes('[hidden] { display: none !important; }'));
+});

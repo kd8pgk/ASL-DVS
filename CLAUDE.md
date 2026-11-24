@@ -135,6 +135,11 @@
   it holds no node tool and no Python. Linux
   first (AppImage); Windows later, after the owner approves the look. It is not
   on the stable/testing channels.
+- **Schemes.** The tools on one node do not all use the same scheme (Node
+  Controller is plain http; Node Talker, SysMon, Node Monitor and others are
+  https with a self-signed certificate each), so each page has its own scheme,
+  learned by retrying the other one when a page fails like a wrong scheme, and
+  a node can trust several certificates.
 - **Version** is `version` in `desktop/package.json` (`X.Y.Z`, no cosmetic
   fourth part). Any change under `desktop/` raises it and adds an entry at the
   top of `changelogs/nodecontroller_desktop.md` with its "Current version"
@@ -158,9 +163,11 @@
 - **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
   12. The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
   Recorder, WifiMon, 44helper, Install Monitor and Terminal Monitor, and Last
-  Heard; Pi-Piper and Pibrary have a title-bar tab and a list button but open
-  in the system web browser, never in the app. Every page opens as a single
-  page first. The sidebar has three slots, Left, Right and Lower, each a
+  Heard; Pi-Piper and Pibrary have a sidebar entry but open in the system web
+  browser, never in the app. There are no title bar tabs: the sidebar lists
+  every page of every node as a single page by default, hides a page whose
+  tool is stopped (unless it is open), and keeps Install Monitor at the bottom,
+  always shown and never hideable. Every page opens as a single page first. The sidebar has three slots, Left, Right and Lower, each a
   stacked list of pages (any page in any slot, one selected per slot); the
   slots decide what the page area shows: one slot is one page, Left and Right
   are 6 and 6, adding Lower puts a full-width third under them (equal rows).

@@ -18,6 +18,7 @@ const HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$|^[0-9A-Fa-f:.]{2,45}$/;
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 const PIN_RE = /^[0-9a-f]{64}$/;
 const MAX_PINS = 8;
+const SCHEME_FLIP_CODES = [-107, -113, -101, -324];
 
 function validHost(h) {
   return typeof h === 'string' && HOST_RE.test(h);
@@ -82,6 +83,7 @@ function blank() {
     https: false,
     ports: Object.fromEntries(PAGES.map((p) => [p.id, p.port])),
     pins: [],
+    schemes: {},
     awayHost: '',
     awayPort: 443,
     awayHttps: true,
@@ -115,6 +117,12 @@ function normalizeNode(raw) {
     if (p && !pins.includes(p)) pins.push(p);
   }
   out.pins = pins.slice(-MAX_PINS);
+  if (r.schemes && typeof r.schemes === 'object') {
+    for (const p of PAGES) {
+      const v = r.schemes[p.id];
+      if (v === 'http' || v === 'https') out.schemes[p.id] = v;
+    }
+  }
 
   const lan = String(r.lanIp == null ? '' : r.lanIp).trim();
   if (lan) {
@@ -146,16 +154,27 @@ function sameOrigin(url, target) {
   }
 }
 
+function schemeOf(node, page) {
+  const s = node.schemes && node.schemes[page.id];
+  if (s === 'http' || s === 'https') return s;
+  return node.https ? 'https' : 'http';
+}
+
+function otherScheme(s) {
+  return s === 'https' ? 'http' : 'https';
+}
+
 function homeTarget(node, page) {
-  return { host: node.host, port: node.ports[page.id], https: node.https, pins: node.pins, via: 'home' };
+  return { host: node.host, port: node.ports[page.id], https: schemeOf(node, page) === 'https', pins: node.pins, via: 'home' };
 }
 
 function lanTarget(node, page) {
   const ip = node.lanIp;
   if (!ip || !IPV4_RE.test(ip) || !validHost(ip)) return null;
   if (ip.toLowerCase() === node.host.toLowerCase()) return null;
-  if (node.https && !node.pins.length) return null;
-  return { host: ip, port: node.ports[page.id], https: node.https, pins: node.pins, via: 'lan' };
+  const https = schemeOf(node, page) === 'https';
+  if (https && !node.pins.length) return null;
+  return { host: ip, port: node.ports[page.id], https, pins: node.pins, via: 'lan' };
 }
 
 function awayTarget(node, page) {
@@ -164,11 +183,24 @@ function awayTarget(node, page) {
   return { host: node.awayHost, port: node.awayPort, https: node.awayHttps, pins: [], via: 'away' };
 }
 
+function hostPortOf(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+    return { host: u.hostname.replace(/^\[|\]$/g, '').toLowerCase(), port };
+  } catch {
+    return null;
+  }
+}
+
 function matchPage(url, nodes) {
+  const hp = hostPortOf(url);
+  if (!hp) return null;
   for (const node of nodes) {
     for (const page of PAGES) {
       for (const t of [homeTarget(node, page), lanTarget(node, page), awayTarget(node, page)]) {
-        if (t && sameOrigin(url, t)) return { nodeId: node.id, pageId: page.id };
+        if (t && t.host.toLowerCase() === hp.host && t.port === hp.port) return { nodeId: node.id, pageId: page.id };
       }
     }
   }
@@ -178,6 +210,9 @@ function matchPage(url, nodes) {
 module.exports = {
   PAGES,
   MAX_PINS,
+  SCHEME_FLIP_CODES,
+  schemeOf,
+  otherScheme,
   validHost,
   parseAddress,
   normalizePin,

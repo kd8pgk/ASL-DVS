@@ -142,7 +142,7 @@ async function main() {
   const launch = () => _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox'],
-    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_EXTERNAL_LOG: extLog },
+    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_EXTERNAL_LOG: extLog, NODECONTROLLER_PROBE_MS: '300' },
   });
   let app = await launch();
   let win = await app.firstWindow();
@@ -152,12 +152,32 @@ async function main() {
   const LHU = `http://127.0.0.1:${lp}/lh`;
   const visible = async () => (await views(app)).filter((v) => v.visible);
   const view = () => win.locator('#views button.on').getAttribute('data-view');
-  const tabLabels = () => win.locator('.tab .label').allTextContents();
-  const page = (i) => win.locator('.node').nth(0).locator('.pages button').nth(i);
+  const PG = ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Install Monitor', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗'];
+  const pgEntry = (name) => (name === 'Install Monitor'
+    ? win.locator('#side-foot .entry')
+    : win.locator('#pages .entry').filter({ has: win.locator('.entry-main', { hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) }));
+  const page = (i) => pgEntry(PG[i]);
+  const classes = async (loc) => ((await loc.getAttribute('class')) || '').split(/\s+/);
+  const pageNames = () => win.locator('#pages .entry-main').allTextContents();
+  const openCount = () => win.locator('#pages .entry.sel, #pages .entry.open, .slot .entry, #side-foot .entry.sel, #side-foot .entry.open').count();
+  const closeAll = async () => {
+    for (let i = 0; i < 40 && (await win.locator('.slot .entry .x').count()); i += 1) {
+      await win.locator('.slot .entry .x').first().click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    for (let i = 0; i < 40 && (await win.locator('#pages .entry .x').count()); i += 1) {
+      await win.locator('#pages .entry .x').first().click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    for (let i = 0; i < 5 && (await win.locator('#side-foot .entry.sel, #side-foot .entry.open').count()); i += 1) {
+      await win.locator('#side-foot .entry.sel, #side-foot .entry.open').first().click({ button: 'right' });
+      await win.locator('#menu .menu-item', { hasText: 'Close tab' }).click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  };
   const size = async () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize());
   const slotEntries = (sl) => win.locator(`.slot[data-slot="${sl}"] .entry-main`).allTextContents();
   const slotSel = (sl) => win.locator(`.slot[data-slot="${sl}"] .entry.sel .entry-main`).textContent();
-  const singleEntries = () => win.locator('#singles .entry-main').allTextContents();
   const entryIn = (sl, text) => win.locator(`.slot[data-slot="${sl}"] .entry`, { hasText: text });
   const showing = async (...urls) => {
     await waitFor(async () => {
@@ -185,31 +205,63 @@ async function main() {
   assert.match(await win.textContent('#f-error'), /LAN/);
   await win.fill('#f-lan', '');
   await win.click('#f-save');
-  await win.waitForSelector('.node');
+  await win.waitForSelector('#pages .group');
   const nodesFile = path.join(data, 'nodes.json');
   const savedNodes = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes;
   assert.deepEqual(savedNodes[0].ports, P);
-  assert.deepEqual(await win.locator('.node .pages button').allTextContents(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Install Monitor', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗']);
-  assert.deepEqual(await win.locator('#tabs .tab.ext .label').allTextContents(), ['Pi-Piper ↗', 'Pibrary ↗']);
-  assert.equal(await win.locator('#tabs .tab.ext').count(), 2);
-  assert.equal(await win.locator('.node .pages button').nth(9).getAttribute('draggable'), 'false');
+  assert.equal(await win.locator('#tabs, .tab').count(), 0);
+  await waitFor(async () => (await pageNames()).length === 10, 'every running page is listed');
+  assert.deepEqual(await pageNames(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗']);
+  assert.deepEqual(await win.locator('#side-foot .entry-main').allTextContents(), ['Install Monitor']);
+  assert.equal(await page(9).getAttribute('draggable'), 'false');
+  assert.equal(await page(7).getAttribute('draggable'), 'false');
+  assert.equal(await win.locator('.group-name').textContent(), 'Stub');
 
-  await win.locator('#tabs .tab.ext', { hasText: 'Pi-Piper' }).click();
+  const serverOf = (n) => servers[names.indexOf(n)];
+  const stop = (n) => new Promise((r) => serverOf(n).close(r));
+  const start = (n) => new Promise((r) => serverOf(n).listen(P[n], '0.0.0.0', r));
+  await stop('sysmon');
+  await stop('recorder');
+  await waitFor(async () => !(await pageNames()).includes('SysMon') && !(await pageNames()).includes('Node Recorder'), 'stopped pages are hidden');
+  assert.equal((await pageNames()).length, 8);
+  await start('sysmon');
+  await start('recorder');
+  await waitFor(async () => (await pageNames()).includes('SysMon') && (await pageNames()).includes('Node Recorder'), 'started pages come back');
+
+  await stop('instmon');
+  await waitFor(async () => (await classes(page(7))).includes('down'), 'a stopped Install Monitor is marked');
+  assert.deepEqual(await win.locator('#side-foot .entry-main').allTextContents(), ['Install Monitor']);
+  await start('instmon');
+  await waitFor(async () => !(await classes(page(7))).includes('down'), 'Install Monitor is up again');
+
+  await page(2).locator('.entry-main').click();
+  await showing(U('sysmon'));
+  await stop('sysmon');
+  await new Promise((r) => setTimeout(r, 900));
+  assert.ok((await pageNames()).includes('SysMon'), 'a stopped page that is open stays in the list');
+  await waitFor(async () => (await classes(page(2))).includes('down'), 'and is marked as stopped');
+  await start('sysmon');
+  await waitFor(async () => !(await classes(page(2))).includes('down'), 'and unmarked when it runs again');
+  await page(2).locator('.x').click();
+  await waitFor(async () => (await views(app)).length === 0, 'SysMon closed');
+
+  await page(9).locator('.entry-main').click();
   await waitFor(() => fs.existsSync(extLog) && fs.readFileSync(extLog, 'utf8').includes(`http://127.0.0.1:${P.piper}/`), 'Pi-Piper opened in the browser');
   await win.waitForFunction(() => /Pi-Piper on Stub opened in your web browser/.test(document.getElementById('notice').textContent));
-  await page(10).click();
+  await page(10).locator('.entry-main').click();
   await waitFor(() => fs.readFileSync(extLog, 'utf8').includes(`http://127.0.0.1:${P.pibrary}/`), 'Pibrary opened in the browser');
   await page(10).click({ button: 'right' });
   assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Open in web browser']);
   await win.locator('#menu .menu-item').click();
   await waitFor(() => fs.readFileSync(extLog, 'utf8').trim().split('\n').length === 3, 'the menu opens the browser too');
-  assert.equal(await win.locator('.tab:not(.ext)').count(), 0);
+  assert.equal(await openCount(), 0);
   assert.equal((await views(app)).length, 0);
 
-  await page(0).click();
+  await page(0).locator('.entry-main').click();
   await showing(U('controller'));
-  assert.deepEqual(await singleEntries(), [Lb('Node Controller')]);
+  assert.ok((await classes(page(0))).includes('sel'));
   assert.equal(await view(), 'single');
+  assert.equal(await win.locator('#title .title-text').textContent(), 'Stub · Node Controller');
   const probe = await waitFor(async () => {
     const t = await inPage(app, `127.0.0.1:${P.controller}/`, 'document.title').catch(() => '');
     return String(t).startsWith('{') ? JSON.parse(t) : null;
@@ -220,17 +272,17 @@ async function main() {
   await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${LHU}', 'asl_dvs_lh') && 1`);
   await showing(LHU);
   assert.equal(await view(), 'single');
-  assert.deepEqual(await singleEntries(), [Lb('Node Controller'), 'Last Heard']);
-  await win.locator('#singles .entry', { hasText: 'Last Heard' }).locator('.x').click();
+  assert.equal(await win.locator('#pages .entry[data-key="lh"]').count(), 1);
+  await win.locator('#pages .entry[data-key="lh"] .x').click();
   await showing(U('controller'));
 
   await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${U('talker')}', 'asl_dvs_listen') && 1`);
   await showing(U('talker'));
-  assert.deepEqual(await singleEntries(), [Lb('Node Controller'), Lb('Node Talker')]);
+  assert.ok((await classes(page(0))).includes('open') && (await classes(page(1))).includes('sel'));
   await inPage(app, `127.0.0.1:${P.controller}/`, `location.assign('${U('talker')}x')`);
   await new Promise((r) => setTimeout(r, 600));
   assert.ok(await state(U('controller')), 'the controller page stays where it was');
-  assert.equal(await win.locator('.tab:not(.ext)').count(), 2);
+  assert.equal(await openCount(), 2);
 
   let [W, H] = await size();
   const g = L.grid(W, H);
@@ -240,25 +292,26 @@ async function main() {
   let t = await state(U('talker'));
   let c = await state(U('controller'));
   assert.deepEqual([t.throttled, t.muted, c.throttled, c.muted], [false, false, true, true]);
-  assert.equal(await win.locator('.tab', { hasText: 'Node Controller' }).locator('.dot.idle').count(), 1);
+  assert.ok((await classes(page(0))).includes('idle'));
+  assert.ok(!(await classes(page(1))).includes('idle'));
 
-  await page(0).click();
+  await page(0).locator('.entry-main').click();
   await showing(U('controller'));
   t = await state(U('talker'));
   assert.deepEqual([t.visible, t.throttled, t.muted], [false, false, false]);
-  assert.equal(await win.locator('.tab', { hasText: 'Node Talker' }).locator('.dot.idle').count(), 0);
+  assert.ok(!(await classes(page(1))).includes('idle'));
 
-  await dragTo(win, win.locator('#singles .entry', { hasText: 'Node Controller' }), win.locator('.slot[data-slot="left"]'));
+  await dragTo(win, page(0), win.locator('.slot[data-slot="left"]'));
   await waitFor(async () => (await view()) === 'slots' && (await slotEntries('left')).length === 1, 'controller in the left slot');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller')]);
   assert.equal(await win.locator('.slot[data-slot="left"].focus').count(), 1);
-  assert.deepEqual(await singleEntries(), [Lb('Node Talker')]);
+  assert.ok(!(await pageNames()).includes('Node Controller'));
   await showing(U('controller'));
   same((await visible())[0].bounds, g.area, 'a lone left slot is a one page view');
   assert.equal(await win.locator('.pane-strip').count(), 0);
   assert.equal(await win.locator('#views button[data-view="slots"]').isDisabled(), false);
 
-  await dragTo(win, win.locator('#singles .entry', { hasText: 'Node Talker' }), win.locator('.zone[data-zone="right"]'));
+  await dragTo(win, page(1), win.locator('.zone[data-zone="right"]'));
   await showing(U('controller'), U('talker'));
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker')]);
   let ex = geo({ left: 'x', right: 'y' }, W, H);
@@ -301,7 +354,7 @@ async function main() {
   t = await state(U('talker'));
   assert.deepEqual([t.visible, t.throttled, t.muted], [false, false, false]);
 
-  await page(5).click({ modifiers: ['Control'] });
+  await page(5).locator('.entry-main').click({ modifiers: ['Control'] });
   await showing(U('sysmon'), U('wifimon'), U('nodemon'));
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('Node Recorder'), Lb('WifiMon')]);
   const idleOnes = (await views(app)).filter((v) => !v.visible && v.throttled).map((v) => v.url).sort();
@@ -313,12 +366,12 @@ async function main() {
 
   await page(6).click({ button: 'right' });
   assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Show alone']);
-  await page(6).press('Escape');
-  await page(6).click();
+  await win.keyboard.press('Escape');
+  await page(6).locator('.entry-main').click();
   await showing(U('h44'));
   assert.equal(await view(), 'single');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
-  assert.equal(await win.locator('.node .pages button').nth(6).getAttribute('draggable'), 'false');
+  assert.equal(await page(6).getAttribute('draggable'), 'false');
   await dragTo(win, page(6), win.locator('.slot[data-slot="lower"]'));
   assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor')]);
   assert.equal(await view(), 'single');
@@ -331,10 +384,11 @@ async function main() {
   await win.locator('#menu .menu-item').click();
   await showing(U('termon'));
   assert.equal(await view(), 'single');
-  assert.equal(await win.locator('.node .pages button').nth(8).getAttribute('draggable'), 'false');
-  await page(7).click();
+  assert.equal(await page(8).getAttribute('draggable'), 'false');
+  await page(7).locator('.entry-main').click();
   await showing(U('instmon'));
-  assert.equal(await win.locator('.node .pages button').nth(7).getAttribute('draggable'), 'false');
+  assert.equal(await page(7).getAttribute('draggable'), 'false');
+  assert.equal(await win.locator('#side-foot .entry .x').count(), 0);
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
   await win.click('#views button[data-view="slots"]');
   await showing(U('sysmon'), U('talker'), U('nodemon'));
@@ -360,9 +414,9 @@ async function main() {
   assert.deepEqual(ext.hits, []);
   await win.click('#views button[data-view="slots"]');
   await showing(U('sysmon'), U('talker'), U('nodemon'));
-  await win.locator('#singles .entry', { hasText: 'Last Heard' }).locator('.entry-main').click();
+  await win.locator('#pages .entry[data-key="lh"] .entry-main').click();
   await showing(LHU);
-  await win.locator('#singles .entry', { hasText: 'Last Heard' }).click({ button: 'right' });
+  await win.locator('#pages .entry[data-key="lh"]').click({ button: 'right' });
   await win.locator('#menu .menu-item', { hasText: 'Put in Lower slot' }).click();
   await showing(U('sysmon'), U('talker'), LHU);
   assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor'), 'Last Heard']);
@@ -372,7 +426,7 @@ async function main() {
   assert.match(await win.textContent('#n-error'), /Last Heard/);
   await win.click('#n-cancel');
   await win.locator('.slot[data-slot="lower"] .entry', { hasText: 'Last Heard' }).locator('.x').click();
-  await win.locator('#singles .entry', { hasText: 'Last Heard' }).locator('.x').click();
+  await win.locator('#pages .entry[data-key="lh"] .x').click();
   await showing(U('sysmon'), U('talker'), U('nodemon'));
 
   await win.click('#save-split');
@@ -390,7 +444,7 @@ async function main() {
 
   await win.locator('.slot[data-slot="right"] .entry', { hasText: 'Node Recorder' }).locator('.x').click();
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('WifiMon')]);
-  assert.ok((await singleEntries()).includes(Lb('Node Recorder')));
+  assert.ok((await pageNames()).includes('Node Recorder'));
   await win.click('.split-name');
   await waitFor(async () => (await slotEntries('right')).length === 3, 'saved split applied');
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('Node Recorder'), Lb('WifiMon')]);
@@ -407,35 +461,33 @@ async function main() {
   assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor')]);
   assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
   assert.equal((await views(app)).length, 3);
-  assert.equal(await win.locator('.tab:not(.ext)').count(), 9);
+  assert.equal(await openCount(), 9);
 
-  const total = await win.locator('.tab:not(.ext)').count();
-  for (let i = 0; i < total; i += 1) await win.locator('.tab .x').nth(0).click();
+  await closeAll();
   await waitFor(async () => (await views(app)).length === 0, 'all tabs closed');
   assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);
   assert.deepEqual(await slotEntries('left'), []);
   await win.click('.split-name');
   await waitFor(async () => (await visible()).length === 3, 'saved split opens its pages');
-  assert.equal(await win.locator('.tab:not(.ext)').count(), 6);
+  assert.equal(await openCount(), 6);
 
   await chord(app, '1');
   await waitFor(async () => (await view()) === 'single', 'single');
-  const tabsNow = await win.locator('.tab:not(.ext)').count();
-  for (let i = 0; i < tabsNow; i += 1) await win.locator('.tab .x').nth(0).click();
+  await closeAll();
   await waitFor(async () => (await views(app)).length === 0, 'tabs closed again');
 
-  await win.click('.node-top button');
+  await win.click('.group-head button');
   await win.fill('#f-host', 'https://127.0.0.1');
   await win.fill('#f-port-talker', String(tlsPort));
   await win.click('#f-save');
-  await win.waitForSelector('.node-host:has-text("https://127.0.0.1")');
+  await waitFor(() => JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].https === true, 'the node is saved as https');
 
-  await page(1).click();
+  await page(1).locator('.entry-main').click();
   await win.waitForSelector('.pane-msg h2');
   assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Talker/);
   assert.match(await win.textContent('.pane-msg .mono'), /SHA-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}/);
   assert.equal(tls.hits.length, 0);
-  assert.equal(await win.locator('.tab .dot.failed').count(), 1);
+  assert.ok((await classes(page(1))).includes('failed'));
   await win.click('text=Trust this certificate');
   await waitFor(() => tls.hits.includes('/'), 'request to the pinned https node');
   await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'failure panel gone');
@@ -443,11 +495,11 @@ async function main() {
   assert.equal(pins.length, 1);
   assert.match(pins[0], /^[0-9a-f]{64}$/);
 
-  await win.click('.node-top button');
+  await win.click('.group-head button');
   await win.fill('#f-port-controller', String(tlsPort2));
   await win.click('#f-save');
   await win.waitForFunction(() => !document.getElementById('dlg').open);
-  await page(0).click();
+  await page(0).locator('.entry-main').click();
   await win.waitForSelector('.pane-msg h2');
   assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Controller/);
   assert.equal(tls2.hits.length, 0);
@@ -456,15 +508,45 @@ async function main() {
   pins = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].pins;
   assert.equal(pins.length, 2);
   assert.notEqual(pins[0], pins[1]);
-  await page(1).click();
+  await page(1).locator('.entry-main').click();
   await waitFor(async () => (await visible()).some((v) => v.url.startsWith('https://127.0.0.1:') && v.url.includes(String(tlsPort))), 'the first certificate is still trusted');
 
-  await win.click('.node-top button');
+  await closeAll();
+  await waitFor(async () => (await views(app)).length === 0, 'pages closed before the scheme checks');
+  await page(2).locator('.entry-main').click();
+  await showing(U('sysmon'));
+  await waitFor(() => JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.sysmon === 'http', 'a plain page on an https node is learned as http');
+  await win.waitForFunction(() => /SysMon on Stub answers on http, not https/.test(document.getElementById('notice').textContent));
+  await closeAll();
+
+  await win.click('.group-head button');
+  await win.uncheck('#f-https');
+  await win.fill('#f-port-nodemon', String(tlsPort2));
+  await win.click('#f-save');
+  await win.waitForFunction(() => !document.getElementById('dlg').open);
+  await page(3).locator('.entry-main').click();
+  await waitFor(async () => (await visible()).some((v) => v.url === `https://127.0.0.1:${tlsPort2}/`), 'a TLS page on an http node is learned as https and the trusted certificate is accepted');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.nodemon, 'https');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes.sysmon, 'http');
+  await closeAll();
+
+  await win.click('.group-head button');
+  assert.equal(await win.locator('#f-scheme-row').isVisible(), true);
+  const remembered = await win.textContent('#f-schemes');
+  assert.match(remembered, /SysMon on http/);
+  assert.match(remembered, /Node Monitor on https/);
+  await win.click('#f-scheme-clear');
+  assert.equal(await win.locator('#f-scheme-row').isHidden(), true);
+  await win.click('#f-save');
+  await win.waitForFunction(() => !document.getElementById('dlg').open);
+  assert.deepEqual(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes, {});
+
+  await win.click('.group-head button');
   await win.click('#f-delete');
-  await win.waitForFunction(() => document.querySelectorAll('.node').length === 0);
+  await win.waitForFunction(() => document.querySelectorAll('#pages .group').length === 0);
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes.length, 0);
   assert.equal(JSON.parse(fs.readFileSync(splitsFile, 'utf8')).splits.length, 0);
-  assert.equal(await win.locator('.tab:not(.ext)').count(), 0);
+  assert.equal(await openCount(), 0);
   assert.equal((await views(app)).length, 0);
 
   await app.close();

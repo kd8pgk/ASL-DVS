@@ -21,25 +21,22 @@
   <div id="notice" class="notice" hidden></div>
   <div id="side-top">
     <section id="slots-box"></section>
-    <section id="singles-box" class="sec">
-      <div class="sec-head">Single pages</div>
-      <ul id="singles" class="entries"></ul>
-    </section>
   </div>
-  <div id="side-bottom">
+  <div id="side-mid">
     <section class="sec">
-      <div class="sec-head">Open a page</div>
-      <ul id="nodes"></ul>
+      <div class="sec-head">Single pages</div>
+      <div id="pages"></div>
     </section>
-    <div id="splits-box" class="splits" hidden>
-      <div class="splits-head">Saved splits</div>
-      <ul id="splits"></ul>
-    </div>
   </div>
+  <div id="splits-box" class="splits" hidden>
+    <div class="splits-head">Saved splits</div>
+    <ul id="splits"></ul>
+  </div>
+  <div id="side-foot"></div>
 </aside>
 <main id="main">
   <header id="head">
-    <div id="tabs" role="tablist"></div>
+    <div id="title"></div>
     <div id="views" class="seg" role="group" aria-label="View">
       <button type="button" data-view="single" title="Show the focused page by itself (Ctrl+1)">Single</button>
       <button type="button" data-view="slots" title="Show the pages in the Left, Right and Lower slots (Ctrl+2)">Slots</button>
@@ -62,6 +59,11 @@
       <span>Trusted certificates</span>
       <span id="f-pin" class="mono"></span>
       <button id="f-pin-clear" type="button">Forget all</button>
+    </div>
+    <div id="f-scheme-row" class="pin" hidden>
+      <span>Remembered</span>
+      <span id="f-schemes" class="mono"></span>
+      <button id="f-scheme-clear" type="button">Forget</button>
     </div>
     <p id="f-error" class="error" hidden></p>
     <div class="row end">
