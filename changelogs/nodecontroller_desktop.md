@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.15`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.16`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.16 (2026-11-24)
+
+The sidebar is rebuilt only when it changes.
+
+- **Less work while dragging.** Every layout update rebuilt the whole sidebar (slots, pages, Install Monitor, saved splits), about 60 times a second while the divider was dragged, and again on every focus or status change. It is now rebuilt only when something it shows changes: the slots, the pages and their state, the saved splits, the view or the nodes. The title bar and panes still update every time.
+- **Tests.** The real-window tests (drag and drop between slots and the sidebar, the menu, saved splits) pass unchanged.
 
 ## 0.11.15 (2026-11-24)
 
