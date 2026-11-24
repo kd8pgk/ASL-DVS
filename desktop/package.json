@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
   "productName": "Node Controller Desktop",
-  "version": "0.11.5",
+  "version": "0.11.6",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",
@@ -13,9 +13,9 @@
     "check-package": "node test/package.js"
   },
   "devDependencies": {
-    "electron": "45.4.1",
-    "electron-builder": "26.18.0",
-    "@electron/fuses": "2.1.3"
+    "@electron/fuses": "2.1.3",
+    "electron": "44.11.5",
+    "electron-builder": "26.18.0"
   },
   "author": "kd8pgk",
   "license": "SEE LICENSE IN ../LICENSE",
