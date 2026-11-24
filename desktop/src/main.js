@@ -5,7 +5,7 @@ const { PAGES, MAX_PINS, SCHEME_FLIP_CODES, otherScheme, normalizeNode, originOf
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
 const { createSessionMarker } = require('./session');
-const { certDecision, formatFingerprint } = require('./pin');
+const { certDecision, formatFingerprint, refusedKey, refusedKeyOfUrl } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
 const P = require('./policy');
@@ -601,7 +601,10 @@ async function ensureView(key) {
       hostname = '';
     }
     const d = certDecision({ hostname, certPem: certificate && certificate.data }, nodes);
-    if (d.refused) refused.set(d.refused.hostname, d.refused);
+    if (d.refused) {
+      const rk = refusedKeyOfUrl(url);
+      refused.set(rk, { ...d.refused, key: rk });
+    }
     event.preventDefault();
     callback(d.trust);
   });
@@ -632,7 +635,7 @@ async function ensureView(key) {
         flips.delete(key);
       }
     }
-    const hit = refused.get(target.host.toLowerCase());
+    const hit = refused.get(refusedKey(target.host, target.port, target.https));
     e.status = 'failed';
     e.error = {
       message: desc,
@@ -898,7 +901,7 @@ function register() {
     const hit = [...refused.values()].find((r) => r.fingerprint === want && r.nodeIds.includes(nodeId));
     if (!hit) return { error: 'That certificate was not the one refused.' };
     node.pins = [...node.pins.filter((p) => p !== hit.fingerprint), hit.fingerprint].slice(-MAX_PINS);
-    refused.delete(hit.hostname);
+    for (const [k, r] of refused) if (r.fingerprint === hit.fingerprint) refused.delete(k);
     router.forget(nodeId);
     persist();
     for (const t of ls.tabs) if (t.nodeId === nodeId && t.kind !== 'lh') closeRt(t.key);

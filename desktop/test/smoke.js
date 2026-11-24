@@ -594,15 +594,23 @@ async function main() {
   await win.click('.group-head button');
   await win.fill('#f-host', 'https://127.0.0.1');
   await win.fill('#f-port-talker', String(tlsPort));
+  await win.fill('#f-port-controller', String(tlsPort2));
   await win.click('#f-save');
   await waitFor(() => JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].https === true, 'the node is saved as https');
 
   await page(1).locator('.entry-main').click();
   await win.waitForSelector('.pane-msg h2');
   assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Talker/);
-  assert.match(await win.textContent('.pane-msg .mono'), /SHA-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}/);
+  const talkerFp = await win.textContent('.pane-msg .mono');
+  assert.match(talkerFp, /SHA-256 ([0-9A-F]{2}:){31}[0-9A-F]{2}/);
   assert.equal(tls.hits.length, 0);
   assert.ok((await classes(page(1))).includes('failed'));
+  await page(0).locator('.entry-main').click();
+  await waitFor(async () => /Could not open Stub · Node Controller/.test(await win.textContent('.pane-msg h2')), 'the second tool on the same host is refused too');
+  assert.notEqual(await win.textContent('.pane-msg .mono'), talkerFp);
+  await page(1).locator('.entry-main').click();
+  await waitFor(async () => /Could not open Stub · Node Talker/.test(await win.textContent('.pane-msg h2')), 'back on the first refused page');
+  assert.equal(await win.textContent('.pane-msg .mono'), talkerFp);
   await win.click('text=Trust this certificate');
   await waitFor(() => tls.hits.includes('/'), 'request to the pinned https node');
   await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'failure panel gone');
@@ -610,10 +618,6 @@ async function main() {
   assert.equal(pins.length, 1);
   assert.match(pins[0], /^[0-9a-f]{64}$/);
 
-  await win.click('.group-head button');
-  await win.fill('#f-port-controller', String(tlsPort2));
-  await win.click('#f-save');
-  await win.waitForFunction(() => !document.getElementById('dlg').open);
   await page(0).locator('.entry-main').click();
   await win.waitForSelector('.pane-msg h2');
   assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Controller/);
