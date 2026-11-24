@@ -156,3 +156,9 @@ test('each page has its own Last Heard window name', () => {
   assert.equal(P.isLastHeardWindow('constructor', 'nt_lh'), false);
   assert.equal(P.isLastHeardWindow('__proto__', 'nt_lh'), false);
 });
+
+test('only Node Talker is never idle', () => {
+  assert.deepEqual([...P.NEVER_IDLE], ['talker']);
+  assert.equal(P.neverIdle('talker'), true);
+  for (const id of ['controller', 'sysmon', 'nodemon', 'lasthard', '', 'constructor', '__proto__']) assert.equal(P.neverIdle(id), false, id);
+});

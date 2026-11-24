@@ -1,6 +1,20 @@
 # Node Controller Desktop changelog
 
-Current version: `0.4.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.5.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.5.0 (2026-11-24)
+
+Every page is a single-page tab; you stack tabs into a split. SysMon and Node Monitor join the pages. Last Heard is a single page too. Pages that are not on screen are idle.
+
+- **More pages.** SysMon (port 9999) and Node Monitor (port 7777) are hardwired pages next to Node Controller and Node Talker. The node's Edit window has a port for each; nodes saved before get the defaults. The lockdown covers them like the others (their node's addresses only; no away address).
+- **Tabs are single pages.** Opening a page, from the node list or a tab, shows that page by itself. A split is an arrangement of tabs you already have open.
+- **Making a split.** Drag a tab, or a page from the node list, onto the page area. Zones show where it goes, always left to right, then down, never more than three: from one page, the right half adds a page beside it; from two pages, the bottom third adds the lower third; over a pane, it replaces that pane (or swaps it, if the page is already showing). The other ways: right-click a tab or page for the same choices in a menu, Ctrl+click to add it to the next free place (right, then below, then the bottom), or the 2 pages and 3 pages buttons (Ctrl+2, Ctrl+3). In a split each pane has a strip with its page's name, **Alone** (show it by itself) and **Remove** (take it out of the split).
+- **Clicking a page that is in the split** brings back the whole split with focus on that page, the same for a tab. Clicking one that is not in it shows that page alone. **Back to split** (or any page that is in the split) returns to it. The 1 page button does the same as Alone for the focused pane and keeps the split to come back to. Closing a page shrinks the split; a pair left alone becomes one page.
+- **Last Heard** (Node Talker's LH and Node Controller's) opens as a new single-page tab, the same tab each time, replacing the 0.4.0 rule that put it beside or below the page. It can be stacked into a split like any tab, but a split that holds it cannot be saved.
+- **Saved splits.** **Save split** names the arrangement on screen (two or three pages, with the divider position); it is kept in `splits.json`, listed in the sidebar, and a click opens any missing tabs and shows it. Up to 20; a name that exists is replaced. Deleting a node deletes the splits that use it.
+- **Idle pages.** A page that is not on screen is idle: Chromium slows it down and its sound is muted. A page that is on screen is never slowed, even when the app window is behind others. **Node Talker is never idle**, on screen or not, so it keeps listening in a hidden tab. A tab shows a hollow dot while its page is idle. This replaces 0.4.0's "hidden pages are not slowed down" for every page except Node Talker. Not yet tried on a real node.
+- **Layout.** The grid is unchanged (sidebar 3, header 1, pages 12; rows equal). In a split, each pane's strip takes 28 pixels from the top of its pane.
+- **Tests.** The layout tests cover dropping, replacing, swapping, the order of places, never more than three panes, clicking a page in and out of the split, Back to split, Last Heard as a single page, closing, restoring and the drop zones; the new splits file has its own tests; the smoke test does it all in the real window: real mouse drag and drop onto the zones, the menu, Ctrl+click, the strips, idle and active pages, Back to split, saved splits, a restart, the shortcuts and deleting a node.
 
 ## 0.4.0 (2026-11-24)
 

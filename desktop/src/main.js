@@ -7,6 +7,7 @@ const { certDecision, formatFingerprint } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
 const P = require('./policy');
+const PR = require('./presets');
 
 const CONNECTION_FIELDS = ['host', 'https', 'ports', 'pin', 'lanIp', 'lanPin', 'awayHost', 'awayPort', 'awayHttps'];
 
@@ -27,6 +28,8 @@ const userData = process.env.NODECONTROLLER_DATA || app.getPath('userData');
 if (process.env.NODECONTROLLER_DATA) app.setPath('userData', userData);
 const store = createStore(path.join(userData, 'nodes.json'));
 const layoutFile = path.join(userData, 'layout.json');
+const presetStore = PR.createPresetStore(path.join(userData, 'splits.json'));
+let splits = presetStore.load();
 let nodes = store.load();
 const router = createRouter();
 const refused = new Map();
@@ -144,11 +147,15 @@ function payload() {
   const r = L.rects(ls, g.area);
   const vis = L.shown(ls);
   return {
-    grid: { sidebar: g.sidebar, header: g.header },
+    grid: { sidebar: g.sidebar, header: g.header, strip: g.strip },
     mode: ls.mode,
     ratio: ls.ratio,
     focus: ls.focus,
     counts: { cols: ls.tabs.length >= 2, trio: ls.tabs.length >= 3 },
+    canBack: L.canBack(ls),
+    canSave: !PR.fromState(ls, 'x').error,
+    splits: splits.map((p) => ({ id: p.id, name: p.name, count: p.items.length })),
+    zones: L.dropZones(ls, g.area),
     overlay,
     tabs: ls.tabs.map((t) => {
       const e = rt.get(t.key);
@@ -160,13 +167,14 @@ function payload() {
         label: labelOf(t),
         shown: vis.indexOf(t.key),
         status: e ? e.status : 'idle',
+        idle: e ? e.idle === true : true,
         via: e ? e.via : 'home',
       };
     }),
     panes: r.panes.map((rect, i) => {
       const key = vis[i];
       const e = key ? rt.get(key) : null;
-      return { rect, key, status: e ? e.status : key ? 'loading' : 'empty', error: e && e.status === 'failed' ? e.error : null };
+      return { rect, view: L.viewRect(ls, rect), key, label: key ? labelOf(ls.tabs.find((t) => t.key === key)) : '', status: e ? e.status : key ? 'loading' : 'empty', error: e && e.status === 'failed' ? e.error : null };
     }),
     dividers: r.dividers,
   };
@@ -194,6 +202,15 @@ function saveNow() {
   }
 }
 
+function setIdle(e, idle) {
+  if (!e.view || e.idle === idle) return;
+  const wc = e.view.webContents;
+  if (wc.isDestroyed()) return;
+  e.idle = idle;
+  wc.setBackgroundThrottling(idle);
+  wc.setAudioMuted(idle);
+}
+
 function sync() {
   if (!alive()) return;
   const r = L.rects(ls, area());
@@ -202,8 +219,10 @@ function sync() {
   for (const [key, e] of rt) {
     if (!e.view) continue;
     const i = vis.indexOf(key);
+    const tab = ls.tabs.find((t) => t.key === key);
+    setIdle(e, i < 0 && !(tab && P.neverIdle(tab.pageId)));
     if (i >= 0 && r.panes[i]) {
-      const p = r.panes[i];
+      const p = L.viewRect(ls, r.panes[i]);
       e.view.setBounds({ x: p.x, y: p.y, width: p.w, height: p.h });
       e.view.setVisible(!overlay && e.status !== 'failed');
     } else {
@@ -370,7 +389,6 @@ async function ensureView(key) {
       nodeIntegration: false,
       webviewTag: false,
       spellcheck: false,
-      backgroundThrottling: false,
     },
   });
   e.view = view;
@@ -489,6 +507,8 @@ function register() {
     for (const t of ls.tabs) if (t.nodeId === id) closeRt(t.key);
     ls = L.closeNode(ls, id);
     nodes = nodes.filter((n) => n.id !== id);
+    splits = splits.filter((p) => !p.items.some((it) => it.nodeId === id));
+    presetStore.save(splits);
     router.forget(id);
     persist();
     sync();
@@ -546,6 +566,78 @@ function register() {
   });
   ipcMain.handle('tabs:reload', (e, key) => {
     if (fromShell(e) && str(key)) reloadTab(key);
+    return { ok: true };
+  });
+  const resolveKey = (arg) => {
+    if (!arg || typeof arg !== 'object') return null;
+    if (str(arg.key)) return ls.tabs.some((t) => t.key === arg.key) ? arg.key : null;
+    if (str(arg.nodeId) && str(arg.pageId) && nodes.some((n) => n.id === arg.nodeId) && PAGES.some((p) => p.id === arg.pageId)) {
+      ls = L.addTab(ls, arg.nodeId, arg.pageId);
+      return L.keyOf(arg.nodeId, arg.pageId);
+    }
+    return null;
+  };
+  ipcMain.handle('tabs:drop', (e, arg) => {
+    if (!fromShell(e) || !arg || !str(arg.zone)) return { ok: false };
+    const key = resolveKey(arg);
+    if (!key) return { ok: false };
+    update(L.dropKey(ls, key, arg.zone));
+    focusView();
+    return { ok: true };
+  });
+  ipcMain.handle('tabs:next', (e, arg) => {
+    if (!fromShell(e)) return { ok: false };
+    const key = resolveKey(arg);
+    if (!key) return { ok: false };
+    update(L.addNext(ls, key));
+    focusView();
+    return { ok: true };
+  });
+  ipcMain.handle('tabs:alone', (e, arg) => {
+    if (!fromShell(e)) return { ok: false };
+    const key = resolveKey(arg);
+    if (!key) return { ok: false };
+    update(L.showAlone(ls, key));
+    focusView();
+    return { ok: true };
+  });
+  ipcMain.handle('tabs:remove-pane', (e, i) => {
+    if (fromShell(e)) update(L.removePane(ls, i));
+    return { ok: true };
+  });
+  ipcMain.handle('tabs:back', (e) => {
+    if (fromShell(e)) {
+      update(L.backToSplit(ls));
+      focusView();
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('splits:save', (e, name) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    const made = PR.fromState(ls, name);
+    if (made.error) return { error: made.error };
+    const r = PR.put(splits, made.preset);
+    if (r.error) return { error: r.error };
+    splits = r.list;
+    presetStore.save(splits);
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('splits:apply', (e, id) => {
+    if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
+    const preset = splits.find((p) => p.id === id);
+    if (!preset) return { error: 'That split is gone.' };
+    const r = PR.apply(ls, preset, nodes, PAGES);
+    if (r.error) return { error: r.error };
+    update(r.state);
+    focusView();
+    return { ok: true };
+  });
+  ipcMain.handle('splits:remove', (e, id) => {
+    if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
+    splits = splits.filter((p) => p.id !== id);
+    presetStore.save(splits);
+    push();
     return { ok: true };
   });
   ipcMain.handle('tabs:mode', (e, mode) => {

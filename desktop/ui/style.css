@@ -112,3 +112,26 @@ dialog label.check { display: flex; align-items: center; gap: 6px; color: var(--
 .pin { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
 .pin .mono { flex: 1; color: var(--text); }
 .error { color: var(--danger); margin: 6px 0 0; }
+.tab .dot.idle { background: transparent; border: 1px solid var(--muted); }
+.pages button.open { border-style: dashed; }
+#back { border-color: var(--accent); color: var(--accent); }
+#back[hidden] { display: none; }
+.pane-strip { position: absolute; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; background: var(--panel); border-bottom: 2px solid var(--line); pointer-events: auto; cursor: default; overflow: hidden; }
+.pane-strip.focus { border-bottom-color: var(--accent); }
+.pane-strip .strip-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.pane-strip button { padding: 1px 8px; font-size: 12px; }
+.zone { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 14%, transparent); border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent); }
+.zone.over { background: color-mix(in srgb, var(--accent) 38%, transparent); border-style: solid; }
+.zone-label { pointer-events: none; padding: 4px 12px; border-radius: 6px; background: var(--panel); color: var(--text); font-weight: 600; }
+.menu { position: fixed; z-index: 10; min-width: 180px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
+.menu[hidden] { display: none; }
+.menu-item { display: block; width: 100%; text-align: left; border: none; background: none; padding: 5px 10px; }
+.menu-item:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.splits { padding: 4px 8px 8px; border-top: 1px solid var(--line); }
+.splits[hidden] { display: none; }
+.splits-head { color: var(--muted); font-size: 12px; padding: 4px 4px; }
+#splits { list-style: none; margin: 0; padding: 0; }
+.split-row { display: flex; gap: 4px; margin-bottom: 4px; }
+.split-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-row .x { border: none; background: none; color: var(--muted); }
+.split-row .x:hover { color: var(--danger); }

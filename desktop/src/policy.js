@@ -94,6 +94,12 @@ function allowShellRequest(url) {
   return /^(file|data):/i.test(url);
 }
 
+const NEVER_IDLE = new Set(['talker']);
+
+function neverIdle(pageId) {
+  return NEVER_IDLE.has(pageId);
+}
+
 const LAST_HEARD_NAMES = { talker: 'nt_lh', controller: 'asl_dvs_lh' };
 
 function isLastHeardWindow(pageId, frameName) {
@@ -158,6 +164,8 @@ module.exports = {
   allowPermission,
   allowRequest,
   allowShellRequest,
+  NEVER_IDLE,
+  neverIdle,
   LAST_HEARD_NAMES,
   isLastHeardWindow,
   isPrivateHost,

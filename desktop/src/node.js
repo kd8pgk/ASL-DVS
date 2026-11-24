@@ -3,6 +3,8 @@ const crypto = require('node:crypto');
 const PAGES = [
   { id: 'controller', label: 'Node Controller', port: 8989, away: false },
   { id: 'talker', label: 'Node Talker', port: 8993, away: true },
+  { id: 'sysmon', label: 'SysMon', port: 9999, away: false },
+  { id: 'nodemon', label: 'Node Monitor', port: 7777, away: false },
 ];
 
 const HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$|^[0-9A-Fa-f:.]{2,45}$/;

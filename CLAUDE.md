@@ -152,10 +152,16 @@
   and `desktop/test/package.js` hold this: a change that weakens it fails them,
   and a change that strengthens it updates them in the same pull request.
 - **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
-  12. Layouts are 1 page, 2 pages (6 + 6) and 3 pages (two over a full-width
-  third, equal rows). Last Heard fills left, then right, then down: beside a
-  single page, below two pages, in place of the bottom pane of three. Never
-  more than three panes (no quarters).
+  12. Every page opens as a single-page tab (Node Controller, Node Talker,
+  SysMon, Node Monitor, Last Heard); a split is an arrangement of open tabs: 1
+  page, 2 pages (6 + 6) or 3 pages (two over a full-width third, equal rows),
+  made by dragging a tab onto the page area, the tab menu, Ctrl+click or the
+  buttons. Places fill left, then right, then down. Never more than three
+  panes (no quarters). Clicking a page that is in the split brings back the
+  whole split with focus on it; one that is not shows alone, with Back to
+  split. Pages that are not on screen are idle (slowed and muted), except
+  Node Talker, which is never idle; pages on screen never are. Last Heard
+  opens as a new single page.
 - **Window titles** say "Node Controller" (see Naming above); node page names
   stay as the nodes serve them.
 - **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after
