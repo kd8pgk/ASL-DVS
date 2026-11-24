@@ -13,7 +13,7 @@ const ZOOM_MAX = 1.6;
 const AUTO_MIN = 0.5;
 const ZOOM_STEP = 0.1;
 const UNITS = 15;
-const SIDEBAR_UNITS = 3;
+const SIDEBAR_UNITS = 2.25;
 const HEADER = 44;
 
 function grid(w, h) {

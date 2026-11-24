@@ -84,10 +84,10 @@ input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 1px v
 .logo {
   font-family: var(--sans);
   font-size: var(--fs-md);
-  line-height: 1.2;
+  line-height: 1.15;
   color: var(--amber);
   letter-spacing: .06em;
-  white-space: nowrap;
+  text-wrap: balance;
   text-shadow: 0 0 10px rgba(255,208,64,.9), 0 0 30px rgba(255,208,64,.5), 0 0 60px rgba(255,208,64,.2);
 }
 .logo-sub {
@@ -104,6 +104,7 @@ input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 1px v
 #side-mid { flex: 1; min-height: 100px; overflow: auto; border-top: 1px solid var(--border2); }
 #side-foot { flex: none; border-top: 2px solid var(--border2); padding: .4rem .5rem .5rem; background: linear-gradient(90deg, #0f1a2e, #161e2e 50%, #0f1a2e); }
 #side-foot .entries { margin: 0; }
+.ver { flex: none; padding: .15rem .8rem .3rem; font-size: var(--fs-xs); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); background: linear-gradient(90deg, #0f1a2e, #161e2e 50%, #0f1a2e); }
 .sec { padding: .1rem .5rem .4rem; }
 .sec-head { font-size: var(--fs-xs); letter-spacing: .28em; text-transform: uppercase; color: var(--text); padding: .3rem .25rem .15rem; }
 .entries { list-style: none; margin: 0; padding: 0; }
