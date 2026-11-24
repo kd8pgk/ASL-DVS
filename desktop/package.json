@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
   "productName": "Node Controller",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",
@@ -56,7 +56,7 @@
       "enableNodeCliInspectArguments": false,
       "enableEmbeddedAsarIntegrityValidation": true,
       "onlyLoadAppFromAsar": true,
-      "grantFileProtocolExtraPrivileges": false
+      "grantFileProtocolExtraPrivileges": true
     },
     "publish": null,
     "compression": "maximum"

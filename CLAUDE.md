@@ -148,9 +148,13 @@
   request only their own node; Last Heard is the one tile that may use the
   public internet, never private addresses unless a saved node. No devtools,
   remote debugging, updater, telemetry or crash reporter; the Chromium sandbox
-  stays on; the packaged app refuses debugging switches. `desktop/test/policy.test.js`
+  stays on; the packaged app refuses debugging switches. The file protocol
+  fuse stays on: with it off the app cannot read its page from its archive and
+  shows a blank window (0.7.0). `desktop/test/policy.test.js`
   and `desktop/test/package.js` hold this: a change that weakens it fails them,
   and a change that strengthens it updates them in the same pull request.
+  `check-package` must see the packaged window report `shell-ready`: running
+  from the source does not prove the AppImage works.
 - **Layout.** The window is 15 units wide: sidebar 3, header 1 unit tall, pages
   12. The pages are Node Controller, Node Talker, SysMon, Node Monitor, Node
   Recorder, WifiMon, 44helper, Install Monitor and Terminal Monitor, and Last

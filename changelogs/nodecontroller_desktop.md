@@ -1,6 +1,16 @@
 # Node Controller Desktop changelog
 
-Current version: `0.7.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.7.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.7.1 (2026-11-24)
+
+Fix: the packaged app (the AppImage) opened a window with a title and nothing inside it. 0.5.0 to 0.7.0 are affected when run as the AppImage; running from the source was fine, which is why the tests missed it.
+
+- **Cause.** The hardening switched off Electron's file protocol privileges fuse. With it off, the app cannot read its own page out of its archive, so the window loaded nothing (`ERR_FILE_NOT_FOUND` for `app.asar/ui/index.html`).
+- **Fix.** The fuse is on again. The window's page is the only one that uses the file protocol; its content security policy allows nothing but its own script and style, and the request policy for that window allows only its own files, so it still cannot fetch anything.
+- **A broken window now fails loudly.** If the window's page cannot load, the app says so on its error output and exits with code 3 instead of leaving a blank window.
+- **The package check now loads the window.** `npm run check-package` starts the packaged app and waits for the window to report that its page ran (`shell-ready`); it fails if it does not, or if a load failure is reported. The fuse list it checks is updated. It was checked against the broken build: it fails there.
+- Nothing else changes.
 
 ## 0.7.0 (2026-11-24)
 
