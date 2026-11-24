@@ -65,13 +65,13 @@ input[type="text"], input[type="number"] {
 .notice { margin: 0 16px 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg); color: var(--ok); }
 .notice.bad { color: var(--danger); }
 #nodes { list-style: none; margin: 0; padding: 0 8px; }
-#side-top { flex: none; max-height: 58%; overflow: auto; }
+#side-top { flex: none; max-height: 54%; overflow: auto; }
 #side-bottom { flex: 1; min-height: 120px; overflow: auto; border-top: 1px solid var(--line); }
 .sec { padding: 2px 8px 6px; }
 .sec-head { color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 4px 2px; }
 .entries { list-style: none; margin: 0; padding: 0; }
-.entry { display: flex; align-items: center; gap: 2px; margin-bottom: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
-.entry-main { flex: 1; min-width: 0; text-align: left; border: none; background: none; padding: 3px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+.entry-main { flex: 1; min-width: 0; text-align: left; border: none; background: none; font-size: 13px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 .entry .x { border: none; background: none; color: var(--muted); padding: 0 6px; }
 .entry .x:hover { color: var(--danger); }
@@ -83,14 +83,14 @@ input[type="text"], input[type="number"] {
 .node-top { display: flex; align-items: center; gap: 6px; }
 .node-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-host { color: var(--muted); font-size: 12px; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pages { display: flex; flex-direction: column; gap: 4px; }
-.pages button { text-align: left; }
+.pages { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.pages button { text-align: left; font-size: 12px; padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pages button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 .ver { padding: 8px 16px; color: var(--muted); font-size: 12px; }
 #main { display: flex; flex-direction: column; min-width: 0; }
 #head { height: var(--header, 6.667vw); display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
-#tabs { flex: 1; display: flex; flex-wrap: wrap; align-content: center; gap: 6px; min-width: 0; max-height: 100%; overflow: hidden; }
-.tab { display: flex; align-items: center; gap: 6px; max-width: 240px; min-width: 0; padding: 4px 6px 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+#tabs { flex: 1; display: flex; flex-wrap: wrap; align-content: center; gap: 4px; min-width: 0; max-height: 100%; overflow-y: auto; scrollbar-width: thin; }
+.tab { display: flex; align-items: center; gap: 5px; max-width: 220px; min-width: 0; padding: 2px 4px 2px 8px; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
 .tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab.shown { border-color: var(--muted); }
 .tab.focus { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }

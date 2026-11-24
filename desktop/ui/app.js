@@ -256,6 +256,7 @@
         const tab = lay && lay.tabs.find((t) => t.nodeId === n.id && t.pageId === p.id);
         const b = el('button', p.external ? 'ext' : tab ? (tab.shown ? 'on' : 'open') : '', p.external ? `${p.label} ↗` : p.label);
         b.type = 'button';
+        b.title = p.label;
         b.draggable = !p.single && !p.external;
         const src = { nodeId: n.id, pageId: p.id };
         b.addEventListener('click', (ev) => activate(src, ev));
@@ -296,6 +297,17 @@
     const box = $('tabs');
     box.textContent = '';
     if (!lay) return;
+    for (const n of nodes) {
+      for (const p of pages) {
+        if (!p.external) continue;
+        const l = el('div', 'tab ext');
+        l.title = `Open ${p.label} in your web browser`;
+        l.append(el('span', 'label', `${nodes.length > 1 ? `${nodeLabel(n)} · ` : ''}${p.label} ↗`));
+        l.addEventListener('click', () => window.nc.openTab(n.id, p.id));
+        l.addEventListener('contextmenu', (ev) => showMenu(ev, { nodeId: n.id, pageId: p.id }));
+        box.append(l);
+      }
+    }
     for (const t of lay.tabs) {
       const cls = ['tab'];
       if (t.shown) cls.push('shown');
@@ -319,17 +331,6 @@
       tab.addEventListener('dragstart', (ev) => startDrag(ev, src));
       tab.addEventListener('dragend', endDrag);
       box.append(tab);
-    }
-    for (const n of nodes) {
-      for (const p of pages) {
-        if (!p.external) continue;
-        const l = el('div', 'tab ext');
-        l.title = `Open ${p.label} in your web browser`;
-        l.append(el('span', 'label', `${nodes.length > 1 ? `${nodeLabel(n)} · ` : ''}${p.label} ↗`));
-        l.addEventListener('click', () => window.nc.openTab(n.id, p.id));
-        l.addEventListener('contextmenu', (ev) => showMenu(ev, { nodeId: n.id, pageId: p.id }));
-        box.append(l);
-      }
     }
     for (const b of $('views').querySelectorAll('button')) {
       const v = b.dataset.view;
