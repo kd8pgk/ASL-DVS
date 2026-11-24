@@ -122,11 +122,17 @@ function harden(ses, kind) {
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     logLine(`trace ${kind} permission asked: ${permission}`);
     const origin = (details && details.requestingUrl) || (wc && !wc.isDestroyed() ? wc.getURL() : '');
-    callback(P.allowPermission(permission, origin, hostsFor(), details && details.mediaTypes));
+    const media = permission === 'media' && details ? details.mediaTypes : undefined;
+    const ok = P.allowPermission(permission, origin, hostsFor(), media);
+    logLine(`trace ${kind} permission answered: ${permission} ${ok}`);
+    callback(ok);
   });
   ses.setPermissionCheckHandler((wc, permission, origin, details) => {
     logLine(`trace ${kind} permission checked: ${permission}`);
-    return P.allowPermission(permission, origin, hostsFor(), details && details.mediaType);
+    const media = permission === 'media' && details ? details.mediaType : undefined;
+    const ok = P.allowPermission(permission, origin, hostsFor(), media);
+    logLine(`trace ${kind} permission answered: ${permission} ${ok}`);
+    return ok;
   });
   ses.setDevicePermissionHandler(() => false);
   ses.setSpellCheckerEnabled(false);
@@ -570,6 +576,9 @@ async function ensureView(key) {
     }
   };
   wc.on('focus', focused);
+  for (const ev of ['did-start-loading', 'did-start-navigation', 'did-navigate', 'dom-ready', 'did-finish-load', 'did-stop-loading', 'page-favicon-updated', 'page-title-updated', 'did-create-window', 'unresponsive', 'responsive']) {
+    wc.on(ev, () => logLine(`trace ${key} ${ev}`));
+  }
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });

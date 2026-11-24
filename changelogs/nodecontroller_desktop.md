@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.3`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.4`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.4 (2026-11-24)
+
+The page trace now covers every page, and permission checks no longer read the media details unless they are about the microphone.
+
+- **Trace fixed.** In 0.11.3 the loading-step trace was only on the Last Heard page. It is now on every node page too.
+- **Permission details.** A permission check or request for anything other than the microphone no longer reads the media type from Electron's details. A page asking about something else (such as `background-sync`, which SysMon asks about as it opens) now gets its answer without touching that field. Each answer is also written to the log.
 
 ## 0.11.3 (2026-11-24)
 
