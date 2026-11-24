@@ -28,7 +28,7 @@ function certDecision(req, nodes) {
   const owners = nodes.filter((n) => pinHosts(n).includes(host));
   if (!owners.length) return { trust: false };
   for (const n of owners) {
-    if (pinMatches(n.pin, req.certPem) || pinMatches(n.lanPin, req.certPem)) return { trust: true };
+    if (n.pins.some((p) => pinMatches(p, req.certPem))) return { trust: true };
   }
   return {
     trust: false,

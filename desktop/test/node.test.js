@@ -35,7 +35,7 @@ test('normalizeNode fills defaults and ports', () => {
   const r = N.normalizeNode({ name: ' Home ', host: 'pi.local' });
   assert.equal(r.node.name, 'Home');
   assert.equal(r.node.https, false);
-  assert.deepEqual(r.node.ports, { controller: 8989, talker: 8993, sysmon: 9999, nodemon: 7777, recorder: 8995, wifimon: 8991, h44: 9997 });
+  assert.deepEqual(r.node.ports, { controller: 8989, talker: 8993, sysmon: 9999, nodemon: 7777, recorder: 8995, wifimon: 8991, h44: 9997, instmon: 8990, termon: 7878, piper: 8765, pibrary: 9000 });
   assert.ok(r.node.id);
 });
 
@@ -69,11 +69,20 @@ test('LAN address must be IPv4', () => {
   assert.match(N.normalizeNode({ host: 'pi.local', lanIp: 'pi2.local' }).error, /LAN/);
 });
 
+test('a node keeps up to eight trusted certificates, as sha-256 hex strings, newest last', () => {
+  const pins = Array.from({ length: 10 }, (_, i) => String(i).repeat(64));
+  assert.deepEqual(N.normalizeNode({ host: 'h', pins }).node.pins, pins.slice(2));
+  assert.deepEqual(N.normalizeNode({ host: 'h', pins: ['ab'.repeat(32), 'AB'.repeat(32), 'bad'] }).node.pins, ['ab'.repeat(32)]);
+  assert.deepEqual(N.normalizeNode({ host: 'h', pin: 'cd'.repeat(32), lanPin: 'ef'.repeat(32) }).node.pins, ['cd'.repeat(32), 'ef'.repeat(32)]);
+  assert.deepEqual(N.normalizeNode({ host: 'h' }).node.pins, []);
+  assert.equal(N.MAX_PINS, 8);
+});
+
 test('a pin is kept only when it is a sha-256 hex string', () => {
   const hex = 'ab'.repeat(32);
-  assert.equal(N.normalizeNode({ host: 'h', pin: hex.toUpperCase() }).node.pin, hex);
-  assert.equal(N.normalizeNode({ host: 'h', pin: (hex.match(/../g)).join(':') }).node.pin, hex);
-  assert.equal(N.normalizeNode({ host: 'h', pin: 'abc' }).node.pin, '');
+  assert.deepEqual(N.normalizeNode({ host: 'h', pin: hex.toUpperCase() }).node.pins, [hex]);
+  assert.deepEqual(N.normalizeNode({ host: 'h', pin: (hex.match(/../g)).join(':') }).node.pins, [hex]);
+  assert.deepEqual(N.normalizeNode({ host: 'h', pin: 'abc' }).node.pins, []);
 });
 
 test('targets: home, lan and away rules', () => {
@@ -82,7 +91,7 @@ test('targets: home, lan and away rules', () => {
   const n = N.normalizeNode({ host: 'pi.local', https: true, lanIp: '192.168.1.5', awayHost: 'node.example.com' }).node;
   assert.equal(N.originOf(N.homeTarget(n, talker)), 'https://pi.local:8993');
   assert.equal(N.lanTarget(n, talker), null);
-  n.pin = 'cd'.repeat(32);
+  n.pins = ['cd'.repeat(32)];
   assert.equal(N.originOf(N.lanTarget(n, talker)), 'https://192.168.1.5:8993');
   assert.equal(N.originOf(N.awayTarget(n, talker)), 'https://node.example.com:443');
   assert.equal(N.awayTarget(n, controller), null);
@@ -101,7 +110,7 @@ test('sameOrigin compares scheme, host and port', () => {
 });
 
 test('matchPage finds the hardwired page a link points at, on any of the node addresses', () => {
-  const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true, ports: { controller: 8989, talker: 8993 }, lanIp: '192.168.1.5', awayHost: 'node.example.com', pin: 'ab'.repeat(32) }).node;
+  const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true, ports: { controller: 8989, talker: 8993 }, lanIp: '192.168.1.5', awayHost: 'node.example.com', pins: ['ab'.repeat(32)] }).node;
   const b = N.normalizeNode({ id: 'b', host: '10.1.1.1' }).node;
   const nodes = [a, b];
   assert.deepEqual(N.matchPage('https://pi.local:8993/', nodes), { nodeId: 'a', pageId: 'talker' });
@@ -113,21 +122,25 @@ test('matchPage finds the hardwired page a link points at, on any of the node ad
 
 test('matchPage ignores other tools, other schemes and other hosts', () => {
   const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true }).node;
-  for (const u of ['https://pi.local:9998/', 'https://pi.local:8990/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
+  for (const u of ['https://pi.local:9998/', 'https://pi.local:8999/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
     assert.equal(N.matchPage(u, [a]), null, u);
   }
   assert.equal(N.matchPage('https://node.example.com/', [a]), null);
 });
 
-test('the hardwired pages and their default ports; only 44helper is single-only', () => {
-  assert.deepEqual(N.PAGES.map((p) => [p.id, p.label, p.port, p.away, Boolean(p.single)]), [
-    ['controller', 'Node Controller', 8989, false, false],
-    ['talker', 'Node Talker', 8993, true, false],
-    ['sysmon', 'SysMon', 9999, false, false],
-    ['nodemon', 'Node Monitor', 7777, false, false],
-    ['recorder', 'Node Recorder', 8995, false, false],
-    ['wifimon', 'WifiMon', 8991, false, false],
-    ['h44', '44helper', 9997, false, true],
+test('the hardwired pages and their default ports; which are single-only and which open in the browser', () => {
+  assert.deepEqual(N.PAGES.map((p) => [p.id, p.label, p.port, p.away, Boolean(p.single), Boolean(p.external)]), [
+    ['controller', 'Node Controller', 8989, false, false, false],
+    ['talker', 'Node Talker', 8993, true, false, false],
+    ['sysmon', 'SysMon', 9999, false, false, false],
+    ['nodemon', 'Node Monitor', 7777, false, false, false],
+    ['recorder', 'Node Recorder', 8995, false, false, false],
+    ['wifimon', 'WifiMon', 8991, false, false, false],
+    ['h44', '44helper', 9997, false, true, false],
+    ['instmon', 'Install Monitor', 8990, false, true, false],
+    ['termon', 'Terminal Monitor', 7878, false, true, false],
+    ['piper', 'Pi-Piper', 8765, false, false, true],
+    ['pibrary', 'Pibrary', 9000, false, false, true],
   ]);
 });
 
@@ -135,7 +148,7 @@ test('a node saved before SysMon and Node Monitor existed gets their default por
   const n = N.normalizeNode({ id: 'old', host: 'pi.local', ports: { controller: 8989, talker: 8993 } }).node;
   assert.equal(n.ports.sysmon, 9999);
   assert.equal(n.ports.nodemon, 7777);
-  assert.deepEqual([n.ports.recorder, n.ports.wifimon, n.ports.h44], [8995, 8991, 9997]);
+  assert.deepEqual([n.ports.recorder, n.ports.wifimon, n.ports.h44, n.ports.instmon, n.ports.termon, n.ports.piper, n.ports.pibrary], [8995, 8991, 9997, 8990, 7878, 8765, 9000]);
 });
 
 test('ports of the new pages are checked and used', () => {
@@ -157,5 +170,9 @@ test('links to the new pages stay in the app, on any of the node addresses', () 
   assert.deepEqual(N.matchPage('http://pi.local:8995/', [n]), { nodeId: 'a', pageId: 'recorder' });
   assert.deepEqual(N.matchPage('http://pi.local:8991/', [n]), { nodeId: 'a', pageId: 'wifimon' });
   assert.deepEqual(N.matchPage('http://pi.local:9997/', [n]), { nodeId: 'a', pageId: 'h44' });
-  assert.equal(N.matchPage('http://pi.local:8990/', [n]), null);
+  assert.deepEqual(N.matchPage('http://pi.local:8990/', [n]), { nodeId: 'a', pageId: 'instmon' });
+  assert.deepEqual(N.matchPage('http://pi.local:7878/', [n]), { nodeId: 'a', pageId: 'termon' });
+  assert.deepEqual(N.matchPage('http://pi.local:8765/', [n]), { nodeId: 'a', pageId: 'piper' });
+  assert.deepEqual(N.matchPage('http://pi.local:9000/', [n]), { nodeId: 'a', pageId: 'pibrary' });
+  assert.equal(N.matchPage('http://pi.local:9001/', [n]), null);
 });

@@ -8,11 +8,16 @@ const PAGES = [
   { id: 'recorder', label: 'Node Recorder', port: 8995, away: false },
   { id: 'wifimon', label: 'WifiMon', port: 8991, away: false },
   { id: 'h44', label: '44helper', port: 9997, away: false, single: true },
+  { id: 'instmon', label: 'Install Monitor', port: 8990, away: false, single: true },
+  { id: 'termon', label: 'Terminal Monitor', port: 7878, away: false, single: true },
+  { id: 'piper', label: 'Pi-Piper', port: 8765, away: false, external: true },
+  { id: 'pibrary', label: 'Pibrary', port: 9000, away: false, external: true },
 ];
 
 const HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$|^[0-9A-Fa-f:.]{2,45}$/;
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 const PIN_RE = /^[0-9a-f]{64}$/;
+const MAX_PINS = 8;
 
 function validHost(h) {
   return typeof h === 'string' && HOST_RE.test(h);
@@ -76,12 +81,11 @@ function blank() {
     host: '',
     https: false,
     ports: Object.fromEntries(PAGES.map((p) => [p.id, p.port])),
-    pin: '',
+    pins: [],
     awayHost: '',
     awayPort: 443,
     awayHttps: true,
     lanIp: '',
-    lanPin: '',
   };
 }
 
@@ -105,8 +109,12 @@ function normalizeNode(raw) {
     out.ports[page.id] = p;
   }
 
-  out.pin = normalizePin(r.pin);
-  out.lanPin = normalizePin(r.lanPin);
+  const pins = [];
+  for (const v of [...(Array.isArray(r.pins) ? r.pins : []), r.pin, r.lanPin]) {
+    const p = normalizePin(v);
+    if (p && !pins.includes(p)) pins.push(p);
+  }
+  out.pins = pins.slice(-MAX_PINS);
 
   const lan = String(r.lanIp == null ? '' : r.lanIp).trim();
   if (lan) {
@@ -139,22 +147,21 @@ function sameOrigin(url, target) {
 }
 
 function homeTarget(node, page) {
-  return { host: node.host, port: node.ports[page.id], https: node.https, pin: node.pin, via: 'home' };
+  return { host: node.host, port: node.ports[page.id], https: node.https, pins: node.pins, via: 'home' };
 }
 
 function lanTarget(node, page) {
   const ip = node.lanIp;
   if (!ip || !IPV4_RE.test(ip) || !validHost(ip)) return null;
   if (ip.toLowerCase() === node.host.toLowerCase()) return null;
-  const pin = node.pin || node.lanPin;
-  if (node.https && !pin) return null;
-  return { host: ip, port: node.ports[page.id], https: node.https, pin, via: 'lan' };
+  if (node.https && !node.pins.length) return null;
+  return { host: ip, port: node.ports[page.id], https: node.https, pins: node.pins, via: 'lan' };
 }
 
 function awayTarget(node, page) {
   if (!page.away || !node.awayHost || !validHost(node.awayHost)) return null;
   if (!(node.awayPort >= 1 && node.awayPort <= 65535)) return null;
-  return { host: node.awayHost, port: node.awayPort, https: node.awayHttps, pin: '', via: 'away' };
+  return { host: node.awayHost, port: node.awayPort, https: node.awayHttps, pins: [], via: 'away' };
 }
 
 function matchPage(url, nodes) {
@@ -170,6 +177,7 @@ function matchPage(url, nodes) {
 
 module.exports = {
   PAGES,
+  MAX_PINS,
   validHost,
   parseAddress,
   normalizePin,

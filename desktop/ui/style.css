@@ -65,7 +65,8 @@ input[type="text"], input[type="number"] {
 .notice { margin: 0 16px 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg); color: var(--ok); }
 .notice.bad { color: var(--danger); }
 #nodes { list-style: none; margin: 0; padding: 0 8px; }
-#side-scroll { flex: 1; min-height: 0; overflow: auto; }
+#side-top { flex: none; max-height: 58%; overflow: auto; }
+#side-bottom { flex: 1; min-height: 120px; overflow: auto; border-top: 1px solid var(--line); }
 .sec { padding: 2px 8px 6px; }
 .sec-head { color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 4px 2px; }
 .entries { list-style: none; margin: 0; padding: 0; }
@@ -154,3 +155,7 @@ dialog label.check { display: flex; align-items: center; gap: 6px; color: var(--
 .strip-stack button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 #side .splits { padding-top: 6px; }
 dialog { max-height: 92vh; overflow: auto; }
+
+.pages button.ext { border-style: dotted; }
+.tab.ext { border-style: dotted; background: transparent; color: var(--muted); }
+.tab.ext:hover { color: var(--text); border-color: var(--accent); }

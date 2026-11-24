@@ -110,6 +110,22 @@
     const menu = $('menu');
     menu.textContent = '';
     const tab = tabFor(src);
+    const pg = pages.find((x) => x.id === src.pageId);
+    if (pg && pg.external) {
+      const b = el('button', 'menu-item', 'Open in web browser');
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        closeMenu();
+        window.nc.openTab(src.nodeId, src.pageId);
+      });
+      menu.append(b);
+      menu.hidden = false;
+      menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 220)}px`;
+      menu.style.top = `${Math.min(ev.clientY, window.innerHeight - 70)}px`;
+      menuOpen = true;
+      setOverlay();
+      return;
+    }
     const add = (label, fn) => {
       const b = el('button', 'menu-item', label);
       b.type = 'button';
@@ -238,9 +254,9 @@
       const box = el('div', 'pages');
       for (const p of pages) {
         const tab = lay && lay.tabs.find((t) => t.nodeId === n.id && t.pageId === p.id);
-        const b = el('button', tab ? (tab.shown ? 'on' : 'open') : '', p.label);
+        const b = el('button', p.external ? 'ext' : tab ? (tab.shown ? 'on' : 'open') : '', p.external ? `${p.label} ↗` : p.label);
         b.type = 'button';
-        b.draggable = !p.single;
+        b.draggable = !p.single && !p.external;
         const src = { nodeId: n.id, pageId: p.id };
         b.addEventListener('click', (ev) => activate(src, ev));
         b.addEventListener('contextmenu', (ev) => showMenu(ev, src));
@@ -303,6 +319,17 @@
       tab.addEventListener('dragstart', (ev) => startDrag(ev, src));
       tab.addEventListener('dragend', endDrag);
       box.append(tab);
+    }
+    for (const n of nodes) {
+      for (const p of pages) {
+        if (!p.external) continue;
+        const l = el('div', 'tab ext');
+        l.title = `Open ${p.label} in your web browser`;
+        l.append(el('span', 'label', `${nodes.length > 1 ? `${nodeLabel(n)} · ` : ''}${p.label} ↗`));
+        l.addEventListener('click', () => window.nc.openTab(n.id, p.id));
+        l.addEventListener('contextmenu', (ev) => showMenu(ev, { nodeId: n.id, pageId: p.id }));
+        box.append(l);
+      }
     }
     for (const b of $('views').querySelectorAll('button')) {
       const v = b.dataset.view;
@@ -546,9 +573,9 @@
     for (const p of pages) $(`f-port-${p.id}`).value = n ? n.ports[p.id] : p.port;
     $('f-away').value = n && n.awayHost ? `${n.awayHttps ? 'https' : 'http'}://${n.awayHost}${n.awayPort === (n.awayHttps ? 443 : 80) ? '' : `:${n.awayPort}`}` : '';
     $('f-lan').value = n ? n.lanIp : '';
-    const pin = n ? n.pin : '';
-    $('f-pin-row').hidden = !pin;
-    $('f-pin').textContent = pin ? (pin.toUpperCase().match(/.{2}/g) || []).join(':') : '';
+    const pins = n ? n.pins : [];
+    $('f-pin-row').hidden = !pins.length;
+    $('f-pin').textContent = pins.map((p) => `${p.slice(0, 8).toUpperCase()}…`).join('  ');
     $('f-delete').hidden = !n;
     $('f-error').hidden = true;
     editing = n ? { ...n } : null;
@@ -572,8 +599,7 @@
       ports: {},
       awayHost: $('f-away').value,
       lanIp: $('f-lan').value,
-      pin: editing ? editing.pin : '',
-      lanPin: editing ? editing.lanPin : '',
+      pins: editing ? editing.pins : [],
     };
     for (const p of pages) raw.ports[p.id] = $(`f-port-${p.id}`).value;
     const r = await window.nc.saveNode(raw);
@@ -658,7 +684,7 @@
     $('form').addEventListener('submit', saveDialog);
     $('f-delete').addEventListener('click', removeNode);
     $('f-pin-clear').addEventListener('click', () => {
-      if (editing) editing.pin = '';
+      if (editing) editing.pins = [];
       $('f-pin-row').hidden = true;
     });
     $('n-cancel').addEventListener('click', closeNameDialog);

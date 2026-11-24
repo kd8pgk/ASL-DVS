@@ -85,6 +85,7 @@ async function waitFor(fn, what, ms = 8000) {
 }
 
 async function dragTo(win, source, target) {
+  await source.scrollIntoViewIfNeeded();
   const sb = await source.boundingBox();
   const cx = sb.x + sb.width / 2;
   const cy = sb.y + sb.height / 2;
@@ -92,6 +93,7 @@ async function dragTo(win, source, target) {
   await win.mouse.down();
   await win.mouse.move(cx + 10, cy + 10, { steps: 4 });
   await target.waitFor({ timeout: 8000 });
+  await target.scrollIntoViewIfNeeded();
   const tb = await target.boundingBox();
   await win.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
   await win.mouse.up();
@@ -113,7 +115,7 @@ async function main() {
   const ext = pageServer('outside');
   const extSrv = http.createServer(ext.handler);
   const extPort = await listen(extSrv);
-  const names = ['controller', 'talker', 'sysmon', 'nodemon', 'recorder', 'wifimon', 'h44'];
+  const names = ['controller', 'talker', 'sysmon', 'nodemon', 'recorder', 'wifimon', 'h44', 'instmon', 'termon', 'piper', 'pibrary'];
   const stubs = Object.fromEntries(names.map((n) => [n, pageServer(`stub ${n}`, n === 'controller' ? probeScript(extPort) : '')]));
   const lh = pageServer('stub last heard', `<script>(async () => { let r; try { await fetch('http://localhost:${extPort}/lh', { mode: 'no-cors' }); r = 'reached'; } catch (e) { r = 'blocked'; } document.title = r; })();</script>`);
   const servers = [...names.map((n) => http.createServer(stubs[n].handler)), http.createServer(lh.handler)];
@@ -128,11 +130,19 @@ async function main() {
   const tlsSrv = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(crt) }, tls.handler);
   const tlsPort = await listen(tlsSrv);
 
+  const key2 = path.join(tmp, 'k2.pem');
+  const crt2 = path.join(tmp, 'c2.pem');
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key2, '-out', crt2, '-days', '2', '-subj', '/CN=stub2', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
+  const tls2 = pageServer('stub tls controller');
+  const tlsSrv2 = https.createServer({ key: fs.readFileSync(key2), cert: fs.readFileSync(crt2) }, tls2.handler);
+  const tlsPort2 = await listen(tlsSrv2);
+
   const data = path.join(tmp, 'data');
+  const extLog = path.join(tmp, 'external.log');
   const launch = () => _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox'],
-    env: { ...process.env, NODECONTROLLER_DATA: data },
+    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_EXTERNAL_LOG: extLog },
   });
   let app = await launch();
   let win = await app.firstWindow();
@@ -179,7 +189,22 @@ async function main() {
   const nodesFile = path.join(data, 'nodes.json');
   const savedNodes = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes;
   assert.deepEqual(savedNodes[0].ports, P);
-  assert.deepEqual(await win.locator('.node .pages button').allTextContents(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper']);
+  assert.deepEqual(await win.locator('.node .pages button').allTextContents(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Install Monitor', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗']);
+  assert.deepEqual(await win.locator('#tabs .tab.ext .label').allTextContents(), ['Pi-Piper ↗', 'Pibrary ↗']);
+  assert.equal(await win.locator('#tabs .tab.ext').count(), 2);
+  assert.equal(await win.locator('.node .pages button').nth(9).getAttribute('draggable'), 'false');
+
+  await win.locator('#tabs .tab.ext', { hasText: 'Pi-Piper' }).click();
+  await waitFor(() => fs.existsSync(extLog) && fs.readFileSync(extLog, 'utf8').includes(`http://127.0.0.1:${P.piper}/`), 'Pi-Piper opened in the browser');
+  await win.waitForFunction(() => /Pi-Piper on Stub opened in your web browser/.test(document.getElementById('notice').textContent));
+  await page(10).click();
+  await waitFor(() => fs.readFileSync(extLog, 'utf8').includes(`http://127.0.0.1:${P.pibrary}/`), 'Pibrary opened in the browser');
+  await page(10).click({ button: 'right' });
+  assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Open in web browser']);
+  await win.locator('#menu .menu-item').click();
+  await waitFor(() => fs.readFileSync(extLog, 'utf8').trim().split('\n').length === 3, 'the menu opens the browser too');
+  assert.equal(await win.locator('.tab:not(.ext)').count(), 0);
+  assert.equal((await views(app)).length, 0);
 
   await page(0).click();
   await showing(U('controller'));
@@ -205,7 +230,7 @@ async function main() {
   await inPage(app, `127.0.0.1:${P.controller}/`, `location.assign('${U('talker')}x')`);
   await new Promise((r) => setTimeout(r, 600));
   assert.ok(await state(U('controller')), 'the controller page stays where it was');
-  assert.equal(await win.locator('.tab').count(), 2);
+  assert.equal(await win.locator('.tab:not(.ext)').count(), 2);
 
   let [W, H] = await size();
   const g = L.grid(W, H);
@@ -224,7 +249,7 @@ async function main() {
   assert.equal(await win.locator('.tab', { hasText: 'Node Talker' }).locator('.dot.idle').count(), 0);
 
   await dragTo(win, win.locator('#singles .entry', { hasText: 'Node Controller' }), win.locator('.slot[data-slot="left"]'));
-  assert.equal(await view(), 'slots');
+  await waitFor(async () => (await view()) === 'slots' && (await slotEntries('left')).length === 1, 'controller in the left slot');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller')]);
   assert.equal(await win.locator('.slot[data-slot="left"].focus').count(), 1);
   assert.deepEqual(await singleEntries(), [Lb('Node Talker')]);
@@ -301,6 +326,19 @@ async function main() {
   await showing(U('sysmon'), U('talker'), U('nodemon'));
   assert.equal(await view(), 'slots');
 
+  await page(8).click({ button: 'right' });
+  assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Show alone']);
+  await win.locator('#menu .menu-item').click();
+  await showing(U('termon'));
+  assert.equal(await view(), 'single');
+  assert.equal(await win.locator('.node .pages button').nth(8).getAttribute('draggable'), 'false');
+  await page(7).click();
+  await showing(U('instmon'));
+  assert.equal(await win.locator('.node .pages button').nth(7).getAttribute('draggable'), 'false');
+  assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
+  await win.click('#views button[data-view="slots"]');
+  await showing(U('sysmon'), U('talker'), U('nodemon'));
+
   await chord(app, '1');
   await waitFor(async () => (await view()) === 'single', 'single by shortcut');
   assert.equal((await visible()).length, 1);
@@ -369,20 +407,20 @@ async function main() {
   assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor')]);
   assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
   assert.equal((await views(app)).length, 3);
-  assert.equal(await win.locator('.tab').count(), 7);
+  assert.equal(await win.locator('.tab:not(.ext)').count(), 9);
 
-  const total = await win.locator('.tab').count();
+  const total = await win.locator('.tab:not(.ext)').count();
   for (let i = 0; i < total; i += 1) await win.locator('.tab .x').nth(0).click();
   await waitFor(async () => (await views(app)).length === 0, 'all tabs closed');
   assert.match(await win.textContent('.pane-msg[data-empty]'), /Add a node/);
   assert.deepEqual(await slotEntries('left'), []);
   await win.click('.split-name');
   await waitFor(async () => (await visible()).length === 3, 'saved split opens its pages');
-  assert.equal(await win.locator('.tab').count(), 6);
+  assert.equal(await win.locator('.tab:not(.ext)').count(), 6);
 
   await chord(app, '1');
   await waitFor(async () => (await view()) === 'single', 'single');
-  const tabsNow = await win.locator('.tab').count();
+  const tabsNow = await win.locator('.tab:not(.ext)').count();
   for (let i = 0; i < tabsNow; i += 1) await win.locator('.tab .x').nth(0).click();
   await waitFor(async () => (await views(app)).length === 0, 'tabs closed again');
 
@@ -401,19 +439,36 @@ async function main() {
   await win.click('text=Trust this certificate');
   await waitFor(() => tls.hits.includes('/'), 'request to the pinned https node');
   await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'failure panel gone');
-  const pinned = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].pin;
-  assert.match(pinned, /^[0-9a-f]{64}$/);
+  let pins = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].pins;
+  assert.equal(pins.length, 1);
+  assert.match(pins[0], /^[0-9a-f]{64}$/);
+
+  await win.click('.node-top button');
+  await win.fill('#f-port-controller', String(tlsPort2));
+  await win.click('#f-save');
+  await win.waitForFunction(() => !document.getElementById('dlg').open);
+  await page(0).click();
+  await win.waitForSelector('.pane-msg h2');
+  assert.match(await win.textContent('.pane-msg h2'), /Could not open Stub · Node Controller/);
+  assert.equal(tls2.hits.length, 0);
+  await win.click('text=Trust this certificate');
+  await waitFor(() => tls2.hits.includes('/'), 'request to the second pinned certificate');
+  pins = JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].pins;
+  assert.equal(pins.length, 2);
+  assert.notEqual(pins[0], pins[1]);
+  await page(1).click();
+  await waitFor(async () => (await visible()).some((v) => v.url.startsWith('https://127.0.0.1:') && v.url.includes(String(tlsPort))), 'the first certificate is still trusted');
 
   await win.click('.node-top button');
   await win.click('#f-delete');
   await win.waitForFunction(() => document.querySelectorAll('.node').length === 0);
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes.length, 0);
   assert.equal(JSON.parse(fs.readFileSync(splitsFile, 'utf8')).splits.length, 0);
-  assert.equal(await win.locator('.tab').count(), 0);
+  assert.equal(await win.locator('.tab:not(.ext)').count(), 0);
   assert.equal((await views(app)).length, 0);
 
   await app.close();
-  for (const sv of [...servers, tlsSrv, extSrv]) sv.close();
+  for (const sv of [...servers, tlsSrv, tlsSrv2, extSrv]) sv.close();
   console.log('smoke ok');
 }
 
