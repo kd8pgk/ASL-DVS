@@ -50,7 +50,6 @@ def remaining_default(mod, ip):
 
 
 MODULES = {
-    "nodetalker": (load("nodetalker_v[0-9]*.py", "sa_nt"), "standard", spec()),
     "noderecorder": (load("noderecorder_v[0-9]*.py", "sa_nr"), "standard", spec()),
     "instmon": (load("instmon_v[0-9]*.py", "sa_im"), "strict", spec()),
     "pibrary": (load("pibrary_v[0-9]*.py", "sa_pib"), "standard", spec(shadow="_read_pass_hash")),
@@ -61,6 +60,7 @@ MODULES = {
     "44helper": (load("44helper_v[0-9]*.py", "sa_44"), "strict",
                  spec(fail="_login_record_failure", success="_login_record_success", log="log")),
 }
+NODETALKER = load("nodetalker_v[0-9]*.py", "sa_nt")
 T0 = 2_000_000.0
 
 
@@ -254,7 +254,7 @@ class StaleCookieTests(unittest.TestCase):
                  ("noderecorder", "_token", "_SESSION_COOKIE_NAME", "Handler"),
                  ("wifimon", "_session_token", "_COOKIE_NAME", "_Handler"))
         for key, meth, const, cls in cases:
-            mod = MODULES[key][0]
+            mod = NODETALKER if key == "nodetalker" else MODULES[key][0]
             name = getattr(mod, const)
             fn = getattr(getattr(mod, cls), meth)
             for cookie in ("%s=old; __Host-%s=new" % (name, name), "__Host-%s=new; %s=old" % (name, name)):

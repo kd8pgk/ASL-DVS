@@ -35,6 +35,8 @@ NC_PI = load("nodecontrol_pi02w_v[0-9]*.py", "ss_nc")
 SM_PI = load("sysmon_pi02w_v[0-9]*.py", "ss_sm")
 NC_FULL = load("nodecontrol_v[0-9]*.py", "ss_ncf")
 SM_FULL = load("sysmon_v[0-9]*.py", "ss_smf")
+NM = load("nodemon_v[0-9]*.py", "ss_nm")
+NT = load("nodetalker_v[0-9]*.py", "ss_nt")
 T0 = 3_000_000.0
 
 
@@ -217,6 +219,179 @@ class SharedFileFull(SharedFile):
         with open(self.SM.__file__, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("lambda: _check_session(token, touch=False)", src)
+
+
+class FourTools(unittest.TestCase):
+    TOOLS = (("NC", NC_PI), ("SM", SM_PI), ("NCF", NC_FULL), ("SMF", SM_FULL), ("NM", NM), ("NT", NT))
+
+    def setUp(self):
+        put({"sessions": {}, "failures": {}, "locked": {}})
+        for _, mod in self.TOOLS:
+            mod._stamp_cache[0] = 0.0
+
+    def run_at(self, t, fn):
+        patches = [mock.patch.object(mod.time, "time", lambda: t) for _, mod in self.TOOLS]
+        for p in patches:
+            p.start()
+        try:
+            return fn()
+        finally:
+            for p in patches:
+                p.stop()
+
+    def fail(self, mod, ip):
+        if mod in (NM, NT):
+            return mod._record_auth_failure(ip)
+        return mod._login_record_failure(ip)
+
+    def wait(self, mod, ip):
+        if mod in (NM, NT):
+            return mod._auth_lockout_remaining(ip)
+        until = mod._login_is_locked(ip)
+        return max(0.0, until - mod.time.time()) if until else 0.0
+
+    def test_all_four_use_one_cookie_name_and_the_standard_tier(self):
+        for name, mod in self.TOOLS:
+            with self.subTest(tool=name):
+                self.assertEqual(mod._SESSION_COOKIE_NAME, "asl_dvs_session")
+                self.assertEqual(mod._SESS_POLICY, mod.sess_policy("standard"))
+
+    def test_a_login_on_any_tool_opens_every_other_tool(self):
+        for name, issuer in self.TOOLS:
+            token, age = issuer._issue_session()
+            self.assertEqual(age, 12 * 3600)
+            for other, mod in self.TOOLS:
+                with self.subTest(issued=name, checked=other):
+                    self.assertTrue(mod._check_session(token))
+
+    def test_any_logout_ends_every_session_on_every_tool(self):
+        for name, mod in self.TOOLS:
+            with self.subTest(logout=name):
+                put({"sessions": {}, "failures": {}, "locked": {}})
+                tokens = [m._issue_session()[0] for _, m in self.TOOLS]
+                self.assertEqual(mod._revoke_all_sessions(), len(tokens))
+                for _, other in self.TOOLS:
+                    for t in tokens:
+                        self.assertFalse(other._check_session(t))
+
+    def test_tokens_are_only_kept_as_hashes(self):
+        for name, mod in (("NM", NM), ("NT", NT)):
+            token, _ = mod._issue_session()
+            self.assertNotIn(token, SHARED_FILE.read_text())
+            self.assertIn(mod.sess_digest(token), raw()["sessions"])
+            self.assertIn(mod.sess_digest(token), raw()["meta"])
+
+    def test_a_root_password_change_ends_every_session(self):
+        for name, mod in (("NM", NM), ("NT", NT)):
+            with mock.patch.object(mod, "_read_shadow_hash", return_value="$6$aaa"):
+                mod._stamp_cache[0] = 0.0
+                token, _ = mod._issue_session()
+                self.assertTrue(mod._check_session(token))
+            for _, other in self.TOOLS:
+                with mock.patch.object(other, "_read_shadow_hash", return_value="$6$bbb"):
+                    other._stamp_cache[0] = 0.0
+                    self.assertFalse(other._check_session(token))
+
+    def test_the_session_expires_after_twelve_idle_hours_and_has_no_hard_cap(self):
+        for name, mod in (("NM", NM), ("NT", NT)):
+            token, _ = self.run_at(T0, mod._issue_session)
+            self.assertTrue(self.run_at(T0 + 12 * 3600 - 60, lambda: NC_PI._check_session(token)))
+            self.assertTrue(self.run_at(T0 + 24 * 3600 - 120, lambda: mod._check_session(token)))
+            dead, _ = self.run_at(T0, mod._issue_session)
+            self.assertFalse(self.run_at(T0 + 12 * 3600 + 60, lambda: mod._check_session(dead)))
+
+    def test_the_cookie_is_refreshed_about_hourly(self):
+        for name, mod in (("NM", NM), ("NT", NT)):
+            token, _ = self.run_at(T0, mod._issue_session)
+
+            def probe(t):
+                return self.run_at(t, lambda: (mod._check_session(token), getattr(mod._sess_local, "renew", 0)))
+            self.assertEqual(probe(T0 + 300), (True, 0))
+            ok, age = probe(T0 + 3700)
+            self.assertTrue(ok)
+            self.assertGreater(age, 0)
+
+    def test_failed_logins_on_different_tools_count_together(self):
+        order = [NM, NT, NC_PI, SM_FULL, NM, NT, NC_FULL, SM_PI]
+        waits = []
+        for mod in order:
+            self.run_at(T0, lambda: self.fail(mod, "10.1.1.1"))
+            waits.append(round(self.run_at(T0, lambda: self.wait(NT, "10.1.1.1"))))
+        self.assertEqual(waits, [0, 0, 0, 0, 5, 10, 20, 40])
+        for name, mod in self.TOOLS:
+            with self.subTest(tool=name):
+                self.assertGreater(self.run_at(T0, lambda: self.wait(mod, "10.1.1.1")), 0)
+                self.assertEqual(self.run_at(T0 + 100, lambda: self.wait(mod, "10.1.1.1")), 0)
+
+    def test_a_good_login_clears_the_count_everywhere(self):
+        for _ in range(3):
+            self.run_at(T0, lambda: self.fail(NM, "10.5.5.5"))
+        NT._record_auth_success("10.5.5.5")
+        for _ in range(4):
+            self.run_at(T0, lambda: self.fail(NT, "10.5.5.5"))
+        self.assertEqual(self.run_at(T0, lambda: self.wait(NM, "10.5.5.5")), 0)
+
+    def test_a_lock_written_by_an_older_version_is_honoured(self):
+        d = raw()
+        d["locked"]["10.2.2.2"] = T0 + 900
+        put(d)
+        for _, mod in (("NM", NM), ("NT", NT)):
+            self.assertGreater(self.run_at(T0, lambda: mod._auth_lockout_remaining("10.2.2.2")), 0)
+
+    def test_a_lock_set_here_is_visible_to_an_older_version(self):
+        for _ in range(5):
+            self.run_at(T0, lambda: NT._record_auth_failure("10.3.3.3"))
+        self.assertGreater(raw()["locked"]["10.3.3.3"], T0)
+
+    def test_internet_logins_have_their_own_limit(self):
+        for i in range(20):
+            self.run_at(T0, lambda: NM._record_auth_failure("203.0.113.%d" % i, True))
+        self.assertGreater(self.run_at(T0, lambda: NT._auth_lockout_remaining("203.0.113.99", True)), 0)
+        self.assertEqual(self.run_at(T0, lambda: NT._auth_lockout_remaining("203.0.113.99", False)), 0)
+
+    def test_the_layout_other_tools_read_is_kept(self):
+        NM._issue_session()
+        NT._issue_session()
+        d = raw()
+        for key in ("sessions", "failures", "locked", "meta"):
+            self.assertIn(key, d)
+        self.assertTrue(all(isinstance(v, (int, float)) for v in d["sessions"].values()))
+        self.assertEqual(len(d["sessions"]), 2)
+
+    def test_node_monitor_binds_its_own_sessions_to_an_address_when_asked(self):
+        token, _ = NM._issue_session("10.9.9.9")
+        self.assertTrue(NM._check_session(token, "10.9.9.9"))
+        self.assertFalse(NM._check_session(token, "10.8.8.8"))
+        self.assertFalse(NM._check_session(token, "10.9.9.9"))
+
+    def test_a_session_from_another_tool_is_not_bound_to_an_address(self):
+        token, _ = NT._issue_session()
+        self.assertTrue(NM._check_session(token, "10.8.8.8"))
+
+    def test_node_monitor_keeps_at_most_ten_sessions_per_address(self):
+        tokens = [NM._issue_session("10.7.7.7")[0] for _ in range(12)]
+        live = [t for t in tokens if NM._check_session(t)]
+        self.assertEqual(live, tokens[-10:])
+
+    def test_the_alive_probe_of_sysmon_still_does_not_extend_a_shared_session(self):
+        token, _ = self.run_at(T0, NT._issue_session)
+        self.assertTrue(self.run_at(T0 + 11 * 3600, lambda: SM_FULL._check_session(token, touch=False)))
+        self.assertFalse(self.run_at(T0 + 12 * 3600 + 60, lambda: SM_FULL._check_session(token, touch=False)))
+
+    def test_without_a_writable_shared_folder_a_tool_keeps_its_own_sessions_in_memory(self):
+        blocked = Path(WORK) / "blocked"
+        blocked.write_text("not a folder")
+        for name, mod in (("NM", NM), ("NT", NT)):
+            with self.subTest(tool=name):
+                mod.auth_shared_mutate.__dict__.pop("memory", None)
+                with mock.patch.object(mod, "_SHARED_AUTH_DIR", blocked):
+                    token, _ = mod._issue_session()
+                    self.assertTrue(mod._check_session(token))
+                    mod._record_auth_failure("10.6.6.6")
+                    self.assertEqual(mod._auth_lockout_remaining("10.6.6.6"), 0)
+                    self.assertEqual(mod._revoke_all_sessions(), 1)
+                    self.assertFalse(mod._check_session(token))
+                mod.auth_shared_mutate.__dict__.pop("memory", None)
 
 
 if __name__ == "__main__":

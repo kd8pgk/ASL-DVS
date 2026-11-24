@@ -525,6 +525,49 @@ def make_nt_case(key):
     return NTCase
 
 
+class SharedLogin(unittest.TestCase):
+    KEYS = ("nodetalker", "nodemon", "nodecontrol_pi02w", "sysmon_pi02w")
+    servers = {}
+
+    @classmethod
+    def setUpClass(cls):
+        reason = skip_reason()
+        if reason:
+            raise unittest.SkipTest(reason)
+        try:
+            for key in cls.KEYS:
+                srv = ts.Server(key)
+                srv.start()
+                cls.servers[key] = srv
+        except BaseException:
+            cls.tearDownClass()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        for srv in cls.servers.values():
+            srv.stop()
+        cls.servers = {}
+
+    def authed(self, key, cookie):
+        probe = {"nodetalker": "/api/config", "nodemon": "/api/status", "nodecontrol_pi02w": "/api/config",
+                 "sysmon_pi02w": "/api/config"}[key]
+        st, _, _ = self.servers[key].request("GET", probe, headers={"Cookie": cookie}, timeout=15)
+        return st != 401
+
+    def test_one_login_opens_all_four_and_any_logout_ends_them(self):
+        cookie = login(self.servers["nodemon"])
+        self.assertTrue(cookie.startswith(("asl_dvs_session=", "__Host-asl_dvs_session=")), cookie)
+        for key in self.KEYS:
+            with self.subTest(tool=key):
+                self.assertTrue(self.authed(key, cookie))
+        self.servers["nodetalker"].request("POST", "/api/logout", body="{}", headers={
+            "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest", "Cookie": cookie}, timeout=15)
+        for key in self.KEYS:
+            with self.subTest(after_logout=key):
+                self.assertFalse(self.authed(key, cookie))
+
+
 LOGOUT_ENDS_EVERY_SESSION = ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "termon", "nodemon", "piper_dashboard")
 NT_KEYS = ("nodetalker", "amp_nodetalker", "noderecorder")
 
