@@ -12,6 +12,7 @@ Node Talker joins the shared login. This is a release: the login cookie and wher
 - **Node Talker Mobile.** The app sends whatever cookie the node sets, so it needs no change; log in once after the node updates.
 - **Mixed versions.** An older Node Talker keeps its own `nodetalker_session` cookie and its own memory store; the two do not interfere.
 - **Shared code.** The `auth_*` helpers are copied from `shared/confio.py`.
+- **No shared folder.** If `/run/asl_dvs` cannot be written (a test run as a normal user), the tool keeps its sessions and lockout in memory for itself, as it did before, and logs it once.
 
 ## 0.14.3 (2026-11-23)
 

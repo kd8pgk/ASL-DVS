@@ -378,6 +378,21 @@ class FourTools(unittest.TestCase):
         self.assertTrue(self.run_at(T0 + 11 * 3600, lambda: SM_FULL._check_session(token, touch=False)))
         self.assertFalse(self.run_at(T0 + 12 * 3600 + 60, lambda: SM_FULL._check_session(token, touch=False)))
 
+    def test_without_a_writable_shared_folder_a_tool_keeps_its_own_sessions_in_memory(self):
+        blocked = Path(WORK) / "blocked"
+        blocked.write_text("not a folder")
+        for name, mod in (("NM", NM), ("NT", NT)):
+            with self.subTest(tool=name):
+                mod.auth_shared_mutate.__dict__.pop("memory", None)
+                with mock.patch.object(mod, "_SHARED_AUTH_DIR", blocked):
+                    token, _ = mod._issue_session()
+                    self.assertTrue(mod._check_session(token))
+                    mod._record_auth_failure("10.6.6.6")
+                    self.assertEqual(mod._auth_lockout_remaining("10.6.6.6"), 0)
+                    self.assertEqual(mod._revoke_all_sessions(), 1)
+                    self.assertFalse(mod._check_session(token))
+                mod.auth_shared_mutate.__dict__.pop("memory", None)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ Node Monitor joins the shared login. This is a release: the login cookie and whe
 - **Session binding to an address (`session_bind_ip`).** It still applies to sessions Node Monitor issues. A session another tool issued carries no address, so it is not bound.
 - **Mixed versions.** An older Node Monitor keeps its own `nodemon_session` cookie and its own memory store; the two do not interfere. Log in again once after the update.
 - **Shared code.** The `auth_*` helpers are copied from `shared/confio.py`.
+- **No shared folder.** If `/run/asl_dvs` cannot be written (a test run as a normal user), the tool keeps its sessions and lockout in memory for itself, as it did before, and logs it once.
 
 ## 0.9.2 (2026-11-23)
 

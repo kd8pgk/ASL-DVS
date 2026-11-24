@@ -1029,9 +1029,12 @@ def auth_shared_mutate(mutator, warn=None):
         finally:
             os.close(fd)
     except Exception as exc:
-        if warn:
-            warn("auth_shared_mutate: %s" % exc)
-        data = {"sessions": {}, "failures": {}, "locked": {}}
+        kept = auth_shared_mutate.__dict__
+        if "memory" not in kept:
+            kept["memory"] = {"sessions": {}, "failures": {}, "locked": {}}
+            if warn:
+                warn("auth_shared_mutate: %s; sessions are kept in memory for this tool only" % exc)
+        data = kept["memory"]
         try:
             mutator(data)
         except Exception:
