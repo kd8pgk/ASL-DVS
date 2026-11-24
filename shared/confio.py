@@ -41,6 +41,16 @@ USED_BY = {
     "lock_wait": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "nodemon", "piper_dashboard"),
     "lock_fail": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "nodemon", "piper_dashboard"),
     "lock_ok": ("nodetalker", "noderecorder", "instmon", "pibrary", "wifimon", "44helper", "nodecontrol_pi02w", "sysmon_pi02w", "nodecontrol", "sysmon", "nodemon", "piper_dashboard"),
+    "auth_shared_mutate": ("nodetalker", "nodemon"),
+    "auth_sess_load": ("nodetalker", "nodemon"),
+    "auth_sess_save": ("nodetalker", "nodemon"),
+    "auth_issue": ("nodetalker", "nodemon"),
+    "auth_check": ("nodetalker", "nodemon"),
+    "auth_drop": ("nodetalker", "nodemon"),
+    "auth_revoke_all": ("nodetalker", "nodemon"),
+    "auth_lock_wait": ("nodetalker", "nodemon"),
+    "auth_lock_fail": ("nodetalker", "nodemon"),
+    "auth_lock_ok": ("nodetalker", "nodemon"),
     "login_ui_html": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper", "nodemon", "piper_dashboard"),
     "login_ui_inject": ("nodetalker", "noderecorder", "instmon", "nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "pibrary", "wifimon", "44helper", "nodemon", "piper_dashboard"),
     "tls_lan_ips": ("nodetalker", "noderecorder", "sysmon_pi02w", "nodecontrol_pi02w", "sysmon"),
@@ -974,6 +984,180 @@ def lock_fail(state, ip, now, wan=False):
 
 def lock_ok(state, ip):
     state.setdefault("ip", {}).pop(ip, None)
+
+
+def auth_shared_mutate(mutator, warn=None):
+    import fcntl
+    import json
+    import os
+    folder = str(globals().get("_SHARED_AUTH_DIR", "/run/asl_dvs"))
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(folder, 0o700)
+        except OSError:
+            pass
+        fd = os.open(os.path.join(folder, "auth_session.json"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
+                try:
+                    data = json.loads(raw) if raw else {}
+                except ValueError:
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                data.setdefault("sessions", {})
+                data.setdefault("failures", {})
+                data.setdefault("locked", {})
+                mutator(data)
+                out = json.dumps(data).encode()
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.ftruncate(fd, 0)
+                os.write(fd, out)
+                os.fsync(fd)
+                return data
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    except Exception as exc:
+        if warn:
+            warn("auth_shared_mutate: %s" % exc)
+        data = {"sessions": {}, "failures": {}, "locked": {}}
+        try:
+            mutator(data)
+        except Exception:
+            pass
+        return data
+
+
+def auth_sess_load(d):
+    def num(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+    d["meta"] = meta
+    store = {}
+    for key, rec in meta.items():
+        idle = d["sessions"].get(key)
+        if (isinstance(rec, dict) and num(idle) and all(num(rec.get(f)) for f in ("abs", "born", "renew"))
+                and isinstance(rec.get("stamp"), str)):
+            store[key] = {"idle": float(idle), "abs": rec["abs"], "born": rec["born"], "renew": rec["renew"],
+                          "stamp": rec["stamp"], "ip": ""}
+    return store
+
+
+def auth_sess_save(d, store, now):
+    def num(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    old_meta = d.get("meta") or {}
+    legacy = {k: v for k, v in d["sessions"].items() if k not in old_meta and num(v) and v > now}
+    d["sessions"] = legacy
+    d["meta"] = {}
+    for key, rec in store.items():
+        d["sessions"][key] = rec["idle"]
+        d["meta"][key] = {"abs": rec["abs"], "born": rec["born"], "renew": rec["renew"], "stamp": rec["stamp"]}
+
+
+def auth_issue(policy, stamp, warn=None):
+    import time
+    box = {}
+    def mut(d):
+        now = time.time()
+        store = auth_sess_load(d)
+        box["result"] = sess_new(store, policy, now, stamp)
+        auth_sess_save(d, store, now)
+    auth_shared_mutate(mut, warn)
+    return box["result"]
+
+
+def auth_check(token, policy, stamp, touch=True, warn=None):
+    import time
+    if not token:
+        return False, 0
+    box = {"ok": False, "renew": False, "age": 0}
+    def mut(d):
+        now = time.time()
+        store = auth_sess_load(d)
+        ok, renew, age = sess_check(store, token, policy, now, stamp, touch)
+        legacy = d["sessions"].get(token)
+        if (not ok and token not in d["meta"] and isinstance(legacy, (int, float))
+                and not isinstance(legacy, bool) and legacy > now):
+            d["sessions"].pop(token, None)
+            store[sess_digest(token)] = {"idle": now + policy["idle"], "abs": 0, "born": now, "renew": now,
+                                         "stamp": stamp, "ip": ""}
+            ok, renew, age = True, True, int(policy["idle"])
+        box.update(ok=ok, renew=renew, age=age)
+        auth_sess_save(d, store, now)
+    auth_shared_mutate(mut, warn)
+    return box["ok"], (box["age"] if box["ok"] and box["renew"] else 0)
+
+
+def auth_drop(digests, warn=None):
+    import time
+    def mut(d):
+        now = time.time()
+        store = auth_sess_load(d)
+        for key in digests:
+            store.pop(key, None)
+        auth_sess_save(d, store, now)
+    auth_shared_mutate(mut, warn)
+
+
+def auth_revoke_all(warn=None):
+    box = {"n": 0}
+    def mut(d):
+        box["n"] = len(d["sessions"])
+        d["sessions"] = {}
+        d["meta"] = {}
+    auth_shared_mutate(mut, warn)
+    return box["n"]
+
+
+def auth_lock_wait(ip, wan=False, warn=None):
+    import time
+    box = {"wait": 0.0}
+    def mut(d):
+        now = time.time()
+        d.setdefault("lock", {})
+        wait = lock_wait(d["lock"], ip, now, wan)
+        legacy = d["locked"].get(ip)
+        if isinstance(legacy, (int, float)) and not isinstance(legacy, bool) and legacy > now:
+            wait = max(wait, legacy - now)
+        box["wait"] = wait
+    auth_shared_mutate(mut, warn)
+    return box["wait"]
+
+
+def auth_lock_fail(ip, wan=False, warn=None):
+    import time
+    box = {"wait": 0.0, "wan": 0}
+    def mut(d):
+        now = time.time()
+        d.setdefault("lock", {})
+        wait = lock_fail(d["lock"], ip, now, wan)
+        if wait > 0:
+            d["locked"][ip] = now + wait
+        box["wait"] = wait
+        box["wan"] = len(d["lock"].get("wan", ()))
+    auth_shared_mutate(mut, warn)
+    return box["wait"], box["wan"]
+
+
+def auth_lock_ok(ip, warn=None):
+    def mut(d):
+        d.setdefault("lock", {})
+        lock_ok(d["lock"], ip)
+        d["failures"].pop(ip, None)
+        d["locked"].pop(ip, None)
+    auth_shared_mutate(mut, warn)
 
 
 def login_ui_html(input_id, nonce=""):

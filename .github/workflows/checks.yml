@@ -132,9 +132,9 @@ jobs:
         run: python3 ci/test_sysmon_health_probe.py
       - name: Login screen (shared look and eye)
         run: python3 ci/test_login_ui.py
-      - name: Session adoption (Node Talker, Node Recorder, instmon, Pibrary, wifimon, 44helper)
+      - name: Session adoption (Node Recorder, instmon, Pibrary, wifimon, 44helper)
         run: python3 ci/test_session_adoption.py
-      - name: Session shared file (Node Controller and SysMon, both builds, mixed versions)
+      - name: Session shared file (Node Controller, SysMon, Node Monitor and Node Talker, both builds, mixed versions)
         run: python3 ci/test_session_shared_file.py
       - name: Services file tests (Node Controller pi02w, Node Talker)
         run: python3 ci/test_nodecontrol_services.py

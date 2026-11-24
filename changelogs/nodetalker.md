@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_14_3_20261123.py`. Newest entries first.
+Current file: `nodetalker_v0_15_0_20261124.py`. Newest entries first.
+
+## 0.15.0 (2026-11-24)
+
+Node Talker joins the shared login. This is a release: the login cookie and where sessions are kept change.
+
+- **One login for four tools.** Node Talker now uses the `asl_dvs_session` cookie and the shared `/run/asl_dvs/auth_session.json` that Node Controller and SysMon already use, so a login on any of them opens the others, and any logout or a root password change ends every session.
+- **Shared lockout.** Failed logins are counted in the same shared file, so a wrong password tried on one tool counts on all of them (5 s doubling to 300 s after 5 mistakes). Internet logins keep their own 20-in-10-minutes limit.
+- **Sessions survive a restart.** They were kept in memory before; the shared file lives in `/run`, so they last until the node reboots.
+- **Node Talker Mobile.** The app sends whatever cookie the node sets, so it needs no change; log in once after the node updates.
+- **Mixed versions.** An older Node Talker keeps its own `nodetalker_session` cookie and its own memory store; the two do not interfere.
+- **Shared code.** The `auth_*` helpers are copied from `shared/confio.py`.
 
 ## 0.14.3 (2026-11-23)
 
