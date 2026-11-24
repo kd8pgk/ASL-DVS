@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.2`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.2 (2026-11-24)
+
+A page that fails to load says why in the log.
+
+- **diagnostics.log** now records each page that fails to load (the page, the error, the address and scheme tried) and each scheme change it makes or undoes, so a page that will not open can be traced.
+- A failed first load no longer prints an "Failed to load URL" warning in the terminal; the page's own failure message covers it.
 
 ## 0.11.1 (2026-11-24)
 

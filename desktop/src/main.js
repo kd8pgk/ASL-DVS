@@ -592,6 +592,7 @@ async function ensureView(key) {
   });
   wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
     if (!isMain || code === -3 || rt.get(key) !== e) return;
+    logLine(`load failed: ${key} ${desc} (${code}) ${url} via=${target.via} scheme=${target.https ? 'https' : 'http'}`);
     router.forget(node.id);
     if (SCHEME_FLIP_CODES.includes(code) && target.via !== 'away') {
       const idx = nodes.findIndex((n) => n.id === node.id);
@@ -602,6 +603,7 @@ async function ensureView(key) {
         const next = otherScheme(now);
         nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: next };
         persist();
+        logLine(`scheme for ${key}: ${now} -> ${next}`);
         flips.set(key, { at: Date.now(), from: now });
         emitNotice(`${page.label} on ${node.name || node.host} answers on ${next}, not ${now}. That is what will be used for it from now on.`, false);
         closeRt(key);
@@ -611,6 +613,7 @@ async function ensureView(key) {
       if (idx >= 0 && recent) {
         nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: last.from };
         persist();
+        logLine(`scheme for ${key}: back to ${last.from}, the other one failed too`);
         flips.delete(key);
       }
     }
@@ -638,7 +641,7 @@ async function ensureView(key) {
     e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: target.via, nodeId: node.id, cert: null };
     sync();
   });
-  wc.loadURL(`${originOf(target)}/`);
+  wc.loadURL(`${originOf(target)}/`).catch(() => {});
   sync();
 }
 
