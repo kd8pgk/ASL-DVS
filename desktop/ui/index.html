@@ -21,24 +21,16 @@
 </aside>
 <main id="main">
   <header id="head">
-    <div id="title">Pick a page</div>
-    <div class="spacer"></div>
-    <button id="reload" type="button" disabled>Reload</button>
-    <button id="close" type="button" disabled>Close</button>
-  </header>
-  <section id="stage">
-    <div id="empty" class="msg">Add a node, then open Node Controller or Node Talker from the list.</div>
-    <div id="fail" class="msg" hidden>
-      <h2 id="fail-title"></h2>
-      <p id="fail-text"></p>
-      <p id="fail-cert" class="mono" hidden></p>
-      <div class="row">
-        <button id="fail-trust" type="button" class="primary" hidden>Trust this certificate</button>
-        <button id="fail-retry" type="button">Try again</button>
-      </div>
+    <div id="tabs" role="tablist"></div>
+    <div id="modes" class="seg" role="group" aria-label="Layout">
+      <button type="button" data-mode="single" title="One page (Ctrl+1)">Single</button>
+      <button type="button" data-mode="cols" title="Side by side (Ctrl+2)">Columns</button>
+      <button type="button" data-mode="rows" title="Stacked (Ctrl+3)">Rows</button>
     </div>
-  </section>
+    <button id="reload" type="button" title="Reload (Ctrl+R)" disabled>Reload</button>
+  </header>
 </main>
+<div id="panes"></div>
 <dialog id="dlg">
   <form id="form" method="dialog" autocomplete="off">
     <h2 id="dlg-title">Add node</h2>

@@ -1,6 +1,20 @@
 # Node Controller Desktop changelog
 
-Current version: `0.1.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.2.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.2.0 (2026-11-24)
+
+Tabs, a split view, a locked-down Chromium and a one-file Linux package. Still only the Node Controller and Node Talker pages.
+
+- **Tabs.** Each page you open from the node list becomes a tab beside the others, and stays loaded when you switch away (Node Talker keeps running). Close a tab with its ×, Ctrl+W or Reload with Ctrl+R. Ctrl+Tab and Ctrl+Shift+Tab step through the tabs. A dot on each tab shows loading, loaded or failed. A tab says "(away)" or "(LAN address)" when it did not use the home address.
+- **Split view.** Single, Columns (side by side) or Rows (stacked), from the buttons or Ctrl+1, Ctrl+2 and Ctrl+3. A new split shows the tab you were on beside the next one, in tab order. Clicking a page, or pressing a tab, goes into the pane you last used. The divider drags; double-click it to centre. Each pane keeps at least 240 pixels. A page that fails to load shows its message and buttons in its own pane.
+- **Remembered layout.** The open tabs, the split and the divider position come back after a restart. Pages load again when shown; a tab you are not looking at loads when you first open it.
+- **Edits that matter reload.** Changing a node's address, ports, certificate, LAN or away address reloads its tabs; renaming a node does not. Deleting a node closes its tabs.
+- **Locked down.** Pages get the microphone (audio only), choosing the speaker, and copying to the clipboard, and only from the node's own addresses. Camera, location, notifications, MIDI, USB, Bluetooth, serial, HID, screen capture, reading the clipboard and everything else are refused. A page can send requests only to its own node (home, LAN or away address): anything else, including WebSockets and images, is blocked. The app window loads only its own files. WebRTC address leaks, spell checking, translation, sync, component updates, the media router and the browser's background network calls are switched off, and there is no crash reporter, updater, telemetry or developer tools.
+- **No back doors.** The packaged app refuses debugging and weakening switches (`--remote-debugging-port`, `--inspect`, `--js-flags`, `--proxy-server`, `--user-data-dir`, `--ignore-certificate-errors`, `--disable-web-security` and more), `ELECTRON_RUN_AS_NODE` and `NODE_OPTIONS` do nothing, and it loads code only from its own archive, which is integrity-checked when it starts. The package check fails if any of that changes.
+- **One file.** `npm run dist` in `desktop/` builds `NodeController-0.2.0.AppImage` (about 99 MB), x64 Linux, English only, unsigned. No icon yet. The app archive holds only the app's own files. An idle packaged app was seen making no outside connections and listening on no port.
+- **Sandbox.** The Chromium sandbox stays on. An AppImage cannot set up the setuid helper, so it needs unprivileged user namespaces, which some systems restrict (for example Ubuntu 24.04 until an AppArmor profile or `kernel.apparmor_restrict_unprivileged_userns=0` allows it). Nothing in the app turns the sandbox off.
+- **Tests.** Unit tests for the layout rules, the lockdown policy and the source (no unsafe setting, only the route probe opens a socket), the smoke test now covers tabs, the split, dragging, shortcuts, restart, closing and what a page may do, and `npm run check-package` checks the AppImage's fuses, archive, locale, switches and silence.
 
 ## 0.1.0 (2026-11-24)
 

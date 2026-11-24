@@ -1,11 +1,12 @@
 (function () {
   const $ = (id) => document.getElementById(id);
+  const GAP = 6;
   let nodes = [];
   let pages = [];
-  let active = null;
+  let lay = null;
   let editing = null;
-  let pendingCert = null;
   let noticeTimer = 0;
+  let paneSig = '';
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -27,27 +28,14 @@
     return n.name || n.host;
   }
 
-  function showStage(which) {
-    $('empty').hidden = which !== 'empty';
-    $('fail').hidden = which !== 'fail';
+  function placeRect(e, r) {
+    e.style.left = `${r.x}px`;
+    e.style.top = `${r.y}px`;
+    e.style.width = `${r.w}px`;
+    e.style.height = `${r.h}px`;
   }
 
-  function setTitle() {
-    if (!active) {
-      $('title').textContent = 'Pick a page';
-      $('reload').disabled = true;
-      $('close').disabled = true;
-      return;
-    }
-    const n = nodes.find((x) => x.id === active.nodeId);
-    const p = pages.find((x) => x.id === active.pageId);
-    const via = active.via === 'away' ? ' (away)' : active.via === 'lan' ? ' (LAN address)' : '';
-    $('title').textContent = `${n ? nodeLabel(n) : ''} · ${p ? p.label : ''}${via}`;
-    $('reload').disabled = false;
-    $('close').disabled = false;
-  }
-
-  function render() {
+  function renderNodes() {
     const ul = $('nodes');
     ul.textContent = '';
     for (const n of nodes) {
@@ -62,60 +50,166 @@
       li.append(el('div', 'node-host', `${n.https ? 'https' : 'http'}://${n.host}`));
       const box = el('div', 'pages');
       for (const p of pages) {
-        const b = el('button', active && active.nodeId === n.id && active.pageId === p.id ? 'on' : '', p.label);
+        const tab = lay && lay.tabs.find((t) => t.nodeId === n.id && t.pageId === p.id);
+        const b = el('button', tab && tab.shown >= 0 ? 'on' : '', p.label);
         b.type = 'button';
-        b.addEventListener('click', () => openPage(n.id, p.id));
+        b.addEventListener('click', () => window.nc.openTab(n.id, p.id));
         box.append(b);
       }
       li.append(box);
       ul.append(li);
     }
-    if (!nodes.length) showStage('empty');
   }
 
-  async function openPage(nodeId, pageId) {
-    active = { nodeId, pageId, via: 'home' };
-    pendingCert = null;
-    showStage('none');
-    render();
-    setTitle();
-    $('title').textContent = 'Connecting…';
-    const r = await window.nc.openPage(nodeId, pageId);
-    if (!r.ok) {
-      active = null;
-      showStage('empty');
-      notice(r.message || 'Could not open the page.', true);
-      render();
-      setTitle();
+  function renderTabs() {
+    const box = $('tabs');
+    box.textContent = '';
+    if (!lay) return;
+    for (const t of lay.tabs) {
+      const cls = ['tab'];
+      if (t.shown >= 0) cls.push('shown');
+      if (t.shown >= 0 && t.shown === lay.focus) cls.push('focus');
+      const tab = el('div', cls.join(' '));
+      tab.setAttribute('role', 'tab');
+      tab.append(el('span', `dot ${t.status}`));
+      tab.append(el('span', 'label', t.via === 'away' ? `${t.label} (away)` : t.via === 'lan' ? `${t.label} (LAN address)` : t.label));
+      const x = el('button', 'x', '×');
+      x.type = 'button';
+      x.title = 'Close (Ctrl+W)';
+      x.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        window.nc.closeTab(t.key);
+      });
+      tab.append(x);
+      tab.addEventListener('click', () => window.nc.activateTab(t.key));
+      box.append(tab);
+    }
+    for (const b of $('modes').querySelectorAll('button')) {
+      const m = b.dataset.mode;
+      b.classList.toggle('on', lay.mode === m);
+      b.disabled = m !== 'single' && !lay.canSplit && lay.mode === 'single';
+    }
+    $('reload').disabled = !lay.tabs.length;
+  }
+
+  function failPanel(pane) {
+    const e = pane.error;
+    const key = pane.key;
+    const tab = lay.tabs.find((t) => t.key === key);
+    const box = el('div', 'pane-msg');
+    placeRect(box, pane.rect);
+    box.append(el('h2', '', `Could not open ${tab ? tab.label : 'the page'}`));
+    box.append(el('p', '', e.message || 'The page did not load.'));
+    if (e.cert) box.append(el('p', 'mono', `This node's certificate is not trusted. SHA-256 ${e.cert.fingerprint}`));
+    const row = el('div', 'row');
+    if (e.cert) {
+      const trust = el('button', 'primary', 'Trust this certificate');
+      trust.type = 'button';
+      trust.addEventListener('click', async () => {
+        const r = await window.nc.trustCert(e.nodeId, e.cert.raw);
+        if (r.error) return notice(r.error, true);
+        nodes = r.nodes;
+        renderNodes();
+      });
+      row.append(trust);
+    }
+    const retry = el('button', '', 'Try again');
+    retry.type = 'button';
+    retry.addEventListener('click', () => window.nc.reloadTab(key));
+    row.append(retry);
+    box.append(row);
+    return box;
+  }
+
+  function startDrag(ev, divider) {
+    ev.preventDefault();
+    const rows = lay.mode === 'rows';
+    const p0 = lay.panes[0].rect;
+    const p1 = lay.panes[1].rect;
+    const start = rows ? p0.y : p0.x;
+    const total = rows ? p0.h + GAP + p1.h : p0.w + GAP + p1.w;
+    divider.classList.add('drag');
+    divider.setPointerCapture(ev.pointerId);
+    let queued = null;
+    const flush = () => {
+      if (queued === null) return;
+      window.nc.setRatio(queued);
+      queued = null;
+    };
+    const move = (m) => {
+      const pos = (rows ? m.clientY : m.clientX) - start - GAP / 2;
+      const ratio = pos / (total - GAP);
+      if (queued === null) requestAnimationFrame(flush);
+      queued = ratio;
+    };
+    const stop = () => {
+      divider.removeEventListener('pointermove', move);
+      divider.removeEventListener('pointerup', stop);
+      divider.removeEventListener('pointercancel', stop);
+      divider.classList.remove('drag');
+      flush();
+    };
+    divider.addEventListener('pointermove', move);
+    divider.addEventListener('pointerup', stop);
+    divider.addEventListener('pointercancel', stop);
+  }
+
+  function sigOf() {
+    return JSON.stringify([lay.mode, lay.overlay, Boolean(lay.divider), lay.panes.map((p) => [p.status, p.key, p.error && p.error.message])]);
+  }
+
+  function positionPanes() {
+    for (const c of $('panes').children) {
+      if (c.classList.contains('divider')) placeRect(c, lay.divider);
+      else placeRect(c, lay.panes[Number(c.dataset.pane)].rect);
+    }
+  }
+
+  function renderPanes() {
+    const sig = sigOf();
+    if (sig === paneSig) {
+      positionPanes();
       return;
     }
-    active.via = r.via;
-    setTitle();
+    paneSig = sig;
+    const box = $('panes');
+    box.textContent = '';
+    if (lay.overlay) return;
+    lay.panes.forEach((pane, i) => {
+      if (pane.status === 'ok') return;
+      let m;
+      if (pane.status === 'failed') {
+        m = failPanel(pane);
+      } else {
+        m = el('div', 'pane-msg');
+        placeRect(m, pane.rect);
+        if (pane.status === 'empty') m.append(el('p', '', 'Add a node, then open Node Controller or Node Talker from the list. Open two pages and pick Columns or Rows to see them side by side.'));
+        else m.append(el('p', '', 'Connecting…'));
+      }
+      m.dataset.pane = String(i);
+      box.append(m);
+    });
+    if (lay.divider && lay.panes.length === 2) {
+      const d = el('div', `divider ${lay.mode}`);
+      placeRect(d, lay.divider);
+      d.addEventListener('pointerdown', (ev) => startDrag(ev, d));
+      d.addEventListener('dblclick', () => window.nc.setRatio(0.5));
+      box.append(d);
+    }
   }
 
-  async function closePage() {
-    await window.nc.closePage();
-    active = null;
-    showStage('empty');
+  function render() {
+    renderTabs();
+    renderNodes();
+    renderPanes();
+  }
+
+  function onLayout(next) {
+    lay = next;
     render();
-    setTitle();
-  }
-
-  function onError(e) {
-    if (!active || active.nodeId !== e.nodeId || active.pageId !== e.pageId) return;
-    const n = nodes.find((x) => x.id === e.nodeId);
-    const p = pages.find((x) => x.id === e.pageId);
-    $('fail-title').textContent = `Could not open ${p ? p.label : 'the page'} on ${n ? nodeLabel(n) : 'the node'}`;
-    $('fail-text').textContent = e.message || 'The page did not load.';
-    pendingCert = e.cert ? { nodeId: e.nodeId, raw: e.cert.raw } : null;
-    $('fail-cert').hidden = !e.cert;
-    $('fail-cert').textContent = e.cert ? `This node's certificate is not trusted. SHA-256 ${e.cert.fingerprint}` : '';
-    $('fail-trust').hidden = !e.cert;
-    showStage('fail');
   }
 
   function openDialog(n) {
-    editing = n || null;
     $('dlg-title').textContent = n ? 'Edit node' : 'Add node';
     $('f-name').value = n ? n.name : '';
     $('f-host').value = n ? n.host : '';
@@ -161,23 +255,16 @@
     }
     nodes = r.nodes;
     closeDialog();
-    render();
-    setTitle();
+    renderNodes();
     notice('Node saved.');
   }
 
   async function removeNode() {
     if (!editing) return;
-    const id = editing.id;
-    const r = await window.nc.removeNode(id);
+    const r = await window.nc.removeNode(editing.id);
     nodes = r.nodes || nodes;
-    if (active && active.nodeId === id) {
-      active = null;
-      showStage('empty');
-    }
     closeDialog();
-    render();
-    setTitle();
+    renderNodes();
     notice('Node deleted.');
   }
 
@@ -186,7 +273,7 @@
     if (r.canceled) return;
     if (r.error) return notice(r.error, true);
     nodes = r.nodes;
-    render();
+    renderNodes();
     notice(`Imported ${r.added} new, ${r.replaced} updated, ${r.skipped} skipped.`);
   }
 
@@ -197,14 +284,6 @@
     notice('Nodes exported.');
   }
 
-  async function trust() {
-    if (!pendingCert) return;
-    const r = await window.nc.trustCert(pendingCert.nodeId, pendingCert.raw);
-    if (r.error) return notice(r.error, true);
-    nodes = r.nodes;
-    if (active) openPage(active.nodeId, active.pageId);
-  }
-
   async function init() {
     const info = await window.nc.info();
     pages = info.pages;
@@ -213,8 +292,12 @@
     $('add').addEventListener('click', () => openDialog(null));
     $('import').addEventListener('click', importNodes);
     $('export').addEventListener('click', exportNodes);
-    $('reload').addEventListener('click', () => active && openPage(active.nodeId, active.pageId));
-    $('close').addEventListener('click', closePage);
+    $('reload').addEventListener('click', () => {
+      if (!lay) return;
+      const key = lay.panes[lay.focus] && lay.panes[lay.focus].key;
+      if (key) window.nc.reloadTab(key);
+    });
+    for (const b of $('modes').querySelectorAll('button')) b.addEventListener('click', () => window.nc.setMode(b.dataset.mode));
     $('f-cancel').addEventListener('click', closeDialog);
     $('dlg').addEventListener('cancel', () => window.nc.overlay(false));
     $('form').addEventListener('submit', saveDialog);
@@ -223,13 +306,8 @@
       if (editing) editing.pin = '';
       $('f-pin-row').hidden = true;
     });
-    $('fail-retry').addEventListener('click', () => active && openPage(active.nodeId, active.pageId));
-    $('fail-trust').addEventListener('click', trust);
-    window.nc.onPageError(onError);
-    window.nc.onPageLoaded(() => {});
-    render();
-    setTitle();
-    showStage('empty');
+    window.nc.onLayout(onLayout);
+    onLayout(await window.nc.getLayout());
   }
 
   init();
