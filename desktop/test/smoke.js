@@ -6,6 +6,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { _electron } = require('playwright');
+const L = require('../src/layout');
 
 const root = path.join(__dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ncd-smoke-'));
@@ -43,7 +44,13 @@ function probeScript(extPort) {
 async function views(app) {
   return app.evaluate(({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows()[0];
-    return w.contentView.children.map((v) => ({ url: v.webContents.getURL(), bounds: v.getBounds(), visible: v.getVisible() }));
+    return w.contentView.children.map((v) => ({
+      url: v.webContents.getURL(),
+      bounds: v.getBounds(),
+      visible: v.getVisible(),
+      throttled: v.webContents.backgroundThrottling,
+      muted: v.webContents.isAudioMuted(),
+    }));
   });
 }
 
@@ -77,19 +84,44 @@ async function waitFor(fn, what, ms = 8000) {
   }
 }
 
+async function dragToZone(win, source, zoneId) {
+  const box = await source.boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await win.mouse.move(cx, cy);
+  await win.mouse.down();
+  await win.mouse.move(cx + 12, cy + 12, { steps: 4 });
+  const zone = win.locator(`.zone[data-zone="${zoneId}"]`);
+  await zone.waitFor({ timeout: 8000 });
+  const zb = await zone.boundingBox();
+  await win.mouse.move(zb.x + zb.width / 2, zb.y + zb.height / 2, { steps: 10 });
+  await win.mouse.up();
+  await win.waitForFunction(() => document.querySelectorAll('.zone').length === 0);
+}
+
+function expected(mode, W, H, ratio = 0.5) {
+  const g = L.grid(W, H);
+  const r = L.rects({ mode, ratio }, g.area);
+  return { g, panes: r.panes.map((p) => L.viewRect({ mode }, p)), rects: r.panes };
+}
+
+function same(a, b, msg) {
+  assert.deepEqual({ x: a.x, y: a.y, w: a.width, h: a.height }, { x: b.x, y: b.y, w: b.w, h: b.h }, msg);
+}
+
 async function main() {
   const ext = pageServer('outside');
   const extSrv = http.createServer(ext.handler);
   const extPort = await listen(extSrv);
   const ctl = pageServer('stub controller', probeScript(extPort));
   const tlk = pageServer('stub talker');
+  const sys = pageServer('stub sysmon');
+  const nm = pageServer('stub node monitor');
   const lh = pageServer('stub last heard', `<script>(async () => { let r; try { await fetch('http://localhost:${extPort}/lh', { mode: 'no-cors' }); r = 'reached'; } catch (e) { r = 'blocked'; } document.title = r; })();</script>`);
-  const ctlSrv = http.createServer(ctl.handler);
-  const tlkSrv = http.createServer(tlk.handler);
-  const lhSrv = http.createServer(lh.handler);
-  const ctlPort = await listen(ctlSrv);
-  const tlkPort = await listen(tlkSrv);
-  const lhPort = await listen(lhSrv);
+  const servers = [ctl, tlk, sys, nm, lh].map((x) => http.createServer(x.handler));
+  const ports = [];
+  for (const sv of servers) ports.push(await listen(sv));
+  const [cp, tp, sp, np, lp] = ports;
 
   const key = path.join(tmp, 'k.pem');
   const crt = path.join(tmp, 'c.pem');
@@ -108,18 +140,36 @@ async function main() {
   let win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
 
+  const url = (port, p = '/') => `http://127.0.0.1:${port}${p}`;
+  const visible = async () => (await views(app)).filter((v) => v.visible);
+  const mode = () => win.locator('#modes button.on').getAttribute('data-mode');
+  const tabLabels = () => win.locator('.tab .label').allTextContents();
+  const tab = (text) => win.locator('.tab', { hasText: text });
+  const page = (n, i) => win.locator('.node').nth(n).locator('.pages button').nth(i);
+  const size = async () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize());
+  const showing = async (...urls) => {
+    await waitFor(async () => {
+      const v = await visible();
+      return v.length === urls.length && urls.every((u) => v.some((x) => x.url === u));
+    }, `showing ${urls.join(', ')}`);
+  };
+
   assert.equal(await win.title(), 'Node Controller');
   assert.match(await win.textContent('.pane-msg'), /Add a node/);
   assert.equal(await win.locator('#modes button[data-mode="cols"]').isDisabled(), true);
   assert.equal(await win.locator('#modes button[data-mode="trio"]').isDisabled(), true);
   assert.deepEqual(await win.locator('#modes button').allTextContents(), ['1 page', '2 pages', '3 pages']);
+  assert.equal(await win.locator('#back').isHidden(), true);
+  assert.equal(await win.locator('#save-split').isDisabled(), true);
 
   async function addNode(name, host, bad) {
     await win.click('#add');
     await win.fill('#f-name', name);
     await win.fill('#f-host', host);
-    await win.fill('#f-port-controller', String(ctlPort));
-    await win.fill('#f-port-talker', String(tlkPort));
+    await win.fill('#f-port-controller', String(cp));
+    await win.fill('#f-port-talker', String(tp));
+    await win.fill('#f-port-sysmon', String(sp));
+    await win.fill('#f-port-nodemon', String(np));
     if (bad) {
       await win.fill('#f-lan', 'bad');
       await win.click('#f-save');
@@ -131,169 +181,187 @@ async function main() {
   }
 
   await addNode('Stub', '127.0.0.1', true);
-
   const nodesFile = path.join(data, 'nodes.json');
   const saved = JSON.parse(fs.readFileSync(nodesFile, 'utf8'));
   assert.equal(saved.nodes.length, 1);
-  assert.equal(saved.nodes[0].ports.talker, tlkPort);
-
-  const page = (n, i) => win.locator('.node').nth(n).locator('.pages button').nth(i);
-  assert.deepEqual(await page(0, 0).allTextContents(), ['Node Controller']);
+  assert.deepEqual([saved.nodes[0].ports.talker, saved.nodes[0].ports.sysmon, saved.nodes[0].ports.nodemon], [tp, sp, np]);
+  assert.deepEqual(await win.locator('.node').nth(0).locator('.pages button').allTextContents(), ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor']);
 
   await page(0, 0).click();
-  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${ctlPort}/` && v.visible), 'controller page');
-  assert.deepEqual(await win.locator('.tab .label').allTextContents(), ['Stub · Node Controller']);
-
+  await showing(url(cp));
+  assert.deepEqual(await tabLabels(), ['Stub · Node Controller']);
   const probe = await waitFor(async () => {
-    const t = await inPage(app, `127.0.0.1:${ctlPort}/`, 'document.title').catch(() => '');
+    const t = await inPage(app, `127.0.0.1:${cp}/`, 'document.title').catch(() => '');
     return String(t).startsWith('{') ? JSON.parse(t) : null;
   }, 'permission probe');
   assert.deepEqual(probe, { geo: 'denied', microphone: 'granted', camera: 'denied', notifications: 'denied', midi: 'denied', 'clipboard-read': 'denied', audio: 'NotFoundError', ext: 'blocked', sock: 'blocked' });
   assert.deepEqual(ext.hits, []);
 
-  await inPage(app, `127.0.0.1:${ctlPort}/`, `window.open('http://127.0.0.1:${lhPort}/lh', 'asl_dvs_lh') && 1`);
-  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${lhPort}/lh` && v.visible), 'Last Heard from Node Controller');
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'cols');
-  {
-    const all = await views(app);
-    const c = all.find((v) => v.url === `http://127.0.0.1:${ctlPort}/`);
-    const l = all.find((v) => v.url === `http://127.0.0.1:${lhPort}/lh`);
-    assert.ok(l.bounds.x > c.bounds.x + c.bounds.width, 'Last Heard opens to the right of the single page');
-    assert.equal(l.bounds.y, c.bounds.y);
-  }
+  await inPage(app, `127.0.0.1:${cp}/`, `window.open('${url(lp, '/lh')}', 'asl_dvs_lh') && 1`);
+  await showing(url(lp, '/lh'));
+  assert.equal(await mode(), 'single');
+  assert.equal(await win.locator('#back').isHidden(), true);
   await win.locator('.tab', { hasText: 'Last Heard' }).locator('.x').click();
-  await waitFor(async () => (await views(app)).length === 1, 'Last Heard closed');
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'single');
+  await showing(url(cp));
 
-  await inPage(app, `127.0.0.1:${ctlPort}/`, `window.open('http://127.0.0.1:${tlkPort}/', 'asl_dvs_listen') && 1`);
-  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${tlkPort}/` && v.visible), 'talker page from a link');
-  assert.equal(await win.locator('.tab').count(), 2);
-  assert.deepEqual(await win.locator('.tab .label').allTextContents(), ['Stub · Node Controller', 'Stub · Node Talker']);
-  await inPage(app, `127.0.0.1:${ctlPort}/`, `location.assign('http://127.0.0.1:${tlkPort}/x')`);
+  await inPage(app, `127.0.0.1:${cp}/`, `window.open('${url(tp)}', 'asl_dvs_listen') && 1`);
+  await showing(url(tp));
+  assert.deepEqual(await tabLabels(), ['Stub · Node Controller', 'Stub · Node Talker']);
+  await inPage(app, `127.0.0.1:${cp}/`, `location.assign('${url(tp, '/x')}')`);
   await new Promise((r) => setTimeout(r, 600));
-  assert.ok((await views(app)).some((v) => v.url === `http://127.0.0.1:${ctlPort}/`), 'the controller page stays where it was');
+  assert.ok((await views(app)).some((v) => v.url === url(cp)), 'the controller page stays where it was');
   assert.equal(await win.locator('.tab').count(), 2);
-  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.every((v) => v.webContents.backgroundThrottling === false)), true);
+
+  let [W, H] = await size();
   let vs = await views(app);
   assert.equal(vs.length, 2);
-  assert.deepEqual(vs.map((v) => v.visible), [false, true]);
-  assert.equal(await win.locator('#modes button[data-mode="cols"]').isDisabled(), false);
+  const g = L.grid(W, H);
+  same(vs.find((v) => v.visible).bounds, g.area, 'one page fills the 12 units');
+  assert.equal(await win.locator('#head').evaluate((e) => Math.round(e.getBoundingClientRect().height)), g.header);
+  assert.equal(await win.locator('#side').evaluate((e) => Math.round(e.getBoundingClientRect().width)), g.sidebar);
+  const shownV = vs.find((v) => v.url === url(tp));
+  const hiddenV = vs.find((v) => v.url === url(cp));
+  assert.deepEqual([shownV.throttled, shownV.muted], [false, false]);
+  assert.deepEqual([hiddenV.throttled, hiddenV.muted], [true, true]);
+  assert.equal(await win.locator('.tab', { hasText: 'Node Controller' }).locator('.dot.idle').count(), 1);
+  assert.equal(await win.locator('.tab', { hasText: 'Node Talker' }).locator('.dot.idle').count(), 0);
   assert.equal(await win.locator('#modes button[data-mode="trio"]').isDisabled(), true);
 
-  let [W, H] = await contentSize(app);
-  const sidebar = Math.round((W * 3) / 15);
-  const header = Math.round(W / 15);
-  const one = vs.find((v) => v.visible).bounds;
-  assert.deepEqual(one, { x: sidebar, y: header, width: W - sidebar, height: H - header });
-  assert.equal(await win.locator('#head').evaluate((e) => Math.round(e.getBoundingClientRect().height)), header);
-  assert.equal(await win.locator('#side').evaluate((e) => Math.round(e.getBoundingClientRect().width)), sidebar);
+  await dragToZone(win, tab('Node Controller'), 'right');
+  await showing(url(tp), url(cp));
+  assert.equal(await mode(), 'cols');
+  assert.equal(await win.locator('.pane-strip').count(), 2);
+  assert.deepEqual(await win.locator('.pane-strip .strip-title').allTextContents(), ['Stub · Node Talker', 'Stub · Node Controller']);
+  assert.equal(await win.locator('.pane-strip.focus').count(), 1);
+  let ex = expected('cols', W, H);
+  same((await views(app)).find((v) => v.url === url(tp)).bounds, ex.panes[0], 'left pane');
+  same((await views(app)).find((v) => v.url === url(cp)).bounds, ex.panes[1], 'right pane');
+  assert.ok((await views(app)).every((v) => v.visible && !v.throttled && !v.muted));
 
-  await win.click('#modes button[data-mode="cols"]');
-  await waitFor(async () => (await views(app)).filter((v) => v.visible).length === 2, 'two visible views');
+  await page(0, 2).click();
+  await showing(url(sp));
+  assert.equal(await mode(), 'single');
+  assert.equal(await win.locator('#back').isVisible(), true);
   vs = await views(app);
-  const [pa, pb] = [...vs].sort((x, y) => x.bounds.x - y.bounds.x);
-  assert.equal(pa.bounds.x, sidebar);
-  assert.equal(pa.bounds.y, header);
-  assert.equal(pa.bounds.x + pa.bounds.width + 6, pb.bounds.x);
-  assert.equal(pb.bounds.x + pb.bounds.width, W);
-  assert.equal(pa.bounds.width, Math.floor(((W - sidebar - 6) * 1) / 2));
-  assert.equal(pa.bounds.height, H - header);
-  assert.equal(await win.locator('.tab.shown').count(), 2);
-  assert.equal(await win.locator('.tab.focus').count(), 1);
+  assert.deepEqual(vs.filter((v) => v.throttled && v.muted).map((v) => v.url).sort(), [url(cp), url(tp)].sort());
+  assert.equal(await win.locator('.pages button.on').count(), 1);
+  assert.equal(await win.locator('.pages button.open').count(), 2);
 
-  const focusLabel = () => win.locator('.tab.focus .label').textContent();
-  const before = await focusLabel();
-  const other = before.includes('Controller') ? `:${tlkPort}/` : `:${ctlPort}/`;
-  await app.evaluate(({ BrowserWindow }, part) => {
-    const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes(part));
-    v.webContents.focus();
-  }, other);
-  await waitFor(async () => (await focusLabel()) !== before, 'focus moves with the page');
+  await page(0, 0).click();
+  await showing(url(tp), url(cp));
+  assert.equal(await mode(), 'cols');
+  assert.equal(await win.locator('.pane-strip.focus .strip-title').textContent(), 'Stub · Node Controller');
+  assert.equal(await win.locator('#back').isHidden(), true);
+  await page(0, 2).click();
+  await showing(url(sp));
+  await win.click('#back');
+  await showing(url(tp), url(cp));
 
-  const left = async () => [...(await views(app))].filter((v) => v.visible).sort((x, y) => x.bounds.x - y.bounds.x)[0];
-  const div = await win.locator('.divider.cols').boundingBox();
-  await win.mouse.move(div.x + 3, div.y + 200);
-  await win.mouse.down();
-  await win.mouse.move(div.x + 103, div.y + 200, { steps: 6 });
-  await win.mouse.up();
-  await waitFor(async () => (await left()).bounds.width > pa.bounds.width + 80, 'divider drag');
-  await win.dblclick('.divider.cols');
-  await waitFor(async () => Math.abs((await left()).bounds.width - pa.bounds.width) <= 1, 'divider reset');
-
-  await chord(app, '3');
-  await new Promise((r) => setTimeout(r, 400));
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'cols');
-
-  await addNode('Stub2', '127.0.0.3', false);
-  await page(1, 0).click();
-  await waitFor(async () => (await views(app)).length === 3, 'third page');
-  assert.equal(await win.locator('.tab').count(), 3);
-  assert.equal(await win.locator('#modes button[data-mode="trio"]').isDisabled(), false);
-
-  await chord(app, '3');
-  await waitFor(async () => (await views(app)).filter((v) => v.visible).length === 3, 'three visible views');
-  vs = (await views(app)).filter((v) => v.visible);
-  const top = vs.filter((v) => v.bounds.y === header).sort((x, y) => x.bounds.x - y.bounds.x);
-  const bottom = vs.find((v) => v.bounds.y !== header);
-  assert.equal(top.length, 2);
-  assert.equal(top[0].bounds.height, top[1].bounds.height);
-  assert.equal(top[0].bounds.x + top[0].bounds.width + 6, top[1].bounds.x);
-  assert.equal(top[0].bounds.width, Math.floor((W - sidebar - 6) / 2));
-  assert.deepEqual([bottom.bounds.x, bottom.bounds.width], [sidebar, W - sidebar]);
-  assert.equal(bottom.bounds.y, header + top[0].bounds.height + 6);
-  assert.ok(Math.abs(bottom.bounds.height - top[0].bounds.height) <= 1);
-  assert.equal(bottom.bounds.y + bottom.bounds.height, H);
+  await dragToZone(win, page(0, 2), 'below');
+  await showing(url(tp), url(cp), url(sp));
+  assert.equal(await mode(), 'trio');
+  ex = expected('trio', W, H);
+  vs = await views(app);
+  same(vs.find((v) => v.url === url(tp)).bounds, ex.panes[0], 'top left');
+  same(vs.find((v) => v.url === url(cp)).bounds, ex.panes[1], 'top right');
+  same(vs.find((v) => v.url === url(sp)).bounds, ex.panes[2], 'bottom');
+  assert.equal(ex.rects[2].w, W - g.sidebar);
+  assert.ok(Math.abs(ex.rects[2].h - ex.rects[0].h) <= 1);
+  assert.equal(await win.locator('.pane-strip').count(), 3);
   assert.equal(await win.locator('.divider.gapline').count(), 1);
   assert.equal(await win.locator('.divider.cols').count(), 1);
 
-  await inPage(app, `127.0.0.1:${tlkPort}/`, `window.open('http://10.9.9.9/x', 'nt_lh') && 1`);
-  await win.waitForFunction(() => /refused/.test(document.getElementById('notice').textContent));
-  assert.equal(await win.locator('.tab').count(), 3);
+  await page(0, 3).click({ button: 'right' });
+  assert.deepEqual(await win.locator('#menu .menu-item').allTextContents(), ['Show alone', 'Replace left', 'Replace right', 'Replace bottom']);
+  await win.locator('#menu .menu-item', { hasText: 'Replace bottom' }).click();
+  await showing(url(tp), url(cp), url(np));
+  vs = await views(app);
+  same(vs.find((v) => v.url === url(np)).bounds, ex.panes[2], 'bottom replaced');
+  assert.deepEqual([vs.find((v) => v.url === url(sp)).throttled, vs.find((v) => v.url === url(sp)).muted], [true, true]);
 
-  await inPage(app, `127.0.0.1:${tlkPort}/`, `window.open('http://127.0.0.1:${lhPort}/lh', 'nt_lh') && 1`);
-  await waitFor(async () => (await views(app)).some((v) => v.url === `http://127.0.0.1:${lhPort}/lh`), 'Last Heard page');
+  await page(0, 2).click({ modifiers: ['Control'] });
+  await showing(url(tp), url(cp), url(sp));
+
+  await inPage(app, `127.0.0.1:${tp}/`, `window.open('http://10.9.9.9/x', 'nt_lh') && 1`);
+  await win.waitForFunction(() => /refused/.test(document.getElementById('notice').textContent));
   assert.equal(await win.locator('.tab').count(), 4);
-  assert.ok((await win.locator('.tab .label').allTextContents()).includes('Last Heard'));
-  const lhView = () => views(app).then((all) => all.find((v) => v.url.includes(`:${lhPort}/`)));
-  await waitFor(async () => (await lhView()).visible, 'Last Heard visible');
-  assert.deepEqual([(await lhView()).bounds.x, (await lhView()).bounds.width], [sidebar, W - sidebar]);
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'trio');
+
+  await inPage(app, `127.0.0.1:${tp}/`, `window.open('${url(lp, '/lh')}', 'nt_lh') && 1`);
+  await showing(url(lp, '/lh'));
+  assert.equal(await mode(), 'single');
+  assert.equal(await win.locator('.tab').count(), 5);
+  same((await visible())[0].bounds, g.area, 'Last Heard fills the page area');
   const lhTitle = await waitFor(async () => {
-    const t = await inPage(app, `:${lhPort}/`, 'document.title').catch(() => '');
+    const t = await inPage(app, `:${lp}/`, 'document.title').catch(() => '');
     return t === 'blocked' || t === 'reached' ? t : '';
   }, 'Last Heard request check');
   assert.equal(lhTitle, 'blocked');
   assert.deepEqual(ext.hits, []);
+  assert.equal(await win.locator('#back').isVisible(), true);
+  await win.click('#back');
+  await showing(url(tp), url(cp), url(sp));
+  assert.equal(await mode(), 'trio');
 
-  await app.evaluate(({ BrowserWindow }) => {
-    const v = BrowserWindow.getAllWindows()[0].contentView.children.find((c) => c.webContents.getURL().includes('/lh'));
-    v.webContents.focus();
-  });
-  await waitFor(async () => (await win.locator('.tab.focus .label').textContent()) === 'Last Heard', 'Last Heard focused');
+  await addNode('Stub2', '127.0.0.3', false);
+  await page(1, 0).click();
+  await win.waitForFunction(() => document.querySelectorAll('.tab').length === 6);
+  await showing(`http://127.0.0.3:${cp}/`);
+  await page(0, 0).click();
+  await showing(url(tp), url(cp), url(sp));
+
+  await win.click('#save-split');
+  await win.fill('#n-name', 'Desk');
+  await win.click('#form-name button[type="submit"]');
+  await win.waitForSelector('.split-row');
+  assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
+  const splitsFile = path.join(data, 'splits.json');
+  const sp1 = JSON.parse(fs.readFileSync(splitsFile, 'utf8')).splits;
+  assert.equal(sp1.length, 1);
+  assert.deepEqual(sp1[0].items.map((i) => `${i.pageId}`), ['talker', 'controller', 'sysmon']);
+
+  await win.locator('.pane-strip', { hasText: 'Stub · SysMon' }).locator('button', { hasText: 'Remove' }).click();
+  await showing(url(tp), url(cp));
+  assert.equal(await mode(), 'cols');
+  await win.locator('.pane-strip', { hasText: 'Stub · Node Talker' }).locator('button', { hasText: 'Alone' }).click();
+  await showing(url(tp));
+  assert.equal(await mode(), 'single');
+  await win.click('.split-name');
+  await showing(url(tp), url(cp), url(sp));
+  assert.equal(await mode(), 'trio');
 
   await app.close();
   app = await launch();
   win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
-  await waitFor(async () => (await views(app)).filter((v) => v.visible).length === 3, 'restored three pages');
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'trio');
-  assert.equal(await win.locator('.tab').count(), 3);
-  assert.equal((await win.locator('.tab .label').allTextContents()).includes('Last Heard'), false);
+  await showing(url(tp), url(cp), url(sp));
+  assert.equal(await mode(), 'trio');
+  assert.equal(await win.locator('.tab').count(), 5);
+  assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
+  assert.equal((await views(app)).length, 3);
 
-  await win.locator('.tab .x').nth(0).click();
-  await waitFor(async () => (await views(app)).length === 2, 'two views after close');
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'cols');
-  await win.locator('.tab .x').nth(0).click();
-  await waitFor(async () => (await views(app)).length === 1, 'one view after close');
-  assert.equal(await win.locator('#modes button.on').getAttribute('data-mode'), 'single');
-  assert.equal((await views(app))[0].visible, true);
-  await chord(app, 'w');
-  await waitFor(async () => (await views(app)).length === 0, 'no views after Ctrl+W');
+  const focusedTitle = await win.locator('.pane-strip.focus .strip-title').textContent();
+  await chord(app, '1');
+  await waitFor(async () => (await mode()) === 'single', 'one page by shortcut');
+  assert.equal(await win.locator('.tab.focus .label').textContent(), focusedTitle);
+  assert.equal((await visible()).length, 1);
+  await chord(app, '3');
+  await showing(url(tp), url(cp), url(sp));
+  assert.equal(await mode(), 'trio');
+  await chord(app, '2');
+  await waitFor(async () => (await mode()) === 'cols', 'two pages by shortcut');
+  assert.equal((await visible()).length, 2);
+  await chord(app, '3');
+  await waitFor(async () => (await mode()) === 'trio', 'the three pages come back');
+  assert.equal((await visible()).length, 3);
+
+  for (let i = 0; i < 5; i += 1) await win.locator('.tab .x').nth(0).click();
+  await waitFor(async () => (await views(app)).length === 0, 'all tabs closed');
   assert.match(await win.textContent('.pane-msg'), /Add a node/);
 
   await win.locator('.node').nth(1).locator('.node-top button').click();
   await win.click('#f-delete');
   await win.waitForFunction(() => document.querySelectorAll('.node').length === 1);
+  assert.equal(await win.locator('.split-row').count(), 1);
 
   await win.click('.node-top button');
   await win.fill('#f-host', 'https://127.0.0.1');
@@ -318,11 +386,12 @@ async function main() {
   await win.click('#f-delete');
   await win.waitForFunction(() => document.querySelectorAll('.node').length === 0);
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes.length, 0);
+  assert.equal(JSON.parse(fs.readFileSync(splitsFile, 'utf8')).splits.length, 0);
   assert.equal(await win.locator('.tab').count(), 0);
   assert.equal((await views(app)).length, 0);
 
   await app.close();
-  for (const sv of [ctlSrv, tlkSrv, tlsSrv, extSrv, lhSrv]) sv.close();
+  for (const sv of [...servers, tlsSrv, extSrv]) sv.close();
   console.log('smoke ok');
 }
 

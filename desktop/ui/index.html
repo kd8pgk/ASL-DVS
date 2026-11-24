@@ -17,6 +17,10 @@
   </div>
   <div id="notice" class="notice" hidden></div>
   <ul id="nodes"></ul>
+  <div id="splits-box" class="splits" hidden>
+    <div class="splits-head">Saved splits</div>
+    <ul id="splits"></ul>
+  </div>
   <div id="ver" class="ver"></div>
 </aside>
 <main id="main">
@@ -27,6 +31,8 @@
       <button type="button" data-mode="cols" title="Two pages side by side (Ctrl+2)">2 pages</button>
       <button type="button" data-mode="trio" title="Two pages over a full-width third (Ctrl+3)">3 pages</button>
     </div>
+    <button id="back" type="button" title="Show the split again" hidden>Back to split</button>
+    <button id="save-split" type="button" title="Save this split" disabled>Save split</button>
     <button id="reload" type="button" title="Reload (Ctrl+R)" disabled>Reload</button>
   </header>
 </main>
@@ -37,10 +43,7 @@
     <label>Name<input id="f-name" type="text" maxlength="80"></label>
     <label>Address<input id="f-host" type="text" placeholder="pi.local or https://pi.local" required></label>
     <label class="check"><input id="f-https" type="checkbox"> Use https</label>
-    <div class="two">
-      <label>Node Controller port<input id="f-port-controller" type="number" min="1" max="65535"></label>
-      <label>Node Talker port<input id="f-port-talker" type="number" min="1" max="65535"></label>
-    </div>
+    <div id="f-ports" class="two"></div>
     <label>Away address (Node Talker only)<input id="f-away" type="text" placeholder="https://node.example.com"></label>
     <label>LAN address (IPv4, optional)<input id="f-lan" type="text" placeholder="192.168.1.50"></label>
     <div id="f-pin-row" class="pin" hidden>
@@ -57,6 +60,19 @@
     </div>
   </form>
 </dialog>
+<dialog id="dlg-name">
+  <form id="form-name" method="dialog" autocomplete="off">
+    <h2>Save split</h2>
+    <label>Name<input id="n-name" type="text" maxlength="40" required></label>
+    <p id="n-error" class="error" hidden></p>
+    <div class="row end">
+      <div class="spacer"></div>
+      <button id="n-cancel" type="button">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<div id="menu" class="menu" role="menu" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

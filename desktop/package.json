@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
   "productName": "Node Controller",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",

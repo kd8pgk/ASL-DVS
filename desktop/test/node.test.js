@@ -35,7 +35,7 @@ test('normalizeNode fills defaults and ports', () => {
   const r = N.normalizeNode({ name: ' Home ', host: 'pi.local' });
   assert.equal(r.node.name, 'Home');
   assert.equal(r.node.https, false);
-  assert.deepEqual(r.node.ports, { controller: 8989, talker: 8993 });
+  assert.deepEqual(r.node.ports, { controller: 8989, talker: 8993, sysmon: 9999, nodemon: 7777 });
   assert.ok(r.node.id);
 });
 
@@ -113,8 +113,37 @@ test('matchPage finds the hardwired page a link points at, on any of the node ad
 
 test('matchPage ignores other tools, other schemes and other hosts', () => {
   const a = N.normalizeNode({ id: 'a', host: 'pi.local', https: true }).node;
-  for (const u of ['https://pi.local:9999/', 'https://pi.local:8990/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
+  for (const u of ['https://pi.local:9998/', 'https://pi.local:8990/', 'http://pi.local:8993/', 'https://other.example:8993/', 'https://pi.local.evil.example:8993/', 'ftp://pi.local:8993/', 'junk', '']) {
     assert.equal(N.matchPage(u, [a]), null, u);
   }
   assert.equal(N.matchPage('https://node.example.com/', [a]), null);
+});
+
+test('the hardwired pages are Node Controller, Node Talker, SysMon and Node Monitor, with their default ports', () => {
+  assert.deepEqual(N.PAGES.map((p) => [p.id, p.label, p.port, p.away]), [
+    ['controller', 'Node Controller', 8989, false],
+    ['talker', 'Node Talker', 8993, true],
+    ['sysmon', 'SysMon', 9999, false],
+    ['nodemon', 'Node Monitor', 7777, false],
+  ]);
+});
+
+test('a node saved before SysMon and Node Monitor existed gets their default ports', () => {
+  const n = N.normalizeNode({ id: 'old', host: 'pi.local', ports: { controller: 8989, talker: 8993 } }).node;
+  assert.equal(n.ports.sysmon, 9999);
+  assert.equal(n.ports.nodemon, 7777);
+});
+
+test('ports of the new pages are checked and used', () => {
+  assert.match(N.normalizeNode({ host: 'pi.local', ports: { sysmon: '0' } }).error, /SysMon port/);
+  assert.match(N.normalizeNode({ host: 'pi.local', ports: { nodemon: 'x' } }).error, /Node Monitor port/);
+  const n = N.normalizeNode({ id: 'a', host: 'pi.local', ports: { sysmon: '9100', nodemon: '7700' } }).node;
+  assert.deepEqual(N.matchPage('http://pi.local:9100/', [n]), { nodeId: 'a', pageId: 'sysmon' });
+  assert.deepEqual(N.matchPage('http://pi.local:7700/', [n]), { nodeId: 'a', pageId: 'nodemon' });
+  assert.equal(N.matchPage('http://pi.local:9999/', [n]), null);
+});
+
+test('only Node Talker can use the away address', () => {
+  const n = N.normalizeNode({ id: 'a', host: 'pi.local', awayHost: 'node.example.com' }).node;
+  for (const p of N.PAGES) assert.equal(Boolean(N.awayTarget(n, p)), p.id === 'talker', p.id);
 });
