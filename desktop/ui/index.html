@@ -16,22 +16,30 @@
     <button id="export" type="button">Export</button>
   </div>
   <div id="notice" class="notice" hidden></div>
-  <ul id="nodes"></ul>
-  <div id="splits-box" class="splits" hidden>
-    <div class="splits-head">Saved splits</div>
-    <ul id="splits"></ul>
+  <div id="side-scroll">
+    <section id="slots-box"></section>
+    <section id="singles-box" class="sec">
+      <div class="sec-head">Single pages</div>
+      <ul id="singles" class="entries"></ul>
+    </section>
+    <section class="sec">
+      <div class="sec-head">Open a page</div>
+      <ul id="nodes"></ul>
+    </section>
+    <div id="splits-box" class="splits" hidden>
+      <div class="splits-head">Saved splits</div>
+      <ul id="splits"></ul>
+    </div>
   </div>
   <div id="ver" class="ver"></div>
 </aside>
 <main id="main">
   <header id="head">
     <div id="tabs" role="tablist"></div>
-    <div id="modes" class="seg" role="group" aria-label="Layout">
-      <button type="button" data-mode="single" title="One page (Ctrl+1)">1 page</button>
-      <button type="button" data-mode="cols" title="Two pages side by side (Ctrl+2)">2 pages</button>
-      <button type="button" data-mode="trio" title="Two pages over a full-width third (Ctrl+3)">3 pages</button>
+    <div id="views" class="seg" role="group" aria-label="View">
+      <button type="button" data-view="single" title="Show the focused page by itself (Ctrl+1)">Single</button>
+      <button type="button" data-view="slots" title="Show the pages in the Left, Right and Lower slots (Ctrl+2)">Slots</button>
     </div>
-    <button id="back" type="button" title="Show the split again" hidden>Back to split</button>
     <button id="save-split" type="button" title="Save this split" disabled>Save split</button>
     <button id="reload" type="button" title="Reload (Ctrl+R)" disabled>Reload</button>
   </header>

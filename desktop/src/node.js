@@ -5,6 +5,9 @@ const PAGES = [
   { id: 'talker', label: 'Node Talker', port: 8993, away: true },
   { id: 'sysmon', label: 'SysMon', port: 9999, away: false },
   { id: 'nodemon', label: 'Node Monitor', port: 7777, away: false },
+  { id: 'recorder', label: 'Node Recorder', port: 8995, away: false },
+  { id: 'wifimon', label: 'WifiMon', port: 8991, away: false },
+  { id: 'h44', label: '44helper', port: 9997, away: false, single: true },
 ];
 
 const HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$|^[0-9A-Fa-f:.]{2,45}$/;

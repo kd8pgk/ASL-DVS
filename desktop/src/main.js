@@ -142,40 +142,69 @@ function labelOf(tab) {
   return `${n ? n.name || n.host : '?'} · ${p ? p.label : '?'}`;
 }
 
+function shortLabel(key) {
+  const t = ls.tabs.find((x) => x.key === key);
+  if (!t) return '';
+  if (t.kind === 'lh') return 'Last Heard';
+  const p = PAGES.find((x) => x.id === t.pageId);
+  return p ? p.label : t.pageId;
+}
+
 function payload() {
   const g = gridNow();
   const r = L.rects(ls, g.area);
-  const vis = L.shown(ls);
+  const list = L.paneList(ls);
+  const vis = list.map((p) => p.key);
+  const pageOf = (t) => PAGES.find((x) => x.id === t.pageId);
   return {
     grid: { sidebar: g.sidebar, header: g.header, strip: g.strip },
-    mode: ls.mode,
+    view: ls.view,
     ratio: ls.ratio,
     focus: ls.focus,
-    counts: { cols: ls.tabs.length >= 2, trio: ls.tabs.length >= 3 },
+    canSplit: L.canSplit(ls),
     canBack: L.canBack(ls),
-    canSave: !PR.fromState(ls, 'x').error,
-    splits: splits.map((p) => ({ id: p.id, name: p.name, count: p.items.length })),
-    zones: L.dropZones(ls, g.area),
+    canSave: L.SLOTS.reduce((n, sl) => n + ls.slots[sl].length, 0) >= 2,
+    splits: splits.map((p) => ({ id: p.id, name: p.name, count: PR.count(p) })),
+    zones: L.dropZones(g.area),
     overlay,
+    slots: L.SLOTS.map((sl) => ({
+      slot: sl,
+      label: L.SLOT_LABEL[sl],
+      pages: ls.slots[sl].map((k) => ({ key: k, label: labelOf(ls.tabs.find((t) => t.key === k)), selected: ls.sel[sl] === k })),
+    })),
     tabs: ls.tabs.map((t) => {
       const e = rt.get(t.key);
+      const pg = pageOf(t);
       return {
         key: t.key,
         nodeId: t.nodeId,
         pageId: t.pageId,
         kind: t.kind || 'page',
         label: labelOf(t),
-        shown: vis.indexOf(t.key),
+        slot: L.slotOf(ls, t.key),
+        singleOnly: Boolean(pg && pg.single),
+        shown: vis.includes(t.key),
+        focused: vis.includes(t.key) && L.focusedKey(ls) === t.key,
         status: e ? e.status : 'idle',
         idle: e ? e.idle === true : true,
         via: e ? e.via : 'home',
       };
     }),
-    panes: r.panes.map((rect, i) => {
-      const key = vis[i];
-      const e = key ? rt.get(key) : null;
-      return { rect, view: L.viewRect(ls, rect), key, label: key ? labelOf(ls.tabs.find((t) => t.key === key)) : '', status: e ? e.status : key ? 'loading' : 'empty', error: e && e.status === 'failed' ? e.error : null };
+    panes: list.map((p, i) => {
+      const e = rt.get(p.key);
+      const rect = r.panes[i];
+      return {
+        slot: p.slot,
+        key: p.key,
+        rect,
+        view: L.viewRect(ls, rect),
+        label: labelOf(ls.tabs.find((t) => t.key === p.key)),
+        stack: p.slot ? ls.slots[p.slot].map((k) => ({ key: k, label: shortLabel(k), selected: k === p.key })) : [],
+        status: e ? e.status : 'loading',
+        error: e && e.status === 'failed' ? e.error : null,
+      };
     }),
+    strips: list.length >= 2,
     dividers: r.dividers,
   };
 }
@@ -239,7 +268,7 @@ function update(next) {
 }
 
 function focusView() {
-  const key = L.shown(ls)[ls.focus];
+  const key = L.focusedKey(ls);
   const e = key ? rt.get(key) : null;
   if (e && e.view && !e.view.webContents.isDestroyed() && e.status !== 'failed') e.view.webContents.focus();
 }
@@ -275,9 +304,11 @@ function closeRt(key) {
 function onKey(event, input) {
   if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
   const k = String(input.key).toLowerCase();
-  const key = L.shown(ls)[ls.focus];
-  if (k === '1' || k === '2' || k === '3') {
-    update(L.setMode(ls, L.MODES[Number(k) - 1]));
+  const key = L.focusedKey(ls);
+  if (k === '1') {
+    update(L.setView(ls, 'single'));
+  } else if (k === '2') {
+    update(L.setView(ls, 'slots'));
   } else if (k === 'w' && key) {
     closeTab(key);
   } else if (k === 'r' && key) {
@@ -324,9 +355,9 @@ async function ensureLastHeard(key, tab) {
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   wc.on('before-input-event', onKey);
   const focused = () => {
-    const i = L.shown(ls).indexOf(key);
-    if (i >= 0 && i !== ls.focus) {
-      ls = L.focusPane(ls, i);
+    const next = L.focusKey(ls, key);
+    if (next !== ls) {
+      ls = next;
       push();
       saveSoon();
     }
@@ -397,9 +428,9 @@ async function ensureView(key) {
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   wc.on('before-input-event', onKey);
   const focused = () => {
-    const i = L.shown(ls).indexOf(key);
-    if (i >= 0 && i !== ls.focus) {
-      ls = L.focusPane(ls, i);
+    const next = L.focusKey(ls, key);
+    if (next !== ls) {
+      ls = next;
       push();
       saveSoon();
     }
@@ -507,7 +538,7 @@ function register() {
     for (const t of ls.tabs) if (t.nodeId === id) closeRt(t.key);
     ls = L.closeNode(ls, id);
     nodes = nodes.filter((n) => n.id !== id);
-    splits = splits.filter((p) => !p.items.some((it) => it.nodeId === id));
+    splits = splits.filter((p) => !L.SLOTS.some((sl) => p.slots[sl].some((it) => it.nodeId === id)));
     presetStore.save(splits);
     router.forget(id);
     persist();
@@ -578,10 +609,10 @@ function register() {
     return null;
   };
   ipcMain.handle('tabs:drop', (e, arg) => {
-    if (!fromShell(e) || !arg || !str(arg.zone)) return { ok: false };
+    if (!fromShell(e) || !arg || !str(arg.slot)) return { ok: false };
     const key = resolveKey(arg);
     if (!key) return { ok: false };
-    update(L.dropKey(ls, key, arg.zone));
+    update(L.putInSlot(ls, key, arg.slot));
     focusView();
     return { ok: true };
   });
@@ -601,13 +632,17 @@ function register() {
     focusView();
     return { ok: true };
   });
-  ipcMain.handle('tabs:remove-pane', (e, i) => {
-    if (fromShell(e)) update(L.removePane(ls, i));
+  ipcMain.handle('tabs:unslot', (e, arg) => {
+    if (!fromShell(e)) return { ok: false };
+    const key = resolveKey(arg);
+    if (!key) return { ok: false };
+    update(L.unslot(ls, key));
+    focusView();
     return { ok: true };
   });
-  ipcMain.handle('tabs:back', (e) => {
-    if (fromShell(e)) {
-      update(L.backToSplit(ls));
+  ipcMain.handle('tabs:view', (e, view) => {
+    if (fromShell(e) && str(view)) {
+      update(L.setView(ls, view));
       focusView();
     }
     return { ok: true };
@@ -640,17 +675,13 @@ function register() {
     push();
     return { ok: true };
   });
-  ipcMain.handle('tabs:mode', (e, mode) => {
-    if (fromShell(e) && str(mode)) update(L.setMode(ls, mode));
-    return { ok: true };
-  });
   ipcMain.handle('tabs:ratio', (e, ratio) => {
     if (fromShell(e)) update(L.setRatio(ls, ratio));
     return { ok: true };
   });
-  ipcMain.handle('tabs:focus', (e, i) => {
-    if (fromShell(e)) {
-      update(L.focusPane(ls, i));
+  ipcMain.handle('tabs:focus', (e, slot) => {
+    if (fromShell(e) && str(slot)) {
+      update(L.focusSlot(ls, slot));
       focusView();
     }
     return { ok: true };
