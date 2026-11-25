@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.12.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.12.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.12.1 (2026-11-25)
+
+Running without the sandbox is written to the log.
+
+- **Warning in diagnostics.log.** The AppImage's start script (from electron-builder) adds `--no-sandbox` by itself when the system does not allow unprivileged user namespaces (some Ubuntu setups; Debian and its derivatives allow them, so the sandbox stays on there). The app still starts in that case, as chosen, and now writes a WARNING line to diagnostics.log each time, saying the pages are less isolated from the computer than they should be. Starting it with `--no-sandbox` by hand does the same.
+- **Tests.** Spotting the flag as a unit test, and in the real window the warning reaching diagnostics.log (the test run uses `--no-sandbox`).
 
 ## 0.12.0 (2026-11-25)
 

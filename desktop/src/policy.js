@@ -58,6 +58,10 @@ function unsafeSwitches(argv) {
   return found;
 }
 
+function sandboxOff(argv) {
+  return argv.some((a) => /^--?no-sandbox$/i.test(String(a)));
+}
+
 function originHost(origin) {
   try {
     return new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -157,6 +161,7 @@ function hostsOfNode(node) {
 }
 
 module.exports = {
+  sandboxOff,
   ALLOWED_PERMISSIONS,
   DISABLED_FEATURES,
   SWITCHES,

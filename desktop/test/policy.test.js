@@ -190,3 +190,11 @@ test('the stylesheet lets the hidden attribute win, so a row that should be hidd
   const css = fs.readFileSync(path.join(__dirname, '..', 'ui', 'style.css'), 'utf8');
   assert.ok(css.includes('[hidden] { display: none !important; }'));
 });
+
+test('running without the sandbox is noticed, so it can be written to the log', () => {
+  assert.equal(P.sandboxOff(['--no-sandbox']), true);
+  assert.equal(P.sandboxOff(['/app', '--disable-gpu', '-no-sandbox']), true);
+  assert.equal(P.sandboxOff(['--disable-gpu']), false);
+  assert.equal(P.sandboxOff(['--no-sandboxes']), false);
+  assert.equal(P.sandboxOff([]), false);
+});

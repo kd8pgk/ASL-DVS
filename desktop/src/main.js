@@ -1020,6 +1020,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 app.whenReady().then(() => {
   if (crashedLast) logLine('the last run did not exit cleanly: the open pages were not restored');
+  if (P.sandboxOff(process.argv.slice(1)) || app.commandLine.hasSwitch('no-sandbox')) {
+    logLine('WARNING: running without the Chromium sandbox (--no-sandbox). The AppImage turns it off by itself when this system does not allow unprivileged user namespaces; the pages are less isolated from this computer than they should be.');
+  }
   Menu.setApplicationMenu(null);
   harden(session.defaultSession, 'shell');
   register();
