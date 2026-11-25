@@ -20,7 +20,7 @@
             android:id="@+id/back"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@null"
             android:src="@android:drawable/ic_media_previous"
             android:tint="@color/text" />
@@ -29,7 +29,7 @@
             android:id="@+id/forward"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@null"
             android:src="@android:drawable/ic_media_next"
             android:tint="@color/text" />
@@ -38,7 +38,7 @@
             android:id="@+id/reload"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@null"
             android:src="@android:drawable/ic_popup_sync"
             android:tint="@color/text" />
@@ -63,7 +63,7 @@
             android:id="@+id/home"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@null"
             android:src="@android:drawable/ic_menu_close_clear_cancel"
             android:tint="@color/text" />
