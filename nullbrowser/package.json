@@ -1,7 +1,7 @@
 {
   "name": "null-browser",
   "productName": "Null Browser",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A private browser that keeps nothing: RAM-only session, no logs, no downloads",
   "private": true,
   "main": "src/main.js",

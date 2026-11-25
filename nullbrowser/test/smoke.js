@@ -81,6 +81,19 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'audio/mpeg' });
       return s.end(Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(64)]));
     }
+    if (q.url === '/big.mp4') {
+      s.writeHead(200, { 'Content-Type': 'video/mp4' });
+      s.write(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(52)]));
+      let sent = 0;
+      const more = () => {
+        if (sent >= 3 * 1024 * 1024 || s.destroyed) return s.end();
+        sent += 128 * 1024;
+        s.write(Buffer.alloc(128 * 1024));
+        setTimeout(more, 20);
+      };
+      s.on('error', () => {});
+      return more();
+    }
     if (q.url === '/popup-target') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>popup</title><p>popup</p>');
@@ -146,7 +159,7 @@ async function main() {
   await warm.close();
   await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the warm-up RAM folder is removed');
   const homeBefore = snapshot(realHome);
-  const app = await launch();
+  const app = await launch([], { NULLBROWSER_MAX_BYTES: String(1024 * 1024) });
   await waitFor(() => app.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the toolbar window');
   const win = app.windows().find((w) => w.url().endsWith('/ui/index.html'));
   await win.waitForLoadState('domcontentloaded');
@@ -251,6 +264,13 @@ async function main() {
   assert.match(await win.textContent('#ask-text'), /talk\.mp3 \(audio(, [^)]*)?\) in your music player/);
   await win.click('#ask-open');
   await waitFor(() => fs.readFileSync(openLog, 'utf8').trim().split('\n').length === 2, 'the audio file is handed on');
+  await go(`http://127.0.0.1:${portA}/big.mp4`);
+  await win.waitForSelector('#ask:not([hidden])');
+  await win.click('#ask-open');
+  await win.waitForFunction(() => /big\.mp4 is too big to open from memory/.test(document.getElementById('notice').textContent));
+  await sleep(300);
+  assert.equal(fs.readFileSync(openLog, 'utf8').trim().split('\n').length, 2, 'a file that grows past the cap with no size given is not opened');
+  assert.equal(ramFiles().some((n) => n.endsWith('big.mp4')), false, 'and is not kept');
 
   await go(`http://127.0.0.1:${portA}/`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'page one again');
