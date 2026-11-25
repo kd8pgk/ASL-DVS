@@ -19,4 +19,17 @@
     <string name="not_really">%1$s is not really %2$s, so it was not opened.</string>
     <string name="no_app">No app on this phone could open %1$s.</string>
     <string name="popups_off">Pop-ups are refused in Null Browser.</string>
+    <string name="line">Line</string>
+    <string name="line_slow">Slow</string>
+    <string name="slow_auto">Slow: Auto</string>
+    <string name="slow_on">Slow: On</string>
+    <string name="slow_off">Slow: Off</string>
+    <string name="images_on">Images: On</string>
+    <string name="images_off">Images: Off</string>
+    <string name="save_data_on">Save-Data: On</string>
+    <string name="save_data_off">Save-Data: Off</string>
+    <string name="read_ahead_on">Read ahead: On</string>
+    <string name="read_ahead_off">Read ahead: Off</string>
+    <string name="close">Close</string>
+    <string name="stop_images">Stop images</string>
 </resources>

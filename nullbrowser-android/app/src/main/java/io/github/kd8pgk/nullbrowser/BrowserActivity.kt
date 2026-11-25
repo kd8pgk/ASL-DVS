@@ -24,6 +24,7 @@ import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -78,6 +79,15 @@ class BrowserActivity : Activity() {
     private var customCallback: WebChromeClient.CustomViewCallback? = null
     private var backCallback: Any? = null
     private var rendererGone = false
+    private lateinit var line: SlowLine
+    private lateinit var lineBtn: Button
+    private lateinit var lineRow: View
+    private lateinit var lineStatus: View
+    private lateinit var lineText: TextView
+    private lateinit var lineMode: Button
+    private lateinit var lineImages: Button
+    private lateinit var lineSave: Button
+    private lateinit var lineAhead: Button
 
     private class Pending(
         val kind: Kind,
@@ -106,6 +116,14 @@ class BrowserActivity : Activity() {
         errorBody = findViewById(R.id.errorBody)
         errorMain = findViewById(R.id.errorMain)
         errorRetry = findViewById(R.id.errorRetry)
+        lineBtn = findViewById(R.id.lineBtn)
+        lineRow = findViewById(R.id.lineRow)
+        lineStatus = findViewById(R.id.lineStatus)
+        lineText = findViewById(R.id.lineText)
+        lineMode = findViewById(R.id.lineMode)
+        lineImages = findViewById(R.id.lineImages)
+        lineSave = findViewById(R.id.lineSave)
+        lineAhead = findViewById(R.id.lineAhead)
 
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
 
@@ -119,6 +137,7 @@ class BrowserActivity : Activity() {
         web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         web.settings.setSupportMultipleWindows(true)
         web.settings.javaScriptCanOpenWindowsAutomatically = false
+        line = SlowLine(web) { renderLine() }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -127,20 +146,32 @@ class BrowserActivity : Activity() {
                 if (url.scheme != "http" && url.scheme != "https") return true
                 val up = upgradeIfNeeded(url)
                 if (up != null) {
-                    view.loadUrl(up)
+                    view.loadUrl(up, extraHeaders())
+                    return true
+                }
+                if (line.saveData && request.method == "GET" && !request.isRedirect) {
+                    view.loadUrl(url.toString(), extraHeaders())
                     return true
                 }
                 return false
+            }
+
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = line.intercept(request)
+
+            override fun onPageCommitVisible(view: WebView, url: String) {
+                line.pageVisible()
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 loadingHost = Uri.parse(url).host
                 hideError()
                 view.evaluateJavascript(NoClip.JS, null)
+                line.pageStarted(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 view.evaluateJavascript(NoClip.JS, null)
+                line.pageFinished()
                 refreshUi()
             }
 
@@ -252,6 +283,22 @@ class BrowserActivity : Activity() {
         findViewById<ImageButton>(R.id.reload).setOnClickListener { web.reload() }
         findViewById<ImageButton>(R.id.home).setOnClickListener { goBlank() }
         errorRetry.setOnClickListener { lastMainError?.let { navigate(it) } ?: web.reload() }
+        lineBtn.setOnClickListener {
+            lineRow.visibility = if (lineRow.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+        findViewById<Button>(R.id.lineClose).setOnClickListener { lineRow.visibility = View.GONE }
+        lineMode.setOnClickListener {
+            line.setMode(when (line.mode) {
+                SlowMode.AUTO -> SlowMode.ON
+                SlowMode.ON -> SlowMode.OFF
+                SlowMode.OFF -> SlowMode.AUTO
+            })
+        }
+        lineImages.setOnClickListener { line.setImages(!line.images) }
+        lineSave.setOnClickListener { line.setSaveData(!line.saveData) }
+        lineAhead.setOnClickListener { line.setReadAhead(!line.readAhead) }
+        findViewById<Button>(R.id.lineStop).setOnClickListener { line.stop() }
+        renderLine()
 
         addr.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO || (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
@@ -280,7 +327,26 @@ class BrowserActivity : Activity() {
         hideError()
         blank.visibility = View.GONE
         web.visibility = View.VISIBLE
-        web.loadUrl(upgradeIfNeeded(uri) ?: target)
+        web.loadUrl(upgradeIfNeeded(uri) ?: target, extraHeaders())
+    }
+
+    private fun extraHeaders(): Map<String, String> = if (line.saveData) mapOf("Save-Data" to "on") else emptyMap()
+
+    private fun renderLine() {
+        if (isDestroyed) return
+        lineBtn.text = getString(if (line.active()) R.string.line_slow else R.string.line)
+        lineMode.text = getString(when (line.mode) {
+            SlowMode.AUTO -> R.string.slow_auto
+            SlowMode.ON -> R.string.slow_on
+            SlowMode.OFF -> R.string.slow_off
+        })
+        lineImages.text = getString(if (line.images) R.string.images_on else R.string.images_off)
+        lineSave.text = getString(if (line.saveData) R.string.save_data_on else R.string.save_data_off)
+        lineAhead.text = getString(if (line.readAhead) R.string.read_ahead_on else R.string.read_ahead_off)
+        val text = line.status()
+        lineText.text = text
+        lineStatus.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        findViewById<Button>(R.id.lineStop).visibility = if (line.busy()) View.VISIBLE else View.GONE
     }
 
     private fun exitFullscreen() {
@@ -362,55 +428,96 @@ class BrowserActivity : Activity() {
     private fun fetchDownload(rec: Pending): File? {
         var url = URL(rec.url)
         var hops = 0
+        val out = File(downloadsDir(cacheDir), "${System.currentTimeMillis()}-${rec.name}")
+        var got = 0L
+        var expected = -1L
+        var validator = ""
+        var tries = 0
         while (true) {
             val c = try {
                 url.openConnection() as HttpURLConnection
             } catch (e: Exception) {
+                out.delete()
                 return null
             }
             try {
                 c.instanceFollowRedirects = false
                 c.setRequestProperty("User-Agent", rec.userAgent)
                 if (hops == 0) rec.cookie?.let { c.setRequestProperty("Cookie", it) }
+                if (line.saveData) c.setRequestProperty("Save-Data", "on")
+                if (got > 0) {
+                    c.setRequestProperty("Range", "bytes=$got-")
+                    if (validator.isNotEmpty()) c.setRequestProperty("If-Range", validator)
+                }
                 c.connectTimeout = 15000
-                c.readTimeout = 15000
+                c.readTimeout = 30000
                 val code = c.responseCode
                 if (code in 300..399) {
-                    val loc = c.getHeaderField("Location") ?: return null
+                    val loc = c.getHeaderField("Location") ?: return null.also { out.delete() }
                     val next = URL(url, loc)
-                    if (next.protocol != "https" && next.protocol != "http") return null
-                    if (url.protocol == "https" && next.protocol == "http") return null
+                    if (next.protocol != "https" && next.protocol != "http") return null.also { out.delete() }
+                    if (url.protocol == "https" && next.protocol == "http") return null.also { out.delete() }
                     hops += 1
-                    if (hops > MAX_REDIRECTS) return null
+                    if (hops > MAX_REDIRECTS) return null.also { out.delete() }
                     url = next
                     continue
                 }
-                if (code !in 200..299) return null
-                if (c.contentLengthLong > MAX_BYTES) return null
-                val out = File(downloadsDir(cacheDir), "${System.currentTimeMillis()}-${rec.name}")
-                var total = 0L
-                var tooBig = false
+                val append: Boolean
+                if (code == 206 && got > 0) {
+                    val r = Slow.parseContentRange(c.getHeaderField("Content-Range"))
+                    if (r == null || r.start != got) {
+                        got = 0
+                        validator = ""
+                        throw java.io.IOException("range mismatch")
+                    }
+                    if (r.total > 0) expected = r.total
+                    append = true
+                } else if (code in 200..299) {
+                    got = 0
+                    expected = c.contentLengthLong
+                    append = false
+                } else if (code >= 500 || code == 408 || code == 429) {
+                    throw java.io.IOException("server busy")
+                } else {
+                    out.delete()
+                    return null
+                }
+                if (expected > MAX_BYTES) {
+                    out.delete()
+                    return null
+                }
+                validator = c.getHeaderField("ETag") ?: c.getHeaderField("Last-Modified") ?: validator
                 c.inputStream.use { input ->
-                    FileOutputStream(out).use { output ->
+                    FileOutputStream(out, append).use { output ->
                         val buf = ByteArray(64 * 1024)
                         while (true) {
                             val n = input.read(buf)
                             if (n < 0) break
-                            total += n
-                            if (total > MAX_BYTES) {
-                                tooBig = true
-                                break
+                            if (got + n > MAX_BYTES) {
+                                out.delete()
+                                return null
                             }
                             output.write(buf, 0, n)
+                            got += n
                         }
                     }
                 }
-                if (tooBig) {
+                if (expected > 0 && got < expected) throw java.io.IOException("short body")
+                return out
+            } catch (e: java.io.IOException) {
+                tries += 1
+                if (tries > Slow.RETRIES) {
                     out.delete()
                     return null
                 }
-                return out
+                try {
+                    Thread.sleep(Slow.backoffMs(tries))
+                } catch (_: InterruptedException) {
+                    out.delete()
+                    return null
+                }
             } catch (e: Exception) {
+                out.delete()
                 return null
             } finally {
                 c.disconnect()
@@ -538,6 +645,7 @@ class BrowserActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (::line.isInitialized) line.shutdown()
         if (::web.isInitialized) {
             if (!rendererGone) {
                 web.stopLoading()

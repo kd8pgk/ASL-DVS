@@ -394,6 +394,12 @@
     script injected on page start and finish, and anything that still lands
     on the clipboard while the app is in front is cleared. A keyboard app's
     own clipboard history cannot be told apart from typing.
+  - Slow line (0.4.0, `Slow.kt`, `SlowLine.kt`): the same **Line** row as
+    the desktop build. In slow mode `blockNetworkImage` holds the page's
+    pictures; the app fetches them itself in viewing order (layout read with
+    `evaluateJavascript`), with range resume, and puts each in place as a
+    `data:` image; the block lifts when the queue is done. Fonts, prefetch and
+    pings are answered empty from `shouldInterceptRequest`.
   - https tried first; a certificate error is refused outright, with no
     trust-for-session yet. No downloads except a PDF, audio or video file,
     content-sniffed against its first bytes the same way the desktop build
