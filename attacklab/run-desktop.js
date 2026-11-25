@@ -22,7 +22,7 @@ async function waitFor(fn, ms) {
   for (;;) {
     let ok = false;
     try {
-      ok = await fn();
+      ok = await Promise.race([fn(), sleep(3000).then(() => false)]);
     } catch {
       ok = false;
     }
