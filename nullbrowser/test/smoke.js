@@ -101,17 +101,18 @@ async function main() {
   const realHome = path.join(tmp, 'home');
   fs.mkdirSync(ramBase);
   fs.mkdirSync(realHome);
-  try {
-    execFileSync('fc-cache', [], { stdio: 'ignore', env: { ...process.env, HOME: realHome, XDG_CACHE_HOME: path.join(realHome, '.cache') } });
-  } catch {
-    process.stderr.write('note: fc-cache not available; the font index is not prepared\n');
-  }
-  const homeBefore = snapshot(realHome);
-  const app = await _electron.launch({
+  const launch = () => _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1'],
     env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache') },
   });
+  const warm = await launch();
+  await waitFor(() => warm.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the warm-up window');
+  await sleep(1500);
+  await warm.close();
+  await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the warm-up RAM folder is removed');
+  const homeBefore = snapshot(realHome);
+  const app = await launch();
   await waitFor(() => app.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the toolbar window');
   const win = app.windows().find((w) => w.url().endsWith('/ui/index.html'));
   await win.waitForLoadState('domcontentloaded');
