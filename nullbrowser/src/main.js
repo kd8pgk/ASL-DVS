@@ -18,7 +18,7 @@ if (app.isPackaged) {
 }
 
 const base = R.ramBase(app.isPackaged ? '' : process.env.NULLBROWSER_RAM_BASE || '');
-R.cleanStale(base.dir);
+R.rammaidSweep(base.dir);
 const preDir = R.prelaunchDir(process.env.NULLBROWSER_PRELAUNCH_DIR);
 const ram = preDir ? R.adoptRamDir(preDir) : R.createRamDir(base.dir);
 
@@ -50,8 +50,8 @@ app.disableHardwareAcceleration();
 const TOOLBAR = 44;
 const BAR = 34;
 const GESTURE_MS = 1000;
-const SINK_MS = 3000;
-const MAX_SINKS = 3;
+const LITTERBUG_MS = 3000;
+const MAX_LITTERBUGS = 3;
 
 let win = null;
 let view = null;
@@ -64,7 +64,7 @@ const allowHttp = new Set();
 const upgraded = new Set();
 const trusted = new Set();
 const allowedSites = new Set();
-const sinkIds = new Set();
+const litterbugIds = new Set();
 let blockedSite = '';
 let nextPopup = '';
 let pendingFile = null;
@@ -75,11 +75,11 @@ let pendingJs = null;
 
 let cleanerStarted = false;
 
-function cleanup() {
-  R.removeRamDir(ram.dir);
+function rammaid() {
+  R.rammaidRemove(ram.dir);
   if (!cleanerStarted) {
     cleanerStarted = true;
-    R.removeAfterExit(ram.dir);
+    R.rammaidAfterExit(ram.dir);
   }
 }
 
@@ -153,6 +153,10 @@ function topUrlOf(details) {
     return pageUrl();
   }
   return pageUrl();
+}
+
+function litterbugRequest(details) {
+  return litterbugIds.has(details.webContentsId);
 }
 
 function thirdParty(details) {
@@ -286,7 +290,7 @@ function hardenPage(s) {
   s.setUserAgent(P.chromiumUserAgent(s.getUserAgent()));
   s.on('will-download', onDownload);
   s.webRequest.onBeforeRequest((details, callback) => {
-    if (sinkIds.has(details.webContentsId)) return callback({ cancel: true });
+    if (litterbugRequest(details)) return callback({ cancel: true });
     if (details.url !== 'about:blank' && !P.allowSubresource(details.url)) return callback({ cancel: true });
     if (details.resourceType === 'mainFrame') {
       const up = P.httpsUpgrade(details.url, allowHttp);
@@ -416,19 +420,19 @@ function createView() {
       blockedSite = site;
       setImmediate(push);
     }
-    if (sinkIds.size >= MAX_SINKS) return { action: 'deny' };
-    nextPopup = 'sink';
-    return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: SINK_OPTIONS };
+    if (litterbugIds.size >= MAX_LITTERBUGS) return { action: 'deny' };
+    nextPopup = 'litterbug';
+    return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: LITTERBUG_OPTIONS };
   });
   wc.on('did-create-window', (child) => {
     const kind = nextPopup;
     nextPopup = '';
-    if (kind === 'sink') sinkPopup(child);
+    if (kind === 'litterbug') litterbugSink(child);
     else if (kind === 'real') realPopup(child);
     else child.destroy();
   });
   wc.on('did-navigate', (ev, url) => {
-    closeSinks();
+    litterbugClose();
     const site = P.siteOf(P.hostOf(url));
     if (blockedSite && blockedSite !== site) blockedSite = '';
   });
@@ -476,7 +480,7 @@ const POPUP_PREFS = {
   navigateOnDragDrop: false,
 };
 
-const SINK_OPTIONS = {
+const LITTERBUG_OPTIONS = {
   show: false,
   width: 1,
   height: 1,
@@ -500,21 +504,21 @@ function realPopupOptions(features) {
   };
 }
 
-function closeSinks() {
+function litterbugClose() {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (sinkIds.has(w.webContents.id)) w.destroy();
+    if (litterbugIds.has(w.webContents.id)) w.destroy();
   }
 }
 
-function sinkPopup(child) {
+function litterbugSink(child) {
   const id = child.webContents.id;
-  sinkIds.add(id);
+  litterbugIds.add(id);
   child.webContents.setAudioMuted(true);
   child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  child.on('closed', () => sinkIds.delete(id));
+  child.on('closed', () => litterbugIds.delete(id));
   setTimeout(() => {
     if (!child.isDestroyed()) child.destroy();
-  }, SINK_MS).unref();
+  }, LITTERBUG_MS).unref();
 }
 
 function realPopup(child) {
@@ -725,7 +729,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 const primary = app.requestSingleInstanceLock();
 if (!primary) {
-  cleanup();
+  rammaid();
   app.exit(0);
 }
 
@@ -755,5 +759,5 @@ app.on('will-quit', () => {
   }
 });
 
-app.on('quit', cleanup);
-process.on('exit', cleanup);
+app.on('quit', rammaid);
+process.on('exit', rammaid);

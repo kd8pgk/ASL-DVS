@@ -311,6 +311,16 @@
   folder the launcher made is removed on quit like any other. The icon is
   `nullbrowser/build/icon.png` (512 px) and `nullbrowser/ui/icon.png`
   (256 px). Not on the stable/testing channels, like the desktop app.
+- **Naming: litterbug and rammaid.** A function whose job is to take
+  something in and let nothing come back out of it (a pop-up window that
+  fetches nothing and is destroyed, a request cancelled with no response) is
+  named `litterbug*` (`litterbugSink`, `litterbugClose`,
+  `litterbugRequest`, `litterbugIds`, `LITTERBUG_MS`, `MAX_LITTERBUGS`,
+  `LITTERBUG_OPTIONS`). A function whose job is to remove files from the RAM
+  folder is named `rammaid*` (`rammaidRemove`, `rammaidSweep`,
+  `rammaidAfterExit`, and the top-level `rammaid()` that runs them at quit).
+  Keep using these names for anything new of the same kind, in `nullbrowser/`
+  only; nothing in `desktop/` is renamed.
 
 ## Workflow
 
