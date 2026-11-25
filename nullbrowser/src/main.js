@@ -177,7 +177,7 @@ function purgeIfSiteChanged(nextUrl) {
   ses.clearCache().catch(() => {});
 }
 
-function removeFile(file) {
+function rammaidFile(file) {
   try {
     fs.rmSync(file, { force: true });
   } catch {
@@ -207,7 +207,7 @@ function checkAndOpen(rec) {
     head = Buffer.alloc(0);
   }
   if (!F.contentMatches(rec.kind, head)) {
-    removeFile(rec.file);
+    rammaidFile(rec.file);
     say(`${rec.name} is not really ${rec.kind === 'pdf' ? 'a PDF' : rec.kind}, so it was not opened.`);
     return;
   }
@@ -223,7 +223,7 @@ function endFile(rec) {
 function finishFile(rec, st) {
   rec.done = st;
   if (st !== 'completed') {
-    removeFile(rec.file);
+    rammaidFile(rec.file);
     if (rec.answer === true) say(`${rec.name} could not be fetched.`);
     endFile(rec);
     return;
@@ -231,7 +231,7 @@ function finishFile(rec, st) {
   if (rec.answer === undefined) return;
   endFile(rec);
   if (rec.answer === true) checkAndOpen(rec);
-  else removeFile(rec.file);
+  else rammaidFile(rec.file);
 }
 
 function answerFile(rec, open) {
@@ -239,7 +239,7 @@ function answerFile(rec, open) {
   if (rec.done === 'completed') {
     endFile(rec);
     if (rec.answer) checkAndOpen(rec);
-    else removeFile(rec.file);
+    else rammaidFile(rec.file);
     return;
   }
   if (rec.done) {

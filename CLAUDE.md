@@ -318,7 +318,8 @@
   `litterbugRequest`, `litterbugIds`, `LITTERBUG_MS`, `MAX_LITTERBUGS`,
   `LITTERBUG_OPTIONS`). A function whose job is to remove files from the RAM
   folder is named `rammaid*` (`rammaidRemove`, `rammaidSweep`,
-  `rammaidAfterExit`, and the top-level `rammaid()` that runs them at quit).
+  `rammaidAfterExit`, `rammaidFile` for one downloaded file, and the
+  top-level `rammaid()` that runs them at quit).
   Keep using these names for anything new of the same kind, in `nullbrowser/`
   only; nothing in `desktop/` is renamed.
 
