@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('nb', {
   fileAnswer: (id, open) => ipcRenderer.invoke('file-answer', id, open),
   allowSite: () => ipcRenderer.invoke('allow-site'),
   dismissPopup: () => ipcRenderer.invoke('dismiss-popup'),
+  importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
+  removeBookmark: (id) => ipcRenderer.invoke('remove-bookmark', id),
   onState: (cb) => ipcRenderer.on('state', (e, s) => cb(s)),
   onFocusAddress: (cb) => ipcRenderer.on('focus-address', () => cb()),
 });

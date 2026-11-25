@@ -273,8 +273,13 @@
 - **Run before pushing:** `npm test` and `xvfb-run -a npm run smoke` in
   `nullbrowser/`, plus `python3 ci/check_repo.py --base origin/main`. The
   `nullbrowser` workflow runs them on every change.
-- **Planned:** 0.3.0 bookmark
-  import kept in RAM; 0.4.0 a per-run "Faster JavaScript" switch; 0.5.0 the
+- **Bookmarks.** A star button opens a panel of bookmarks, with **Import…**
+  for a bookmarks export (the `.html` file Chrome, Firefox, Edge and Safari
+  write, in the Netscape bookmark format). Only `http://` and `https://`
+  links are read in; everything else in the file is skipped. The imported
+  list lives only in memory, capped at 500, and is gone once Null Browser
+  closes; nothing is written to disk.
+- **Planned:** 0.4.0 a per-run "Faster JavaScript" switch; 0.5.0 the
   packaged AppImage, launcher and icon.
 
 ## Workflow

@@ -1,6 +1,15 @@
 # Null Browser changelog
 
-Current version: `0.2.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.3.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.3.0 (2026-11-25)
+
+Bookmark import, kept only until you close the browser.
+
+- **A star button on the toolbar** opens a panel of bookmarks. **Import…** opens a file picker for a bookmarks export (the `.html` file Chrome, Firefox, Edge and Safari all write in the same Netscape bookmark format); every `http://` and `https://` link in it is read in, with its title. Anything else in the file (a folder name, a `javascript:` or `ftp://` link) is skipped. Clicking a bookmark opens it and closes the panel; the ✕ by each one removes it.
+- **Nothing is written to disk.** The file you pick is read once and never kept; the bookmarks themselves live only in the running browser's memory, capped at 500, and are gone the moment Null Browser closes — there is no file, setting or database to import them a second time from.
+- **Fixed while testing:** a pop-up test reached into the running browser by always taking the first top-level window, which is only ever right when no pop-up (blocked or real) is open at that moment; three spots now find the actual shell window instead. The flakiness this caused was already there in 0.2.0's own pop-up tests; it surfaced here because the bookmark test runs right after them.
+- **Tests.** The bookmark-file parser (folders, duplicate and non-http(s) links, HTML-escaped titles, a file-size cap, a bookmark-count cap) as unit tests; in a real window: importing a bookmarks file, importing the same file again, opening a bookmark, and removing one.
 
 ## 0.2.0 (2026-11-25)
 

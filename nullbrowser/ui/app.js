@@ -2,6 +2,39 @@
   const $ = (id) => document.getElementById(id);
   let editing = false;
   let askId = 0;
+  let bmOpen = false;
+
+  function renderBookmarks(list) {
+    const ul = $('bm-list');
+    ul.textContent = '';
+    for (const b of list) {
+      const li = document.createElement('li');
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'bm-link';
+      link.title = b.url;
+      link.textContent = b.title || b.url;
+      link.addEventListener('click', () => {
+        bmOpen = false;
+        show($('bm-panel'), false);
+        go(b.url);
+      });
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'bm-remove';
+      rm.setAttribute('aria-label', `Remove ${b.title || b.url}`);
+      rm.textContent = '✕';
+      rm.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        window.nb.removeBookmark(b.id);
+      });
+      li.appendChild(link);
+      li.appendChild(rm);
+      ul.appendChild(li);
+    }
+    show($('bm-empty'), list.length === 0);
+    $('bm').textContent = list.length ? `★ ${list.length}` : '☆';
+  }
 
   function show(el, on) {
     el.hidden = !on;
@@ -42,6 +75,7 @@
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
+    renderBookmarks(s.bookmarks || []);
     renderError(s.error);
   }
 
@@ -113,6 +147,18 @@
   $('ask-cancel').addEventListener('click', () => window.nb.fileAnswer(askId, false));
   $('pop-allow').addEventListener('click', () => window.nb.allowSite());
   $('pop-close').addEventListener('click', () => window.nb.dismissPopup());
+  $('bm').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    bmOpen = !bmOpen;
+    show($('bm-panel'), bmOpen);
+  });
+  $('bm-import').addEventListener('click', () => window.nb.importBookmarks());
+  document.addEventListener('click', (ev) => {
+    if (bmOpen && ev.target !== $('bm') && !$('bm-panel').contains(ev.target)) {
+      bmOpen = false;
+      show($('bm-panel'), false);
+    }
+  });
   window.nb.onState(render);
   window.nb.onFocusAddress(() => $('addr').focus());
   window.nb.state().then(render);
