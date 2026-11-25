@@ -1,6 +1,18 @@
 # Node Controller Desktop changelog
 
-Current version: `0.12.1`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.12.2`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.12.2 (2026-11-25)
+
+The main process is split into smaller parts. No change in what the app does.
+
+- **main.js 1,052 to 629 lines.** It now holds the window, the page views and the start and quit handling. The rest moved out:
+  - `payload.js`: what the sidebar is told (pages, slots, panes, labels). A plain function of the app's state, now with its own tests.
+  - `sessions.js`: the per-node and Last Heard sessions and their lockdown handlers (permissions, which addresses a page may request).
+  - `ipc.js`: every request the sidebar can make (nodes, pages, slots, saved splits, certificates, the launcher, restart).
+  - `launcher.js`: also where the launcher finds the AppImage, the home folder and the desktop folder.
+- **One shared state.** The layout, the nodes, the saved splits, the window and the overlay flag live in one object the parts share, instead of loose variables.
+- **Tests.** New unit tests for the sidebar payload (labels, one page, three slots, errors and flags) and the launcher's environment; every earlier test and the real-window tests pass unchanged.
 
 ## 0.12.1 (2026-11-25)
 

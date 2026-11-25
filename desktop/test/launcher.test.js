@@ -79,3 +79,18 @@ test('the desktop folder comes from user-dirs.dirs, like xdg-user-dir, without r
   assert.equal(LN.desktopDirFrom('/home/jim', 'XDG_DESKTOP_DIR="relative"\n'), '/home/jim/Desktop');
   assert.equal(LN.desktopDirFrom('/home/jim', ''), '/home/jim/Desktop');
 });
+
+test('the launcher environment: packaged uses APPIMAGE and the real home, tests use their own', () => {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'ncenv-'));
+  fs.mkdirSync(path.join(h, '.config'));
+  fs.writeFileSync(path.join(h, '.config', 'user-dirs.dirs'), 'XDG_DESKTOP_DIR="$HOME/Skrivbord"\n');
+  const real = LN.launcherEnv({ packaged: true, env: { APPIMAGE: '/a/x.AppImage', NODECONTROLLER_TEST_HOME: '/nope', NODECONTROLLER_TEST_APPIMAGE: '/nope' }, home: h });
+  assert.equal(real.runningAppImage(), '/a/x.AppImage');
+  assert.equal(real.homeDir(), h);
+  assert.equal(real.desktopDir(), path.join(h, 'Skrivbord'));
+  assert.equal(real.launcherPaths().shortcut, path.join(h, 'Skrivbord', 'nodecontroller.desktop'));
+  const dev = LN.launcherEnv({ packaged: false, env: { APPIMAGE: '/a/x.AppImage', NODECONTROLLER_TEST_HOME: h, NODECONTROLLER_TEST_APPIMAGE: '/t/y.AppImage' }, home: '/home/other' });
+  assert.equal(dev.runningAppImage(), '/t/y.AppImage');
+  assert.equal(dev.homeDir(), h);
+  assert.equal(LN.launcherEnv({ packaged: false, env: {}, home: h }).runningAppImage(), '');
+});

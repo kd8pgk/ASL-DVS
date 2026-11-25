@@ -1,20 +1,24 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog, screen } = require('electron');
-const { PAGES, MAX_PINS, flipDecision, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
+const { app, BrowserWindow, WebContentsView, Menu, session, shell, screen } = require('electron');
+const { PAGES, flipDecision, otherScheme, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
 const { createSessionMarker } = require('./session');
 const { createLog } = require('./diag');
 const LN = require('./launcher');
 const { certDecision, formatFingerprint, refusedKey, refusedKeyOfUrl } = require('./pin');
-const { createStore, exportText, importText } = require('./store');
+const { createStore } = require('./store');
 const L = require('./layout');
 const P = require('./policy');
 const PR = require('./presets');
+const { buildPayload } = require('./payload');
+const { createSessions } = require('./sessions');
+const { registerIpc } = require('./ipc');
 
-const CONNECTION_FIELDS = ['host', 'https', 'schemes', 'ports', 'pins', 'lanIp', 'awayHost', 'awayPort', 'awayHttps'];
+const S = { ls: null, nodes: [], splits: [], win: null, overlay: false };
+
 const FLIP_WINDOW_MS = 30000;
 
 app.setName('Node Controller');
@@ -39,8 +43,8 @@ const crashedLast = primary ? marker.begin().crashed : false;
 const store = createStore(path.join(userData, 'nodes.json'));
 const layoutFile = path.join(userData, 'layout.json');
 const presetStore = PR.createPresetStore(path.join(userData, 'splits.json'));
-let splits = presetStore.load();
-let nodes = store.load();
+S.splits = presetStore.load();
+S.nodes = store.load();
 const router = createRouter();
 const refused = new Map();
 const flips = new Map();
@@ -48,7 +52,7 @@ const confirmed = new Set();
 const rt = new Map();
 const probeMs = !app.isPackaged && Number(process.env.NODECONTROLLER_PROBE_MS) >= 100 ? Number(process.env.NODECONTROLLER_PROBE_MS) : undefined;
 const monitor = createMonitor({
-  getNodes: () => nodes,
+  getNodes: () => S.nodes,
   getPages: () => PAGES,
   onChange: () => push(),
   interval: probeMs,
@@ -63,21 +67,21 @@ function readJson(file) {
 }
 
 const INTERNAL = PAGES.filter((p) => !p.external);
-let ls = crashedLast ? L.emptyState() : L.restore(readJson(layoutFile), nodes, INTERNAL);
+S.ls = crashedLast ? L.emptyState() : L.restore(readJson(layoutFile), S.nodes, INTERNAL);
 if (crashedLast) {
   try {
     fs.unlinkSync(layoutFile);
   } catch {
-    ls = L.emptyState();
+    S.ls = L.emptyState();
   }
 }
-let startupNotice = crashedLast
+const startupNotice = crashedLast
   ? 'The app closed unexpectedly last time, so it started with no pages open. Your nodes, saved splits and trusted certificates are kept.'
   : '';
 
 function plainOrigins() {
   const out = new Set();
-  for (const n of nodes) {
+  for (const n of S.nodes) {
     for (const page of PAGES) {
       for (const t of [homeTarget(n, page), lanTarget(n, page), awayTarget(n, page)]) {
         if (t && !t.https) out.add(originOf(t));
@@ -101,87 +105,23 @@ function needsRestart() {
   return need;
 }
 
-const hardened = new WeakSet();
-const partitions = new Map();
-const LH_PARTITION = 'lasthard';
+const SES = createSessions({ session, getNodes: () => S.nodes, log: (t) => logLine(t) });
+const { nodeSession, lastHeardSession, harden, allNodeHosts } = SES;
 
-function nodeOfPartition(ses) {
-  const hit = [...partitions].find(([, v]) => v === ses);
-  return hit ? nodes.find((n) => n.id === hit[0]) : null;
-}
-
-function allNodeHosts() {
-  return nodes.flatMap((n) => P.hostsOfNode(n));
-}
-
-function nodeSession(node) {
-  const ses = session.fromPartition(`persist:node-${node.id}`);
-  partitions.set(node.id, ses);
-  harden(ses, 'node');
-  return ses;
-}
-
-function lastHeardSession() {
-  const ses = session.fromPartition(LH_PARTITION);
-  harden(ses, 'lh');
-  return ses;
-}
-
-const refusedSeen = new Set();
-
-function logRefused(kind, permission) {
-  const k = `${kind}:${permission}`;
-  if (refusedSeen.has(k)) return;
-  refusedSeen.add(k);
-  logLine(`permission refused: ${permission} (${kind} pages)`);
-}
-
-function harden(ses, kind) {
-  if (hardened.has(ses)) return;
-  hardened.add(ses);
-  const hostsFor = () => {
-    const n = kind === 'node' ? nodeOfPartition(ses) : null;
-    return n ? P.hostsOfNode(n) : [];
-  };
-  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const origin = (details && details.requestingUrl) || (wc && !wc.isDestroyed() ? wc.getURL() : '');
-    const media = permission === 'media' && details ? details.mediaTypes : undefined;
-    const ok = P.allowPermission(permission, origin, hostsFor(), media);
-    if (!ok) logRefused(kind, permission);
-    callback(ok);
-  });
-  ses.setPermissionCheckHandler((wc, permission, origin, details) => {
-    const media = permission === 'media' && details ? details.mediaType : undefined;
-    const ok = P.allowPermission(permission, origin, hostsFor(), media);
-    if (!ok) logRefused(kind, permission);
-    return ok;
-  });
-  ses.setDevicePermissionHandler(() => false);
-  ses.setSpellCheckerEnabled(false);
-  ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
-    let ok;
-    if (kind === 'node') ok = P.allowRequest(details.url, hostsFor());
-    else if (kind === 'lh') ok = P.allowLastHeardRequest(details.url, allNodeHosts());
-    else ok = P.allowShellRequest(details.url);
-    callback({ cancel: !ok });
-  });
-}
-
-let win = null;
-let overlay = false;
-let shellReady = false;
+S.win = null;
+S.overlay = false;
 let saveTimer = null;
 
 function alive() {
-  return win && !win.isDestroyed();
+  return S.win && !S.win.isDestroyed();
 }
 
 function fromShell(e) {
-  return alive() && e.sender === win.webContents;
+  return alive() && e.sender === S.win.webContents;
 }
 
 function gridNow() {
-  const [w, h] = win.getContentSize();
+  const [w, h] = S.win.getContentSize();
   return L.grid(w, h);
 }
 
@@ -196,95 +136,15 @@ function logLine(text) {
 }
 
 function emitNotice(text, bad) {
-  if (alive()) win.webContents.send('notice', { text, bad: Boolean(bad) });
-}
-
-function labelOf(tab) {
-  if (tab.kind === 'lh') return 'Last Heard';
-  const n = nodes.find((x) => x.id === tab.nodeId);
-  const p = PAGES.find((x) => x.id === tab.pageId);
-  return `${n ? n.name || n.host : '?'} · ${p ? p.label : '?'}`;
-}
-
-function shortLabel(key) {
-  const t = ls.tabs.find((x) => x.key === key);
-  if (!t) return '';
-  if (t.kind === 'lh') return 'Last Heard';
-  const p = PAGES.find((x) => x.id === t.pageId);
-  return p ? p.label : t.pageId;
+  if (alive()) S.win.webContents.send('notice', { text, bad: Boolean(bad) });
 }
 
 function payload() {
-  const g = gridNow();
-  const r = L.rects(ls, g.area);
-  const list = L.paneList(ls);
-  const vis = list.map((p) => p.key);
-  const pageOf = (t) => PAGES.find((x) => x.id === t.pageId);
-  const zoomOf = {};
-  list.forEach((p, i) => {
-    const v = L.viewRect(ls, r.panes[i]);
-    zoomOf[p.key] = L.zoomFor(ls, p.key, v.w, v.h);
-  });
-  return {
-    grid: { sidebar: g.sidebar, header: g.header, strip: g.strip },
-    view: ls.view,
-    ratio: ls.ratio,
-    focus: ls.focus,
-    down: monitor.snapshot().down,
-    canSplit: L.canSplit(ls),
-    canBack: L.canBack(ls),
-    canSave: L.SLOTS.reduce((n, sl) => n + ls.slots[sl].length, 0) >= 2,
-    splits: splits.map((p) => ({ id: p.id, name: p.name, count: PR.count(p) })),
-    zones: L.dropZones(g.area),
-    overlay,
-    restart: needsRestart(),
-    slots: L.SLOTS.map((sl) => ({
-      slot: sl,
-      label: L.SLOT_LABEL[sl],
-      pages: ls.slots[sl].map((k) => ({ key: k, label: labelOf(ls.tabs.find((t) => t.key === k)), selected: ls.sel[sl] === k })),
-    })),
-    tabs: ls.tabs.map((t) => {
-      const e = rt.get(t.key);
-      const pg = pageOf(t);
-      return {
-        key: t.key,
-        nodeId: t.nodeId,
-        pageId: t.pageId,
-        kind: t.kind || 'page',
-        label: labelOf(t),
-        slot: L.slotOf(ls, t.key),
-        singleOnly: Boolean(pg && pg.single),
-        shown: vis.includes(t.key),
-        zoom: zoomOf[t.key] === undefined ? 1 : zoomOf[t.key],
-        focused: vis.includes(t.key) && L.focusedKey(ls) === t.key,
-        status: e ? e.status : 'idle',
-        idle: e ? e.idle === true : true,
-        via: e ? e.via : 'home',
-      };
-    }),
-    panes: list.map((p, i) => {
-      const e = rt.get(p.key);
-      const rect = r.panes[i];
-      return {
-        slot: p.slot,
-        key: p.key,
-        rect,
-        view: L.viewRect(ls, rect),
-        label: labelOf(ls.tabs.find((t) => t.key === p.key)),
-        zoom: zoomOf[p.key],
-        zoomSet: ls.zooms[p.key] !== undefined,
-        stack: p.slot ? ls.slots[p.slot].map((k) => ({ key: k, label: shortLabel(k), selected: k === p.key })) : [],
-        status: e ? e.status : 'loading',
-        error: e && e.status === 'failed' ? e.error : null,
-      };
-    }),
-    strips: list.length >= 2,
-    dividers: r.dividers,
-  };
+  return buildPayload({ ls: S.ls, nodes: S.nodes, splits: S.splits, rt, grid: gridNow(), down: monitor.snapshot().down, overlay: S.overlay, restart: needsRestart() });
 }
 
 function push() {
-  if (alive()) win.webContents.send('layout', payload());
+  if (alive()) S.win.webContents.send('layout', payload());
 }
 
 function saveSoon() {
@@ -298,7 +158,7 @@ function saveNow() {
   try {
     fs.mkdirSync(userData, { recursive: true });
     const tmp = `${layoutFile}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(L.serialize(ls)));
+    fs.writeFileSync(tmp, JSON.stringify(L.serialize(S.ls)));
     fs.renameSync(tmp, layoutFile);
   } catch {
     return;
@@ -330,17 +190,17 @@ function applyScale(e, rect) {
 }
 
 function viewRectOf(key) {
-  const list = L.paneList(ls);
+  const list = L.paneList(S.ls);
   const i = list.findIndex((p) => p.key === key);
   if (i < 0) return { w: 0, h: 0 };
-  return L.viewRect(ls, L.rects(ls, area()).panes[i]);
+  return L.viewRect(S.ls, L.rects(S.ls, area()).panes[i]);
 }
 
 function zoomKey(key, op) {
-  if (!key || !ls.tabs.some((t) => t.key === key)) return;
+  if (!key || !S.ls.tabs.some((t) => t.key === key)) return;
   const v = viewRectOf(key);
-  if (op === 'fit') ls = L.fitZoom(ls, key);
-  else if (op === 'in' || op === 'out') ls = L.stepZoom(ls, key, op === 'in' ? 1 : -1, v.w, v.h);
+  if (op === 'fit') S.ls = L.fitZoom(S.ls, key);
+  else if (op === 'in' || op === 'out') S.ls = L.stepZoom(S.ls, key, op === 'in' ? 1 : -1, v.w, v.h);
   else return;
   sync();
 }
@@ -356,20 +216,20 @@ function setIdle(e, idle) {
 
 function sync() {
   if (!alive()) return;
-  const r = L.rects(ls, area());
-  const vis = L.shown(ls);
+  const r = L.rects(S.ls, area());
+  const vis = L.shown(S.ls);
   for (const key of vis) if (key) ensureView(key);
   for (const [key, e] of rt) {
     if (!e.view) continue;
     const i = vis.indexOf(key);
-    const tab = ls.tabs.find((t) => t.key === key);
+    const tab = S.ls.tabs.find((t) => t.key === key);
     setIdle(e, i < 0 && !(tab && P.neverIdle(tab.pageId)));
     if (i >= 0 && r.panes[i]) {
-      const p = L.viewRect(ls, r.panes[i]);
+      const p = L.viewRect(S.ls, r.panes[i]);
       e.view.setBounds({ x: p.x, y: p.y, width: p.w, height: p.h });
-      e.zoom = L.zoomFor(ls, key, p.w, p.h);
+      e.zoom = L.zoomFor(S.ls, key, p.w, p.h);
       applyScale(e, p);
-      e.view.setVisible(!overlay && e.status !== 'failed');
+      e.view.setVisible(!S.overlay && e.status !== 'failed');
     } else {
       e.view.setVisible(false);
     }
@@ -379,12 +239,12 @@ function sync() {
 }
 
 function update(next) {
-  ls = next;
+  S.ls = next;
   sync();
 }
 
 function focusView() {
-  const key = L.focusedKey(ls);
+  const key = L.focusedKey(S.ls);
   const e = key ? rt.get(key) : null;
   if (e && e.view && !e.view.webContents.isDestroyed() && e.status !== 'failed') e.view.webContents.focus();
 }
@@ -404,7 +264,7 @@ function externalOpen(url) {
 }
 
 async function openExternalPage(nodeId, pageId) {
-  const node = nodes.find((n) => n.id === nodeId);
+  const node = S.nodes.find((n) => n.id === nodeId);
   const page = PAGES.find((p) => p.id === pageId);
   if (!node || !page || !page.external) return false;
   const target = await router.pick(node, page);
@@ -414,13 +274,13 @@ async function openExternalPage(nodeId, pageId) {
 }
 
 function openLink(url) {
-  const m = matchPage(url, nodes);
+  const m = matchPage(url, S.nodes);
   const pg = m && PAGES.find((p) => p.id === m.pageId);
   if (!m || (pg && pg.external)) {
     externalOpen(url);
     return;
   }
-  update(L.openTab(ls, m.nodeId, m.pageId));
+  update(L.openTab(S.ls, m.nodeId, m.pageId));
   focusView();
 }
 
@@ -428,7 +288,7 @@ function closeRt(key) {
   const e = rt.get(key);
   rt.delete(key);
   if (e && e.view) {
-    if (alive()) win.contentView.removeChildView(e.view);
+    if (alive()) S.win.contentView.removeChildView(e.view);
     if (!e.view.webContents.isDestroyed()) e.view.webContents.close();
   }
 }
@@ -443,11 +303,11 @@ function onKey(event, input) {
 }
 
 function runKey(k, shift) {
-  const key = L.focusedKey(ls);
+  const key = L.focusedKey(S.ls);
   if (k === '1') {
-    update(L.setView(ls, 'single'));
+    update(L.setView(S.ls, 'single'));
   } else if (k === '2') {
-    update(L.setView(ls, 'slots'));
+    update(L.setView(S.ls, 'slots'));
   } else if (k === 'w' && key) {
     closeTab(key);
   } else if ((k === '=' || k === '+') && key) {
@@ -458,10 +318,10 @@ function runKey(k, shift) {
     zoomKey(key, 'fit');
   } else if (k === 'r' && key) {
     reloadTab(key);
-  } else if (k === 'tab' && ls.tabs.length > 1) {
-    const i = ls.tabs.findIndex((t) => t.key === key);
+  } else if (k === 'tab' && S.ls.tabs.length > 1) {
+    const i = S.ls.tabs.findIndex((t) => t.key === key);
     const step = shift ? -1 : 1;
-    update(L.openKey(ls, ls.tabs[(i + step + ls.tabs.length) % ls.tabs.length].key));
+    update(L.openKey(S.ls, S.ls.tabs[(i + step + S.ls.tabs.length) % S.ls.tabs.length].key));
     focusView();
   }
 }
@@ -471,8 +331,8 @@ function openLastHeard(nodeId, url) {
     emitNotice('That Last Heard address was refused: only web addresses on the public internet, or on one of your nodes, are opened here.', true);
     return;
   }
-  const had = ls.tabs.find((t) => t.key === L.LH_KEY);
-  ls = L.openLastHeard(ls, nodeId, url);
+  const had = S.ls.tabs.find((t) => t.key === L.LH_KEY);
+  S.ls = L.openLastHeard(S.ls, nodeId, url);
   if (had && had.url !== url) closeRt(L.LH_KEY);
   sync();
   focusView();
@@ -490,14 +350,14 @@ function makeView(key, e, ses, { via, nodeId, onOk }) {
     },
   });
   e.view = view;
-  win.contentView.addChildView(view);
+  S.win.contentView.addChildView(view);
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   wc.on('before-input-event', onKey);
   const focused = () => {
-    const next = L.focusKey(ls, key);
-    if (next !== ls) {
-      ls = next;
+    const next = L.focusKey(S.ls, key);
+    if (next !== S.ls) {
+      S.ls = next;
       push();
       saveSoon();
     }
@@ -554,12 +414,12 @@ async function ensureLastHeard(key, tab) {
 
 async function ensureView(key) {
   if (rt.has(key)) return;
-  const tab = ls.tabs.find((t) => t.key === key);
+  const tab = S.ls.tabs.find((t) => t.key === key);
   if (tab && tab.kind === 'lh') {
     await ensureLastHeard(key, tab);
     return;
   }
-  const node = tab && nodes.find((n) => n.id === tab.nodeId);
+  const node = tab && S.nodes.find((n) => n.id === tab.nodeId);
   const page = tab && PAGES.find((p) => p.id === tab.pageId);
   if (!node || !page) return;
   const e = { view: null, status: 'loading', error: null, via: 'home', origin: '' };
@@ -594,7 +454,7 @@ async function ensureView(key) {
     } catch {
       hostname = '';
     }
-    const d = certDecision({ hostname, certPem: certificate && certificate.data }, nodes);
+    const d = certDecision({ hostname, certPem: certificate && certificate.data }, S.nodes);
     if (d.refused) {
       const rk = refusedKeyOfUrl(url);
       refused.set(rk, { ...d.refused, key: rk });
@@ -610,11 +470,11 @@ async function ensureView(key) {
     const recent = Boolean(last && Date.now() - last.at < FLIP_WINDOW_MS);
     const decision = flipDecision({ code, via: target.via, recent, confirmed: confirmed.has(`${key} ${originOf(target)}`) });
     if (decision !== 'none') {
-      const idx = nodes.findIndex((n) => n.id === node.id);
+      const idx = S.nodes.findIndex((n) => n.id === node.id);
       if (idx >= 0 && decision === 'flip') {
         const now = target.https ? 'https' : 'http';
         const next = otherScheme(now);
-        nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: next };
+        S.nodes[idx].schemes = { ...S.nodes[idx].schemes, [page.id]: next };
         persist();
         logLine(`scheme for ${key}: ${now} -> ${next}`);
         flips.set(key, { at: Date.now(), from: now });
@@ -627,7 +487,7 @@ async function ensureView(key) {
         return;
       }
       if (idx >= 0 && decision === 'revert') {
-        nodes[idx].schemes = { ...nodes[idx].schemes, [page.id]: last.from };
+        S.nodes[idx].schemes = { ...S.nodes[idx].schemes, [page.id]: last.from };
         persist();
         logLine(`scheme for ${key}: back to ${last.from}, the other one failed too`);
         flips.delete(key);
@@ -650,12 +510,12 @@ async function ensureView(key) {
 
 function closeTab(key) {
   closeRt(key);
-  update(L.closeTab(ls, key));
+  update(L.closeTab(S.ls, key));
   focusView();
 }
 
 function reloadTab(key) {
-  const tab = ls.tabs.find((t) => t.key === key);
+  const tab = S.ls.tabs.find((t) => t.key === key);
   if (!tab) return;
   closeRt(key);
   router.forget(tab.nodeId);
@@ -664,305 +524,18 @@ function reloadTab(key) {
 }
 
 function snapshot() {
-  return nodes.map((n) => ({ ...n }));
+  return S.nodes.map((n) => ({ ...n }));
 }
 
 function persist() {
-  store.save(nodes);
+  store.save(S.nodes);
 }
 
-function runningAppImage() {
-  if (app.isPackaged) return process.env.APPIMAGE || '';
-  return process.env.NODECONTROLLER_TEST_APPIMAGE || '';
-}
-
-function homeDir() {
-  if (!app.isPackaged && process.env.NODECONTROLLER_TEST_HOME) return process.env.NODECONTROLLER_TEST_HOME;
-  return os.homedir();
-}
-
-function desktopDir() {
-  const home = homeDir();
-  const conf = process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME) ? process.env.XDG_CONFIG_HOME : path.join(home, '.config');
-  let text = '';
-  try {
-    text = fs.readFileSync(path.join(conf, 'user-dirs.dirs'), 'utf8');
-  } catch {
-    text = '';
-  }
-  return LN.desktopDirFrom(home, text);
-}
-
-function launcherPaths() {
-  return LN.launcherPaths(homeDir(), desktopDir());
-}
-
-function register() {
-  const str = (v) => typeof v === 'string';
-  ipcMain.handle('app:info', (e) => (fromShell(e) ? { version: app.getVersion(), pages: PAGES } : null));
-  ipcMain.handle('layout:get', (e) => {
-    if (!fromShell(e)) return null;
-    if (!shellReady) {
-      shellReady = true;
-      process.stderr.write('shell-ready\n');
-      if (startupNotice) {
-        const text = startupNotice;
-        startupNotice = '';
-        setTimeout(() => emitNotice(text, true), 400);
-      }
-    }
-    return payload();
-  });
-  ipcMain.handle('nodes:list', (e) => (fromShell(e) ? snapshot() : []));
-  ipcMain.handle('nodes:save', (e, raw) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    const r = normalizeNode(raw);
-    if (!r.node) return { error: r.error };
-    const i = nodes.findIndex((n) => n.id === r.node.id);
-    let changed = false;
-    if (i >= 0) {
-      const old = nodes[i];
-      changed = CONNECTION_FIELDS.some((f) => JSON.stringify(old[f]) !== JSON.stringify(r.node[f]));
-      nodes[i] = r.node;
-      router.forget(r.node.id);
-    } else {
-      nodes.push(r.node);
-    }
-    persist();
-    if (changed) for (const t of ls.tabs) if (t.nodeId === r.node.id && t.kind !== 'lh') closeRt(t.key);
-    sync();
-    monitor.refresh();
-    return { node: r.node, nodes: snapshot() };
-  });
-  ipcMain.handle('nodes:remove', async (e, id) => {
-    if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
-    for (const t of ls.tabs) if (t.nodeId === id) closeRt(t.key);
-    ls = L.closeNode(ls, id);
-    nodes = nodes.filter((n) => n.id !== id);
-    splits = splits.filter((p) => !L.SLOTS.some((sl) => p.slots[sl].some((it) => it.nodeId === id)));
-    presetStore.save(splits);
-    router.forget(id);
-    persist();
-    sync();
-    monitor.refresh();
-    try {
-      await (partitions.get(id) || session.fromPartition(`persist:node-${id}`)).clearStorageData();
-    } catch {
-      return { nodes: snapshot() };
-    }
-    return { nodes: snapshot() };
-  });
-  ipcMain.handle('nodes:export', async (e) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    const r = await dialog.showSaveDialog(win, {
-      defaultPath: 'nodecontroller-nodes.json',
-      filters: [{ name: 'JSON', extensions: ['json'] }],
-    });
-    if (r.canceled || !r.filePath) return { canceled: true };
-    try {
-      fs.writeFileSync(r.filePath, exportText(nodes));
-    } catch (err) {
-      logLine(`export failed: ${err && err.code ? err.code : err}`);
-      return { error: 'The node list could not be written there. Pick another folder.' };
-    }
-    return { path: r.filePath };
-  });
-  ipcMain.handle('nodes:import', async (e) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
-    if (r.canceled || !r.filePaths.length) return { canceled: true };
-    let text;
-    try {
-      text = fs.readFileSync(r.filePaths[0], 'utf8');
-    } catch {
-      return { error: 'That file could not be read.' };
-    }
-    const res = importText(nodes, text);
-    if (res.error) return res;
-    nodes = res.nodes;
-    for (const n of nodes) router.forget(n.id);
-    persist();
-    sync();
-    monitor.refresh();
-    return { nodes: snapshot(), added: res.added, replaced: res.replaced, skipped: res.skipped };
-  });
-  ipcMain.handle('tabs:open', (e, nodeId, pageId) => {
-    if (!fromShell(e) || !str(nodeId) || !str(pageId)) return { ok: false };
-    if (!nodes.some((n) => n.id === nodeId) || !PAGES.some((p) => p.id === pageId)) return { ok: false };
-    if (PAGES.find((p) => p.id === pageId).external) {
-      openExternalPage(nodeId, pageId);
-      return { ok: true };
-    }
-    update(L.openTab(ls, nodeId, pageId));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:activate', (e, key) => {
-    if (!fromShell(e) || !str(key)) return { ok: false };
-    update(L.openKey(ls, key));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:close', (e, key) => {
-    if (fromShell(e) && str(key)) closeTab(key);
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:reload', (e, key) => {
-    if (fromShell(e) && str(key)) reloadTab(key);
-    return { ok: true };
-  });
-  const resolveKey = (arg) => {
-    if (!arg || typeof arg !== 'object') return null;
-    if (str(arg.key)) return ls.tabs.some((t) => t.key === arg.key) ? arg.key : null;
-    if (str(arg.nodeId) && str(arg.pageId) && nodes.some((n) => n.id === arg.nodeId) && INTERNAL.some((p) => p.id === arg.pageId)) {
-      ls = L.addTab(ls, arg.nodeId, arg.pageId);
-      return L.keyOf(arg.nodeId, arg.pageId);
-    }
-    return null;
-  };
-  ipcMain.handle('tabs:drop', (e, arg) => {
-    if (!fromShell(e) || !arg || !str(arg.slot) || !L.SLOTS.includes(arg.slot)) return { ok: false };
-    const key = resolveKey(arg);
-    if (!key) return { ok: false };
-    update(L.putInSlot(ls, key, arg.slot));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:next', (e, arg) => {
-    if (!fromShell(e)) return { ok: false };
-    const key = resolveKey(arg);
-    if (!key) return { ok: false };
-    update(L.addNext(ls, key));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:alone', (e, arg) => {
-    if (!fromShell(e)) return { ok: false };
-    const key = resolveKey(arg);
-    if (!key) return { ok: false };
-    update(L.showAlone(ls, key));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:unslot', (e, arg) => {
-    if (!fromShell(e)) return { ok: false };
-    const key = resolveKey(arg);
-    if (!key) return { ok: false };
-    update(L.unslot(ls, key));
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:zoom', (e, arg) => {
-    if (!fromShell(e) || !arg || !str(arg.op)) return { ok: false };
-    zoomKey(str(arg.key) ? arg.key : L.focusedKey(ls), arg.op);
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:view', (e, view) => {
-    if (fromShell(e) && str(view)) {
-      update(L.setView(ls, view));
-      focusView();
-    }
-    return { ok: true };
-  });
-  ipcMain.handle('splits:save', (e, name) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    const made = PR.fromState(ls, name);
-    if (made.error) return { error: made.error };
-    const r = PR.put(splits, made.preset);
-    if (r.error) return { error: r.error };
-    splits = r.list;
-    presetStore.save(splits);
-    push();
-    return { ok: true };
-  });
-  ipcMain.handle('splits:apply', (e, id) => {
-    if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
-    const preset = splits.find((p) => p.id === id);
-    if (!preset) return { error: 'That split is gone.' };
-    const r = PR.apply(ls, preset, nodes, INTERNAL);
-    if (r.error) return { error: r.error };
-    update(r.state);
-    focusView();
-    return { ok: true };
-  });
-  ipcMain.handle('splits:remove', (e, id) => {
-    if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
-    splits = splits.filter((p) => p.id !== id);
-    presetStore.save(splits);
-    push();
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:ratio', (e, ratio) => {
-    if (fromShell(e)) update(L.setRatio(ls, ratio));
-    return { ok: true };
-  });
-  ipcMain.handle('tabs:focus', (e, slot) => {
-    if (fromShell(e) && str(slot)) {
-      update(L.focusSlot(ls, slot));
-      focusView();
-    }
-    return { ok: true };
-  });
-  ipcMain.handle('app:restart', (e) => {
-    if (!fromShell(e)) return { ok: false };
-    logLine('restarting at the user\'s request');
-    if (process.env.APPIMAGE) app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
-    else app.relaunch();
-    app.quit();
-    return { ok: true };
-  });
-  ipcMain.handle('launcher:status', (e) => (fromShell(e) ? LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) : null));
-  ipcMain.handle('launcher:install', (e) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    let r;
-    try {
-      let icon = null;
-      try {
-        icon = fs.readFileSync(path.join(__dirname, '..', 'ui', 'icon.png'));
-      } catch {
-        icon = null;
-      }
-      r = LN.installLauncher({ paths: launcherPaths(), running: runningAppImage(), iconPng: icon, version: app.getVersion() });
-    } catch (err) {
-      logLine(`launcher install failed: ${err && err.code ? err.code : err}`);
-      return { error: 'The launcher could not be added. See diagnostics.log.' };
-    }
-    if (r.error) return r;
-    logLine(`launcher added${r.shortcut ? ' with a desktop icon' : ''}`);
-    return { ok: true, shortcut: Boolean(r.shortcut), status: LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) };
-  });
-  ipcMain.handle('launcher:remove', (e) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    LN.removeLauncher({ paths: launcherPaths() });
-    logLine('launcher removed');
-    return { ok: true, status: LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) };
-  });
-  ipcMain.handle('ui:overlay', (e, on) => {
-    if (!fromShell(e)) return { ok: false };
-    overlay = Boolean(on);
-    sync();
-    return { ok: true };
-  });
-  ipcMain.handle('cert:trust', (e, nodeId, fingerprint) => {
-    if (!fromShell(e)) return { error: 'Not allowed.' };
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return { error: 'That node is gone.' };
-    const want = String(fingerprint || '').toLowerCase().replace(/[^0-9a-f]/g, '');
-    const hit = [...refused.values()].find((r) => r.fingerprint === want && r.nodeIds.includes(nodeId));
-    if (!hit) return { error: 'That certificate was not the one refused.' };
-    node.pins = [...node.pins.filter((p) => p !== hit.fingerprint), hit.fingerprint].slice(-MAX_PINS);
-    for (const [k, r] of refused) if (r.fingerprint === hit.fingerprint) refused.delete(k);
-    router.forget(nodeId);
-    persist();
-    for (const t of ls.tabs) if (t.nodeId === nodeId && t.kind !== 'lh') closeRt(t.key);
-    sync();
-    return { nodes: snapshot() };
-  });
-}
+const { runningAppImage, launcherPaths } = LN.launcherEnv({ packaged: app.isPackaged, env: process.env, home: os.homedir() });
 
 function createWindow() {
   const size = L.windowSize(screen.getPrimaryDisplay().workAreaSize);
-  win = new BrowserWindow({
+  S.win = new BrowserWindow({
     width: size.width,
     height: size.height,
     minWidth: size.minWidth,
@@ -977,25 +550,25 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.webContents.on('before-input-event', onKey);
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  if (size.maximize) win.maximize();
-  win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
-  win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
+  S.win.webContents.on('before-input-event', onKey);
+  S.win.webContents.on('will-navigate', (e) => e.preventDefault());
+  S.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  if (size.maximize) S.win.maximize();
+  S.win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
+  S.win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;
     process.stderr.write(`Failed to load the window: ${desc}\n`);
     app.exit(3);
   });
-  win.webContents.once('did-finish-load', () => sync());
-  win.on('resize', sync);
-  win.webContents.on('render-process-gone', (ev, details) => {
+  S.win.webContents.once('did-finish-load', () => sync());
+  S.win.on('resize', sync);
+  S.win.webContents.on('render-process-gone', (ev, details) => {
     logLine(`window process gone: reason=${details.reason} exit=${details.exitCode}`);
-    if (alive()) win.webContents.reload();
+    if (alive()) S.win.webContents.reload();
   });
-  win.on('close', () => logLine('window closed by the user or the system'));
-  win.on('closed', () => {
-    win = null;
+  S.win.on('close', () => logLine('window closed by the user or the system'));
+  S.win.on('closed', () => {
+    S.win = null;
     rt.clear();
   });
 }
@@ -1005,9 +578,9 @@ app.on('web-contents-created', (e, contents) => {
 });
 
 app.on('second-instance', () => {
-  if (win && !win.isDestroyed()) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
+  if (S.win && !S.win.isDestroyed()) {
+    if (S.win.isMinimized()) S.win.restore();
+    S.win.focus();
   }
 });
 
@@ -1025,7 +598,11 @@ app.whenReady().then(() => {
   }
   Menu.setApplicationMenu(null);
   harden(session.defaultSession, 'shell');
-  register();
+  registerIpc({
+    S, SES, INTERNAL, refused, router, monitor, presetStore, startupNotice,
+    fromShell, payload, persist, push, sync, update, focusView, closeRt, closeTab, reloadTab, zoomKey,
+    snapshot, emitNotice, openExternalPage, logLine, launcherPaths, runningAppImage,
+  });
   createWindow();
   monitor.start();
 });

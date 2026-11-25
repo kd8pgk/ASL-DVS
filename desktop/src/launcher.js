@@ -118,4 +118,21 @@ function removeLauncher({ paths }) {
   return { ok: true };
 }
 
-module.exports = { APP_ID, WM_CLASS, desktopDirFrom, launcherPaths, execQuote, desktopEntry, launcherStatus, installLauncher, removeLauncher };
+function launcherEnv({ packaged, env, home }) {
+  const runningAppImage = () => (packaged ? env.APPIMAGE || '' : env.NODECONTROLLER_TEST_APPIMAGE || '');
+  const homeDir = () => (!packaged && env.NODECONTROLLER_TEST_HOME ? env.NODECONTROLLER_TEST_HOME : home);
+  const desktopDir = () => {
+    const h = homeDir();
+    const conf = env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(h, '.config');
+    let text = '';
+    try {
+      text = fs.readFileSync(path.join(conf, 'user-dirs.dirs'), 'utf8');
+    } catch {
+      text = '';
+    }
+    return desktopDirFrom(h, text);
+  };
+  return { runningAppImage, homeDir, desktopDir, launcherPaths: () => launcherPaths(homeDir(), desktopDir()) };
+}
+
+module.exports = { launcherEnv, APP_ID, WM_CLASS, desktopDirFrom, launcherPaths, execQuote, desktopEntry, launcherStatus, installLauncher, removeLauncher };
