@@ -1,11 +1,13 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const os = require('node:os');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, screen, shell, dialog } = require('electron');
 const P = require('./policy');
 const R = require('./ram');
 const F = require('./files');
 const B = require('./bookmarks');
+const W = require('./watchdog');
 
 app.setName('Null Browser');
 
@@ -166,15 +168,37 @@ function thirdParty(details) {
   return P.isThirdParty(details.url, top);
 }
 
+function purgeOrigin(origin) {
+  if (origin) ses.clearStorageData({ origin }).catch(() => {});
+  ses.clearCache().catch(() => {});
+}
+
 function purgeIfSiteChanged(nextUrl) {
   const leaving = pageUrl();
   if (!leaving) return;
   const leavingSite = P.siteOf(P.hostOf(leaving));
   const nextSite = P.siteOf(P.hostOf(nextUrl));
   if (!leavingSite || leavingSite === nextSite || allowedSites.has(leavingSite)) return;
-  const origin = P.originOf(leaving);
-  if (origin) ses.clearStorageData({ origin }).catch(() => {});
-  ses.clearCache().catch(() => {});
+  purgeOrigin(P.originOf(leaving));
+}
+
+function watchdogFlag(site, reason) {
+  if (!site || allowedSites.has(site)) return;
+  purgeOrigin(P.originOf(pageUrl()));
+  say(`Watchdog: ${site} ${reason}, so it was cleared.`);
+}
+
+const watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+
+const CPU_CORES = Math.max(os.cpus().length, 1);
+
+function watchdogCpuPoll() {
+  if (!view || view.webContents.isDestroyed()) return;
+  const pid = view.webContents.getOSProcessId();
+  const m = app.getAppMetrics().find((x) => x.pid === pid);
+  if (!m) return;
+  const idle = Date.now() - lastInput > W.CPU_IDLE_MS;
+  watchdog.noteCpu(P.siteOf(P.hostOf(pageUrl())), idle, m.cpu.percentCPUUsage * CPU_CORES);
 }
 
 function rammaidFile(file) {
@@ -209,6 +233,14 @@ function checkAndOpen(rec) {
   if (!F.contentMatches(rec.kind, head)) {
     rammaidFile(rec.file);
     say(`${rec.name} is not really ${rec.kind === 'pdf' ? 'a PDF' : rec.kind}, so it was not opened.`);
+    const from = (() => {
+      try {
+        return rec.item.getURL();
+      } catch {
+        return '';
+      }
+    })();
+    watchdog.noteFakeFile(P.siteOf(P.hostOf(from || pageUrl())));
     return;
   }
   openFile(rec.file);
@@ -298,6 +330,8 @@ function hardenPage(s) {
         upgraded.add(up);
         return callback({ redirectURL: up });
       }
+    } else {
+      watchdog.noteSubresource(P.siteOf(P.hostOf(topUrlOf(details))), P.hostOf(details.url));
     }
     return callback({});
   });
@@ -420,7 +454,10 @@ function createView() {
       blockedSite = site;
       setImmediate(push);
     }
-    if (litterbugIds.size >= MAX_LITTERBUGS) return { action: 'deny' };
+    if (litterbugIds.size >= MAX_LITTERBUGS) {
+      watchdog.notePopupCapped(site);
+      return { action: 'deny' };
+    }
     nextPopup = 'litterbug';
     return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: LITTERBUG_OPTIONS };
   });
@@ -463,7 +500,9 @@ function createView() {
     push();
   });
   wc.on('render-process-gone', (ev, details) => {
-    error = { kind: 'fail', url: pageUrl(), message: `The page stopped working (${details.reason}).`, code: 0 };
+    const url = pageUrl();
+    error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
+    watchdog.noteCrash(P.siteOf(P.hostOf(url)));
     push();
   });
   wc.loadURL('about:blank').catch(() => {});
@@ -748,6 +787,7 @@ app.whenReady().then(() => {
   hardenPage(ses);
   register();
   createWindow();
+  setInterval(watchdogCpuPoll, W.CPU_IDLE_MS).unref();
 });
 
 app.on('window-all-closed', () => app.quit());

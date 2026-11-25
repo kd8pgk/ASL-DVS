@@ -1,6 +1,16 @@
 # Null Browser changelog
 
-Current version: `0.6.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.7.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.7.0 (2026-11-25)
+
+A watchdog: a site that behaves like an attack gets its storage cleared on the spot.
+
+- **Five signals, watched per site.** A site is flagged, cleared and told about it when it: crashes the page twice within a minute; sends two disguised files (claiming to be a PDF, audio or video but failing the content check) within two minutes; keeps trying to open pop-ups after hitting the pop-up cap, three times within thirty seconds; has its page contact fifteen different hosts within ten seconds; or keeps the page's process pinned above 60% of a CPU core for three samples running (fifteen seconds) while nothing is clicked or typed.
+- **Clears and tells you, nothing more.** A flagged site has its cookies and storage wiped the same way leaving it for a different site already would (scoped to its own origin), with a notice naming the site and what was seen (for example *Watchdog: evil.test sent disguised files repeatedly, so it was cleared.*). The page itself is left open; you decide whether to stay.
+- **An allowed site is exempt**, the same as it is already exempt from the ordinary leaving-a-site clear.
+- **`src/watchdog.js`** holds the five counters as plain, clock-injectable functions, with no Electron dependency, so they're unit-tested without a browser. `main.js` wires each one to where the signal already happens: `render-process-gone`, the content-mismatch check, the pop-up cap, every subresource request, and a five-second `app.getAppMetrics()` poll (normalized by core count, since a single busy thread on a multi-core machine can read a low percentage of the whole machine while still pinning one core).
+- **Tests.** All five counters, their windows and resets, as unit tests; in a real window: each of the five signals produced for real (two disguised PDF downloads, six rapid pop-up attempts, a page with fifteen unreachable subresource hosts, a genuine fifteen-second CPU-pinning busy loop, and two real renderer crashes via `forcefullyCrashRenderer()`), each ending in its own watchdog notice.
 
 ## 0.6.0 (2026-11-25)
 

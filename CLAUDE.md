@@ -261,6 +261,14 @@
     scoped to its own origin, the moment the new page starts loading. Staying
     on one site, redirects included, is unaffected. **Allow for this site**
     exempts it from this too, for as long as it stays allowed.
+  - A watchdog (`src/watchdog.js`) clears a site the same way, with a notice
+    naming it and why, when it crashes the page twice in a minute, sends two
+    disguised files in two minutes, keeps opening pop-ups after the pop-up
+    cap three times in thirty seconds, has its page contact fifteen
+    different hosts in ten seconds, or pins the page's process above 60% of
+    a CPU core for three five-second samples running while nothing is
+    clicked or typed. It only clears and tells you; the page stays open. An
+    allowed site is exempt, same as the leaving-a-site clear above.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.

@@ -89,6 +89,15 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>page two</title><p>two</p>');
     }
+    if (q.url === '/fanout') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      const imgs = Array.from({ length: 15 }, (_, i) => `<img src="https://fanout-${i}.invalid/x.png">`).join('');
+      return s.end(`<!doctype html><title>fanout</title>${imgs}`);
+    }
+    if (q.url === '/busy') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>busy</title><script>const t=Date.now()+26000;while(Date.now()<t){}</script>');
+    }
     s.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'fp=1; Path=/' });
     return s.end(`<!doctype html><title>page one</title><p>one</p>
 <img src="http://localhost:${portB}/pixel.gif?n=${Date.now()}" width="1" height="1">
@@ -128,7 +137,7 @@ async function main() {
   fs.mkdirSync(realHome);
   const launch = (extra = [], envExtra = {}) => _electron.launch({
     executablePath: require('electron'),
-    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1,MAP other.test 127.0.0.1', ...extra],
+    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1,MAP other.test 127.0.0.1,MAP wd.test 127.0.0.1', ...extra],
     env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache'), ...envExtra },
   });
   const warm = await launch();
@@ -345,6 +354,39 @@ async function main() {
   await go(`http://pub.test:${portPurge}/`);
   await waitFor(() => seenPurge.length >= 6, 'back on the allowed site');
   assert.match(seenPurge[5].cookie, /keep=1/, 'an allowed site keeps its cookie across leaving and returning');
+
+  await go(`http://wd.test:${portA}/`);
+  await win.waitForFunction(() => /no secure version/.test(document.getElementById('msg-title').textContent));
+  await win.click('#msg-main');
+  await waitFor(async () => (await pageUrl()) === `http://wd.test:${portA}/`, 'the watchdog test site, authorized for http');
+
+  await go(`http://wd.test:${portA}/fake.pdf`);
+  await win.waitForSelector('#ask:not([hidden])');
+  await win.click('#ask-open');
+  await win.waitForFunction(() => /is not really a PDF/.test(document.getElementById('notice').textContent));
+  await go(`http://wd.test:${portA}/fake.pdf`);
+  await win.waitForSelector('#ask:not([hidden])');
+  await win.click('#ask-open');
+  await win.waitForFunction(() => /Watchdog: wd\.test sent disguised files repeatedly/.test(document.getElementById('notice').textContent));
+
+  await pageEval(`for (let i = 0; i < 6; i += 1) window.open('http://wd.test:${portA}/popup-' + i); true`);
+  await win.waitForFunction(() => /Watchdog: wd\.test kept opening pop-ups after being capped/.test(document.getElementById('notice').textContent));
+
+  await go(`http://wd.test:${portA}/fanout`);
+  await win.waitForFunction(() => /Watchdog: wd\.test contacted many different hosts at once/.test(document.getElementById('notice').textContent), undefined, { timeout: 15000 });
+
+  await go(`http://wd.test:${portA}/busy`);
+  await win.waitForFunction(() => /Watchdog: wd\.test used heavy CPU while idle/.test(document.getElementById('notice').textContent), undefined, { timeout: 30000 });
+
+  await go(`http://wd.test:${portA}/`);
+  await waitFor(async () => (await pageUrl()) === `http://wd.test:${portA}/`, 'back on the watchdog site');
+  const crashOnce = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents.forcefullyCrashRenderer());
+  await crashOnce();
+  await win.waitForFunction(() => /The page stopped working/.test(document.getElementById('msg-text') ? document.getElementById('msg-text').textContent : ''));
+  await win.click('#msg-retry');
+  await waitFor(async () => (await pageUrl()) === `http://wd.test:${portA}/`, 'back up after the first crash');
+  await crashOnce();
+  await win.waitForFunction(() => /Watchdog: wd\.test crashed repeatedly/.test(document.getElementById('notice').textContent));
 
   await win.click('#home');
   await win.waitForSelector('#blank:not([hidden])');
