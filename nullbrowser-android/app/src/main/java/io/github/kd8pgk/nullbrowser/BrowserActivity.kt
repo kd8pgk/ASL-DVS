@@ -3,30 +3,46 @@ package io.github.kd8pgk.nullbrowser
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
 import android.os.Message
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.MimeTypeMap
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+
+private val FILENAME_RE = Regex("filename=\"?([^\";]+)\"?")
+private val SCHEME_RE = Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE)
+private val SPACE_RE = Regex("\\s")
+private const val MAX_REDIRECTS = 5
 
 class BrowserActivity : Activity() {
     private lateinit var web: WebView
@@ -35,6 +51,7 @@ class BrowserActivity : Activity() {
     private lateinit var askBar: View
     private lateinit var askText: TextView
     private lateinit var askOpen: Button
+    private lateinit var askCancel: Button
     private lateinit var blank: View
     private lateinit var errorView: View
     private lateinit var errorTitle: TextView
@@ -42,11 +59,16 @@ class BrowserActivity : Activity() {
     private lateinit var errorMain: Button
     private lateinit var errorRetry: Button
 
-    private val upgraded = mutableSetOf<String>()
+    private val upgradedHosts = mutableSetOf<String>()
     private val allowHttp = mutableSetOf<String>()
     private var editing = false
     private var pending: Pending? = null
     private var lastMainError: String? = null
+    private var loadingHost: String? = null
+    private var customView: View? = null
+    private var customCallback: WebChromeClient.CustomViewCallback? = null
+    private var backCallback: Any? = null
+    private var rendererGone = false
 
     private class Pending(
         val kind: Kind,
@@ -59,6 +81,7 @@ class BrowserActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wipe()
         setContentView(R.layout.activity_browser)
 
         web = findViewById(R.id.web)
@@ -67,6 +90,7 @@ class BrowserActivity : Activity() {
         askBar = findViewById(R.id.askBar)
         askText = findViewById(R.id.askText)
         askOpen = findViewById(R.id.askOpen)
+        askCancel = findViewById(R.id.askCancel)
         blank = findViewById(R.id.blank)
         errorView = findViewById(R.id.errorView)
         errorTitle = findViewById(R.id.errorTitle)
@@ -83,7 +107,7 @@ class BrowserActivity : Activity() {
         web.settings.allowContentAccess = false
         web.settings.setGeolocationEnabled(false)
         web.settings.mediaPlaybackRequiresUserGesture = true
-        web.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         web.settings.setSupportMultipleWindows(true)
         web.settings.javaScriptCanOpenWindowsAutomatically = false
 
@@ -91,17 +115,17 @@ class BrowserActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame) return false
                 val url = request.url
-                if (url.scheme == "http" && !isPrivateHost(url.host) && !allowHttp.contains(url.host)) {
-                    val httpsUrl = url.buildUpon().scheme("https").build().toString()
-                    upgraded.add(httpsUrl)
-                    view.loadUrl(httpsUrl)
+                if (url.scheme != "http" && url.scheme != "https") return true
+                val up = upgradeIfNeeded(url)
+                if (up != null) {
+                    view.loadUrl(up)
                     return true
                 }
-                if (url.scheme != "http" && url.scheme != "https") return true
                 return false
             }
 
-            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                loadingHost = Uri.parse(url).host
                 hideError()
             }
 
@@ -109,25 +133,31 @@ class BrowserActivity : Activity() {
                 refreshUi()
             }
 
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                refreshUi()
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
-                val url = request.url.toString()
-                lastMainError = url
-                if (upgraded.contains(url)) {
-                    val plain = url.replaceFirst("https:", "http:")
-                    showNoHttps(request.url.host ?: "", plain)
+                val url = request.url
+                lastMainError = url.toString()
+                val host = url.host ?: ""
+                if (url.scheme == "https" && upgradedHosts.contains(host)) {
+                    showNoHttps(host, url.buildUpon().scheme("http").build().toString())
                 } else {
                     showLoadError(error.description?.toString() ?: "It did not load.")
                 }
             }
 
-            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                 handler.cancel()
-                showCertError(error.url)
+                val host = Uri.parse(error.url).host
+                if (host != null && host == loadingHost) showCertError(host)
             }
 
-            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                showLoadError("The page stopped working.")
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                rendererGone = true
+                recreate()
                 return true
             }
         }
@@ -149,7 +179,8 @@ class BrowserActivity : Activity() {
                 val temp = WebView(this@BrowserActivity)
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                        web.loadUrl(request.url.toString())
+                        navigate(request.url.toString())
+                        v.post { v.destroy() }
                         return true
                     }
                 }
@@ -158,11 +189,32 @@ class BrowserActivity : Activity() {
                 resultMsg.sendToTarget()
                 return true
             }
+
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                if (customView != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                customView = view
+                customCallback = callback
+                (window.decorView as FrameLayout).addView(
+                    view,
+                    FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    window.insetsController?.hide(WindowInsets.Type.systemBars())
+                }
+                syncBack()
+            }
+
+            override fun onHideCustomView() {
+                exitFullscreen()
+            }
         }
 
         web.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            val name = safeName(guessFileName(url, contentDisposition))
-            val kind = classify(mimeType, name)
+            val raw = safeName(guessFileName(url, contentDisposition))
+            val kind = classify(mimeType, raw)
             if (kind == null) {
                 showNotice(getString(R.string.downloads_off))
                 return@setDownloadListener
@@ -171,27 +223,29 @@ class BrowserActivity : Activity() {
                 showNotice("Answer the question about the other file first.")
                 return@setDownloadListener
             }
+            val mimeExt = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType?.substringBefore(';')?.trim())
+            val name = withExtension(raw, kind, mimeExt)
             val cookie = CookieManager.getInstance().getCookie(url)
-            val rec = Pending(kind, name, url, cookie, userAgent)
-            pending = rec
+            pending = Pending(kind, name, url, cookie, userAgent)
             askText.text = getString(R.string.ask_open_file, name, kindLabel(kind), appLabel(kind))
             askOpen.isEnabled = true
-            findViewById<Button>(R.id.askCancel).isEnabled = true
+            askCancel.isEnabled = true
             askBar.visibility = View.VISIBLE
         }
 
         askOpen.setOnClickListener { answerPending(true) }
-        findViewById<Button>(R.id.askCancel).setOnClickListener { answerPending(false) }
+        askCancel.setOnClickListener { answerPending(false) }
 
         findViewById<ImageButton>(R.id.back).setOnClickListener { if (web.canGoBack()) web.goBack() }
         findViewById<ImageButton>(R.id.forward).setOnClickListener { if (web.canGoForward()) web.goForward() }
         findViewById<ImageButton>(R.id.reload).setOnClickListener { web.reload() }
         findViewById<ImageButton>(R.id.home).setOnClickListener { goBlank() }
-        errorRetry.setOnClickListener { lastMainError?.let { web.loadUrl(it) } ?: web.reload() }
+        errorRetry.setOnClickListener { lastMainError?.let { navigate(it) } ?: web.reload() }
 
         addr.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO || (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
                 editing = false
+                addr.clearFocus()
                 go(addr.text.toString())
                 true
             } else {
@@ -203,6 +257,59 @@ class BrowserActivity : Activity() {
         goBlank()
     }
 
+    private fun upgradeIfNeeded(url: Uri): String? {
+        val host = url.host ?: return null
+        if (url.scheme != "http" || isPrivateHost(host) || allowHttp.contains(host)) return null
+        upgradedHosts.add(host)
+        return url.buildUpon().scheme("https").build().toString()
+    }
+
+    private fun navigate(target: String) {
+        val uri = Uri.parse(target)
+        hideError()
+        blank.visibility = View.GONE
+        web.visibility = View.VISIBLE
+        web.loadUrl(upgradeIfNeeded(uri) ?: target)
+    }
+
+    private fun exitFullscreen() {
+        val v = customView ?: return
+        (window.decorView as FrameLayout).removeView(v)
+        customView = null
+        customCallback?.onCustomViewHidden()
+        customCallback = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.show(WindowInsets.Type.systemBars())
+        }
+        syncBack()
+    }
+
+    private fun handleBack(): Boolean {
+        if (customView != null) {
+            exitFullscreen()
+            return true
+        }
+        if (web.canGoBack()) {
+            web.goBack()
+            return true
+        }
+        return false
+    }
+
+    private fun syncBack() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val want = customView != null || web.canGoBack()
+        val current = backCallback as OnBackInvokedCallback?
+        if (want && current == null) {
+            val cb = OnBackInvokedCallback { handleBack() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
+            backCallback = cb
+        } else if (!want && current != null) {
+            onBackInvokedDispatcher.unregisterOnBackInvokedCallback(current)
+            backCallback = null
+        }
+    }
+
     private fun answerPending(open: Boolean) {
         val rec = pending ?: return
         if (!open) {
@@ -212,77 +319,101 @@ class BrowserActivity : Activity() {
         }
         askText.text = getString(R.string.ask_open_file, rec.name, kindLabel(rec.kind), appLabel(rec.kind)) + " Loading…"
         askOpen.isEnabled = false
-        findViewById<Button>(R.id.askCancel).isEnabled = false
+        askCancel.isEnabled = false
         Thread {
             val file = fetchDownload(rec)
+            val ok = file != null && contentMatches(rec.kind, readHead(file))
+            if (file != null && !ok) file.delete()
             runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
                 pending = null
                 askBar.visibility = View.GONE
-                if (file == null) {
-                    showNotice("${rec.name} could not be fetched.")
-                    return@runOnUiThread
+                when {
+                    file == null -> showNotice("${rec.name} could not be fetched.")
+                    !ok -> showNotice(getString(R.string.not_really, rec.name, kindLabel(rec.kind)))
+                    else -> openFile(file, rec.kind)
                 }
-                val head = file.inputStream().use { input ->
-                    val buf = ByteArray(64)
-                    val n = input.read(buf)
-                    if (n <= 0) ByteArray(0) else buf.copyOf(n)
-                }
-                if (!contentMatches(rec.kind, head)) {
-                    file.delete()
-                    showNotice(getString(R.string.not_really, rec.name, kindLabel(rec.kind)))
-                    return@runOnUiThread
-                }
-                openFile(file)
             }
         }.start()
     }
 
+    private fun readHead(file: File): ByteArray = file.inputStream().use { input ->
+        val buf = ByteArray(64)
+        var n = 0
+        while (n < buf.size) {
+            val r = input.read(buf, n, buf.size - n)
+            if (r < 0) break
+            n += r
+        }
+        buf.copyOf(n)
+    }
+
     private fun fetchDownload(rec: Pending): File? {
-        var conn: HttpURLConnection? = null
-        return try {
-            val c = URL(rec.url).openConnection() as HttpURLConnection
-            conn = c
-            c.setRequestProperty("User-Agent", rec.userAgent)
-            rec.cookie?.let { c.setRequestProperty("Cookie", it) }
-            c.connectTimeout = 15000
-            c.readTimeout = 15000
-            c.connect()
-            if (c.responseCode !in 200..299) return null
-            val dir = downloadsDir(cacheDir)
-            val out = File(dir, "${System.currentTimeMillis()}-${rec.name}")
-            var total = 0L
-            var tooBig = false
-            c.inputStream.use { input ->
-                FileOutputStream(out).use { output ->
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_BYTES) {
-                            tooBig = true
-                            break
+        var url = URL(rec.url)
+        var hops = 0
+        while (true) {
+            val c = try {
+                url.openConnection() as HttpURLConnection
+            } catch (e: Exception) {
+                return null
+            }
+            try {
+                c.instanceFollowRedirects = false
+                c.setRequestProperty("User-Agent", rec.userAgent)
+                if (hops == 0) rec.cookie?.let { c.setRequestProperty("Cookie", it) }
+                c.connectTimeout = 15000
+                c.readTimeout = 15000
+                val code = c.responseCode
+                if (code in 300..399) {
+                    val loc = c.getHeaderField("Location") ?: return null
+                    val next = URL(url, loc)
+                    if (next.protocol != "https" && next.protocol != "http") return null
+                    if (url.protocol == "https" && next.protocol == "http") return null
+                    hops += 1
+                    if (hops > MAX_REDIRECTS) return null
+                    url = next
+                    continue
+                }
+                if (code !in 200..299) return null
+                if (c.contentLengthLong > MAX_BYTES) return null
+                val out = File(downloadsDir(cacheDir), "${System.currentTimeMillis()}-${rec.name}")
+                var total = 0L
+                var tooBig = false
+                c.inputStream.use { input ->
+                    FileOutputStream(out).use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > MAX_BYTES) {
+                                tooBig = true
+                                break
+                            }
+                            output.write(buf, 0, n)
                         }
-                        output.write(buf, 0, n)
                     }
                 }
+                if (tooBig) {
+                    out.delete()
+                    return null
+                }
+                return out
+            } catch (e: Exception) {
+                return null
+            } finally {
+                c.disconnect()
             }
-            if (tooBig) {
-                out.delete()
-                null
-            } else {
-                out
-            }
-        } catch (e: Exception) {
-            null
-        } finally {
-            conn?.disconnect()
         }
     }
 
-    private fun openFile(file: File) {
+    private fun openFile(file: File, kind: Kind) {
         val uri = Uri.parse("content://io.github.kd8pgk.nullbrowser.fileprovider/${Uri.encode(file.name)}")
-        val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: when (kind) {
+            Kind.PDF -> "application/pdf"
+            Kind.AUDIO -> "audio/*"
+            Kind.VIDEO -> "video/*"
+        }
         val intent = Intent(Intent.ACTION_VIEW)
         intent.setDataAndType(uri, mime)
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -294,8 +425,7 @@ class BrowserActivity : Activity() {
     }
 
     private fun guessFileName(url: String, contentDisposition: String?): String {
-        val m = contentDisposition?.let { Regex("filename=\"?([^\";]+)\"?").find(it) }
-        m?.groupValues?.get(1)?.let { return it }
+        contentDisposition?.let { FILENAME_RE.find(it) }?.groupValues?.get(1)?.let { return it }
         return Uri.parse(url).lastPathSegment ?: "file"
     }
 
@@ -305,28 +435,21 @@ class BrowserActivity : Activity() {
             goBlank()
             return
         }
-        if (t.contains(Regex("\\s"))) {
+        if (SPACE_RE.containsMatchIn(t)) {
             showNotice("Type a web address, for example example.com. There is no search box.")
             return
         }
-        var candidate = t
-        if (!Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE).containsMatchIn(t)) {
-            candidate = "https://$t"
-        }
-        val uri = try {
-            Uri.parse(candidate)
-        } catch (e: Exception) {
-            showNotice("That is not a web address.")
-            return
-        }
+        val candidate = if (SCHEME_RE.containsMatchIn(t)) t else "https://$t"
+        val uri = Uri.parse(candidate)
         if (uri.scheme != "http" && uri.scheme != "https") {
             showNotice("${uri.scheme} addresses are not opened here.")
             return
         }
-        hideError()
-        blank.visibility = View.GONE
-        web.visibility = View.VISIBLE
-        web.loadUrl(candidate)
+        if (uri.host.isNullOrEmpty()) {
+            showNotice("That is not a web address.")
+            return
+        }
+        navigate(candidate)
     }
 
     private fun goBlank() {
@@ -339,6 +462,7 @@ class BrowserActivity : Activity() {
 
     private fun refreshUi() {
         if (!editing) addr.setText(if (web.url == "about:blank") "" else web.url)
+        syncBack()
     }
 
     private fun hideError() {
@@ -366,14 +490,13 @@ class BrowserActivity : Activity() {
         errorMain.visibility = View.VISIBLE
         errorMain.setOnClickListener {
             allowHttp.add(host)
-            web.loadUrl(plainUrl)
+            navigate(plainUrl)
         }
         errorView.visibility = View.VISIBLE
         blank.visibility = View.GONE
     }
 
-    private fun showCertError(url: String) {
-        val host = Uri.parse(url).host ?: ""
+    private fun showCertError(host: String) {
         errorTitle.text = getString(R.string.cert_title)
         errorBody.text = getString(R.string.cert_body, host)
         errorMain.visibility = View.GONE
@@ -383,15 +506,27 @@ class BrowserActivity : Activity() {
 
     @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() {
-        if (web.canGoBack()) web.goBack() else super.onBackPressed()
+        if (!handleBack()) super.onBackPressed()
+    }
+
+    private fun wipe() {
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+        WebStorage.getInstance().deleteAllData()
+        downloadsDir(cacheDir).deleteRecursively()
     }
 
     override fun onDestroy() {
-        CookieManager.getInstance().removeAllCookies(null)
-        web.clearHistory()
-        web.clearCache(true)
-        WebStorage.getInstance().deleteAllData()
-        downloadsDir(cacheDir).deleteRecursively()
+        if (::web.isInitialized) {
+            if (!rendererGone) {
+                web.stopLoading()
+                web.clearHistory()
+                web.clearCache(true)
+            }
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.destroy()
+        }
+        wipe()
         super.onDestroy()
     }
 }
