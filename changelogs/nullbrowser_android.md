@@ -1,6 +1,18 @@
 # Null Browser Mobile changelog
 
-Current version: `0.3.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.4.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.4.0 (2026-11-25)
+
+Made for dial-up, as in the desktop build (0.11.0).
+
+- **Slow mode** (the new **Line** button: **Slow: Auto / On / Off**). Auto turns it on when a page takes over 3 seconds to show or images arrive at under about 16 KB/s. Nothing is saved: every start is Auto.
+- **Images in viewing order, one at a time.** In slow mode the page view's own image loading is held back while the text and layout arrive; Null Browser then fetches the page's pictures itself, one after another, in the order you read them (on screen top to bottom, then down the page, then above, small images and side ads last), and puts each in place as it lands. Scrolling moves what you are looking at to the front. When the pictures are done, anything left (backgrounds) loads normally. A status row shows the progress and line speed, with **Stop images**.
+- **A dropped line costs nothing already received.** Pictures and PDF, audio or video files resume from the byte they stopped at (up to five tries, waiting 2 to 32 seconds).
+- **Less to wait for.** In slow mode web fonts, link prefetch and link pings are answered empty, and video and audio are not preloaded.
+- **Images: On / Off** for text only, **Save-Data** (off by default; added to page loads and Null Browser's own fetches) and **Read ahead** (off by default: when a page is done, the next page's pictures are fetched into memory so they show at once).
+- **Known limits.** Android's page view cannot be told to hold one image and let another go, so in slow mode all picture loading goes through Null Browser's own fetcher; a site whose rules forbid in-page (`data:`) images gets its pictures the normal way once the queue is done. Save-Data cannot be added to the page view's own requests for pictures and scripts.
+- **Tests.** Unit tests for the line meter, the viewing order, resuming, the next-page link and the page's picture list.
 
 ## 0.3.0 (2026-11-25)
 

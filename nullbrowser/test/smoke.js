@@ -57,6 +57,29 @@ function walk(dir) {
   return out;
 }
 
+const panelLog = [];
+
+function pngOf(bytes) {
+  const zlib = require('node:zlib');
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(td) >>> 0);
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0);
+  ihdr.writeUInt32BE(1, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const head = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr)]);
+  const tail = Buffer.concat([chunk('IDAT', zlib.deflateSync(Buffer.from([0, 9, 99, 200]))), chunk('IEND', Buffer.alloc(0))]);
+  const text = Buffer.concat([Buffer.from('Fill\0', 'latin1'), Buffer.alloc(Math.max(0, bytes - head.length - tail.length - 18), 120)]);
+  return Buffer.concat([head, chunk('tEXt', text), tail]);
+}
+
 async function main() {
   const seenB = [];
   const seenA = [];
@@ -110,6 +133,35 @@ async function main() {
     if (q.url === '/trap') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>trap</title><div style="position:absolute;left:0;top:0;width:400px;height:300px"></div><script>addEventListener("beforeunload",(e)=>{e.preventDefault();e.returnValue="stay"})</script>');
+    }
+    if (q.url === '/comic') {
+      s.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': "img-src 'self'" });
+      return s.end('<!doctype html><title>comic</title><style>img{display:block;width:500px;height:400px;margin-bottom:20px}</style><p id="t">story</p><img src="/panel/1.png"><img src="/panel/2.png"><img src="/panel/3.png">');
+    }
+    if (q.url.startsWith('/panel/')) {
+      const name = q.url.slice(7).split('?')[0];
+      const body = pngOf(12 * 1024);
+      const range = /^bytes=(\d+)-$/.exec(String(q.headers.range || ''));
+      const from = range ? Number(range[1]) : 0;
+      panelLog.push(`${range ? 'range' : 'get'} ${name}${range ? `@${from}` : ''}`);
+      const headers = { 'Content-Type': 'image/png', 'Accept-Ranges': 'bytes', ETag: '"p"', 'Content-Length': body.length - from, 'Cache-Control': 'no-store' };
+      if (range) headers['Content-Range'] = `bytes ${from}-${body.length - 1}/${body.length}`;
+      s.writeHead(range ? 206 : 200, headers);
+      let at = from;
+      const cut = name === '2.png' && !range ? 6000 : -1;
+      const tick = () => {
+        if (s.destroyed) return;
+        if (cut >= 0 && at >= cut) return s.socket.destroy();
+        const end = Math.min(body.length, at + 2048, cut >= 0 ? cut : Infinity);
+        s.write(body.subarray(at, end));
+        at = end;
+        if (at >= body.length) {
+          panelLog.push(`done ${name}`);
+          return s.end();
+        }
+        return setTimeout(tick, 60);
+      };
+      return tick();
     }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
@@ -250,6 +302,30 @@ async function main() {
   await sleep(500);
   await go(`http://127.0.0.1:${portA}/two`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page that asks to stay cannot hold you');
+  await win.click('#line');
+  await win.waitForSelector('#lineset:not([hidden])');
+  await win.click('#ls-mode');
+  assert.equal(await win.textContent('#ls-mode'), 'Slow: On');
+  await go(`http://127.0.0.1:${portA}/comic`);
+  await waitFor(() => panelLog.filter((l) => l.startsWith('done')).length === 3, 'the comic panels load', 30000);
+  await waitFor(async () => (await pageEval("Array.from(document.images).every(function(i){return i.complete&&i.naturalWidth>0})")) === true, 'every panel shows on the page', 10000);
+  assert.deepEqual(panelLog, ['get 1.png', 'done 1.png', 'get 2.png', 'range 2.png@6000', 'done 2.png', 'get 3.png', 'done 3.png'], 'panels load one at a time, in order, and a cut-off panel resumes where it stopped');
+  panelLog.length = 0;
+  await win.click('#ls-images');
+  assert.equal(await win.textContent('#ls-images'), 'Images: Off');
+  await go(`http://127.0.0.1:${portA}/two`);
+  await go(`http://127.0.0.1:${portA}/comic`);
+  await waitFor(async () => (await pageEval("(document.getElementById('t')||{}).textContent||''")) === 'story', 'the text-only page');
+  await sleep(1000);
+  assert.deepEqual(panelLog, [], 'with images off no image is fetched');
+  await go(`http://127.0.0.1:${portA}/two`);
+  await win.click('#ls-images');
+  await win.click('#ls-mode');
+  await win.click('#ls-mode');
+  assert.equal(await win.textContent('#ls-mode'), 'Slow: Auto');
+  await win.click('#ls-close');
+  await win.waitForSelector('#lineset', { state: 'hidden' });
+
   const clip = (text) => app.evaluate(({ clipboard }, t) => (t === undefined ? clipboard.readText() : clipboard.writeText(t)), text);
   await go(`http://127.0.0.1:${portA}/clip`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/clip`, 'the clipboard page');

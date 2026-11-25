@@ -1,6 +1,19 @@
 # Null Browser changelog
 
-Current version: `0.10.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.11.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.11.0 (2026-11-25)
+
+Made for dial-up: a slow line, a web comic, a line that drops.
+
+- **Slow mode** (the new **Line** button, then **Slow: Auto / On / Off**). Auto turns it on when pages arrive at under about 16 KB/s or the first byte takes over 3 seconds, and off again above about 48 KB/s. Nothing is saved: every start is Auto.
+- **Images in viewing order, one at a time.** In slow mode the page text, style and scripts load first; images wait and are fetched one after another, in the order you read them: what is on screen top to bottom, then down the page, then anything above. Scrolling moves what you are looking at to the front. Small images (icons, buttons) and images beside the main column (side ads) wait until the rest is done. A status row shows "image 3 of 14, in viewing order" and the line speed, with **Stop images**.
+- **A dropped line costs nothing already received.** In slow mode Null Browser fetches the images itself and, when the line drops, asks again from the byte it stopped at (up to five tries, waiting 2 to 32 seconds); a panel that still fails is tried once more at the end. The finished image is handed to the page from memory. File downloads already resume in Chromium.
+- **Less to wait for.** In slow mode, web fonts (the system font is used), link prefetch, tracking pings and video or audio preloading are skipped.
+- **Images: On / Off**, for text only, slow or not. Off fetches no image at all; turning it back on loads the page's images.
+- **Save-Data** (off by default): asks sites for lighter pages. Sites can see it.
+- **Read ahead** (off by default): when a page is done and the line is idle, the next page (its `rel="next"` or Next link, same site only) and its images are fetched into memory, so Next opens without waiting for its images. Sites can see it. The read-ahead is dropped when you go to another site.
+- **Tests.** Unit tests for the line meter, the viewing order, the page image rule, resuming and the next-page link; the smoke test loads a three-panel comic in slow mode (one at a time, in order, with a cut-off panel resumed) and a text-only page. The attack lab adds slowlab (`attacklab/run-slow.js`): a throttled comic with a side ad, a cut-off panel, a scroll test, a web font and prefetch, a text-only page and a two-page read-ahead; all six pass.
 
 ## 0.10.0 (2026-11-25)
 
