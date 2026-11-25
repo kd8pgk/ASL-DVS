@@ -821,7 +821,7 @@ function register() {
     return null;
   };
   ipcMain.handle('tabs:drop', (e, arg) => {
-    if (!fromShell(e) || !arg || !str(arg.slot)) return { ok: false };
+    if (!fromShell(e) || !arg || !str(arg.slot) || !L.SLOTS.includes(arg.slot)) return { ok: false };
     const key = resolveKey(arg);
     if (!key) return { ok: false };
     update(L.putInSlot(ls, key, arg.slot));
