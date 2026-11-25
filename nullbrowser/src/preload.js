@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('nb', {
   dismissPopup: () => ipcRenderer.invoke('dismiss-popup'),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   removeBookmark: (id) => ipcRenderer.invoke('remove-bookmark', id),
+  requestFastJs: (on) => ipcRenderer.invoke('request-fast-js', on),
+  cancelFastJs: () => ipcRenderer.invoke('cancel-fast-js'),
+  confirmFastJs: () => ipcRenderer.invoke('confirm-fast-js'),
   onState: (cb) => ipcRenderer.on('state', (e, s) => cb(s)),
   onFocusAddress: (cb) => ipcRenderer.on('focus-address', () => cb()),
 });

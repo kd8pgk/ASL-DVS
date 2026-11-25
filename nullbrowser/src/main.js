@@ -19,7 +19,8 @@ if (app.isPackaged) {
 
 const base = R.ramBase(app.isPackaged ? '' : process.env.NULLBROWSER_RAM_BASE || '');
 R.cleanStale(base.dir);
-const ram = R.createRamDir(base.dir);
+const preDir = R.prelaunchDir(process.env.NULLBROWSER_PRELAUNCH_DIR);
+const ram = preDir ? R.adoptRamDir(preDir) : R.createRamDir(base.dir);
 
 process.env.HOME = ram.sub.home;
 process.env.XDG_CONFIG_HOME = ram.sub.config;
@@ -35,9 +36,15 @@ app.setPath('temp', ram.sub.temp);
 app.setPath('logs', path.join(ram.sub.temp, 'logs'));
 app.setPath('crashDumps', path.join(ram.sub.temp, 'crash'));
 
+const fastJs = process.argv.slice(1).includes(P.FAST_JS_ARG);
+
 app.commandLine.appendSwitch('disable-features', P.DISABLED_FEATURES.join(','));
-for (const sw of P.SWITCHES) app.commandLine.appendSwitch(sw);
-app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
+for (const sw of P.SWITCHES) {
+  const eq = sw.indexOf('=');
+  if (eq === -1) app.commandLine.appendSwitch(sw);
+  else app.commandLine.appendSwitch(sw.slice(0, eq), sw.slice(eq + 1));
+}
+if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const TOOLBAR = 44;
@@ -64,6 +71,7 @@ let pendingFile = null;
 let fileSeq = 0;
 let bookmarks = [];
 let bookmarkSeq = 0;
+let pendingJs = null;
 
 let cleanerStarted = false;
 
@@ -104,12 +112,14 @@ function state() {
     allowed: allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
     bookmarks: bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
+    fastJs,
+    jsAsk: pendingJs,
   };
 }
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1);
 }
 
 function layout() {
@@ -261,6 +271,7 @@ function hardenPage(s) {
   s.setPermissionCheckHandler(() => false);
   s.setDevicePermissionHandler(() => false);
   s.setSpellCheckerEnabled(false);
+  s.setSpellCheckerLanguages([]);
   s.setUserAgent(P.chromiumUserAgent(s.getUserAgent()));
   s.on('will-download', onDownload);
   s.webRequest.onBeforeRequest((details, callback) => {
@@ -307,6 +318,7 @@ function hardenShell(s) {
   s.setPermissionCheckHandler(() => false);
   s.setDevicePermissionHandler(() => false);
   s.setSpellCheckerEnabled(false);
+  s.setSpellCheckerLanguages([]);
   s.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !/^(file|data):/i.test(details.url) }));
 }
 
@@ -511,8 +523,17 @@ function fromShell(e) {
   return alive() && e.sender === win.webContents;
 }
 
+let shellReady = false;
+
 function register() {
-  ipcMain.handle('state', (e) => (fromShell(e) ? state() : null));
+  ipcMain.handle('state', (e) => {
+    if (!fromShell(e)) return null;
+    if (!shellReady) {
+      shellReady = true;
+      process.stderr.write('shell-ready\n');
+    }
+    return state();
+  });
   ipcMain.handle('go', (e, text) => {
     if (!fromShell(e)) return { error: 'Not allowed.' };
     const r = P.normalizeInput(text);
@@ -618,6 +639,25 @@ function register() {
     if (!fromShell(e)) return { ok: false };
     bookmarks = bookmarks.filter((b) => b.id !== id);
     push();
+    return { ok: true };
+  });
+  ipcMain.handle('request-fast-js', (e, on) => {
+    if (!fromShell(e)) return { ok: false };
+    if (Boolean(on) === fastJs) return { ok: true };
+    pendingJs = Boolean(on);
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('cancel-fast-js', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    pendingJs = null;
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('confirm-fast-js', (e) => {
+    if (!fromShell(e) || pendingJs === null) return { ok: false };
+    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), pendingJs) });
+    app.quit();
     return { ok: true };
   });
 }

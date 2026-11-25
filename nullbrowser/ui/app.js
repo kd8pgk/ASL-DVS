@@ -3,6 +3,7 @@
   let editing = false;
   let askId = 0;
   let bmOpen = false;
+  let fastJsNow = false;
 
   function renderBookmarks(list) {
     const ul = $('bm-list');
@@ -71,7 +72,19 @@
     }
     show($('popbar'), Boolean(s.popup));
     $('pop-text').textContent = s.popup ? `A pop-up from ${s.popup} was blocked.` : '';
-    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0);
+    fastJsNow = Boolean(s.fastJs);
+    $('fastjs').textContent = s.fastJs ? 'JIT: On' : 'JIT: Off';
+    $('fastjs').title = s.fastJs
+      ? 'Faster JavaScript is on for this run. Turning it off restarts Null Browser.'
+      : 'Turn on faster JavaScript (restarts Null Browser now; off again next time you start it).';
+    const jsAsking = s.jsAsk !== null && s.jsAsk !== undefined;
+    show($('jsbar'), jsAsking);
+    if (jsAsking) {
+      $('jsbar-text').textContent = s.jsAsk
+        ? 'Turn on faster JavaScript? Null Browser restarts now, and goes back to JIT off the next time you start it.'
+        : 'Turn off faster JavaScript and go back to JIT off? Null Browser restarts now.';
+    }
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0);
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
@@ -153,6 +166,9 @@
     show($('bm-panel'), bmOpen);
   });
   $('bm-import').addEventListener('click', () => window.nb.importBookmarks());
+  $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
+  $('jsbar-yes').addEventListener('click', () => window.nb.confirmFastJs());
+  $('jsbar-no').addEventListener('click', () => window.nb.cancelFastJs());
   document.addEventListener('click', (ev) => {
     if (bmOpen && ev.target !== $('bm') && !$('bm-panel').contains(ev.target)) {
       bmOpen = false;

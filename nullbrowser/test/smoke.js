@@ -119,10 +119,10 @@ async function main() {
   const openLog = path.join(tmp, 'opened.log');
   fs.mkdirSync(ramBase);
   fs.mkdirSync(realHome);
-  const launch = () => _electron.launch({
+  const launch = (extra = [], envExtra = {}) => _electron.launch({
     executablePath: require('electron'),
-    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1'],
-    env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache') },
+    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1', ...extra],
+    env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache'), ...envExtra },
   });
   const warm = await launch();
   await waitFor(() => warm.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the warm-up window');
@@ -151,6 +151,13 @@ async function main() {
   assert.ok(inside.home.startsWith(ramBase) && inside.user.startsWith(ramBase), 'home and the Chromium profile are in the RAM folder');
   const ramDirs = fs.readdirSync(ramBase).filter((n) => n.startsWith('null-browser-'));
   assert.equal(ramDirs.length, 1);
+
+  const spell = await app.evaluate(({ session: s2, BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0];
+    return { default: s2.defaultSession.getSpellCheckerLanguages(), page: view.webContents.session.getSpellCheckerLanguages() };
+  });
+  assert.deepEqual(spell.default, [], 'no dictionary is ever fetched for the default session');
+  assert.deepEqual(spell.page, [], 'no dictionary is ever fetched for the page session');
 
   await go(`127.0.0.1:${portA}/`.replace(/^/, 'http://'));
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'the first page');
@@ -300,6 +307,13 @@ async function main() {
   await win.waitForSelector('#bm-empty:not([hidden])');
   assert.match(await win.textContent('#bm'), /☆/, 'the bookmark star shows empty once the list is empty');
 
+  assert.match(await win.textContent('#fastjs'), /JIT: Off/);
+  await win.click('#fastjs');
+  await win.waitForSelector('#jsbar:not([hidden])');
+  assert.match(await win.textContent('#jsbar-text'), /Turn on faster JavaScript/);
+  await win.click('#jsbar-no');
+  await win.waitForFunction(() => document.getElementById('jsbar').hidden);
+
   await win.click('#home');
   await win.waitForSelector('#blank:not([hidden])');
 
@@ -314,6 +328,29 @@ async function main() {
   }
   assert.deepEqual(fs.readdirSync(ramBase), [], 'nothing is left in the RAM base');
   assert.deepEqual(snapshot(realHome), homeBefore, 'nothing was added to or changed in the real home folder');
+
+  const preDir = path.join(ramBase, 'null-browser-0-999999-prelaunch');
+  fs.mkdirSync(preDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(preDir, 'pid'), String(process.pid));
+  for (const sub of ['home', 'config', 'cache', 'data', 'state', 'chromium', 'session', 'temp', 'files']) fs.mkdirSync(path.join(preDir, sub), { mode: 0o700 });
+  const adopted = await launch([], { NULLBROWSER_PRELAUNCH_DIR: preDir });
+  await waitFor(() => adopted.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the adopted-folder window');
+  await waitFor(() => fs.readdirSync(ramBase).filter((n) => n.startsWith('null-browser-')).length === 1, 'no second RAM folder is created alongside the adopted one');
+  assert.deepEqual(fs.readdirSync(ramBase).filter((n) => n.startsWith('null-browser-')), ['null-browser-0-999999-prelaunch']);
+  await adopted.close();
+  await waitFor(() => !fs.existsSync(preDir), 'the adopted folder is removed on quit too');
+
+  const fast = await launch(['--nb-fast-js']);
+  await waitFor(() => fast.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the faster-JavaScript window');
+  const fastWin = fast.windows().find((w) => w.url().endsWith('/ui/index.html'));
+  await fastWin.waitForLoadState('domcontentloaded');
+  await fastWin.waitForFunction(() => window.nb !== undefined);
+  const fastState = await fastWin.evaluate(() => window.nb.state());
+  assert.equal(fastState.fastJs, true, 'the marker switches JIT back on for this run');
+  assert.match(await fastWin.textContent('#fastjs'), /JIT: On/);
+  assert.equal(await fast.evaluate(({ app: a2 }) => a2.commandLine.getSwitchValue('js-flags')), '', 'no --jitless is passed this run');
+  await fast.close();
+  await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the faster-JavaScript run also cleans up its RAM folder');
 
   for (const sv of [a, b, plain, tls]) sv.close();
   console.log('smoke ok');
