@@ -39,7 +39,11 @@ app.setPath('crashDumps', path.join(ram.sub.temp, 'crash'));
 const fastJs = process.argv.slice(1).includes(P.FAST_JS_ARG);
 
 app.commandLine.appendSwitch('disable-features', P.DISABLED_FEATURES.join(','));
-for (const sw of P.SWITCHES) app.commandLine.appendSwitch(sw);
+for (const sw of P.SWITCHES) {
+  const eq = sw.indexOf('=');
+  if (eq === -1) app.commandLine.appendSwitch(sw);
+  else app.commandLine.appendSwitch(sw.slice(0, eq), sw.slice(eq + 1));
+}
 if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 

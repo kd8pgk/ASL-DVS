@@ -10,6 +10,8 @@ const DISABLED_FEATURES = [
   'NetworkTimeServiceQuerying',
   'Prerender2',
   'SpareRendererForSitePerProcess',
+  'DnsOverHttpsUpgrade',
+  'AsyncDns',
 ];
 
 const SWITCHES = [
@@ -24,6 +26,7 @@ const SWITCHES = [
   'disable-gpu-program-cache',
   'no-pings',
   'no-default-browser-check',
+  'dns-over-https-mode=off',
 ];
 
 const JS_FLAGS = '--jitless';

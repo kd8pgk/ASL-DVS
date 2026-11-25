@@ -64,6 +64,9 @@ test('JIT is off, and the packaged app refuses debugging and certificate switche
   assert.equal(P.JS_FLAGS, '--jitless');
   assert.deepEqual(P.unsafeSwitches(['--remote-debugging-port=9222', '--ignore-certificate-errors', '--js-flags=--expose-gc', '--disable-gpu']), ['remote-debugging-port', 'ignore-certificate-errors', 'js-flags']);
   assert.ok(P.SWITCHES.includes('disable-background-networking'));
+  assert.ok(P.SWITCHES.includes('dns-over-https-mode=off'), 'no automatic DNS-over-HTTPS probe to Google at idle');
+  assert.ok(P.DISABLED_FEATURES.includes('DnsOverHttpsUpgrade'));
+  assert.ok(P.DISABLED_FEATURES.includes('AsyncDns'));
 });
 
 test('the faster-JavaScript marker is added or removed from the relaunch args without disturbing the rest, and never duplicated', () => {
