@@ -107,6 +107,10 @@ async function main() {
       const imgs = Array.from({ length: 15 }, (_, i) => `<img src="https://fanout-${i}.invalid/x.png">`).join('');
       return s.end(`<!doctype html><title>fanout</title>${imgs}`);
     }
+    if (q.url === '/trap') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>trap</title><div style="position:absolute;left:0;top:0;width:400px;height:300px"></div><script>addEventListener("beforeunload",(e)=>{e.preventDefault();e.returnValue="stay"})</script>');
+    }
     if (q.url === '/busy') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>busy</title><script>const t=Date.now()+26000;while(Date.now()<t){}</script>');
@@ -226,6 +230,18 @@ async function main() {
   });
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a clicked new-tab link opens in the same page');
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+
+  await go(`http://127.0.0.1:${portA}/trap`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/trap`, 'the leave-site trap page');
+  await sleep(500);
+  await app.evaluate(({ BrowserWindow }) => {
+    const wc = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents;
+    wc.sendInputEvent({ type: 'mouseDown', x: 100, y: 100, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: 100, y: 100, button: 'left', clickCount: 1 });
+  });
+  await sleep(500);
+  await go(`http://127.0.0.1:${portA}/two`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page that asks to stay cannot hold you');
 
   await go(`http://127.0.0.1:${portA}/file`);
   await win.waitForFunction(() => /Downloads are off/.test(document.getElementById('notice').textContent));
