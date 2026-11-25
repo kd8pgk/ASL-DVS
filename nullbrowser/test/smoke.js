@@ -58,6 +58,7 @@ function walk(dir) {
 }
 
 const panelLog = [];
+const fpSeen = [];
 
 function pngOf(bytes) {
   const zlib = require('node:zlib');
@@ -162,6 +163,11 @@ async function main() {
         return setTimeout(tick, 60);
       };
       return tick();
+    }
+    if (q.url === '/fp') {
+      fpSeen.push({ lang: q.headers['accept-language'] || '', ua: q.headers['user-agent'] || '', hints: Object.keys(q.headers).filter((k) => /^(sec-ch-ua-|ect$|rtt$|downlink$|device-memory$)/.test(k) && !['sec-ch-ua-mobile', 'sec-ch-ua-platform'].includes(k)) });
+      s.writeHead(200, { 'Content-Type': 'text/html', 'Accept-CH': 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version, ECT, Device-Memory' });
+      return s.end('<!doctype html><title>fp</title><p>fp</p>');
     }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
@@ -325,6 +331,21 @@ async function main() {
   assert.equal(await win.textContent('#ls-mode'), 'Slow: Auto');
   await win.click('#ls-close');
   await win.waitForSelector('#lineset', { state: 'hidden' });
+
+  await go(`http://127.0.0.1:${portA}/fp`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/fp`, 'the minimal-info page');
+  await go(`http://127.0.0.1:${portA}/two`);
+  await go(`http://127.0.0.1:${portA}/fp`);
+  await waitFor(() => fpSeen.length >= 2, 'the minimal-info page twice');
+  for (const f of fpSeen) {
+    assert.doesNotMatch(f.ua, /NullBrowser|Electron|null-browser/i, 'the user agent names no app');
+    assert.match(f.ua, /Chrome\/\d+\.0\.0\.0 Safari/, 'the Chrome version is the short one Chrome itself sends');
+    assert.doesNotMatch(f.lang, /,/, 'one language');
+    assert.deepEqual(f.hints, [], 'no detailed hints even after the site asked');
+  }
+  const js = await pageEval("JSON.stringify(['connection','deviceMemory','hardwareConcurrency','getBattery'].map(function(k){return k in navigator}))");
+  assert.equal(js, '[false,false,false,false]', 'scripts cannot read line speed, memory, cores or battery');
+  assert.equal(await pageEval("navigator.userAgentData.getHighEntropyValues(['model','platformVersion','fullVersionList','architecture']).then(function(v){return Object.keys(v).sort().join(',')})"), 'brands,mobile,platform', 'only the basic hints are given to scripts');
 
   const clip = (text) => app.evaluate(({ clipboard }, t) => (t === undefined ? clipboard.readText() : clipboard.writeText(t)), text);
   await go(`http://127.0.0.1:${portA}/clip`);

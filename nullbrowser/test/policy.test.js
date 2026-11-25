@@ -84,3 +84,39 @@ test('the faster-JavaScript marker is added or removed from the relaunch args wi
   assert.deepEqual(P.relaunchArgv([], false), []);
   assert.ok(P.unsafeSwitches([P.FAST_JS_ARG]).length === 0, 'the marker itself is never treated as an unsafe switch');
 });
+
+test('the user agent is plain Chromium with the version Chrome itself sends', () => {
+  const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) NullBrowser/0.11.0 Chrome/152.0.7977.169 Electron/44.11.5 Safari/537.36';
+  assert.equal(P.chromiumUserAgent(ua), 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36');
+});
+
+test('one language is sent', () => {
+  assert.equal(P.firstLanguage(['de_DE.UTF-8', 'en-US'], 'fr'), 'de-DE');
+  assert.equal(P.firstLanguage([], 'fr-CA'), 'fr-CA');
+  assert.equal(P.firstLanguage([], ''), 'en-US');
+});
+
+test('only the three basic browser hints are kept', () => {
+  for (const h of ['Sec-CH-UA', 'sec-ch-ua-mobile', 'Sec-CH-UA-Platform']) assert.equal(P.isExtraHint(h), false);
+  for (const h of ['Sec-CH-UA-Model', 'sec-ch-ua-platform-version', 'Sec-CH-UA-Full-Version-List', 'ECT', 'RTT', 'Downlink', 'Device-Memory', 'Sec-CH-DPR', 'Viewport-Width']) assert.equal(P.isExtraHint(h), true);
+  assert.equal(P.isExtraHint('Accept'), false);
+});
+
+test('the Referer is cut to the site name across sites and dropped from https to http', () => {
+  assert.equal(P.trimReferer('https://a.com/page?secret=1', 'https://b.com/x'), 'https://a.com/');
+  assert.equal(P.trimReferer('https://www.a.com/page?secret=1', 'https://img.a.com/x'), 'https://www.a.com/page?secret=1');
+  assert.equal(P.trimReferer('https://a.com/page', 'http://a.com/x'), '');
+  assert.equal(P.trimReferer('', 'https://b.com/'), '');
+});
+
+test('request headers are trimmed and nothing is invented', () => {
+  const r = P.minimalRequestHeaders({ Accept: '*/*', 'Accept-Language': 'en-US,en;q=0.9,de;q=0.8', 'Sec-CH-UA-Model': '"Pixel"', ECT: '4g', Referer: 'https://a.com/p?q=1' }, 'https://b.com/', 'en-US');
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.headers, { Accept: '*/*', 'Accept-Language': 'en-US', Referer: 'https://a.com/' });
+  assert.equal(P.minimalRequestHeaders({ Accept: '*/*' }, 'https://b.com/', 'en-US').changed, false);
+});
+
+test('a site cannot ask for more hints', () => {
+  assert.deepEqual(P.dropHintAsks({ 'Accept-CH': 'Sec-CH-UA-Model', 'Critical-CH': 'Sec-CH-UA-Model', 'Content-Type': 'text/html' }), { 'Content-Type': 'text/html' });
+  assert.equal(P.dropHintAsks({ 'Content-Type': 'text/html' }), null);
+});
