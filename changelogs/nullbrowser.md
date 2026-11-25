@@ -1,6 +1,16 @@
 # Null Browser changelog
 
-Current version: `0.1.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.2.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.2.0 (2026-11-25)
+
+Files handed to your own apps, pop-ups sent to nowhere, and sign-ins that need a pop-up.
+
+- **PDF, audio and video open in your own apps, after asking.** Opening a PDF, a sound file or a video shows a bar: *Open report.pdf (PDF, 2.1 MB) in your PDF viewer?* with **Open** and **Cancel**. The file is fetched into the RAM folder (never your Downloads folder), and handed to the system's default app only after **Open**; **Cancel** deletes it. Before it is handed on, its first bytes are checked: a file that says it is a PDF but is not (a web page, a program) is deleted with a notice and not opened. Up to 512 MB, one file at a time. Every other download is still refused. Null Browser has no PDF viewer or media player of its own; the file is removed with the RAM folder when Null Browser quits, so to keep it, save a copy from the other app first.
+- **Pop-ups accepted, then dropped.** A pop-up opened by a script no longer gets an error a site could notice: it opens as a hidden, muted window that loads nothing (every request it makes is cancelled) and is closed after 3 seconds. A bar says a pop-up was blocked.
+- **Allow for this site.** The same bar has **Allow for this site**, for sign-ins that need a pop-up ("Sign in with…"). Until Null Browser closes, that site's pop-ups open as real windows (with no menu, no further pop-ups of their own, and the same certificate and address rules) and its third-party cookies are kept, in memory, so the sign-in can finish.
+- **Fixed in the test:** the third-party test cookie lacked `Secure`, so Chromium refused it on its own and the "never sent back" check could not fail. It now uses `SameSite=None; Secure`, and the check fails if the cookie rule is turned off.
+- **Tests.** The file type, content check, name and question rules as unit tests; in a real window: a PDF asks, **Cancel** opens nothing, **Open** hands it on, a fake PDF is refused, an mp3 asks, a script pop-up is dropped and its request never reaches the server, **Allow for this site** opens a real pop-up and keeps a third-party sign-in cookie.
 
 ## 0.1.0 (2026-11-25)
 

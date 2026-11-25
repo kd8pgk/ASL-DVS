@@ -239,14 +239,21 @@
     acceleration is off, and the packaged launcher in 0.5.0 is to set the
     folders before Chromium starts).
   - No log file, crash reporter, telemetry, updater, history or saved setting.
-  - No downloads. Camera, microphone, location, notifications and every device
-    are denied. Only http and https pages; subresources also ws, wss, data and
+  - No downloads. A PDF, audio or video file (by type, checked against its
+    first bytes) is fetched into the RAM folder and handed to the system app
+    only after the user answers **Open** (never before; a file that finishes
+    first waits for the answer). Anything else is refused. Camera, microphone,
+    location, notifications and every device are denied. Only http and https pages; subresources also ws, wss, data and
     blob.
   - https first (public http is upgraded; "Open anyway (not secure)" when a site
     has none). Certificate errors are refused; only hosts on a private network
     may be trusted, and only until it closes.
   - Third-party cookies are accepted and dropped: never stored, never sent.
-    Script pop-ups are refused; a clicked new-tab link opens in the same page.
+    Script pop-ups are accepted and dropped (a hidden, muted window whose
+    requests are all cancelled, closed after 3 s); a clicked new-tab link opens
+    in the same page. **Allow for this site** (until it closes) lets that
+    site's pop-ups open for real and keeps its third-party cookies, in memory,
+    for sign-ins.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
@@ -266,9 +273,7 @@
 - **Run before pushing:** `npm test` and `xvfb-run -a npm run smoke` in
   `nullbrowser/`, plus `python3 ci/check_repo.py --base origin/main`. The
   `nullbrowser` workflow runs them on every change.
-- **Planned:** 0.2.0 PDF, audio and video handed to the system app after asking
-  (from the RAM folder), pop-ups accepted and dropped, and "Allow for this site"
-  for logins (pop-ups and their third-party cookies, in RAM); 0.3.0 bookmark
+- **Planned:** 0.3.0 bookmark
   import kept in RAM; 0.4.0 a per-run "Faster JavaScript" switch; 0.5.0 the
   packaged AppImage, launcher and icon.
 

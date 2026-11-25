@@ -67,6 +67,23 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="thing.bin"' });
       return s.end('secret bytes');
     }
+    if (q.url === '/doc.pdf') {
+      const body = Buffer.from('%PDF-1.4\n% test document\n');
+      s.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': body.length });
+      return s.end(body);
+    }
+    if (q.url === '/fake.pdf') {
+      s.writeHead(200, { 'Content-Type': 'application/pdf' });
+      return s.end('<!doctype html><script>alert(1)</script>');
+    }
+    if (q.url === '/talk.mp3') {
+      s.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+      return s.end(Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(64)]));
+    }
+    if (q.url === '/popup-target') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>popup</title><p>popup</p>');
+    }
     if (q.url === '/two') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>page two</title><p>two</p>');
@@ -78,7 +95,7 @@ async function main() {
   });
   const b = http.createServer((q, s) => {
     seenB.push({ url: q.url, cookie: q.headers.cookie || '' });
-    s.writeHead(200, { 'Content-Type': 'image/gif', 'Set-Cookie': 'tp=1; Path=/; SameSite=None' });
+    s.writeHead(200, { 'Content-Type': 'image/gif', 'Set-Cookie': 'tp=1; Path=/; SameSite=None; Secure' });
     s.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64'));
   });
   const plain = http.createServer((q, s) => {
@@ -99,12 +116,13 @@ async function main() {
 
   const ramBase = path.join(tmp, 'ram');
   const realHome = path.join(tmp, 'home');
+  const openLog = path.join(tmp, 'opened.log');
   fs.mkdirSync(ramBase);
   fs.mkdirSync(realHome);
   const launch = () => _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1'],
-    env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache') },
+    env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache') },
   });
   const warm = await launch();
   await waitFor(() => warm.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the warm-up window');
@@ -154,9 +172,14 @@ async function main() {
   })()`, true);
   assert.deepEqual(perms, { n: 'denied', cam: 'refused', geo: 'refused' });
 
-  assert.equal(await pageEval(`window.open('http://127.0.0.1:${portA}/two') === null`), true, 'a script pop-up gets nothing');
-  await sleep(500);
-  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+  const windows = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).map((w) => ({ visible: w.isVisible(), url: w.webContents.getURL() })));
+  assert.equal(await pageEval(`(() => { const w = window.open('http://127.0.0.1:${portA}/popup-target'); return w !== null && typeof w === 'object'; })()`), true, 'a script pop-up gets a window back');
+  await win.waitForSelector('#popbar:not([hidden])');
+  assert.match(await win.textContent('#pop-text'), /A pop-up from 127\.0\.0\.1 was blocked/);
+  const during = await windows();
+  assert.equal(during.filter((w) => w.visible).length, 1, 'the dropped pop-up is never shown');
+  await waitFor(async () => (await windows()).length === 1, 'the dropped pop-up is closed after a few seconds', 8000);
+  assert.equal(seenA.some((r) => r.url === '/popup-target'), false, 'the dropped pop-up loads nothing');
   assert.equal(await pageUrl(), `http://127.0.0.1:${portA}/`);
 
   await app.evaluate(({ BrowserWindow }) => {
@@ -170,6 +193,61 @@ async function main() {
 
   await go(`http://127.0.0.1:${portA}/file`);
   await win.waitForFunction(() => /Downloads are off/.test(document.getElementById('notice').textContent));
+
+  const ramFiles = () => {
+    const d = fs.readdirSync(ramBase).find((n) => n.startsWith('null-browser-'));
+    return d ? fs.readdirSync(path.join(ramBase, d, 'files')) : [];
+  };
+  await go(`http://127.0.0.1:${portA}/two`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'back on a page');
+  await go(`http://127.0.0.1:${portA}/doc.pdf`);
+  await win.waitForSelector('#ask:not([hidden])');
+  assert.match(await win.textContent('#ask-text'), /^Open doc\.pdf \(PDF, \d+ bytes\) in your PDF viewer\?/);
+  assert.equal(await pageUrl(), `http://127.0.0.1:${portA}/two`, 'the page stays where it was');
+  await win.click('#ask-cancel');
+  await win.waitForSelector('#ask', { state: 'hidden' });
+  await sleep(300);
+  assert.deepEqual(ramFiles(), [], 'a cancelled file is not kept');
+  assert.equal(fs.existsSync(openLog), false, 'a cancelled file is not opened');
+  await go(`http://127.0.0.1:${portA}/doc.pdf`);
+  await win.waitForSelector('#ask:not([hidden])');
+  await win.click('#ask-open');
+  await waitFor(() => fs.existsSync(openLog), 'the PDF is handed to the system app');
+  const opened = fs.readFileSync(openLog, 'utf8').trim().split('\n');
+  assert.equal(opened.length, 1);
+  assert.ok(opened[0].startsWith(ramBase), 'the handed-off file is in the RAM folder');
+  assert.match(fs.readFileSync(opened[0], 'utf8'), /^%PDF-1\.4/);
+  await go(`http://127.0.0.1:${portA}/fake.pdf`);
+  await win.waitForSelector('#ask:not([hidden])');
+  await win.click('#ask-open');
+  await win.waitForFunction(() => /fake\.pdf is not really a PDF/.test(document.getElementById('notice').textContent));
+  assert.equal(fs.readFileSync(openLog, 'utf8').trim().split('\n').length, 1, 'a file that is not what it claims is not opened');
+  assert.equal(ramFiles().some((n) => n.endsWith('fake.pdf')), false, 'and is not kept');
+  await go(`http://127.0.0.1:${portA}/talk.mp3`);
+  await win.waitForSelector('#ask:not([hidden])');
+  assert.match(await win.textContent('#ask-text'), /talk\.mp3 \(audio(, [^)]*)?\) in your music player/);
+  await win.click('#ask-open');
+  await waitFor(() => fs.readFileSync(openLog, 'utf8').trim().split('\n').length === 2, 'the audio file is handed on');
+
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'page one again');
+  await pageEval(`window.open('http://127.0.0.1:${portA}/popup-target'); true`);
+  await win.waitForSelector('#popbar:not([hidden])');
+  await win.click('#pop-allow');
+  await win.waitForFunction(() => /allowed for 127\.0\.0\.1 until Null Browser closes/.test(document.getElementById('notice').textContent));
+  const before = seenA.filter((r) => r.url === '/popup-target').length;
+  await pageEval(`window.open('http://127.0.0.1:${portA}/popup-target', 'login', 'width=500,height=600'); true`);
+  await waitFor(async () => (await windows()).some((w) => w.visible && w.url.endsWith('/popup-target')), 'an allowed pop-up opens for real');
+  assert.equal(seenA.filter((r) => r.url === '/popup-target').length, before + 1);
+  await app.evaluate(({ BrowserWindow }) => { for (const w of BrowserWindow.getAllWindows()) if (w.webContents.getURL().endsWith('/popup-target')) w.destroy(); });
+  const bBefore = seenB.length;
+  await go(`http://127.0.0.1:${portA}/two`);
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(() => seenB.length >= bBefore + 1, 'the pixel again');
+  await go(`http://127.0.0.1:${portA}/two`);
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(() => seenB.length >= bBefore + 2, 'the pixel once more');
+  assert.match(seenB[seenB.length - 1].cookie, /tp=1/, 'on an allowed site third-party sign-in cookies are kept for the session');
 
   await go(`http://pub.test:${portTls}/`);
   await win.waitForSelector('#msg:not([hidden])');

@@ -1,6 +1,7 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   let editing = false;
+  let askId = 0;
 
   function show(el, on) {
     el.hidden = !on;
@@ -28,6 +29,17 @@
     document.title = s.title ? `${s.title} - Null Browser` : 'Null Browser';
     show($('notice'), Boolean(s.notice));
     $('notice').textContent = s.notice || '';
+    askId = s.ask ? s.ask.id : 0;
+    show($('ask'), Boolean(s.ask));
+    if (s.ask) {
+      $('ask-text').textContent = s.ask.busy ? `${s.ask.text} Loading\u2026` : s.ask.text;
+      $('ask-open').disabled = s.ask.busy;
+      $('ask-cancel').disabled = s.ask.busy;
+    }
+    show($('popbar'), Boolean(s.popup));
+    $('pop-text').textContent = s.popup ? `A pop-up from ${s.popup} was blocked.` : '';
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0);
+    document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
     renderError(s.error);
@@ -65,13 +77,8 @@
     }
   }
 
-  async function go(text) {
-    const r = await window.nb.go(text);
-    if (r && r.error) {
-      $('notice').textContent = r.error;
-      show($('notice'), true);
-      setTimeout(() => show($('notice'), false), 5000);
-    }
+  function go(text) {
+    window.nb.go(text);
   }
 
   $('form').addEventListener('submit', (ev) => {
@@ -102,6 +109,10 @@
   });
   $('home').addEventListener('click', () => window.nb.nav('home'));
   $('msg-retry').addEventListener('click', () => window.nb.nav('reload'));
+  $('ask-open').addEventListener('click', () => window.nb.fileAnswer(askId, true));
+  $('ask-cancel').addEventListener('click', () => window.nb.fileAnswer(askId, false));
+  $('pop-allow').addEventListener('click', () => window.nb.allowSite());
+  $('pop-close').addEventListener('click', () => window.nb.dismissPopup());
   window.nb.onState(render);
   window.nb.onFocusAddress(() => $('addr').focus());
   window.nb.state().then(render);
