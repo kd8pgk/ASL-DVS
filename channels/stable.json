@@ -47,13 +47,13 @@
    "version": "7.5.0"
   },
   "instmon": {
-   "blob": "e5ca58d0c4cad2a2dd6d908d6cfa13325528e49a",
-   "commit": "546950a363d3bb02fce7cf771b12194782e2d0a7",
-   "file": "instmon_v2_114_0_20261121.py",
-   "landed": "2026-11-21T22:25:05Z",
-   "promoted": "2026-11-24T22:25:05Z",
+   "blob": "76c28ff85d33d63600dd1c922ec85994a6bc0296",
+   "commit": "121df06433cfeb4375d13b6a196d55287d7b757b",
+   "file": "instmon_v2_115_0_20261121.py",
+   "landed": "2026-11-22T00:01:04Z",
+   "promoted": "2026-11-25T00:01:04Z",
    "reason": "count",
-   "version": "2.114.0"
+   "version": "2.115.0"
   },
   "nodecontrol": {
    "blob": "3048647192a793761052308aa873bd074926bf41",
