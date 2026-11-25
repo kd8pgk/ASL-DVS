@@ -759,7 +759,12 @@ function register() {
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (r.canceled || !r.filePath) return { canceled: true };
-    fs.writeFileSync(r.filePath, exportText(nodes));
+    try {
+      fs.writeFileSync(r.filePath, exportText(nodes));
+    } catch (err) {
+      logLine(`export failed: ${err && err.code ? err.code : err}`);
+      return { error: 'The node list could not be written there. Pick another folder.' };
+    }
     return { path: r.filePath };
   });
   ipcMain.handle('nodes:import', async (e) => {
