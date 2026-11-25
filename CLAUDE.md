@@ -233,7 +233,10 @@
     that is removed on quit, by a detached shell command that waits for the
     browser to end (Chromium writes after the last JavaScript runs), and at the
     next start if a crash left it. The smoke test checks that nothing is left
-    there or in the real home folder.
+    there, and that nothing in the real home folder is added or changed (the
+    test builds the font index first: fontconfig and the GPU process start
+    before the app can move `HOME`, which is why GPU acceleration is off; the
+    packaged launcher in 0.5.0 is to set the folders before Chromium starts).
   - No log file, crash reporter, telemetry, updater, history or saved setting.
   - No downloads. Camera, microphone, location, notifications and every device
     are denied. Only http and https pages; subresources also ws, wss, data and

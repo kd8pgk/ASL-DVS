@@ -38,6 +38,15 @@ function listen(server) {
   return new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
 }
 
+function snapshot(dir) {
+  const out = {};
+  for (const p of walk(dir)) {
+    const st = fs.statSync(p);
+    out[p.slice(dir.length)] = st.isDirectory() ? 'dir' : `${st.size}:${st.mtimeMs}`;
+  }
+  return out;
+}
+
 function walk(dir) {
   const out = [];
   for (const name of fs.readdirSync(dir)) {
@@ -92,6 +101,12 @@ async function main() {
   const realHome = path.join(tmp, 'home');
   fs.mkdirSync(ramBase);
   fs.mkdirSync(realHome);
+  try {
+    execFileSync('fc-cache', [], { stdio: 'ignore', env: { ...process.env, HOME: realHome, XDG_CACHE_HOME: path.join(realHome, '.cache') } });
+  } catch {
+    process.stderr.write('note: fc-cache not available; the font index is not prepared\n');
+  }
+  const homeBefore = snapshot(realHome);
   const app = await _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1'],
@@ -187,7 +202,7 @@ async function main() {
     throw e;
   }
   assert.deepEqual(fs.readdirSync(ramBase), [], 'nothing is left in the RAM base');
-  assert.deepEqual(walk(realHome).map((p) => p.slice(realHome.length)), [], 'nothing was written to the real home folder');
+  assert.deepEqual(snapshot(realHome), homeBefore, 'nothing was added to or changed in the real home folder');
 
   for (const sv of [a, b, plain, tls]) sv.close();
   console.log('smoke ok');
