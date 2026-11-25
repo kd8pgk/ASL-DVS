@@ -734,6 +734,38 @@
     notice('Split saved.');
   }
 
+  let launcher = null;
+
+  function renderLauncher() {
+    const b = $('launcher');
+    if (!launcher || !launcher.available) {
+      b.hidden = true;
+      return;
+    }
+    b.hidden = false;
+    if (!launcher.installed) {
+      b.textContent = 'Add to menu';
+      b.title = 'Add Node Controller Desktop to the app menu and the desktop';
+    } else if (!launcher.fromInstalled) {
+      b.textContent = 'Update menu copy';
+      b.title = `Replace the copy the menu starts (${launcher.installedVersion || 'unknown version'}) with this one`;
+    } else {
+      b.textContent = 'Remove from menu';
+      b.title = 'Take Node Controller Desktop out of the app menu and off the desktop';
+    }
+  }
+
+  async function launcherClick() {
+    if (!launcher) return;
+    const removing = launcher.installed && launcher.fromInstalled;
+    const r = removing ? await window.nc.removeLauncher() : await window.nc.addLauncher();
+    if (r.error) return notice(r.error, true);
+    launcher = r.status;
+    renderLauncher();
+    if (removing) notice('Removed from the app menu and the desktop.');
+    else notice(r.shortcut ? 'Added to the app menu and the desktop.' : 'Added to the app menu.');
+  }
+
   async function init() {
     const info = await window.nc.info();
     pages = info.pages;
@@ -749,6 +781,9 @@
     });
     $('save-split').addEventListener('click', openNameDialog);
     $('restart-now').addEventListener('click', () => window.nc.restartApp());
+    $('launcher').addEventListener('click', launcherClick);
+    launcher = await window.nc.launcherStatus();
+    renderLauncher();
     for (const b of $('views').querySelectorAll('button')) b.addEventListener('click', () => window.nc.setView(b.dataset.view));
     $('f-cancel').addEventListener('click', closeDialog);
     $('dlg').addEventListener('close', setOverlay);

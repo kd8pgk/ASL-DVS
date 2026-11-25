@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('nc', {
   overlay: (on) => ipcRenderer.invoke('ui:overlay', on),
   trustCert: (nodeId, fingerprint) => ipcRenderer.invoke('cert:trust', nodeId, fingerprint),
   restartApp: () => ipcRenderer.invoke('app:restart'),
+  launcherStatus: () => ipcRenderer.invoke('launcher:status'),
+  addLauncher: () => ipcRenderer.invoke('launcher:install'),
+  removeLauncher: () => ipcRenderer.invoke('launcher:remove'),
   onLayout: (cb) => listen('layout', cb),
   onNotice: (cb) => listen('notice', cb),
 });
