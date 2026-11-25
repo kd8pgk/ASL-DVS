@@ -20,6 +20,7 @@ if (app.isPackaged) {
 }
 
 const base = R.ramBase(app.isPackaged ? '' : process.env.NULLBROWSER_RAM_BASE || '');
+const MAX_BYTES = !app.isPackaged && Number(process.env.NULLBROWSER_MAX_BYTES) > 0 ? Number(process.env.NULLBROWSER_MAX_BYTES) : F.MAX_BYTES;
 R.rammaidSweep(base.dir);
 const preDir = R.prelaunchDir(process.env.NULLBROWSER_PRELAUNCH_DIR);
 const ram = preDir ? R.adoptRamDir(preDir) : R.createRamDir(base.dir);
@@ -256,7 +257,8 @@ function finishFile(rec, st) {
   rec.done = st;
   if (st !== 'completed') {
     rammaidFile(rec.file);
-    if (rec.answer === true) say(`${rec.name} could not be fetched.`);
+    if (rec.tooBig) say(`${rec.name} is too big to open from memory.`);
+    else if (rec.answer === true) say(`${rec.name} could not be fetched.`);
     endFile(rec);
     return;
   }
@@ -295,7 +297,7 @@ function onDownload(event, item) {
     say('Downloads are off in Null Browser.');
     return;
   }
-  if (total > F.MAX_BYTES) {
+  if (total > MAX_BYTES) {
     item.cancel();
     say(`${name} is too big to open from memory.`);
     return;
@@ -308,6 +310,11 @@ function onDownload(event, item) {
   fileSeq += 1;
   const rec = { id: fileSeq, item, file: path.join(ram.sub.files, `${fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
   item.setSavePath(rec.file);
+  item.on('updated', () => {
+    if (rec.tooBig || item.getReceivedBytes() <= MAX_BYTES) return;
+    rec.tooBig = true;
+    item.cancel();
+  });
   item.once('done', (e, st) => finishFile(rec, st));
   pendingFile = rec;
   push();

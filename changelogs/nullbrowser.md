@@ -1,6 +1,13 @@
 # Null Browser changelog
 
-Current version: `0.7.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.8.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.8.0 (2026-11-25)
+
+A fix found by the new attack lab (`attacklab/`).
+
+- **A file that does not say how big it is can no longer fill memory.** The 512 MB limit was only checked against the size a server declares; a server that sent no size (a chunked stream) could keep sending, and the lab's test pushed 629 MB into the RAM folder. The download is now stopped as soon as it passes 512 MB, with the notice "… is too big to open from memory", and nothing is opened or kept.
+- **Tests.** The smoke test streams an unsized file past a small cap (set for the test run only; a packaged app ignores it) and checks that it is stopped, not opened and not kept.
 
 ## 0.7.0 (2026-11-25)
 

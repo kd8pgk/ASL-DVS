@@ -331,6 +331,24 @@
   Keep using these names for anything new of the same kind, in `nullbrowser/`
   only; nothing in `desktop/` is renamed.
 
+## Attack lab (`attacklab/`)
+
+- **A test server that attacks the two Null Browsers with harmless
+  stand-ins**, never real malware: files with the wrong magic bytes (an `MZ`
+  or ELF header, a shell script, HTML, the EICAR test string) dressed as PDFs,
+  songs and videos, a polyglot PDF, a `../` file name, oversize and endless
+  files, redirect loops, a self-signed https port, pop-up floods, permission
+  grabs, dangerous link schemes, a ClickFix copy trick, a fake lock screen,
+  alert loops, a memory bomb, a CPU busy loop and storage that tries to
+  survive a restart. The server decides each verdict from what reaches it
+  (`/results`); tests it cannot see from its side are marked by hand or by
+  the runner.
+- `node attacklab/server.js --port 8088 --host 0.0.0.0` serves it to a phone
+  on the same network (Null Browser Mobile); `node attacklab/run-desktop.js`
+  drives the desktop Null Browser from source with Playwright and prints the
+  verdicts. Node built-ins only, no comments, like the apps. Not run in CI
+  yet.
+
 ## Null Browser Mobile (`nullbrowser-android/`)
 
 - **Null Browser Mobile** is a separate, scoped-down Android sibling of Null
