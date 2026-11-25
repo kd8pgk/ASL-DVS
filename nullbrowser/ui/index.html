@@ -17,7 +17,13 @@
     <input id="addr" type="text" spellcheck="false" placeholder="Type a web address" aria-label="Address">
   </form>
   <span id="sec" class="sec" hidden></span>
+  <button id="bm" type="button" title="Bookmarks" aria-label="Bookmarks">&#9734;</button>
 </header>
+<div id="bm-panel" class="panel" hidden>
+  <div class="panel-head"><span>Bookmarks</span><button id="bm-import" type="button">Import&hellip;</button></div>
+  <ul id="bm-list"></ul>
+  <p id="bm-empty" class="panel-empty" hidden>No bookmarks yet. Import from another browser's exported bookmarks file; they are kept only until Null Browser closes.</p>
+</div>
 <div id="bars">
   <div id="notice" class="bar notice" hidden></div>
   <div id="ask" class="bar" hidden><span id="ask-text" class="bar-text"></span><button id="ask-open" type="button" class="primary">Open</button><button id="ask-cancel" type="button">Cancel</button></div>

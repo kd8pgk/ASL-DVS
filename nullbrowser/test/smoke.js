@@ -134,8 +134,8 @@ async function main() {
   await waitFor(() => app.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the toolbar window');
   const win = app.windows().find((w) => w.url().endsWith('/ui/index.html'));
   await win.waitForLoadState('domcontentloaded');
-  const pageEval = (code, gesture = false) => app.evaluate(({ BrowserWindow }, [c, g]) => BrowserWindow.getAllWindows()[0].contentView.children[0].webContents.executeJavaScript(c, g), [code, gesture]);
-  const pageUrl = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[0].webContents.getURL());
+  const pageEval = (code, gesture = false) => app.evaluate(({ BrowserWindow }, [c, g]) => BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents.executeJavaScript(c, g), [code, gesture]);
+  const pageUrl = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents.getURL());
   const go = async (text) => {
     await win.fill('#addr', text);
     await win.press('#addr', 'Enter');
@@ -183,7 +183,7 @@ async function main() {
   assert.equal(await pageUrl(), `http://127.0.0.1:${portA}/`);
 
   await app.evaluate(({ BrowserWindow }) => {
-    const wc = BrowserWindow.getAllWindows()[0].contentView.children[0].webContents;
+    const wc = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents;
     wc.focus();
     wc.sendInputEvent({ type: 'mouseDown', x: 60, y: 100, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: 60, y: 100, button: 'left', clickCount: 1 });
@@ -267,6 +267,38 @@ async function main() {
   await win.click('#msg-main');
   await waitFor(async () => (await pageUrl()) === `https://127.0.0.1:${portTls}/`, 'a device on your own network can be trusted for the session');
   await win.waitForSelector('#sec.ok');
+
+  const bmFile = path.join(tmp, 'bookmarks.html');
+  fs.writeFileSync(bmFile, `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<DL><p>
+<DT><A HREF="http://127.0.0.1:${portA}/">Page one</A>
+<DT><A HREF="javascript:alert(1)">evil</A>
+</DL><p>`);
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+  }, bmFile);
+  await win.click('#bm');
+  await win.waitForSelector('#bm-panel:not([hidden])');
+  await win.click('#bm-import');
+  await win.waitForFunction(() => /1 bookmark imported/.test(document.getElementById('notice').textContent));
+  await win.waitForSelector('#bm-list li');
+  assert.equal(await win.locator('#bm-list li').count(), 1, 'only the http(s) link was imported');
+  assert.match(await win.textContent('#bm'), /★ 1/);
+
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+  }, bmFile);
+  await win.click('#bm-import');
+  await win.waitForFunction(() => /already imported/.test(document.getElementById('notice').textContent));
+
+  await win.click('.bm-link');
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'clicking a bookmark opens it');
+  assert.equal(await win.locator('#bm-panel').isHidden(), true, 'the panel closes after a bookmark is opened');
+
+  await win.click('#bm');
+  await win.click('.bm-remove');
+  await win.waitForSelector('#bm-empty:not([hidden])');
+  assert.match(await win.textContent('#bm'), /☆/, 'the bookmark star shows empty once the list is empty');
 
   await win.click('#home');
   await win.waitForSelector('#blank:not([hidden])');

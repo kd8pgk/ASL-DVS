@@ -1,10 +1,11 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, screen, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, screen, shell, dialog } = require('electron');
 const P = require('./policy');
 const R = require('./ram');
 const F = require('./files');
+const B = require('./bookmarks');
 
 app.setName('Null Browser');
 
@@ -61,6 +62,8 @@ let blockedSite = '';
 let nextPopup = '';
 let pendingFile = null;
 let fileSeq = 0;
+let bookmarks = [];
+let bookmarkSeq = 0;
 
 let cleanerStarted = false;
 
@@ -100,6 +103,7 @@ function state() {
     popup: blockedSite && !allowedSites.has(blockedSite) ? blockedSite : '',
     allowed: allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
+    bookmarks: bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
   };
 }
 
@@ -568,6 +572,52 @@ function register() {
     if (!fromShell(e) || !error || error.kind !== 'cert' || !error.trustable || !error.fingerprint) return { ok: false };
     trusted.add(`${error.host} ${error.fingerprint}`);
     load(error.url);
+    return { ok: true };
+  });
+  ipcMain.handle('import-bookmarks', async (e) => {
+    if (!fromShell(e)) return { ok: false };
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Import bookmarks',
+      filters: [{ name: 'Bookmarks', extensions: ['html', 'htm'] }],
+      properties: ['openFile'],
+    });
+    if (res.canceled || !res.filePaths[0]) return { ok: false };
+    let text = '';
+    try {
+      const st = fs.statSync(res.filePaths[0]);
+      if (st.size > B.MAX_FILE_BYTES) {
+        say('That bookmarks file is too big to import.');
+        return { ok: false };
+      }
+      text = fs.readFileSync(res.filePaths[0], 'utf8');
+    } catch {
+      say('That file could not be read.');
+      return { ok: false };
+    }
+    const found = B.parseBookmarks(text);
+    const have = new Set(bookmarks.map((b) => b.url));
+    let added = 0;
+    let full = false;
+    for (const f of found) {
+      if (have.has(f.url)) continue;
+      if (bookmarks.length >= B.MAX_BOOKMARKS) {
+        full = true;
+        continue;
+      }
+      have.add(f.url);
+      bookmarkSeq += 1;
+      bookmarks.push({ id: bookmarkSeq, url: f.url, title: f.title });
+      added += 1;
+    }
+    if (added) say(`${added} bookmark${added === 1 ? '' : 's'} imported${full ? ' (the list is now full)' : ''}.`);
+    else say(full ? 'The bookmarks list is full.' : found.length ? 'Those bookmarks were already imported.' : 'No bookmarks were found in that file.');
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('remove-bookmark', (e, id) => {
+    if (!fromShell(e)) return { ok: false };
+    bookmarks = bookmarks.filter((b) => b.id !== id);
+    push();
     return { ok: true };
   });
 }
