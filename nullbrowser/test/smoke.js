@@ -109,6 +109,9 @@ async function main() {
 
   await win.waitForSelector('#blank:not([hidden])');
   assert.equal(await win.inputValue('#addr'), '');
+  await win.evaluate(() => document.fonts.ready);
+  assert.equal(await win.evaluate(() => document.fonts.check('16px "Readex Pro"')), true, 'the shared Readex Pro font is loaded from the app');
+  assert.match(await win.evaluate(() => getComputedStyle(document.body).fontFamily), /Readex Pro/);
   const inside = await app.evaluate(({ app: a2 }) => ({ home: process.env.HOME, user: a2.getPath('userData'), jit: a2.commandLine.getSwitchValue('js-flags') }));
   assert.equal(inside.jit, '--jitless', 'JIT is off');
   assert.ok(inside.home.startsWith(ramBase) && inside.user.startsWith(ramBase), 'home and the Chromium profile are in the RAM folder');

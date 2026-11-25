@@ -567,6 +567,7 @@ def js_comment_lines(text):
 
 
 DESKTOP_STYLE = "desktop/ui/style.css"
+NULLBROWSER_STYLE = "nullbrowser/ui/style.css"
 
 
 def check_desktop_look(path, text):
@@ -725,7 +726,7 @@ def main():
             check_shell(path)
         elif path.startswith(JS_APP_DIRS) and "/node_modules/" not in path and "/dist/" not in path and path.endswith((".js", ".css", ".html")):
             check_desktop_comments(path, text)
-            if path == DESKTOP_STYLE:
+            if path in (DESKTOP_STYLE, NULLBROWSER_STYLE):
                 check_desktop_look(path, text)
         elif path.startswith("channels/") and path.endswith(".json"):
             if path == STABLE_FILE:

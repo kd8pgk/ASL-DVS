@@ -474,6 +474,15 @@ class CheckTests(unittest.TestCase):
         self.r.commit("b", T0 + 2 * DAY)
         self.assertCheck(True)
 
+    def test_nullbrowser_style_needs_the_shared_look(self):
+        self.nullbrowser("0.1.0")
+        self.r.write("nullbrowser/ui/style.css", "body { color: red; }\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "nullbrowser/ui/style.css: not on the shared Node Control look")
+        self.r.write("nullbrowser/ui/style.css", DESKTOP_LOOK)
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(True)
+
     def test_desktop_bad_version(self):
         self.desktop("0.1")
         self.r.commit("a", T0 + DAY)

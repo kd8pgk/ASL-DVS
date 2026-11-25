@@ -247,6 +247,10 @@
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
   - The packaged app refuses debugging and certificate switches.
+- **Look.** The toolbar and its pages use the shared Node Control look: the
+  Readex Pro files in `nullbrowser/ui/fonts/` (the same woff2 data the tools
+  embed) and the shared variables in `nullbrowser/ui/style.css`, which
+  `ci/check_repo.py` checks as it does the desktop app's.
 - **Version** is `version` in `nullbrowser/package.json` (`X.Y.Z`); any change
   under `nullbrowser/` raises it and adds an entry at the top of
   `changelogs/nullbrowser.md` with its "Current version" line updated
