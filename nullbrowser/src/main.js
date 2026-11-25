@@ -162,6 +162,17 @@ function thirdParty(details) {
   return P.isThirdParty(details.url, top);
 }
 
+function purgeIfSiteChanged(nextUrl) {
+  const leaving = pageUrl();
+  if (!leaving) return;
+  const leavingSite = P.siteOf(P.hostOf(leaving));
+  const nextSite = P.siteOf(P.hostOf(nextUrl));
+  if (!leavingSite || leavingSite === nextSite || allowedSites.has(leavingSite)) return;
+  const origin = P.originOf(leaving);
+  if (origin) ses.clearStorageData({ origin }).catch(() => {});
+  ses.clearCache().catch(() => {});
+}
+
 function removeFile(file) {
   try {
     fs.rmSync(file, { force: true });
@@ -384,6 +395,7 @@ function createView() {
   for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'page-title-updated']) wc.on(ev, push);
   wc.on('did-start-navigation', (ev, url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      purgeIfSiteChanged(url);
       error = null;
       pendingCert = null;
     }

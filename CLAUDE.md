@@ -255,6 +255,12 @@
     in the same page. **Allow for this site** (until it closes) lets that
     site's pop-ups open for real and keeps its third-party cookies, in memory,
     for sign-ins.
+  - A site's own cookies and storage (local storage, IndexedDB, service
+    workers, cache) do not outlive your visit to it either: navigating to a
+    different site's address or a link to one clears the site being left,
+    scoped to its own origin, the moment the new page starts loading. Staying
+    on one site, redirects included, is unaffected. **Allow for this site**
+    exempts it from this too, for as long as it stays allowed.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.

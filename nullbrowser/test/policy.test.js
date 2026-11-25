@@ -40,6 +40,14 @@ test('third parties: a different site is third party, subdomains of the same sit
   assert.equal(P.isThirdParty('https://x.com/', ''), false);
 });
 
+test('a page\'s origin is its scheme, host and port, with no path, query or fragment; a bad url has none', () => {
+  assert.equal(P.originOf('https://example.com/a/b?x=1#y'), 'https://example.com');
+  assert.equal(P.originOf('http://example.com:8080/'), 'http://example.com:8080');
+  assert.equal(P.originOf('about:blank'), 'null');
+  assert.equal(P.originOf('not a url'), '');
+  assert.equal(P.originOf(''), '');
+});
+
 test('pages may only be http(s); subresources also ws, data and blob', () => {
   assert.equal(P.allowPageUrl('https://example.com/'), true);
   assert.equal(P.allowPageUrl('about:blank'), true);

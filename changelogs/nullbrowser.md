@@ -1,6 +1,15 @@
 # Null Browser changelog
 
-Current version: `0.5.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.6.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.6.0 (2026-11-25)
+
+Leaving a site for a different one now wipes what it left behind.
+
+- **A site's cookies and storage no longer outlive your visit to it.** Navigating to a different site's address or a link to one now clears the site you are leaving — its cookies, local storage, IndexedDB, service workers and cached files — the moment the new page starts loading, not just when Null Browser closes. Staying on one site, including a multi-step sign-in that redirects through several of its own pages, is unaffected; only crossing to a different site triggers it.
+- **Allow for this site also covers this.** A site you've allowed (for a pop-up sign-in) keeps its storage when you leave it too, for as long as Null Browser stays open, the same as its cookies and pop-ups already did.
+- **Scoped to the site you left, nothing else.** The clearing targets that site's own origin, so it can never reach into another site's storage, allowed or not.
+- **Tests.** `originOf` as a unit test; in a real window: a cookie set on one site survives a second visit to the same site, is gone after visiting a different, unallowed site and returning, and survives that same round trip once the site has been allowed.
 
 ## 0.5.0 (2026-11-25)
 
