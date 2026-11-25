@@ -377,6 +377,7 @@ class BrowserActivity : Activity() {
         blank.visibility = View.GONE
     }
 
+    @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
