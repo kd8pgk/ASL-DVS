@@ -222,6 +222,48 @@
   release exists first):
   `https://github.com/kd8pgk/ASL-DVS/releases/download/desktop-vX.Y.Z/NodeController-X.Y.Z.AppImage`
 
+## Null Browser (`nullbrowser/`)
+
+- **Null Browser** is a separate private browser in `nullbrowser/`, an Electron
+  app in JavaScript, unrelated to the nodes. Its promise is that it keeps
+  nothing; changes must not weaken any of these:
+  - The page session is in memory only (a non-persistent partition), and so is
+    the toolbar's. Chromium's working folder, and `HOME`, `XDG_*` and `TMPDIR`,
+    point into a RAM folder (`/dev/shm/null-browser-<uid>-<pid>-<random>`)
+    that is removed on quit, by a detached shell command that waits for the
+    browser to end (Chromium writes after the last JavaScript runs), and at the
+    next start if a crash left it. The smoke test checks that nothing is left
+    there or in the real home folder.
+  - No log file, crash reporter, telemetry, updater, history or saved setting.
+  - No downloads. Camera, microphone, location, notifications and every device
+    are denied. Only http and https pages; subresources also ws, wss, data and
+    blob.
+  - https first (public http is upgraded; "Open anyway (not secure)" when a site
+    has none). Certificate errors are refused; only hosts on a private network
+    may be trusted, and only until it closes.
+  - Third-party cookies are accepted and dropped: never stored, never sent.
+    Script pop-ups are refused; a clicked new-tab link opens in the same page.
+  - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
+    driver caches on disk). The user agent is plain Chromium; nothing else is
+    disguised. It is private, not anonymous.
+  - The packaged app refuses debugging and certificate switches.
+- **Version** is `version` in `nullbrowser/package.json` (`X.Y.Z`); any change
+  under `nullbrowser/` raises it and adds an entry at the top of
+  `changelogs/nullbrowser.md` with its "Current version" line updated
+  (`ci/check_repo.py` checks this). No comments in its `.js`, `.css` or `.html`
+  files; no runtime libraries (only `electron` as a dev dependency).
+- **Electron:** the newest supported release that passes the Debian check (44.x
+  today, like the desktop app). It reaches any website, so every Electron
+  security release means a rebuild.
+- **Run before pushing:** `npm test` and `xvfb-run -a npm run smoke` in
+  `nullbrowser/`, plus `python3 ci/check_repo.py --base origin/main`. The
+  `nullbrowser` workflow runs them on every change.
+- **Planned:** 0.2.0 PDF, audio and video handed to the system app after asking
+  (from the RAM folder), pop-ups accepted and dropped, and "Allow for this site"
+  for logins (pop-ups and their third-party cookies, in RAM); 0.3.0 bookmark
+  import kept in RAM; 0.4.0 a per-run "Faster JavaScript" switch; 0.5.0 the
+  packaged AppImage, launcher and icon.
+
 ## Workflow
 
 - After a build is pushed, open the pull request and merge it, without

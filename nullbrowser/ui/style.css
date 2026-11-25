@@ -1,0 +1,33 @@
+:root {
+  --bg: #0d1117;
+  --surface: #161e2e;
+  --border: #2a3a52;
+  --text: #cfd8e3;
+  --muted: #8b98a8;
+  --amber: #ffd040;
+  --green: #4ade80;
+  --red: #f87171;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; overflow: hidden; }
+[hidden] { display: none !important; }
+#bar { height: 44px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--surface); border-bottom: 1px solid var(--border); }
+button { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px; font: inherit; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+button:disabled { opacity: .35; cursor: default; }
+#form { flex: 1; min-width: 0; }
+#addr { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font: inherit; }
+#addr:focus { outline: none; border-color: var(--amber); }
+.sec { font-size: 12px; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.sec.ok { color: var(--green); border: 1px solid var(--green); }
+.sec.bad { color: var(--red); border: 1px solid var(--red); }
+.notice { position: absolute; top: 52px; right: 12px; max-width: 420px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--amber); color: var(--amber); border-radius: 4px; z-index: 2; }
+.msg, .blank { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+.msg h1, .blank h1 { font-size: 20px; font-weight: 600; margin: 0 0 10px; }
+.blank h1 { color: var(--amber); letter-spacing: .08em; }
+.msg p, .blank p { margin: 4px 0; max-width: 640px; color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--text) !important; }
+.warn { color: var(--amber) !important; }
+.row { display: flex; gap: 8px; margin-top: 14px; }

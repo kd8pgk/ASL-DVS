@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<title>Null Browser</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="bar">
+  <button id="back" type="button" title="Back (Alt+Left)" aria-label="Back">&#9664;</button>
+  <button id="forward" type="button" title="Forward (Alt+Right)" aria-label="Forward">&#9654;</button>
+  <button id="reload" type="button" title="Reload (Ctrl+R)" aria-label="Reload">&#10227;</button>
+  <button id="home" type="button" title="Blank page" aria-label="Blank page">&#8962;</button>
+  <form id="form" autocomplete="off">
+    <input id="addr" type="text" spellcheck="false" placeholder="Type a web address" aria-label="Address">
+  </form>
+  <span id="sec" class="sec" hidden></span>
+</header>
+<div id="notice" class="notice" hidden></div>
+<main id="msg" class="msg" hidden>
+  <h1 id="msg-title"></h1>
+  <p id="msg-text"></p>
+  <p id="msg-mono" class="mono" hidden></p>
+  <div class="row">
+    <button id="msg-main" type="button" hidden></button>
+    <button id="msg-retry" type="button">Try again</button>
+  </div>
+</main>
+<main id="blank" class="blank" hidden>
+  <h1>Null Browser</h1>
+  <p>Nothing is kept: no history, no cookies after you close, no downloads, no logs.</p>
+  <p id="blank-ram" class="warn" hidden>This system has no RAM folder, so the browser's working files are in the temporary folder until it closes.</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

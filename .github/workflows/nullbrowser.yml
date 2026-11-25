@@ -1,0 +1,49 @@
+name: nullbrowser
+
+on:
+  pull_request:
+    paths:
+      - "nullbrowser/**"
+      - ".github/workflows/nullbrowser.yml"
+  push:
+    branches: [main]
+    paths:
+      - "nullbrowser/**"
+      - ".github/workflows/nullbrowser.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nullbrowser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nullbrowser/package-lock.json
+      - name: Install
+        working-directory: nullbrowser
+        run: npm ci
+      - name: Syntax check
+        working-directory: nullbrowser
+        run: |
+          for f in src/*.js ui/*.js test/*.js; do node --check "$f"; done
+      - name: Unit tests
+        working-directory: nullbrowser
+        run: npm test
+      - name: Playwright
+        run: npm install --no-save --prefix "$RUNNER_TEMP/pw" playwright@1.63.0
+      - name: Smoke test
+        working-directory: nullbrowser
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+        run: xvfb-run -a npm run smoke
