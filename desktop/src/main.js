@@ -476,12 +476,10 @@ function openLastHeard(nodeId, url) {
   focusView();
 }
 
-async function ensureLastHeard(key, tab) {
-  const e = { view: null, status: 'loading', error: null, via: 'home', origin: '' };
-  rt.set(key, e);
+function makeView(key, e, ses, { via, nodeId, onOk }) {
   const view = new WebContentsView({
     webPreferences: {
-      session: lastHeardSession(),
+      session: ses,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -506,6 +504,27 @@ async function ensureLastHeard(key, tab) {
   wc.on('input-event', (ev, input) => {
     if (input && input.type === 'mouseDown') focused();
   });
+  wc.on('did-finish-load', () => {
+    if (rt.get(key) === e && e.status === 'loading') {
+      e.status = 'ok';
+      if (onOk) onOk();
+      push();
+    }
+  });
+  wc.on('render-process-gone', (ev, details) => {
+    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
+    if (rt.get(key) !== e) return;
+    e.status = 'failed';
+    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via, nodeId, cert: null };
+    sync();
+  });
+  return wc;
+}
+
+async function ensureLastHeard(key, tab) {
+  const e = { view: null, status: 'loading', error: null, via: 'home', origin: '' };
+  rt.set(key, e);
+  const wc = makeView(key, e, lastHeardSession(), { via: 'home', nodeId: tab.nodeId });
   wc.setWindowOpenHandler(({ url }) => {
     externalOpen(url);
     return { action: 'deny' };
@@ -525,19 +544,6 @@ async function ensureLastHeard(key, tab) {
     logLine(`load failed: ${key} ${desc} (${code}) ${url}`);
     e.status = 'failed';
     e.error = { message: desc, code, via: 'home', nodeId: tab.nodeId, cert: null };
-    sync();
-  });
-  wc.on('did-finish-load', () => {
-    if (rt.get(key) === e && e.status === 'loading') {
-      e.status = 'ok';
-      push();
-    }
-  });
-  wc.on('render-process-gone', (ev, details) => {
-    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
-    if (rt.get(key) !== e) return;
-    e.status = 'failed';
-    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: 'home', nodeId: tab.nodeId, cert: null };
     sync();
   });
   wc.loadURL(tab.url);
@@ -560,32 +566,13 @@ async function ensureView(key) {
   if (rt.get(key) !== e || !alive()) return;
   e.via = target.via;
   e.origin = originOf(target);
-  const view = new WebContentsView({
-    webPreferences: {
-      session: nodeSession(node),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webviewTag: false,
-      spellcheck: false,
+  const wc = makeView(key, e, nodeSession(node), {
+    via: target.via,
+    nodeId: node.id,
+    onOk: () => {
+      flips.delete(key);
+      confirmed.add(`${key} ${originOf(target)}`);
     },
-  });
-  e.view = view;
-  win.contentView.addChildView(view);
-  const wc = view.webContents;
-  wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
-  wc.on('before-input-event', onKey);
-  const focused = () => {
-    const next = L.focusKey(ls, key);
-    if (next !== ls) {
-      ls = next;
-      push();
-      saveSoon();
-    }
-  };
-  wc.on('focus', focused);
-  wc.on('input-event', (ev, input) => {
-    if (input && input.type === 'mouseDown') focused();
   });
   wc.setWindowOpenHandler(({ url, frameName }) => {
     if (P.isLastHeardWindow(page.id, frameName)) openLastHeard(node.id, url);
@@ -653,21 +640,6 @@ async function ensureView(key) {
       nodeId: node.id,
       cert: hit && target.via !== 'away' ? { fingerprint: formatFingerprint(hit.fingerprint), raw: hit.fingerprint } : null,
     };
-    sync();
-  });
-  wc.on('did-finish-load', () => {
-    if (rt.get(key) === e && e.status === 'loading') {
-      e.status = 'ok';
-      flips.delete(key);
-      confirmed.add(`${key} ${originOf(target)}`);
-      push();
-    }
-  });
-  wc.on('render-process-gone', (ev, details) => {
-    logLine(`page process gone: ${key} reason=${details.reason} exit=${details.exitCode}`);
-    if (rt.get(key) !== e) return;
-    e.status = 'failed';
-    e.error = { message: `The page stopped working (${details.reason}). Try again to reload it.`, code: 0, via: target.via, nodeId: node.id, cert: null };
     sync();
   });
   wc.loadURL(`${originOf(target)}/`).catch(() => {});

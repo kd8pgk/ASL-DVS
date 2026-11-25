@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.19`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.20`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.20 (2026-11-25)
+
+Node pages and Last Heard share one setup.
+
+- **One place for page views.** The setup every page view needs (the locked-down view itself, its window, the WebRTC rule, the keyboard shortcuts, focus tracking, the "loaded" and "stopped working" handling) was written out twice, once for node pages and once for Last Heard, and the copies had drifted (0.11.3's trace went into only one of them). It is now one helper both use; what differs (the session, where links may go, certificates, scheme switching) stays separate. No change in what the app does.
+- **Tests.** The real-window tests, which open node pages and Last Heard, pass unchanged.
 
 ## 0.11.19 (2026-11-25)
 
