@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.18`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.19`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.19 (2026-11-25)
+
+A drop on a slot that does not exist opens nothing.
+
+- **Slot checked first.** A drop names the page and the slot. For a page that was not open, the page was added to the layout before the slot name was checked, so a drop with an unknown slot left the page open but shown nowhere (and saved that way). The slot is now checked first, and a bad drop changes nothing.
+- **Tests.** In the real window: a drop for an unknown node and one on a slot that does not exist are refused and open nothing.
 
 ## 0.11.18 (2026-11-25)
 

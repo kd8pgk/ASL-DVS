@@ -237,6 +237,12 @@ async function main() {
   await win.click('#export');
   await win.waitForFunction(() => /could not be written/.test(document.getElementById('notice').textContent));
   assert.match(await win.getAttribute('#notice', 'class'), /bad/);
+
+  const tabsBefore = (await win.evaluate(() => window.nc.getLayout())).tabs.length;
+  assert.deepEqual(await win.evaluate(() => window.nc.dropTab({ nodeId: 'nope', pageId: 'sysmon', slot: 'left' })), { ok: false });
+  const nodeId0 = JSON.parse(fs.readFileSync(path.join(data, 'nodes.json'), 'utf8')).nodes[0].id;
+  assert.deepEqual(await win.evaluate((id) => window.nc.dropTab({ nodeId: id, pageId: 'sysmon', slot: 'middle' }), nodeId0), { ok: false });
+  assert.equal((await win.evaluate(() => window.nc.getLayout())).tabs.length, tabsBefore, 'a drop on a slot that does not exist opens nothing');
   assert.equal(await page(9).getAttribute('draggable'), 'false');
   assert.equal(await page(7).getAttribute('draggable'), 'false');
   assert.equal(await win.locator('.group-name').textContent(), 'Stub');
