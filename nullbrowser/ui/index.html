@@ -18,7 +18,11 @@
   </form>
   <span id="sec" class="sec" hidden></span>
 </header>
-<div id="notice" class="notice" hidden></div>
+<div id="bars">
+  <div id="notice" class="bar notice" hidden></div>
+  <div id="ask" class="bar" hidden><span id="ask-text" class="bar-text"></span><button id="ask-open" type="button" class="primary">Open</button><button id="ask-cancel" type="button">Cancel</button></div>
+  <div id="popbar" class="bar" hidden><span id="pop-text" class="bar-text"></span><button id="pop-allow" type="button" class="primary">Allow for this site</button><button id="pop-close" type="button" aria-label="Close">&#10005;</button></div>
+</div>
 <main id="msg" class="msg" hidden>
   <h1 id="msg-title"></h1>
   <p id="msg-text"></p>
