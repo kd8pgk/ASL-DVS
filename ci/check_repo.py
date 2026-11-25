@@ -29,6 +29,10 @@ DESKTOP_DIR = "desktop/"
 DESKTOP_PACKAGE = "desktop/package.json"
 DESKTOP_LOG = "changelogs/nodecontroller_desktop.md"
 DESKTOP_VERSION_RE = re.compile(r'^\s*"version":\s*"([^"]+)"', re.M)
+NULLBROWSER_DIR = "nullbrowser/"
+NULLBROWSER_PACKAGE = "nullbrowser/package.json"
+NULLBROWSER_LOG = "changelogs/nullbrowser.md"
+JS_APP_DIRS = (DESKTOP_DIR, NULLBROWSER_DIR)
 CODING_RE = re.compile(r"^#.*coding[:=]")
 SH_TITLE_RE = re.compile(r"^#\s*\S+\.sh\s+v\S+")
 JS_FUNC_RE = re.compile(r"(\(\s*(?:async\s+)?)?\bfunction\s+([A-Za-z_][\w]*)\s*\(")
@@ -563,6 +567,7 @@ def js_comment_lines(text):
 
 
 DESKTOP_STYLE = "desktop/ui/style.css"
+NULLBROWSER_STYLE = "nullbrowser/ui/style.css"
 
 
 def check_desktop_look(path, text):
@@ -580,36 +585,44 @@ def check_desktop_comments(path, text):
     else:
         lines = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r"<!--", text)]
     if lines:
-        fail(f"{path}: line {lines[0]} has a comment; desktop files carry no comments (CLAUDE.md)")
+        fail(f"{path}: line {lines[0]} has a comment; {path.split('/')[0]}/ files carry no comments (CLAUDE.md)")
 
 
-def check_desktop(base, paths):
-    if not any(p.startswith(DESKTOP_DIR) for p in paths):
+def check_js_app(base, paths, folder, package, log):
+    if not any(p.startswith(folder) for p in paths):
         return
-    m = DESKTOP_VERSION_RE.search(read(DESKTOP_PACKAGE) if os.path.isfile(DESKTOP_PACKAGE) else "")
+    m = DESKTOP_VERSION_RE.search(read(package) if os.path.isfile(package) else "")
     if not m:
-        fail(f'{DESKTOP_PACKAGE}: no "version": "X.Y.Z" line found')
+        fail(f'{package}: no "version": "X.Y.Z" line found')
         return
     version = m.group(1)
     vt, suffix = split_version(version)
     if vt is None or suffix or len(vt) != 3:
-        fail(f"{DESKTOP_PACKAGE}: version '{version}' must be X.Y.Z")
+        fail(f"{package}: version '{version}' must be X.Y.Z")
         return
-    om = DESKTOP_VERSION_RE.search(show(base, DESKTOP_PACKAGE) or "")
+    om = DESKTOP_VERSION_RE.search(show(base, package) or "")
     if om:
         ot, _ = split_version(om.group(1))
         if ot is not None and vt <= ot:
-            fail(f"{DESKTOP_PACKAGE}: desktop/ changed but version {version} is not newer than {om.group(1)}")
-    if not os.path.isfile(DESKTOP_LOG):
-        fail(f"desktop/: {DESKTOP_LOG} is missing")
+            fail(f"{package}: {folder} changed but version {version} is not newer than {om.group(1)}")
+    if not os.path.isfile(log):
+        fail(f"{folder}: {log} is missing")
         return
-    lines = read(DESKTOP_LOG).splitlines()
+    lines = read(log).splitlines()
     cur = next((ln for ln in lines if ln.startswith("Current version:")), "")
     if f"`{version}`" not in cur:
-        fail(f"{DESKTOP_LOG}: the 'Current version' line does not name `{version}`")
+        fail(f"{log}: the 'Current version' line does not name `{version}`")
     head = next((ln for ln in lines if ln.startswith("## ")), "")
     if version not in head.split():
-        fail(f"{DESKTOP_LOG}: the top entry is '{head}', not {version}")
+        fail(f"{log}: the top entry is '{head}', not {version}")
+
+
+def check_desktop(base, paths):
+    check_js_app(base, paths, DESKTOP_DIR, DESKTOP_PACKAGE, DESKTOP_LOG)
+
+
+def check_nullbrowser(base, paths):
+    check_js_app(base, paths, NULLBROWSER_DIR, NULLBROWSER_PACKAGE, NULLBROWSER_LOG)
 
 
 def check_launchers():
@@ -699,7 +712,7 @@ def main():
     changed = [p for p in added + modified if os.path.isfile(p)]
     if args.all:
         tracked = git("ls-files").splitlines()
-        changed = sorted(set(changed) | {p for p in tracked if (p.endswith((".py", ".sh")) or (p.startswith(DESKTOP_DIR) and p.endswith((".js", ".css", ".html")))) and os.path.isfile(p)
+        changed = sorted(set(changed) | {p for p in tracked if (p.endswith((".py", ".sh")) or (p.startswith(JS_APP_DIRS) and p.endswith((".js", ".css", ".html")))) and os.path.isfile(p)
                                           and not p.startswith(("android/", "docs/"))})
 
     for path in changed:
@@ -711,9 +724,9 @@ def main():
                     note_unused_page_functions(path, text)
         elif path.endswith(".sh"):
             check_shell(path)
-        elif path.startswith(DESKTOP_DIR) and "/node_modules/" not in path and "/dist/" not in path and path.endswith((".js", ".css", ".html")):
+        elif path.startswith(JS_APP_DIRS) and "/node_modules/" not in path and "/dist/" not in path and path.endswith((".js", ".css", ".html")):
             check_desktop_comments(path, text)
-            if path == DESKTOP_STYLE:
+            if path in (DESKTOP_STYLE, NULLBROWSER_STYLE):
                 check_desktop_look(path, text)
         elif path.startswith("channels/") and path.endswith(".json"):
             if path == STABLE_FILE:
@@ -809,6 +822,7 @@ def main():
     check_launchers()
     check_android(base, added + modified + deleted)
     check_desktop(base, [p for p in added + modified + deleted if not p.startswith("desktop/node_modules/")])
+    check_nullbrowser(base, [p for p in added + modified + deleted if not p.startswith("nullbrowser/node_modules/")])
 
     for n in notes:
         print(f"note: {n}")

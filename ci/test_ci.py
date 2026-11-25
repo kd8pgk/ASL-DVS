@@ -402,11 +402,40 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "Current version")
 
+    def nullbrowser(self, ver, log_ver=None, extra="x"):
+        self.r.write("nullbrowser/package.json", '{\n  "name": "x",\n  "version": "%s"\n}\n' % ver)
+        self.r.write("nullbrowser/src/main.js", extra + "\n")
+        v = log_ver or ver
+        self.r.write("changelogs/nullbrowser.md", f"# log\n\nCurrent version: `{v}`.\n\n## {v} (2026-11-25)\n\n- x\n")
+
+    def test_nullbrowser_first_and_bump(self):
+        self.nullbrowser("0.1.0")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+        self.r.git("checkout", "-q", "main")
+        self.r.git("merge", "-q", "pr")
+        self.r.git("checkout", "-q", "pr")
+        self.nullbrowser("0.1.0", extra="y")
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(False, "nullbrowser/ changed but version 0.1.0 is not newer than 0.1.0")
+        self.nullbrowser("0.1.1", extra="y")
+        self.r.commit("c", T0 + 3 * DAY)
+        self.assertCheck(True)
+
+    def test_nullbrowser_changelog_and_comments(self):
+        self.nullbrowser("0.1.0", log_ver="0.0.9")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "changelogs/nullbrowser.md: the 'Current version'")
+        self.nullbrowser("0.1.0")
+        self.r.write("nullbrowser/ui/app.js", "const a = 1; // note\n")
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(False, "nullbrowser/ files carry no comments")
+
     def test_desktop_js_comment_fails(self):
         self.desktop("0.1.0")
         self.r.write("desktop/src/extra.js", "const a = 1; // note\n")
         self.r.commit("a", T0 + DAY)
-        self.assertCheck(False, "desktop files carry no comments")
+        self.assertCheck(False, "desktop/ files carry no comments")
 
     def test_desktop_block_comment_fails(self):
         self.desktop("0.1.0")
@@ -442,6 +471,15 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "shared Node Control look")
         self.r.write("desktop/ui/style.css", DESKTOP_LOOK)
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(True)
+
+    def test_nullbrowser_style_needs_the_shared_look(self):
+        self.nullbrowser("0.1.0")
+        self.r.write("nullbrowser/ui/style.css", "body { color: red; }\n")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "nullbrowser/ui/style.css: not on the shared Node Control look")
+        self.r.write("nullbrowser/ui/style.css", DESKTOP_LOOK)
         self.r.commit("b", T0 + 2 * DAY)
         self.assertCheck(True)
 
