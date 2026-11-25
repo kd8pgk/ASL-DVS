@@ -76,6 +76,25 @@ function createRamDir(base, pid = process.pid) {
   return { dir, sub };
 }
 
+function adoptRamDir(dir) {
+  const sub = {};
+  for (const name of ['home', 'config', 'cache', 'data', 'state', 'chromium', 'session', 'temp', 'files']) {
+    sub[name] = path.join(dir, name);
+    fs.mkdirSync(sub[name], { recursive: true, mode: 0o700 });
+  }
+  return { dir, sub };
+}
+
+function prelaunchDir(value) {
+  if (!value || !path.isAbsolute(value) || !path.basename(value).startsWith(PREFIX)) return '';
+  try {
+    if (!fs.statSync(value).isDirectory()) return '';
+  } catch {
+    return '';
+  }
+  return value;
+}
+
 function removeRamDir(dir) {
   if (!dir || !path.basename(dir).startsWith(PREFIX)) return false;
   try {
@@ -97,4 +116,4 @@ function removeAfterExit(dir, pid = process.pid, run = spawn) {
   }
 }
 
-module.exports = { PREFIX, ramBase, cleanStale, createRamDir, removeRamDir, removeAfterExit, alive };
+module.exports = { PREFIX, ramBase, cleanStale, createRamDir, adoptRamDir, prelaunchDir, removeRamDir, removeAfterExit, alive };

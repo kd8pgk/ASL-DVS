@@ -46,6 +46,23 @@ test('the RAM folder is /dev/shm when there is one, or an override for tests', (
   else assert.equal(r.ram, false);
 });
 
+test('a directory the launcher wrapper already built is adopted, not recreated, as long as the folder is its own', () => {
+  const b = base();
+  const wrapperMade = path.join(b, `${R.PREFIX}0-12345-abcdef`);
+  fs.mkdirSync(wrapperMade, { mode: 0o700 });
+  fs.writeFileSync(path.join(wrapperMade, 'pid'), '12345');
+  assert.equal(R.prelaunchDir(wrapperMade), wrapperMade);
+  assert.equal(R.prelaunchDir(path.join(b, 'not-ours')), '');
+  assert.equal(R.prelaunchDir('relative/null-browser-x'), '');
+  assert.equal(R.prelaunchDir(''), '');
+  assert.equal(R.prelaunchDir(path.join(b, `${R.PREFIX}missing`)), '');
+
+  const adopted = R.adoptRamDir(wrapperMade);
+  assert.equal(adopted.dir, wrapperMade);
+  for (const k of ['home', 'config', 'cache', 'data', 'state', 'chromium', 'session', 'temp', 'files']) assert.ok(fs.statSync(adopted.sub[k]).isDirectory(), k);
+  assert.equal(R.removeRamDir(adopted.dir), true);
+});
+
 test('after quit a detached cleaner waits for the browser to end, then removes the folder', () => {
   const calls = [];
   const fake = (cmd, args, opts) => {

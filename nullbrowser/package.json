@@ -1,20 +1,63 @@
 {
   "name": "null-browser",
   "productName": "Null Browser",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A private browser that keeps nothing: RAM-only session, no logs, no downloads",
   "private": true,
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.js",
-    "smoke": "node test/smoke.js"
+    "smoke": "node test/smoke.js",
+    "dist": "electron-builder --linux AppImage --publish never",
+    "check-package": "node test/package.js"
   },
   "devDependencies": {
-    "electron": "44.11.5"
+    "@electron/fuses": "2.1.3",
+    "electron": "44.11.5",
+    "electron-builder": "26.18.0"
   },
   "author": "kd8pgk",
   "license": "SEE LICENSE IN ../LICENSE",
+  "build": {
+    "appId": "io.github.kd8pgk.nullbrowser",
+    "productName": "Null Browser",
+    "copyright": "kd8pgk",
+    "asar": true,
+    "electronLanguages": [
+      "en-US"
+    ],
+    "files": [
+      "src/**/*",
+      "ui/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "afterPack": "build/afterPack.js",
+    "appImage": {
+      "executableArgs": []
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Network",
+      "artifactName": "NullBrowser-${version}.${ext}",
+      "executableName": "nullbrowser",
+      "icon": "build/icon.png",
+      "syncDesktopName": true
+    },
+    "publish": null,
+    "compression": "normal"
+  },
+  "desktopName": "nullbrowser.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/kd8pgk/ASL-DVS.git",

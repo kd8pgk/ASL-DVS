@@ -19,7 +19,8 @@ if (app.isPackaged) {
 
 const base = R.ramBase(app.isPackaged ? '' : process.env.NULLBROWSER_RAM_BASE || '');
 R.cleanStale(base.dir);
-const ram = R.createRamDir(base.dir);
+const preDir = R.prelaunchDir(process.env.NULLBROWSER_PRELAUNCH_DIR);
+const ram = preDir ? R.adoptRamDir(preDir) : R.createRamDir(base.dir);
 
 process.env.HOME = ram.sub.home;
 process.env.XDG_CONFIG_HOME = ram.sub.config;
@@ -516,8 +517,17 @@ function fromShell(e) {
   return alive() && e.sender === win.webContents;
 }
 
+let shellReady = false;
+
 function register() {
-  ipcMain.handle('state', (e) => (fromShell(e) ? state() : null));
+  ipcMain.handle('state', (e) => {
+    if (!fromShell(e)) return null;
+    if (!shellReady) {
+      shellReady = true;
+      process.stderr.write('shell-ready\n');
+    }
+    return state();
+  });
   ipcMain.handle('go', (e, text) => {
     if (!fromShell(e)) return { error: 'Not allowed.' };
     const r = P.normalizeInput(text);

@@ -234,10 +234,11 @@
     browser to end (Chromium writes after the last JavaScript runs), and at the
     next start if a crash left it. The smoke test checks that nothing is left
     there, and that a browsing session adds or changes nothing in the real home
-    folder (a warm-up run first builds Chromium's own font index, which, like
-    the GPU process, can start before the app moves `HOME`; that is why GPU
-    acceleration is off, and the packaged launcher in 0.5.0 is to set the
-    folders before Chromium starts).
+    folder. Run from source, a warm-up run first builds Chromium's own font
+    index, which, like the GPU process, can start before the app's own code
+    moves `HOME`; that is why GPU acceleration is off. The packaged AppImage
+    does not need the warm-up: its launcher (below) sets the folders before
+    Chromium starts at all.
   - No log file, crash reporter, telemetry, updater, history or saved setting.
   - No downloads. A PDF, audio or video file (by type, checked against its
     first bytes) is fetched into the RAM folder and handed to the system app
@@ -266,13 +267,19 @@
   under `nullbrowser/` raises it and adds an entry at the top of
   `changelogs/nullbrowser.md` with its "Current version" line updated
   (`ci/check_repo.py` checks this). No comments in its `.js`, `.css` or `.html`
-  files; no runtime libraries (only `electron` as a dev dependency).
+  files; no runtime libraries (only `electron`, `electron-builder` and
+  `@electron/fuses` as dev dependencies).
 - **Electron:** the newest supported release that passes the Debian check (44.x
   today, like the desktop app). It reaches any website, so every Electron
   security release means a rebuild.
-- **Run before pushing:** `npm test` and `xvfb-run -a npm run smoke` in
-  `nullbrowser/`, plus `python3 ci/check_repo.py --base origin/main`. The
-  `nullbrowser` workflow runs them on every change.
+- **Run before pushing:** `npm test`, `xvfb-run -a npm run smoke` and, after
+  `npm run dist`, `xvfb-run -a npm run check-package` in `nullbrowser/`, plus
+  `python3 ci/check_repo.py --base origin/main`. The `nullbrowser` workflow
+  builds and tests every change and, on `main`, publishes the AppImage as a
+  pre-release `nullbrowser-vX.Y.Z` (unsigned).
+- **After a Null Browser build is merged, post its AppImage link** (check the
+  release exists first):
+  `https://github.com/kd8pgk/ASL-DVS/releases/download/nullbrowser-vX.Y.Z/NullBrowser-X.Y.Z.AppImage`
 - **Bookmarks.** A star button opens a panel of bookmarks, with **Import…**
   for a bookmarks export (the `.html` file Chrome, Firefox, Edge and Safari
   write, in the Netscape bookmark format). Only `http://` and `https://`
@@ -283,7 +290,21 @@
   first, then restarts Null Browser as a whole new process with the JIT
   compiler on or off for that run only; nothing is written to disk to
   remember the choice, so the next start is `--jitless` again.
-- **Planned:** 0.5.0 the packaged AppImage, launcher and icon.
+- **Packaged (0.5.0).** `npm run dist` builds a Linux AppImage
+  (`electron-builder`, normal compression, the same fuses as the desktop app).
+  `build/afterPack.js` renames the real binary to `nullbrowser-bin` and puts a
+  shell launcher in its place (`nullbrowser`): the launcher picks a RAM
+  folder, creates it with the same layout `ram.js` would, and sets `HOME`,
+  `XDG_*` and `TMPDIR` to point into it **before** the real binary (and so
+  Chromium) ever starts, closing the font-index gap a source run still has.
+  `main.js` adopts that folder (`NULLBROWSER_PRELAUNCH_DIR`) instead of
+  making its own. `check-package` (`test/package.js`) builds on the desktop
+  app's packaged checks (fuses, the asar file list, refused debugging
+  switches, no listening port) and adds its own: the real home folder stays
+  empty from the very first start, with no warm-up needed, and the RAM
+  folder the launcher made is removed on quit like any other. The icon is
+  `nullbrowser/build/icon.png` (512 px) and `nullbrowser/ui/icon.png`
+  (256 px). Not on the stable/testing channels, like the desktop app.
 
 ## Workflow
 

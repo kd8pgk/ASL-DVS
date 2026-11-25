@@ -1,6 +1,15 @@
 # Null Browser changelog
 
-Current version: `0.4.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.5.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.5.0 (2026-11-25)
+
+A packaged Linux AppImage, with a launcher that closes the one gap a source run still has.
+
+- **Packaged.** `npm run dist` builds a single unsigned AppImage (electron-builder, normal compression, about 123 MB), the same fuses as Node Controller Desktop (no `ELECTRON_RUN_AS_NODE`, no Node options, asar integrity checked, only the asar is loaded). The `nullbrowser` workflow builds and checks it on every change, and publishes it as a pre-release `nullbrowser-vX.Y.Z` on `main`.
+- **The launcher.** Running Null Browser from source still needs a one-time warm-up, because Chromium's own font index can be built before the app's JavaScript moves `HOME` into the RAM folder. The packaged build does not: a small shell script takes the place of the real program, and before it hands off to the real one, it picks a RAM folder, builds it with the same layout `ram.js` would, and points `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `TMPDIR` at it — all before Chromium's own startup code runs for the first time. Null Browser itself then adopts that folder instead of making a new one, and removes it on quit exactly as before.
+- **Icon.** A plain amber "no" circle on the app's own dark background, matching the toolbar's look, at 512 px (`build/icon.png`) and 256 px (`ui/icon.png`).
+- **Tests.** The RAM-folder adoption rules as unit tests, and, in a real window, that a folder the launcher already built is used as-is rather than duplicated. `check-package` (new) builds on the desktop app's packaged checks and adds its own: the real home folder stays empty from the packaged app's very first start, with no warm-up run needed, and the RAM folder is still removed when the packaged app quits.
 
 ## 0.4.0 (2026-11-25)
 
