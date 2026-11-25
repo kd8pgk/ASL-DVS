@@ -255,6 +255,12 @@
     in the same page. **Allow for this site** (until it closes) lets that
     site's pop-ups open for real and keeps its third-party cookies, in memory,
     for sign-ins.
+  - A site's own cookies and storage (local storage, IndexedDB, service
+    workers, cache) do not outlive your visit to it either: navigating to a
+    different site's address or a link to one clears the site being left,
+    scoped to its own origin, the moment the new page starts loading. Staying
+    on one site, redirects included, is unaffected. **Allow for this site**
+    exempts it from this too, for as long as it stays allowed.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
@@ -305,6 +311,17 @@
   folder the launcher made is removed on quit like any other. The icon is
   `nullbrowser/build/icon.png` (512 px) and `nullbrowser/ui/icon.png`
   (256 px). Not on the stable/testing channels, like the desktop app.
+- **Naming: litterbug and rammaid.** A function whose job is to take
+  something in and let nothing come back out of it (a pop-up window that
+  fetches nothing and is destroyed, a request cancelled with no response) is
+  named `litterbug*` (`litterbugSink`, `litterbugClose`,
+  `litterbugRequest`, `litterbugIds`, `LITTERBUG_MS`, `MAX_LITTERBUGS`,
+  `LITTERBUG_OPTIONS`). A function whose job is to remove files from the RAM
+  folder is named `rammaid*` (`rammaidRemove`, `rammaidSweep`,
+  `rammaidAfterExit`, `rammaidFile` for one downloaded file, and the
+  top-level `rammaid()` that runs them at quit).
+  Keep using these names for anything new of the same kind, in `nullbrowser/`
+  only; nothing in `desktop/` is renamed.
 
 ## Workflow
 

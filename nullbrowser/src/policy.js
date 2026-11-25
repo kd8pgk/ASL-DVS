@@ -121,6 +121,14 @@ function isPrivateHost(host) {
   return false;
 }
 
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+}
+
 function siteOf(host) {
   const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!h || isIp(h)) return h;
@@ -219,6 +227,7 @@ module.exports = {
   UNSAFE_SWITCHES,
   unsafeSwitches,
   hostOf,
+  originOf,
   isPrivateHost,
   siteOf,
   isThirdParty,

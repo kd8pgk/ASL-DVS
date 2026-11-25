@@ -60,6 +60,7 @@ function walk(dir) {
 async function main() {
   const seenB = [];
   const seenA = [];
+  const seenPurge = [];
   let portB = 0;
   const a = http.createServer((q, s) => {
     seenA.push({ url: q.url, cookie: q.headers.cookie || '' });
@@ -102,6 +103,11 @@ async function main() {
     s.writeHead(200, { 'Content-Type': 'text/html' });
     s.end('<!doctype html><title>plain only</title><p>plain</p>');
   });
+  const purge = http.createServer((q, s) => {
+    seenPurge.push({ url: q.url, cookie: q.headers.cookie || '' });
+    s.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'keep=1; Path=/' });
+    s.end('<!doctype html><title>purge test</title><p>purge</p>');
+  });
   const key = path.join(tmp, 'k.pem');
   const crt = path.join(tmp, 'c.pem');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', crt, '-days', '2', '-subj', '/CN=stub', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:pub.test'], { stdio: 'ignore' });
@@ -113,6 +119,7 @@ async function main() {
   portB = await listen(b);
   const portPlain = await listen(plain);
   const portTls = await listen(tls);
+  const portPurge = await listen(purge);
 
   const ramBase = path.join(tmp, 'ram');
   const realHome = path.join(tmp, 'home');
@@ -121,7 +128,7 @@ async function main() {
   fs.mkdirSync(realHome);
   const launch = (extra = [], envExtra = {}) => _electron.launch({
     executablePath: require('electron'),
-    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1', ...extra],
+    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1,MAP other.test 127.0.0.1', ...extra],
     env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache'), ...envExtra },
   });
   const warm = await launch();
@@ -314,6 +321,31 @@ async function main() {
   await win.click('#jsbar-no');
   await win.waitForFunction(() => document.getElementById('jsbar').hidden);
 
+  await go(`http://pub.test:${portPurge}/`);
+  await waitFor(async () => (await pageUrl()) === `http://pub.test:${portPurge}/`, 'the purge-test page (first visit)');
+  await waitFor(() => seenPurge.length >= 1, 'the first request');
+  assert.equal(seenPurge[0].cookie, '', 'no cookie on the very first request');
+  await go(`http://pub.test:${portPurge}/`);
+  await waitFor(() => seenPurge.length >= 2, 'a second request to the same site');
+  assert.match(seenPurge[1].cookie, /keep=1/, 'staying on the same site keeps its cookie');
+  await go(`http://other.test:${portPurge}/`);
+  await win.waitForFunction(() => /no secure version/.test(document.getElementById('msg-title').textContent));
+  await win.click('#msg-main');
+  await waitFor(async () => (await pageUrl()) === `http://other.test:${portPurge}/`, 'a different, unallowed site');
+  await go(`http://pub.test:${portPurge}/`);
+  await waitFor(() => seenPurge.length >= 4, 'back on the first site');
+  assert.equal(seenPurge[3].cookie, '', 'leaving for a different, unallowed site purges its cookie');
+
+  await pageEval(`window.open('http://pub.test:${portPurge}/popup'); true`);
+  await win.waitForSelector('#popbar:not([hidden])');
+  await win.click('#pop-allow');
+  await win.waitForFunction(() => /allowed for pub\.test until Null Browser closes/.test(document.getElementById('notice').textContent));
+  await go(`http://other.test:${portPurge}/`);
+  await waitFor(async () => (await pageUrl()) === `http://other.test:${portPurge}/`, 'leaving the now-allowed site');
+  await go(`http://pub.test:${portPurge}/`);
+  await waitFor(() => seenPurge.length >= 6, 'back on the allowed site');
+  assert.match(seenPurge[5].cookie, /keep=1/, 'an allowed site keeps its cookie across leaving and returning');
+
   await win.click('#home');
   await win.waitForSelector('#blank:not([hidden])');
 
@@ -352,7 +384,7 @@ async function main() {
   await fast.close();
   await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the faster-JavaScript run also cleans up its RAM folder');
 
-  for (const sv of [a, b, plain, tls]) sv.close();
+  for (const sv of [a, b, plain, tls, purge]) sv.close();
   console.log('smoke ok');
 }
 

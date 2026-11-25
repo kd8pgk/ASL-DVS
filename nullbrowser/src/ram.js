@@ -34,7 +34,7 @@ function ownerTag() {
   return typeof process.getuid === 'function' ? String(process.getuid()) : 'u';
 }
 
-function cleanStale(base) {
+function rammaidSweep(base) {
   const tag = `${PREFIX}${ownerTag()}-`;
   let removed = 0;
   let names = [];
@@ -95,7 +95,7 @@ function prelaunchDir(value) {
   return value;
 }
 
-function removeRamDir(dir) {
+function rammaidRemove(dir) {
   if (!dir || !path.basename(dir).startsWith(PREFIX)) return false;
   try {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -105,7 +105,7 @@ function removeRamDir(dir) {
   }
 }
 
-function removeAfterExit(dir, pid = process.pid, run = spawn) {
+function rammaidAfterExit(dir, pid = process.pid, run = spawn) {
   if (!dir || !path.basename(dir).startsWith(PREFIX) || !path.isAbsolute(dir)) return false;
   try {
     const child = run('/bin/sh', ['-c', 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; rm -rf -- "$2"', 'null-browser-clean', String(pid), dir], { detached: true, stdio: 'ignore' });
@@ -116,4 +116,4 @@ function removeAfterExit(dir, pid = process.pid, run = spawn) {
   }
 }
 
-module.exports = { PREFIX, ramBase, cleanStale, createRamDir, adoptRamDir, prelaunchDir, removeRamDir, removeAfterExit, alive };
+module.exports = { PREFIX, ramBase, rammaidSweep, createRamDir, adoptRamDir, prelaunchDir, rammaidRemove, rammaidAfterExit, alive };
