@@ -158,6 +158,18 @@
   Node Monitor open on a Debian test machine with that version.
 - **Packed at normal compression** (since 0.11.9): about 123 MB, but it
   starts about seven times faster than at maximum compression.
+- **Launcher** (since 0.12.0). Only when the user clicks **Add to menu** (shown
+  when the app runs from an AppImage), the app copies the AppImage to
+  `~/.local/share/node-controller/`, writes
+  `~/.local/share/applications/nodecontroller.desktop`, the icon under
+  `~/.local/share/icons/hicolor/256x256/apps/` and the same launcher in the
+  Desktop folder (read from `user-dirs.dirs`; the app runs no other program,
+  and the policy test still forbids `child_process`). **Remove from menu** takes
+  them all away. The window
+  class and `desktopName` are `nodecontroller`, so docks group the window with
+  the entry (X11 and Wayland). The AppImage's own desktop entry carries no
+  `--no-sandbox` (`appImage.executableArgs` is empty). The icon is
+  `desktop/build/icon.png` (512 px) and `desktop/ui/icon.png` (256 px).
 - **The lockdown is the contract.** Pages get only the audio-only microphone,
   speaker choice and clipboard writes, and only from their node; they may
   request only their own node; Last Heard is the one tile that may use the

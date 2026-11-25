@@ -1,11 +1,13 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell, dialog, screen } = require('electron');
 const { PAGES, MAX_PINS, flipDecision, otherScheme, normalizeNode, originOf, sameOrigin, homeTarget, lanTarget, awayTarget, matchPage } = require('./node');
 const { createRouter } = require('./route');
 const { createMonitor } = require('./status');
 const { createSessionMarker } = require('./session');
 const { createLog } = require('./diag');
+const LN = require('./launcher');
 const { certDecision, formatFingerprint, refusedKey, refusedKeyOfUrl } = require('./pin');
 const { createStore, exportText, importText } = require('./store');
 const L = require('./layout');
@@ -669,6 +671,32 @@ function persist() {
   store.save(nodes);
 }
 
+function runningAppImage() {
+  if (app.isPackaged) return process.env.APPIMAGE || '';
+  return process.env.NODECONTROLLER_TEST_APPIMAGE || '';
+}
+
+function homeDir() {
+  if (!app.isPackaged && process.env.NODECONTROLLER_TEST_HOME) return process.env.NODECONTROLLER_TEST_HOME;
+  return os.homedir();
+}
+
+function desktopDir() {
+  const home = homeDir();
+  const conf = process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME) ? process.env.XDG_CONFIG_HOME : path.join(home, '.config');
+  let text = '';
+  try {
+    text = fs.readFileSync(path.join(conf, 'user-dirs.dirs'), 'utf8');
+  } catch {
+    text = '';
+  }
+  return LN.desktopDirFrom(home, text);
+}
+
+function launcherPaths() {
+  return LN.launcherPaths(homeDir(), desktopDir());
+}
+
 function register() {
   const str = (v) => typeof v === 'string';
   ipcMain.handle('app:info', (e) => (fromShell(e) ? { version: app.getVersion(), pages: PAGES } : null));
@@ -882,6 +910,32 @@ function register() {
     else app.relaunch();
     app.quit();
     return { ok: true };
+  });
+  ipcMain.handle('launcher:status', (e) => (fromShell(e) ? LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) : null));
+  ipcMain.handle('launcher:install', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    let r;
+    try {
+      let icon = null;
+      try {
+        icon = fs.readFileSync(path.join(__dirname, '..', 'ui', 'icon.png'));
+      } catch {
+        icon = null;
+      }
+      r = LN.installLauncher({ paths: launcherPaths(), running: runningAppImage(), iconPng: icon, version: app.getVersion() });
+    } catch (err) {
+      logLine(`launcher install failed: ${err && err.code ? err.code : err}`);
+      return { error: 'The launcher could not be added. See diagnostics.log.' };
+    }
+    if (r.error) return r;
+    logLine(`launcher added${r.shortcut ? ' with a desktop icon' : ''}`);
+    return { ok: true, shortcut: Boolean(r.shortcut), status: LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) };
+  });
+  ipcMain.handle('launcher:remove', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    LN.removeLauncher({ paths: launcherPaths() });
+    logLine('launcher removed');
+    return { ok: true, status: LN.launcherStatus(launcherPaths(), runningAppImage(), app.getVersion()) };
   });
   ipcMain.handle('ui:overlay', (e, on) => {
     if (!fromShell(e)) return { ok: false };

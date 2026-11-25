@@ -1,6 +1,18 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.20`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.12.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.12.0 (2026-11-25)
+
+Start from the app menu or a desktop icon.
+
+- **Add to menu.** When the app runs from an AppImage, the sidebar shows **Add to menu**. One click copies the AppImage to `~/.local/share/node-controller/` (so the icon keeps working if the download is moved or deleted), adds **Node Controller Desktop** to the app menu (`~/.local/share/applications/nodecontroller.desktop`), installs its icon, and puts the same launcher on the desktop (the folder named in `~/.config/user-dirs.dirs`, normally `~/Desktop`), marked executable. Nothing is written until the button is clicked.
+- **Update and remove.** Run a different AppImage and the button says **Update menu copy**, which replaces the copy the menu starts. Started from the menu copy it says **Remove from menu**, which takes the copy, the menu entry, the icon and the desktop launcher away.
+- **One icon in the dock.** The launcher names the app's window class, `nodecontroller` (and the app's `desktopName` is `nodecontroller.desktop` on Wayland), so MATE, KDE, XFCE and GNOME group the window with the menu entry instead of showing a second icon.
+- **Desktops.** MATE (Caja) and KDE trust a launcher that is executable. GNOME and XFCE ask once, the first time it is opened, whether to trust it. The app runs no other program to set this (the lockdown still forbids it).
+- **An app icon.** The app's own icon (a small picture of its layout, amber on dark) replaces Electron's default in the menu, the dock and the window.
+- **No sandbox switch in the AppImage's own entry.** The desktop entry inside the AppImage no longer carries `--no-sandbox` (electron-builder adds it by default).
+- **Tests.** The launcher on its own (paths, the entry text with spaces and refused characters, the desktop folder from user-dirs.dirs, install, update, remove, no desktop folder, not an AppImage) and, in the real window, Add to menu into a test home folder and Remove from menu from the installed copy.
 
 ## 0.11.20 (2026-11-25)
 

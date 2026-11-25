@@ -150,10 +150,14 @@ async function main() {
 
   const data = path.join(tmp, 'data');
   const extLog = path.join(tmp, 'external.log');
+  const fakeHome = path.join(tmp, 'home');
+  fs.mkdirSync(path.join(fakeHome, 'Desktop'), { recursive: true });
+  const fakeImage = path.join(tmp, 'NodeController-test.AppImage');
+  fs.writeFileSync(fakeImage, 'not really an appimage');
   const launch = () => _electron.launch({
     executablePath: require('electron'),
     args: [root, '--no-sandbox'],
-    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_EXTERNAL_LOG: extLog, NODECONTROLLER_PROBE_MS: '300' },
+    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_EXTERNAL_LOG: extLog, NODECONTROLLER_PROBE_MS: '300', NODECONTROLLER_TEST_APPIMAGE: fakeImage, NODECONTROLLER_TEST_HOME: fakeHome },
   });
   let app = await launch();
   let win = await app.firstWindow();
@@ -243,6 +247,18 @@ async function main() {
   const nodeId0 = JSON.parse(fs.readFileSync(path.join(data, 'nodes.json'), 'utf8')).nodes[0].id;
   assert.deepEqual(await win.evaluate((id) => window.nc.dropTab({ nodeId: id, pageId: 'sysmon', slot: 'middle' }), nodeId0), { ok: false });
   assert.equal((await win.evaluate(() => window.nc.getLayout())).tabs.length, tabsBefore, 'a drop on a slot that does not exist opens nothing');
+
+  const menuFile = path.join(fakeHome, '.local', 'share', 'applications', 'nodecontroller.desktop');
+  const deskFile = path.join(fakeHome, 'Desktop', 'nodecontroller.desktop');
+  const copied = path.join(fakeHome, '.local', 'share', 'node-controller', 'NodeController.AppImage');
+  assert.equal(await win.textContent('#launcher'), 'Add to menu');
+  await win.click('#launcher');
+  await win.waitForFunction(() => /Added to the app menu and the desktop/.test(document.getElementById('notice').textContent));
+  assert.equal(fs.readFileSync(copied, 'utf8'), 'not really an appimage');
+  assert.match(fs.readFileSync(menuFile, 'utf8'), /StartupWMClass=nodecontroller/);
+  assert.equal(fs.readFileSync(deskFile, 'utf8'), fs.readFileSync(menuFile, 'utf8'));
+  assert.ok(fs.existsSync(path.join(fakeHome, '.local', 'share', 'icons', 'hicolor', '256x256', 'apps', 'nodecontroller.png')));
+  assert.equal(await win.textContent('#launcher'), 'Update menu copy');
   assert.equal(await page(9).getAttribute('draggable'), 'false');
   assert.equal(await page(7).getAttribute('draggable'), 'false');
   assert.equal(await win.locator('.group-name').textContent(), 'Stub');
@@ -720,6 +736,21 @@ async function main() {
   assert.equal((await views(app)).length, 0);
 
   await app.close();
+
+  app = await _electron.launch({
+    executablePath: require('electron'),
+    args: [root, '--no-sandbox'],
+    env: { ...process.env, NODECONTROLLER_DATA: data, NODECONTROLLER_TEST_APPIMAGE: copied, NODECONTROLLER_TEST_HOME: fakeHome },
+  });
+  win = await app.firstWindow();
+  await win.waitForFunction(() => !document.getElementById('launcher').hidden);
+  assert.equal(await win.textContent('#launcher'), 'Remove from menu', 'started from the installed copy');
+  await win.click('#launcher');
+  await win.waitForFunction(() => /Removed from the app menu/.test(document.getElementById('notice').textContent));
+  for (const f of [menuFile, deskFile, copied]) assert.equal(fs.existsSync(f), false, f);
+  assert.equal(await win.textContent('#launcher'), 'Add to menu');
+  await app.close();
+
   for (const sv of [...servers, tlsSrv, tlsSrv2, extSrv]) sv.close();
   console.log('smoke ok');
 }

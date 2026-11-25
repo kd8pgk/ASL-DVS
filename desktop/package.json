@@ -1,7 +1,7 @@
 {
   "name": "nodecontroller-desktop",
   "productName": "Node Controller Desktop",
-  "version": "0.11.20",
+  "version": "0.12.0",
   "description": "Desktop client for Node Controller and Node Talker pages",
   "private": true,
   "main": "src/main.js",
@@ -35,6 +35,9 @@
     "directories": {
       "output": "dist"
     },
+    "appImage": {
+      "executableArgs": []
+    },
     "linux": {
       "target": [
         {
@@ -47,6 +50,7 @@
       "category": "Network",
       "artifactName": "NodeController-${version}.${ext}",
       "executableName": "nodecontroller",
+      "icon": "build/icon.png",
       "syncDesktopName": true
     },
     "electronFuses": {
