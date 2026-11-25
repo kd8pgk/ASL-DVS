@@ -128,6 +128,18 @@
     window.nb.go(text);
   }
 
+  for (const type of ['copy', 'cut', 'paste', 'drop']) {
+    document.addEventListener(type, (ev) => {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+  }
+  document.addEventListener('auxclick', (ev) => {
+    if (ev.button === 1) ev.preventDefault();
+  }, true);
+  document.addEventListener('mouseup', (ev) => {
+    if (ev.button === 1) ev.preventDefault();
+  }, true);
   $('form').addEventListener('submit', (ev) => {
     ev.preventDefault();
     editing = false;

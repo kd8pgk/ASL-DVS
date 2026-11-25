@@ -107,6 +107,18 @@ async function main() {
       const imgs = Array.from({ length: 15 }, (_, i) => `<img src="https://fanout-${i}.invalid/x.png">`).join('');
       return s.end(`<!doctype html><title>fanout</title>${imgs}`);
     }
+    if (q.url === '/trap') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>trap</title><div style="position:absolute;left:0;top:0;width:400px;height:300px"></div><script>addEventListener("beforeunload",(e)=>{e.preventDefault();e.returnValue="stay"})</script>');
+    }
+    if (q.url === '/clip') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>clip</title><input id="i" style="position:absolute;left:10px;top:10px;width:300px"><iframe id="f" src="/two" style="position:absolute;top:60px"></iframe>');
+    }
+    if (q.url === '/printtrap') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>printtrap</title><script>setTimeout(()=>{for(;;)window.print()},300)</script>');
+    }
     if (q.url === '/busy') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>busy</title><script>const t=Date.now()+26000;while(Date.now()<t){}</script>');
@@ -226,6 +238,80 @@ async function main() {
   });
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a clicked new-tab link opens in the same page');
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+
+  await go(`http://127.0.0.1:${portA}/trap`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/trap`, 'the leave-site trap page');
+  await sleep(500);
+  await app.evaluate(({ BrowserWindow }) => {
+    const wc = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents;
+    wc.sendInputEvent({ type: 'mouseDown', x: 100, y: 100, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: 100, y: 100, button: 'left', clickCount: 1 });
+  });
+  await sleep(500);
+  await go(`http://127.0.0.1:${portA}/two`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page that asks to stay cannot hold you');
+  const clip = (text) => app.evaluate(({ clipboard }, t) => (t === undefined ? clipboard.readText() : clipboard.writeText(t)), text);
+  await go(`http://127.0.0.1:${portA}/clip`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/clip`, 'the clipboard page');
+  await sleep(800);
+  const writes = {
+    exec: "(function(){var a=document.createElement('textarea');a.value='PWNED';document.body.appendChild(a);a.select();var r=document.execCommand('copy');a.remove();return r})()",
+    event: "(function(){document.addEventListener('copy',function(e){e.clipboardData.setData('text/plain','PWNED');e.preventDefault()},{once:true});document.execCommand('copy');return 1})()",
+    async: "navigator.clipboard.writeText('PWNED').then(function(){return 'ok'},function(e){return e.name})",
+    frame: "(function(){var d=document.getElementById('f').contentDocument;var a=d.createElement('textarea');a.value='PWNED';d.body.appendChild(a);a.select();return d.execCommand('copy')})()",
+    fresh: "(function(){var f=document.createElement('iframe');document.body.appendChild(f);var ex=f.contentWindow.Document.prototype.execCommand;var a=document.createElement('textarea');a.value='PWNED';document.body.appendChild(a);a.select();return ex.call(document,'copy')})()",
+  };
+  for (const [name, code] of Object.entries(writes)) {
+    await clip('SENTINEL');
+    await pageEval(code, true).catch(() => {});
+    await sleep(200);
+    assert.equal(await clip(), 'SENTINEL', `a page cannot write the clipboard (${name})`);
+  }
+  assert.match(String(await pageEval("navigator.clipboard.readText().then(function(){return 'read'},function(e){return e.name})", true)), /NotAllowedError/, 'a page cannot read the clipboard');
+  await clip('PASTED');
+  await pageEval("document.getElementById('i').focus(); true", true);
+  const keyTo = (target, mods, keyCode) => app.evaluate(({ BrowserWindow }, [t, m, k]) => {
+    const w = BrowserWindow.getAllWindows().find((x) => x.contentView && x.contentView.children.length > 0);
+    const wc = t === 'page' ? w.contentView.children[0].webContents : w.webContents;
+    wc.focus();
+    wc.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: m });
+    wc.sendInputEvent({ type: 'char', keyCode: k, modifiers: m });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: m });
+  }, [target, mods, keyCode]);
+  await keyTo('page', ['control'], 'V');
+  await keyTo('page', ['shift'], 'Insert');
+  await sleep(300);
+  assert.equal(await pageEval("document.getElementById('i').value"), '', 'Ctrl+V and Shift+Insert paste nothing into a page');
+  await pageEval("(function(){var i=document.getElementById('i');i.value='SECRET';i.focus();i.select();return 1})()", true);
+  await clip('SENTINEL');
+  await keyTo('page', ['control'], 'C');
+  await keyTo('page', ['control'], 'X');
+  await keyTo('page', ['control'], 'Insert');
+  await keyTo('page', ['shift'], 'Delete');
+  await sleep(300);
+  assert.equal(await clip(), 'SENTINEL', 'copy and cut keys put nothing on the clipboard');
+  await win.fill('#addr', 'typed');
+  await win.focus('#addr');
+  await clip('PASTED');
+  await keyTo('shell', ['control'], 'V');
+  await keyTo('shell', ['shift'], 'Insert');
+  await sleep(300);
+  assert.equal(await win.inputValue('#addr'), 'typed', 'nothing pastes into the address bar');
+  await win.evaluate(() => document.getElementById('addr').select());
+  await clip('SENTINEL');
+  await keyTo('shell', ['control'], 'C');
+  await keyTo('shell', ['control'], 'X');
+  await sleep(300);
+  assert.equal(await clip(), 'SENTINEL', 'nothing is copied out of the address bar');
+  assert.equal(await win.inputValue('#addr'), 'typed', 'cut does not remove the address text either');
+  await win.press('#addr', 'Escape');
+
+  await go(`http://127.0.0.1:${portA}/printtrap`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/printtrap`, 'the print trap page');
+  await sleep(1500);
+  await go(`http://127.0.0.1:${portA}/two`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page stuck in a print dialog is closed when you leave it', 10000);
+  assert.equal(await win.evaluate(() => document.getElementById('msg').hidden), true, 'leaving a stuck page shows no error');
 
   await go(`http://127.0.0.1:${portA}/file`);
   await win.waitForFunction(() => /Downloads are off/.test(document.getElementById('notice').textContent));
@@ -449,6 +535,12 @@ async function main() {
   for (const sv of [a, b, plain, tls, purge]) sv.close();
   console.log('smoke ok');
 }
+
+process.on('unhandledRejection', (e) => {
+  if (/Page\.handleJavaScriptDialog\): No dialog is showing/.test(String(e && e.message))) return;
+  console.error(e);
+  process.exit(1);
+});
 
 main().then(() => process.exit(0), (e) => {
   console.error(e);

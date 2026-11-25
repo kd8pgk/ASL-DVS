@@ -43,7 +43,7 @@
             android:src="@android:drawable/ic_popup_sync"
             android:tint="@color/text" />
 
-        <EditText
+        <io.github.kd8pgk.nullbrowser.NoClipEditText
             android:id="@+id/addr"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -115,7 +115,7 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <WebView
+        <io.github.kd8pgk.nullbrowser.NoClipWebView
             android:id="@+id/web"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />

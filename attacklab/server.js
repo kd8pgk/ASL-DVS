@@ -40,7 +40,7 @@ const TESTS = [
   { id: 'size-declared', kind: 'auto', title: 'Oversize file (size declared)', expect: 'A video that says it is 600 MB is refused before most of it is fetched.' },
   { id: 'size-stream', kind: 'auto', title: 'Oversize file (size hidden)', expect: 'A video that never says its size is cut off by 512 MB, not fetched to 600 MB.' },
   { id: 'redirects', kind: 'auto', title: 'Redirect loop', expect: 'The browser gives up on a long redirect chain instead of following all 30 hops.' },
-  { id: 'clickfix', kind: 'auto', title: 'ClickFix copy trick', expect: 'Known gap: a page can still put text on the clipboard with execCommand("copy"). Recorded, not fixed.' },
+  { id: 'clickfix', kind: 'auto', title: 'ClickFix copy trick', expect: 'The clipboard is off: the page cannot put text on it with execCommand("copy").' },
   { id: 'disguised', kind: 'look', title: 'Disguised files', expect: 'Each fake (program, script, web page, EICAR test file) is refused with an "is not really" notice; only the real PDF opens.' },
   { id: 'polyglot', kind: 'look', title: 'Polyglot PDF', expect: 'Known limit: a real %PDF- file that also carries script passes the type check. The PDF viewer is the last defense.' },
   { id: 'traversal', kind: 'look', title: 'Path in the file name', expect: 'A file named ../../../evil.pdf is saved under a safe name; nothing lands outside the browser.' },
@@ -48,6 +48,9 @@ const TESTS = [
   { id: 'fullscreen', kind: 'look', title: 'Fake lock screen', expect: 'Back (or Esc) always gets you out; the page cannot trap you.' },
   { id: 'alerts', kind: 'look', title: 'Alert loop', expect: 'The browser stays usable; you can leave the page.' },
   { id: 'crash', kind: 'look', title: 'Memory bomb', expect: 'The page dies, the browser recovers, and its data is wiped.' },
+  { id: 'leave-trap', kind: 'look', title: '"Leave site?" trap', expect: 'After one tap on the page, typing a new address (or closing the window) still leaves it; the page cannot hold you.' },
+  { id: 'print-loop', kind: 'look', title: 'Print dialog loop', expect: 'A page calling print() over and over cannot lock the browser; you can still leave it.' },
+  { id: 'page-files', kind: 'look', title: 'Files made by the page', expect: 'A program from a data: or blob: address, or an <a download> link, is refused; a fake PDF made in the page is refused as "not really"; only the real PDF made in the page is offered.' },
   { id: 'cpu', kind: 'look', title: 'Hidden miner (busy CPU)', expect: 'Desktop: the watchdog clears the site within about 20 s if you do not touch anything. Android: known gap, no CPU watchdog.' },
 ];
 
@@ -126,7 +129,7 @@ function createLab({ thirdParty = '', httpsPort = 0 } = {}) {
       case 'clickfix': {
         const r = last('clickfix', 'copied');
         if (!r) return { status: 'not run', note: 'tap the button' };
-        return r.data === 'true' ? { status: 'known gap', note: 'the page wrote to the clipboard' } : { status: 'pass', note: 'the copy was refused' };
+        return r.data === 'true' ? { status: 'FAIL', note: 'the page wrote to the clipboard' } : { status: 'pass', note: 'the copy was refused' };
       }
       default: {
         const files = list.filter((e) => e.what === 'fetch').map((e) => e.data);
@@ -198,6 +201,26 @@ if(navigator.clipboard&&navigator.clipboard.readText){navigator.clipboard.readTe
       case 'crash':
         return page(t.title, `${head}<button id="go">Start eating memory</button>`,
           set(`document.getElementById('go').onclick=function(){b('started');var a=[];setInterval(function(){for(var i=0;i<50;i++)a.push(new Array(1e6).fill(Math.random()))},10)};`));
+      case 'leave-trap':
+        return page(t.title, `${head}<p>Tap the box once, then try to leave: type another address, press back, or close the window.</p><button id="go" style="width:100%;height:160px">tap me once</button>`,
+          set(`addEventListener('beforeunload',function(e){b('blocked');e.preventDefault();e.returnValue='Stay?';return'Stay?'});document.getElementById('go').onclick=function(){b('armed')};`));
+      case 'print-loop':
+        return page(t.title, `${head}<button id="go">Start the print loop</button>`,
+          set(`document.getElementById('go').onclick=function(){b('started');var n=0;function p(){if(n++>=20)return b('ended');try{window.print()}catch(e){}setTimeout(p,300)}p()};`));
+      case 'page-files':
+        return page(t.title, `${head}<p>Each button makes a file inside the page, with no server involved, and asks for it to be saved.</p>
+<p><button id="dexe">program from a data: address</button></p>
+<p><button id="bexe">program from a blob: address</button></p>
+<p><a id="aexe" href="/dl/setup.exe" download="setup.exe">program by an &lt;a download&gt; link</a></p>
+<p><button id="bfake">fake PDF from a blob: address</button></p>
+<p><button id="breal">real PDF from a blob: address (control)</button></p>`,
+          set(`function save(u,n){var a=document.createElement('a');a.href=u;a.download=n;document.body.appendChild(a);a.click();a.remove()}
+function blob(bytes,type){return URL.createObjectURL(new Blob([bytes],{type:type}))}
+var MZ=new Uint8Array([0x4d,0x5a,0x90,0,3,0,0,0,4,0,0,0,0xff,0xff,0,0]);
+document.getElementById('dexe').onclick=function(){b('try','dexe');save('data:application/x-msdownload;base64,TVqQAAMAAAAEAAAA//8AAA==','tool.exe')};
+document.getElementById('bexe').onclick=function(){b('try','bexe');save(blob(MZ,'application/x-msdownload'),'tool.exe')};
+document.getElementById('bfake').onclick=function(){b('try','bfake');save(blob(MZ,'application/pdf'),'invoice.pdf')};
+document.getElementById('breal').onclick=function(){b('try','breal');save(blob(${JSON.stringify(REAL_PDF)},'application/pdf'),'real.pdf')};`));
       case 'cpu':
         return page(t.title, `${head}<p>Starts a 40-second busy loop 2 seconds after loading. Do not touch anything until it ends.</p>`,
           set(`setTimeout(function(){b('started');var t=Date.now()+40000;while(Date.now()<t){}b('ended')},2000);`));

@@ -269,6 +269,17 @@
     a CPU core for three five-second samples running while nothing is
     clicked or typed. It only clears and tells you; the page stays open. An
     allowed site is exempt, same as the leaving-a-site clear above.
+  - A page cannot hold you: its request to stay (`beforeunload`) is always
+    ignored, and a page that does not answer within 2 seconds when you leave
+    it (stuck in a print dialog, for example) has its process ended and the
+    navigation goes on.
+  - The clipboard is off everywhere (0.10.0). `src/noclip.js`, a frame
+    preload on the page session (`nodeIntegrationInSubFrames` so it runs in
+    every frame), locks `execCommand` copy/cut/paste, the Clipboard API and
+    the copy/cut/paste events before page code runs. `clipKey` drops
+    Ctrl+C/X/V, Ctrl+Insert, Shift+Insert and Shift+Delete in pages, allowed
+    pop-ups and the toolbar; the toolbar also drops paste, drop and
+    middle-click. There is no context menu.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
@@ -339,8 +350,9 @@
   songs and videos, a polyglot PDF, a `../` file name, oversize and endless
   files, redirect loops, a self-signed https port, pop-up floods, permission
   grabs, dangerous link schemes, a ClickFix copy trick, a fake lock screen,
-  alert loops, a memory bomb, a CPU busy loop and storage that tries to
-  survive a restart. The server decides each verdict from what reaches it
+  alert loops, a memory bomb, a CPU busy loop, storage that tries to
+  survive a restart, a "Leave site?" trap, a print-dialog loop and files a
+  page builds itself. The server decides each verdict from what reaches it
   (`/results`); tests it cannot see from its side are marked by hand or by
   the runner.
 - `node attacklab/server.js --port 8088 --host 0.0.0.0` serves it to a phone
@@ -365,6 +377,12 @@
   - Third-party cookies dropped (`CookieManager.setAcceptThirdPartyCookies`).
     Every permission request (camera, microphone, location and the rest) is
     denied without asking.
+  - The clipboard is off (0.3.0, `NoClip.kt`): no copy/paste menu in the
+    page (`NoClipWebView`) or the address bar (`NoClipEditText`), clipboard
+    keys and the keyboard's cut/copy/paste commands dropped, the same page
+    script injected on page start and finish, and anything that still lands
+    on the clipboard while the app is in front is cleared. A keyboard app's
+    own clipboard history cannot be told apart from typing.
   - https tried first; a certificate error is refused outright, with no
     trust-for-session yet. No downloads except a PDF, audio or video file,
     content-sniffed against its first bytes the same way the desktop build
