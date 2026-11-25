@@ -269,6 +269,10 @@
     a CPU core for three five-second samples running while nothing is
     clicked or typed. It only clears and tells you; the page stays open. An
     allowed site is exempt, same as the leaving-a-site clear above.
+  - A page cannot hold you: its request to stay (`beforeunload`) is always
+    ignored, and a page that does not answer within 2 seconds when you leave
+    it (stuck in a print dialog, for example) has its process ended and the
+    navigation goes on.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.

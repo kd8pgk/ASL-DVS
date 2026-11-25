@@ -111,6 +111,10 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>trap</title><div style="position:absolute;left:0;top:0;width:400px;height:300px"></div><script>addEventListener("beforeunload",(e)=>{e.preventDefault();e.returnValue="stay"})</script>');
     }
+    if (q.url === '/printtrap') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>printtrap</title><script>setTimeout(()=>{for(;;)window.print()},300)</script>');
+    }
     if (q.url === '/busy') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>busy</title><script>const t=Date.now()+26000;while(Date.now()<t){}</script>');
@@ -242,6 +246,12 @@ async function main() {
   await sleep(500);
   await go(`http://127.0.0.1:${portA}/two`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page that asks to stay cannot hold you');
+  await go(`http://127.0.0.1:${portA}/printtrap`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/printtrap`, 'the print trap page');
+  await sleep(1500);
+  await go(`http://127.0.0.1:${portA}/two`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a page stuck in a print dialog is closed when you leave it', 10000);
+  assert.equal(await win.evaluate(() => document.getElementById('msg').hidden), true, 'leaving a stuck page shows no error');
 
   await go(`http://127.0.0.1:${portA}/file`);
   await win.waitForFunction(() => /Downloads are off/.test(document.getElementById('notice').textContent));
@@ -465,6 +475,12 @@ async function main() {
   for (const sv of [a, b, plain, tls, purge]) sv.close();
   console.log('smoke ok');
 }
+
+process.on('unhandledRejection', (e) => {
+  if (/Page\.handleJavaScriptDialog\): No dialog is showing/.test(String(e && e.message))) return;
+  console.error(e);
+  process.exit(1);
+});
 
 main().then(() => process.exit(0), (e) => {
   console.error(e);

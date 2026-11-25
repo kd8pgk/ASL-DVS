@@ -54,12 +54,16 @@ const TOOLBAR = 44;
 const BAR = 34;
 const GESTURE_MS = 1000;
 const LITTERBUG_MS = 3000;
+const STUCK_MS = 2000;
 const MAX_LITTERBUGS = 3;
 
 let win = null;
 let view = null;
 let ses = null;
 let lastInput = 0;
+let commits = 0;
+let leaving = 0;
+let unsticking = null;
 let notice = '';
 let error = null;
 let pendingCert = null;
@@ -388,10 +392,26 @@ function showFingerprint(hex) {
   return (hex.toUpperCase().match(/.{1,2}/g) || []).join(':');
 }
 
+function unstick(redo) {
+  const wc = view.webContents;
+  const id = ++leaving;
+  const seen = commits;
+  let answered = false;
+  const frame = wc.mainFrame;
+  if (!frame) return;
+  frame.executeJavaScript('1').then(() => { answered = true; }, () => { answered = true; });
+  setTimeout(() => {
+      if (answered || id !== leaving || seen !== commits || wc.isDestroyed() || wc.isCrashed()) return;
+      unsticking = redo;
+    wc.forcefullyCrashRenderer();
+  }, STUCK_MS).unref();
+}
+
 function load(url) {
   error = null;
   pendingCert = null;
   view.webContents.loadURL(url).catch(() => {});
+  unstick(() => view.webContents.loadURL(url).catch(() => {}));
   push();
 }
 
@@ -507,7 +527,16 @@ function createView() {
     }
     push();
   });
+  wc.on('did-navigate', () => {
+    commits += 1;
+  });
   wc.on('render-process-gone', (ev, details) => {
+    if (unsticking) {
+      const redo = unsticking;
+      unsticking = null;
+      redo();
+      return;
+    }
     const url = pageUrl();
     error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
     watchdog.noteCrash(P.siteOf(P.hostOf(url)));
@@ -608,6 +637,7 @@ function register() {
     if (r.blank) {
       error = null;
       view.webContents.loadURL('about:blank').catch(() => {});
+      unstick(() => view.webContents.loadURL('about:blank').catch(() => {}));
       push();
       return { ok: true };
     }
@@ -617,13 +647,20 @@ function register() {
   ipcMain.handle('nav', (e, what) => {
     if (!fromShell(e)) return { ok: false };
     const wc = view.webContents;
-    if (what === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
-    else if (what === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
-    else if (what === 'reload') retry();
+    if (what === 'back' && wc.navigationHistory.canGoBack()) {
+      const to = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() - 1);
+      wc.navigationHistory.goBack();
+      if (to) unstick(() => wc.loadURL(to.url).catch(() => {}));
+    } else if (what === 'forward' && wc.navigationHistory.canGoForward()) {
+      const to = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() + 1);
+      wc.navigationHistory.goForward();
+      if (to) unstick(() => wc.loadURL(to.url).catch(() => {}));
+    } else if (what === 'reload') retry();
     else if (what === 'stop') wc.stop();
     else if (what === 'home') {
       error = null;
       wc.loadURL('about:blank').catch(() => {});
+      unstick(() => wc.loadURL('about:blank').catch(() => {}));
     }
     push();
     return { ok: true };
