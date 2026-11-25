@@ -7,7 +7,8 @@ Current version: `0.11.20`. The app is in `desktop/`; its version is `version` i
 Node pages and Last Heard share one setup.
 
 - **One place for page views.** The setup every page view needs (the locked-down view itself, its window, the WebRTC rule, the keyboard shortcuts, focus tracking, the "loaded" and "stopped working" handling) was written out twice, once for node pages and once for Last Heard, and the copies had drifted (0.11.3's trace went into only one of them). It is now one helper both use; what differs (the session, where links may go, certificates, scheme switching) stays separate. No change in what the app does.
-- **Tests.** The real-window tests, which open node pages and Last Heard, pass unchanged.
+- **Scheme rule tightened.** An address that has loaded in this session now keeps its scheme whatever the error (0.11.13 still switched on an SSL error, which a node reset can also cause mid-handshake), and a switch that fails again within 30 s always goes back, whatever the second error is (before, only a wrong-scheme error went back, so a page could be left on the wrong scheme). CI hit this: the reset test failed there with the reset arriving as an SSL error.
+- **Tests.** The scheme rule as a unit test with those cases; the real-window tests, which open node pages and Last Heard and reset a working https page, pass.
 
 ## 0.11.19 (2026-11-25)
 

@@ -19,12 +19,11 @@ const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 const PIN_RE = /^[0-9a-f]{64}$/;
 const MAX_PINS = 8;
 const SCHEME_FLIP_CODES = [-107, -113, -101, -324];
-const TRANSIENT_CODES = [-101, -324];
 
 function flipDecision({ code, via, recent, confirmed }) {
-  if (!SCHEME_FLIP_CODES.includes(code) || via === 'away') return 'none';
+  if (via === 'away' || code === -3) return 'none';
   if (recent) return 'revert';
-  if (confirmed && TRANSIENT_CODES.includes(code)) return 'none';
+  if (confirmed || !SCHEME_FLIP_CODES.includes(code)) return 'none';
   return 'flip';
 }
 
@@ -219,7 +218,6 @@ module.exports = {
   PAGES,
   MAX_PINS,
   SCHEME_FLIP_CODES,
-  TRANSIENT_CODES,
   flipDecision,
   schemeOf,
   otherScheme,
