@@ -25,6 +25,9 @@ ANDROID_DIR = "android/"
 ANDROID_GRADLE = "android/app/build.gradle.kts"
 ANDROID_LOG = "changelogs/nodetalker_android.md"
 ANDROID_VERSION_RE = re.compile(r'^val appVersion = "([^"]+)"', re.M)
+NULLBROWSER_ANDROID_DIR = "nullbrowser-android/"
+NULLBROWSER_ANDROID_GRADLE = "nullbrowser-android/app/build.gradle.kts"
+NULLBROWSER_ANDROID_LOG = "changelogs/nullbrowser_android.md"
 DESKTOP_DIR = "desktop/"
 DESKTOP_PACKAGE = "desktop/package.json"
 DESKTOP_LOG = "changelogs/nodecontroller_desktop.md"
@@ -425,33 +428,33 @@ def check_changelog(stem, name, version):
         fail(f"{path}: the top entry is '{head}', not {version}")
 
 
-def check_android(base, paths):
-    if not any(p.startswith(ANDROID_DIR) for p in paths):
+def check_android_app(base, paths, android_dir, gradle_path, log_path):
+    if not any(p.startswith(android_dir) for p in paths):
         return
-    m = ANDROID_VERSION_RE.search(read(ANDROID_GRADLE) if os.path.isfile(ANDROID_GRADLE) else "")
+    m = ANDROID_VERSION_RE.search(read(gradle_path) if os.path.isfile(gradle_path) else "")
     if not m:
-        fail(f"{ANDROID_GRADLE}: no 'val appVersion = \"X.Y.Z\"' line found")
+        fail(f"{gradle_path}: no 'val appVersion = \"X.Y.Z\"' line found")
         return
     version = m.group(1)
     vt, suffix = split_version(version)
     if vt is None or suffix or len(vt) != 3:
-        fail(f"{ANDROID_GRADLE}: appVersion '{version}' must be X.Y.Z")
+        fail(f"{gradle_path}: appVersion '{version}' must be X.Y.Z")
         return
-    om = ANDROID_VERSION_RE.search(show(base, ANDROID_GRADLE) or "")
+    om = ANDROID_VERSION_RE.search(show(base, gradle_path) or "")
     if om:
         ot, _ = split_version(om.group(1))
         if ot is not None and vt <= ot:
-            fail(f"{ANDROID_GRADLE}: android/ changed but appVersion {version} is not newer than {om.group(1)}")
-    if not os.path.isfile(ANDROID_LOG):
-        fail(f"android/: {ANDROID_LOG} is missing")
+            fail(f"{gradle_path}: {android_dir} changed but appVersion {version} is not newer than {om.group(1)}")
+    if not os.path.isfile(log_path):
+        fail(f"{android_dir}: {log_path} is missing")
         return
-    lines = read(ANDROID_LOG).splitlines()
+    lines = read(log_path).splitlines()
     cur = next((ln for ln in lines if ln.startswith("Current version:")), "")
     if f"`{version}`" not in cur:
-        fail(f"{ANDROID_LOG}: the 'Current version' line does not name `{version}`")
+        fail(f"{log_path}: the 'Current version' line does not name `{version}`")
     head = next((ln for ln in lines if ln.startswith("## ")), "")
     if version not in head.split():
-        fail(f"{ANDROID_LOG}: the top entry is '{head}', not {version}")
+        fail(f"{log_path}: the top entry is '{head}', not {version}")
 
 
 JS_PREV_REGEX = set("(,=:[!&|?{};+-*%<>~^")
@@ -820,7 +823,8 @@ def main():
             note_docs_naming(path)
 
     check_launchers()
-    check_android(base, added + modified + deleted)
+    check_android_app(base, added + modified + deleted, ANDROID_DIR, ANDROID_GRADLE, ANDROID_LOG)
+    check_android_app(base, added + modified + deleted, NULLBROWSER_ANDROID_DIR, NULLBROWSER_ANDROID_GRADLE, NULLBROWSER_ANDROID_LOG)
     check_desktop(base, [p for p in added + modified + deleted if not p.startswith("desktop/node_modules/")])
     check_nullbrowser(base, [p for p in added + modified + deleted if not p.startswith("nullbrowser/node_modules/")])
 
