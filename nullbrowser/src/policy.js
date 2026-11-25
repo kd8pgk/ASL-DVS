@@ -215,10 +215,92 @@ function stripCookieHeaders(headers) {
 }
 
 function chromiumUserAgent(ua) {
-  return String(ua || '').replace(/\s+\S*[Ee]lectron\/\S+/g, '').replace(/\s+null-browser\/\S+/gi, '').replace(/\s+Null Browser\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
+  const s = String(ua || '');
+  const platform = (/^Mozilla\/5\.0 \(([^)]*)\)/.exec(s) || [])[1];
+  const major = (/\bChrome\/(\d+)/.exec(s) || [])[1];
+  if (!platform || !major) return s.replace(/\s+\S*[Ee]lectron\/\S+/g, '').replace(/\s+null-?browser\/\S+/gi, '').replace(/\s{2,}/g, ' ').trim();
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
+function firstLanguage(preferred, locale) {
+  const list = [...(Array.isArray(preferred) ? preferred : []), locale, 'en-US'];
+  for (const l of list) {
+    const tag = String(l || '').replace(/_/g, '-').split('.')[0];
+    if (/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(tag)) return tag;
+  }
+  return 'en-US';
+}
+
+const LOW_HINTS = new Set(['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform']);
+const EXTRA_HINTS = new Set(['ect', 'rtt', 'downlink', 'device-memory', 'dpr', 'viewport-width', 'width']);
+
+function isExtraHint(name) {
+  const n = String(name).toLowerCase();
+  if (n.startsWith('sec-ch-')) return !LOW_HINTS.has(n);
+  return EXTRA_HINTS.has(n);
+}
+
+function trimReferer(referer, url) {
+  if (!referer) return '';
+  let from;
+  let to;
+  try {
+    from = new URL(referer);
+    to = new URL(url);
+  } catch {
+    return '';
+  }
+  if (from.protocol === 'https:' && to.protocol === 'http:') return '';
+  if (siteOf(from.hostname) === siteOf(to.hostname) && from.protocol === to.protocol) return referer;
+  return `${from.origin}/`;
+}
+
+function minimalRequestHeaders(headers, url, lang) {
+  let changed = false;
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const n = k.toLowerCase();
+    if (isExtraHint(n)) {
+      changed = true;
+      continue;
+    }
+    if (n === 'accept-language' && String(v) !== lang) {
+      out[k] = lang;
+      changed = true;
+      continue;
+    }
+    if (n === 'referer') {
+      const r = trimReferer(String(v), url);
+      if (r !== String(v)) changed = true;
+      if (r) out[k] = r;
+      continue;
+    }
+    out[k] = v;
+  }
+  return { headers: out, changed };
+}
+
+const HINT_ASKS = new Set(['accept-ch', 'critical-ch', 'delegate-ch']);
+
+function dropHintAsks(headers) {
+  let changed = false;
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (HINT_ASKS.has(k.toLowerCase())) {
+      changed = true;
+      continue;
+    }
+    out[k] = v;
+  }
+  return changed ? out : null;
 }
 
 module.exports = {
+  firstLanguage,
+  isExtraHint,
+  trimReferer,
+  minimalRequestHeaders,
+  dropHintAsks,
   DISABLED_FEATURES,
   SWITCHES,
   JS_FLAGS,

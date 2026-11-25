@@ -755,7 +755,7 @@ function hardenPage(s) {
   s.setDevicePermissionHandler(() => false);
   s.setSpellCheckerEnabled(false);
   s.setSpellCheckerLanguages([]);
-  s.setUserAgent(P.chromiumUserAgent(s.getUserAgent()));
+  s.setUserAgent(P.chromiumUserAgent(s.getUserAgent()), pageLang());
   s.on('will-download', onDownload);
   s.webRequest.onBeforeRequest((details, callback) => {
     if (litterbugRequest(details)) return callback({ cancel: true });
@@ -787,9 +787,10 @@ function hardenPage(s) {
     if (page && details.resourceType !== 'mainFrame' && slowActive() && S.isPrefetch(details.requestHeaders)) return callback({ cancel: true });
     const strip = thirdParty(details);
     const addSave = line.saveData && (page || details.webContentsId === undefined);
-    if (!strip && !addSave) return callback({});
+    const minimal = P.minimalRequestHeaders(details.requestHeaders, details.url, pageLang());
+    if (!strip && !addSave && !minimal.changed) return callback({});
     const requestHeaders = {};
-    for (const [k, v] of Object.entries(details.requestHeaders)) if (!(strip && k.toLowerCase() === 'cookie')) requestHeaders[k] = v;
+    for (const [k, v] of Object.entries(minimal.headers)) if (!(strip && k.toLowerCase() === 'cookie')) requestHeaders[k] = v;
     if (addSave) requestHeaders['Save-Data'] = 'on';
     return callback({ requestHeaders });
   });
@@ -821,9 +822,11 @@ function hardenPage(s) {
   });
   s.webRequest.onHeadersReceived((details, callback) => {
     const doc = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
+    const asks = P.dropHintAsks(details.responseHeaders);
+    if (asks) details = { ...details, responseHeaders: asks };
     const csp = doc ? S.cspHeaders(details.responseHeaders) : null;
     if (csp) details = { ...details, responseHeaders: csp };
-    let headers = csp;
+    let headers = csp || asks;
     if (details.resourceType === 'mainFrame' && details.statusCode >= 200 && details.statusCode < 300) {
       const ct = Object.entries(details.responseHeaders || {}).find(([k]) => k.toLowerCase() === 'content-type');
       if (F.kindOfMime(ct ? [].concat(ct[1])[0] : '')) {
@@ -841,6 +844,13 @@ function hardenPage(s) {
     const r = P.stripCookieHeaders(details.responseHeaders);
     return callback(r.removed ? { responseHeaders: r.headers } : {});
   });
+}
+
+let langCache = '';
+
+function pageLang() {
+  if (!langCache) langCache = P.firstLanguage(app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [], app.getLocale());
+  return langCache;
 }
 
 function hardenShell(s) {
@@ -1331,6 +1341,7 @@ app.on('second-instance', () => {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  app.userAgentFallback = P.chromiumUserAgent(app.userAgentFallback);
   hardenShell(session.defaultSession);
   hardenShell(shellSession());
   ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
@@ -1347,6 +1358,7 @@ app.whenReady().then(() => {
     return new Response(hit.buf, { headers: { 'content-type': hit.type || 'application/octet-stream', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
   });
   ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
+  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
   ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
   register();
   createWindow();

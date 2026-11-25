@@ -137,6 +137,7 @@ class BrowserActivity : Activity() {
         web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         web.settings.setSupportMultipleWindows(true)
         web.settings.javaScriptCanOpenWindowsAutomatically = false
+        web.settings.userAgentString = LessInfo.userAgent(web.settings.userAgentString)
         line = SlowLine(web) { renderLine() }
 
         web.webViewClient = object : WebViewClient() {
@@ -166,11 +167,13 @@ class BrowserActivity : Activity() {
                 loadingHost = Uri.parse(url).host
                 hideError()
                 view.evaluateJavascript(NoClip.JS, null)
+                view.evaluateJavascript(LessInfo.JS, null)
                 line.pageStarted(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 view.evaluateJavascript(NoClip.JS, null)
+                view.evaluateJavascript(LessInfo.JS, null)
                 line.pageFinished()
                 refreshUi()
             }

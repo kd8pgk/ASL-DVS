@@ -1,6 +1,18 @@
 # Null Browser changelog
 
-Current version: `0.11.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.12.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.12.0 (2026-11-25)
+
+Tell sites less, and never anything false. Sites behind a "checking your connection" page (Cloudflare, as 4chan uses) compare what a browser says about itself, so nothing is faked; things are only left out.
+
+- **The user agent was giving Null Browser away.** It carried `NullBrowser/0.11.0` and the full Chrome version on every request, which picks you out of a crowd. It is now the plain Chromium form with the short version Chrome itself sends (`Chrome/152.0.0.0`), for pages and Null Browser's own fetches.
+- **One language.** Only your first language is sent (`Accept-Language`, and `navigator.languages`), not the whole list.
+- **No detailed hints.** A site that asks for the operating system version, CPU type, device model, full version list, line speed or memory (`Accept-CH`, `Critical-CH`) is not answered: the ask is dropped and any such header is removed. A script asking for the same (`getHighEntropyValues`) gets only the basic brand, mobile and platform values. (Electron sends no client-hint headers at all by default; that is unchanged.)
+- **Line speed, memory, CPU cores and battery** are no longer readable by page scripts (`navigator.connection`, `deviceMemory`, `hardwareConcurrency` and `getBattery` are not there, as in browsers that never had them). Chromium answered a battery-level request without asking before.
+- **Referer.** Going to another site sends only the site name (`https://example.com/`), never the page address, whatever the page's own policy says; going from https to http sends nothing. Within one site it is unchanged.
+- **Known limits.** Background workers a page starts can still read the core count and memory size (the page script cannot reach them). Screen size, time zone and fonts are left as they are: changing them would be faking.
+- **Tests.** Unit tests for each trim; the smoke test checks the user agent, one language, no detailed hints after a site asks, and the script readouts. The attack lab adds a fingerprint page (`attacklab/fplab.js`, `run-fp.js`) that records what reaches it, headers and script values; it passes.
 
 ## 0.11.0 (2026-11-25)
 

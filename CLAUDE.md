@@ -287,6 +287,14 @@
     range resume) in viewing order from the frame preload's position report,
     then served from memory on the `nbimg:` scheme (added to each page's
     `img-src`); fonts, pings, prefetch and media preload are skipped.
+  - Minimal info, never faked (0.12.0): the user agent is plain Chromium
+    with the short version (`chromiumUserAgent`); one language
+    (`firstLanguage`); detailed client hints and `Accept-CH`/`Critical-CH`
+    dropped; the Referer across sites cut to the origin and dropped from
+    https to http (`minimalRequestHeaders`); `src/lessinfo.js` removes
+    `navigator.connection`, `deviceMemory`, `hardwareConcurrency` and
+    `getBattery` and gives only low-entropy UA data. Screen, time zone and
+    fonts are not touched: changing them would be faking.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
@@ -366,6 +374,10 @@
   a throttled comic page, a cut-off panel, scrolling, fonts and prefetch,
   text only and read-ahead; `node attacklab/run-slow.js` runs it against the
   desktop build.
+- **fplab** (`attacklab/fplab.js`): open `/t/fingerprint` over the lab's
+  https port; it records the headers and script values that reach it and
+  fails on anything beyond the minimum. `node attacklab/run-fp.js` runs it
+  against the desktop build.
 - `node attacklab/server.js --port 8088 --host 0.0.0.0` serves it to a phone
   on the same network (Null Browser Mobile); `node attacklab/run-desktop.js`
   drives the desktop Null Browser from source with Playwright and prints the
@@ -400,6 +412,11 @@
     `evaluateJavascript`), with range resume, and puts each in place as a
     `data:` image; the block lifts when the queue is done. Fonts, prefetch and
     pings are answered empty from `shouldInterceptRequest`.
+  - Minimal info (0.5.0, `LessInfo.kt`): the user agent drops the phone's
+    model and build and shortens the Chrome version; the same page script
+    as the desktop build removes the line, memory, core and battery
+    readouts. Languages, Referer and hint headers cannot be set in WebView
+    without AndroidX.
   - https tried first; a certificate error is refused outright, with no
     trust-for-session yet. No downloads except a PDF, audio or video file,
     content-sniffed against its first bytes the same way the desktop build

@@ -1,6 +1,15 @@
 # Null Browser Mobile changelog
 
-Current version: `0.4.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.0 (2026-11-25)
+
+Tell sites less, and never anything false, as in the desktop build (0.12.0).
+
+- **The phone's model and build number are no longer in the user agent.** Android's page view sent them (for example `Pixel 7 Build/UQ1A.240205.004`) on every request. Now only Linux, the Android version and the page-view marker are kept, with the short Chrome version Chrome itself sends. Null Browser's own fetches use the same.
+- **Line speed, memory, CPU cores and battery** are no longer readable by page scripts, and a script asking for the detailed browser hints gets only the basic brand, mobile and platform values (the same page script as the desktop build, injected when a page starts and finishes loading).
+- **Known limits.** Android's page view gives an app no way to choose the languages it sends, to trim the Referer, or to refuse the detailed hint headers without an extra library, so those follow the page view's own rules (the Referer across sites is the site name only unless the page asks for more).
+- **Tests.** The user-agent trim as unit tests.
 
 ## 0.4.0 (2026-11-25)
 
