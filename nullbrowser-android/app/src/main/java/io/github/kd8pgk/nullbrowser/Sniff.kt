@@ -93,3 +93,13 @@ fun kindLabel(kind: Kind): String = when (kind) {
     Kind.AUDIO -> "audio"
     Kind.VIDEO -> "video"
 }
+
+fun withExtension(name: String, kind: Kind, mimeExt: String?): String {
+    if (kindOfName(name) == kind) return name
+    val ext = mimeExt?.lowercase()?.takeIf { EXT_KIND[it] == kind } ?: when (kind) {
+        Kind.PDF -> "pdf"
+        Kind.AUDIO -> "mp3"
+        Kind.VIDEO -> "mp4"
+    }
+    return "$name.$ext"
+}

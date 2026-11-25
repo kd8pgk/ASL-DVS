@@ -48,6 +48,15 @@ class SniffTest {
     }
 
     @Test
+    fun aFileWithoutTheRightExtensionGetsOneSoTheViewerKnowsIt() {
+        assertEquals("report.pdf", withExtension("report.pdf", Kind.PDF, "pdf"))
+        assertEquals("download.pdf", withExtension("download", Kind.PDF, null))
+        assertEquals("track.ogg", withExtension("track", Kind.AUDIO, "ogg"))
+        assertEquals("clip.mp4", withExtension("clip", Kind.VIDEO, "exe"))
+        assertEquals("song.mp3.mp4", withExtension("song.mp3", Kind.VIDEO, "mp4"))
+    }
+
+    @Test
     fun humanSizeIsReadable() {
         assertEquals("", humanSize(0))
         assertEquals("500 bytes", humanSize(500))

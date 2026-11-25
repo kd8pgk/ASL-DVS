@@ -1,5 +1,8 @@
 package io.github.kd8pgk.nullbrowser
 
+private val IPV4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$")
+private val IPV6_PRIVATE = Regex("^(fc|fd|fe8|fe9|fea|feb)")
+
 fun isPrivateHost(host: String?): Boolean {
     val h = (host ?: "").lowercase()
     if (h.isEmpty()) return true
@@ -7,7 +10,7 @@ fun isPrivateHost(host: String?): Boolean {
         h.endsWith(".internal") || h.endsWith(".lan") || h.endsWith(".home.arpa")
     ) return true
     if (!h.contains('.') && !h.contains(':')) return true
-    val v4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").find(h)
+    val v4 = IPV4.find(h)
     if (v4 != null) {
         val a = v4.groupValues[1].toInt()
         val b = v4.groupValues[2].toInt()
@@ -17,7 +20,7 @@ fun isPrivateHost(host: String?): Boolean {
     }
     if (h.contains(':')) {
         if (h == "::" || h == "::1") return true
-        return Regex("^(fc|fd|fe8|fe9|fea|feb)").containsMatchIn(h) || h.startsWith("::ffff:")
+        return IPV6_PRIVATE.containsMatchIn(h) || h.startsWith("::ffff:")
     }
     return false
 }
