@@ -61,6 +61,7 @@ button:hover:not(:disabled) { filter: brightness(1.6); box-shadow: 0 0 12px curr
 button:active:not(:disabled) { transform: scale(.96); }
 button:disabled { opacity: .35; cursor: default; }
 button.primary { color: var(--green); border-color: var(--green-dim); }
+#line.on { color: var(--amber); border-color: var(--amber); }
 #form { flex: 1; min-width: 0; }
 #addr {
   width: 100%;

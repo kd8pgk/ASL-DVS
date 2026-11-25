@@ -17,6 +17,7 @@
     <input id="addr" type="text" spellcheck="false" placeholder="Type a web address" aria-label="Address">
   </form>
   <span id="sec" class="sec" hidden></span>
+  <button id="line" type="button" title="Slow line and images" aria-label="Slow line and images" aria-expanded="false">Line</button>
   <button id="bm" type="button" title="Bookmarks" aria-label="Bookmarks">&#9734;</button>
   <button id="fastjs" type="button" title="Faster JavaScript (restarts Null Browser)" aria-label="Faster JavaScript">JIT: Off</button>
 </header>
@@ -29,6 +30,8 @@
   <div id="notice" class="bar notice" hidden></div>
   <div id="ask" class="bar" hidden><span id="ask-text" class="bar-text"></span><button id="ask-open" type="button" class="primary">Open</button><button id="ask-cancel" type="button">Cancel</button></div>
   <div id="popbar" class="bar" hidden><span id="pop-text" class="bar-text"></span><button id="pop-allow" type="button" class="primary">Allow for this site</button><button id="pop-close" type="button" aria-label="Close">&#10005;</button></div>
+  <div id="lineset" class="bar" hidden><span class="bar-text">Slow line and images (until Null Browser closes)</span><button id="ls-mode" type="button" title="Slow mode: Auto turns it on when pages arrive slowly">Slow: Auto</button><button id="ls-images" type="button" title="Images: Off shows text only">Images: On</button><button id="ls-save" type="button" title="Ask sites for lighter pages with the Save-Data header (sites can see it)">Save-Data: Off</button><button id="ls-ahead" type="button" title="When a page is done, load the next page and its images ahead (sites can see it)">Read ahead: Off</button><button id="ls-close" type="button" aria-label="Close">&#10005;</button></div>
+  <div id="linebar" class="bar" hidden><span id="linebar-text" class="bar-text"></span><button id="ls-stop" type="button">Stop images</button></div>
   <div id="jsbar" class="bar" hidden><span id="jsbar-text" class="bar-text"></span><button id="jsbar-yes" type="button" class="primary">Restart</button><button id="jsbar-no" type="button">Cancel</button></div>
 </div>
 <main id="msg" class="msg" hidden>

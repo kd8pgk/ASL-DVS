@@ -5,17 +5,20 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { SLOW_TESTS, SLOW_IDS, createSlowLab } = require('./slowlab');
 
 const EICAR = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 const MB = 1024 * 1024;
 const CAP = 512 * MB;
 
 function args(argv) {
-  const out = { port: 8088, host: '0.0.0.0', thirdParty: '' };
+  const out = { port: 8088, host: '0.0.0.0', thirdParty: '', rate: 5, panel: 24 };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--port') out.port = Number(argv[(i += 1)]);
     else if (argv[i] === '--host') out.host = argv[(i += 1)];
     else if (argv[i] === '--third-party') out.thirdParty = argv[(i += 1)];
+    else if (argv[i] === '--rate') out.rate = Number(argv[(i += 1)]);
+    else if (argv[i] === '--panel') out.panel = Number(argv[(i += 1)]);
   }
   return out;
 }
@@ -52,9 +55,10 @@ const TESTS = [
   { id: 'print-loop', kind: 'look', title: 'Print dialog loop', expect: 'A page calling print() over and over cannot lock the browser; you can still leave it.' },
   { id: 'page-files', kind: 'look', title: 'Files made by the page', expect: 'A program from a data: or blob: address, or an <a download> link, is refused; a fake PDF made in the page is refused as "not really"; only the real PDF made in the page is offered.' },
   { id: 'cpu', kind: 'look', title: 'Hidden miner (busy CPU)', expect: 'Desktop: the watchdog clears the site within about 20 s if you do not touch anything. Android: known gap, no CPU watchdog.' },
+  ...SLOW_TESTS,
 ];
 
-function createLab({ thirdParty = '', httpsPort = 0 } = {}) {
+function createLab({ thirdParty = '', httpsPort = 0, rate = 5, panel = 24 } = {}) {
   const events = [];
   const marks = {};
   const streams = {};
@@ -73,7 +77,10 @@ function createLab({ thirdParty = '', httpsPort = 0 } = {}) {
     return list.length ? list[list.length - 1] : null;
   }
 
+  const slow = createSlowLab({ ev, of, rateKb: rate, panelKb: panel });
+
   function verdict(test) {
+    if (SLOW_IDS.has(test) && !marks[test]) return slow.verdict(test);
     const list = of(test);
     const seen = (w) => list.some((e) => e.what === w);
     if (marks[test.id || test]) return marks[test.id || test];
@@ -375,6 +382,7 @@ document.getElementById('breal').onclick=function(){b('try','breal');save(blob($
         `<script>var T='persist';var v=null;try{v=localStorage.getItem('nb_persist')}catch(e){}b('check-ls',v?'found':'gone');try{var r=indexedDB.open('attacklab',1);r.onupgradeneeded=function(){r.transaction.abort();b('check-idb','gone')};r.onsuccess=function(){var db=r.result;if(!db.objectStoreNames.contains('s')){b('check-idb','gone');return}var g=db.transaction('s').objectStore('s').get('k');g.onsuccess=function(){b('check-idb',g.result?'found':'gone')};g.onerror=function(){b('check-idb','gone')}};r.onerror=function(){b('check-idb','gone')}}catch(e){b('check-idb','gone')}</script>`));
     }
     if (p === '/t/cert-ok') return html(page('certificate', '<h1>You reached the self-signed page</h1><p>If this loaded without a warning you could not get past, that is a FAIL on Android.</p>'));
+    if (slow.handle(req, res, url)) return undefined;
     if (p.startsWith('/t/')) {
       const id = p.slice(3);
       if (TESTS.some((t) => t.id === id)) return html(testPage(id));
@@ -401,7 +409,7 @@ function selfSigned(dir) {
 function start(opts) {
   const tls = selfSigned(fs.mkdtempSync(path.join(os.tmpdir(), 'attacklab-')));
   const httpsPort = tls ? opts.port + 1 : 0;
-  const lab = createLab({ thirdParty: opts.thirdParty, httpsPort });
+  const lab = createLab({ thirdParty: opts.thirdParty, httpsPort, rate: opts.rate || 5, panel: opts.panel || 24 });
   const server = http.createServer(lab.handle);
   server.listen(opts.port, opts.host);
   let secure = null;

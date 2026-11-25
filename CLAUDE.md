@@ -280,6 +280,13 @@
     Ctrl+C/X/V, Ctrl+Insert, Shift+Insert and Shift+Delete in pages, allowed
     pop-ups and the toolbar; the toolbar also drops paste, drop and
     middle-click. There is no context menu.
+  - Slow line (0.11.0, `src/slow.js`, `src/vieworder.js`): a **Line** row
+    with Slow (Auto/On/Off), Images (On/Off), Save-Data and Read ahead
+    (both off by default); nothing is saved. In slow mode image requests are
+    held and fetched one at a time by the main process (`net.request`, with
+    range resume) in viewing order from the frame preload's position report,
+    then served from memory on the `nbimg:` scheme (added to each page's
+    `img-src`); fonts, pings, prefetch and media preload are skipped.
   - JavaScript JIT off (`--jitless`) and GPU acceleration off (no graphics
     driver caches on disk). The user agent is plain Chromium; nothing else is
     disguised. It is private, not anonymous.
@@ -355,6 +362,10 @@
   page builds itself. The server decides each verdict from what reaches it
   (`/results`); tests it cannot see from its side are marked by hand or by
   the runner.
+- **slowlab** (`attacklab/slowlab.js`, `--rate` KB/s, default 5 for 56k):
+  a throttled comic page, a cut-off panel, scrolling, fonts and prefetch,
+  text only and read-ahead; `node attacklab/run-slow.js` runs it against the
+  desktop build.
 - `node attacklab/server.js --port 8088 --host 0.0.0.0` serves it to a phone
   on the same network (Null Browser Mobile); `node attacklab/run-desktop.js`
   drives the desktop Null Browser from source with Playwright and prints the

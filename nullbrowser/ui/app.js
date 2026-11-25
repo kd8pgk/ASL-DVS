@@ -4,6 +4,35 @@
   let askId = 0;
   let bmOpen = false;
   let fastJsNow = false;
+  let lineNow = { mode: 'auto', images: true, saveData: false, readAhead: false, open: false };
+  const NEXT_MODE = { auto: 'on', on: 'off', off: 'auto' };
+  const MODE_LABEL = { auto: 'Slow: Auto', on: 'Slow: On', off: 'Slow: Off' };
+
+  function renderLine(l) {
+    lineNow = l;
+    const line = $('line');
+    line.textContent = l.active ? 'Slow' : 'Line';
+    line.classList.toggle('on', Boolean(l.active) || !l.images);
+    line.setAttribute('aria-expanded', l.open ? 'true' : 'false');
+    show($('lineset'), Boolean(l.open));
+    $('ls-mode').textContent = MODE_LABEL[l.mode] || 'Slow: Auto';
+    $('ls-images').textContent = l.images ? 'Images: On' : 'Images: Off';
+    $('ls-save').textContent = l.saveData ? 'Save-Data: On' : 'Save-Data: Off';
+    $('ls-ahead').textContent = l.readAhead ? 'Read ahead: On' : 'Read ahead: Off';
+    const loading = Boolean(l.active && (l.busy || l.retrying));
+    show($('linebar'), loading || Boolean(l.ahead));
+    const parts = [];
+    if (loading) {
+      parts.push('Slow line');
+      if (l.retrying) parts.push('the line dropped, trying again');
+      if (l.total) parts.push(`image ${Math.min(l.done + 1, l.total)} of ${l.total}, in viewing order`);
+      if (l.rate) parts.push(l.rate);
+    }
+    if (l.ahead) parts.push(l.ahead);
+    $('linebar-text').textContent = parts.join(' \u00b7 ');
+    show($('ls-stop'), loading);
+    return (l.open ? 1 : 0) + (loading || l.ahead ? 1 : 0);
+  }
 
   function renderBookmarks(list) {
     const ul = $('bm-list');
@@ -84,7 +113,8 @@
         ? 'Turn on faster JavaScript? Null Browser restarts now, and goes back to JIT off the next time you start it.'
         : 'Turn off faster JavaScript and go back to JIT off? Null Browser restarts now.';
     }
-    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0);
+    const lineRows = renderLine(s.line || lineNow);
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + lineRows;
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
@@ -178,6 +208,13 @@
     show($('bm-panel'), bmOpen);
   });
   $('bm-import').addEventListener('click', () => window.nb.importBookmarks());
+  $('line').addEventListener('click', () => window.nb.lineSet('open', !lineNow.open));
+  $('ls-close').addEventListener('click', () => window.nb.lineSet('open', false));
+  $('ls-mode').addEventListener('click', () => window.nb.lineSet('mode', NEXT_MODE[lineNow.mode] || 'auto'));
+  $('ls-images').addEventListener('click', () => window.nb.lineSet('images', !lineNow.images));
+  $('ls-save').addEventListener('click', () => window.nb.lineSet('saveData', !lineNow.saveData));
+  $('ls-ahead').addEventListener('click', () => window.nb.lineSet('readAhead', !lineNow.readAhead));
+  $('ls-stop').addEventListener('click', () => window.nb.stopImages());
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
   $('jsbar-yes').addEventListener('click', () => window.nb.confirmFastJs());
   $('jsbar-no').addEventListener('click', () => window.nb.cancelFastJs());
