@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Null Browser</string>
+    <string name="addr_hint">Type a web address</string>
+    <string name="home_title">Null Browser</string>
+    <string name="home_body">Nothing is kept: no history, no logs, no downloads except what you say Open to.</string>
+    <string name="no_https_title">This site has no secure version</string>
+    <string name="no_https_body">%1$s did not answer over https. If you open it anyway, everything you send and see can be read or changed on the way.</string>
+    <string name="open_anyway">Open anyway (not secure)</string>
+    <string name="cert_title">This site’s certificate is not valid</string>
+    <string name="cert_body">%1$s could not prove who it is. The page was not opened.</string>
+    <string name="load_failed_title">The page could not be opened</string>
+    <string name="retry">Try again</string>
+    <string name="downloads_off">Downloads are off in Null Browser.</string>
+    <string name="file_too_big">%1$s is too big to open from memory.</string>
+    <string name="ask_open_file">Open %1$s (%2$s) in your %3$s?</string>
+    <string name="open">Open</string>
+    <string name="cancel">Cancel</string>
+    <string name="not_really">%1$s is not really %2$s, so it was not opened.</string>
+    <string name="no_app">No app on this phone could open %1$s.</string>
+    <string name="popups_off">Pop-ups are refused in Null Browser.</string>
+</resources>

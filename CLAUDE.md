@@ -331,6 +331,66 @@
   Keep using these names for anything new of the same kind, in `nullbrowser/`
   only; nothing in `desktop/` is renamed.
 
+## Null Browser Mobile (`nullbrowser-android/`)
+
+- **Null Browser Mobile** is a separate, scoped-down Android sibling of Null
+  Browser, in its own top-level folder (not inside `android/`, which is Node
+  Talker Mobile's), built on Android's `WebView` rather than embedding
+  Chromium directly the way the desktop build does. It is a deliberately
+  smaller promise, stated plainly rather than claimed as parity: it keeps
+  what an app can control through WebView's own APIs, and drops what it
+  can't, instead of reaching for an unsupported workaround.
+  - One screen, one `WebView`: an address bar, back/forward/reload, a blank
+    start page, no tabs, no history, no saved settings. Everything (cookies,
+    storage, cache, the private downloads folder) is cleared when the app
+    closes (`BrowserActivity.onDestroy`).
+  - Third-party cookies dropped (`CookieManager.setAcceptThirdPartyCookies`).
+    Every permission request (camera, microphone, location and the rest) is
+    denied without asking.
+  - https tried first; a certificate error is refused outright, with no
+    trust-for-session yet. No downloads except a PDF, audio or video file,
+    content-sniffed against its first bytes the same way the desktop build
+    is, fetched into the app's private cache and handed to the user's own
+    app only after they say Open. A script pop-up without a real tap on the
+    page is refused outright, with a notice; a tapped link that would open a
+    new window loads in the same page instead.
+  - **What WebView does not give an app a supported way to control, and so
+    is not attempted:** disabling the JIT compiler, passing Chromium
+    command-line switches (closing the ones the desktop build closes, such
+    as the DNS-over-HTTPS probe or the spell-check dictionary fetch), or
+    reading a separately sandboxed renderer process's own CPU usage (the
+    watchdog's CPU-while-idle signal). The desktop build's RAM-folder
+    machinery (the packaged launcher, `rammaid*`) does not apply either:
+    every Android app already gets its own OS-sandboxed private storage, so
+    there is no shared `$HOME` for it to leak into in the first place.
+  - **Planned, not dropped:** bookmark import, the per-site leave-and-clear
+    storage behavior, pop-ups accepted-but-starved instead of refused
+    outright, and the watchdog's other four signals (crash-loop, repeated
+    disguised files, the pop-up cap kept being hit, request fan-out) all
+    have a workable Android equivalent and are later versions, the same way
+    they were later versions of the desktop build.
+- **No libraries beyond the Kotlin standard library** (and JUnit for tests),
+  like Node Talker Mobile; this is why file hand-off uses a small hand-written
+  `ContentProvider` (`DownloadProvider.kt`) instead of AndroidX's
+  `FileProvider`.
+- **Version** is `appVersion` (`X.Y.Z`) in
+  `nullbrowser-android/app/build.gradle.kts`; any change under
+  `nullbrowser-android/` raises it and adds an entry at the top of
+  `changelogs/nullbrowser_android.md` with its "Current version" line updated
+  (`ci/check_repo.py` checks this, the same `check_android_app` helper Node
+  Talker Mobile uses). No comments in its Kotlin or Gradle files, like Node
+  Talker Mobile.
+- **Package name** `io.github.kd8pgk.nullbrowser`; its own `debug.keystore`
+  (not shared with Node Talker Mobile's), committed the same way, so test
+  builds install over each other but never over Node Talker Mobile.
+- The `nullbrowser-android` workflow builds, tests and lints every change
+  and, on `main`, publishes the APK as a pre-release
+  `nullbrowser-android-vX.Y.Z` (not on the stable/testing channels, like the
+  other apps in this section).
+- **After a build is merged, post its APK download link** (check the release
+  exists first):
+  `https://github.com/kd8pgk/ASL-DVS/releases/download/nullbrowser-android-vX.Y.Z/NullBrowserMobile-X.Y.Z.apk`
+
 ## Workflow
 
 - After a build is pushed, open the pull request and merge it, without
