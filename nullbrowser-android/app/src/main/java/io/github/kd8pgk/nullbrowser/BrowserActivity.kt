@@ -222,7 +222,11 @@ class BrowserActivity : Activity() {
                     showNotice("${rec.name} could not be fetched.")
                     return@runOnUiThread
                 }
-                val head = file.inputStream().use { it.readNBytes(64) }
+                val head = file.inputStream().use { input ->
+                    val buf = ByteArray(64)
+                    val n = input.read(buf)
+                    if (n <= 0) ByteArray(0) else buf.copyOf(n)
+                }
                 if (!contentMatches(rec.kind, head)) {
                     file.delete()
                     showNotice(getString(R.string.not_really, rec.name, kindLabel(rec.kind)))
