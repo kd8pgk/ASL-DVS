@@ -65,3 +65,11 @@ test('JIT is off, and the packaged app refuses debugging and certificate switche
   assert.deepEqual(P.unsafeSwitches(['--remote-debugging-port=9222', '--ignore-certificate-errors', '--js-flags=--expose-gc', '--disable-gpu']), ['remote-debugging-port', 'ignore-certificate-errors', 'js-flags']);
   assert.ok(P.SWITCHES.includes('disable-background-networking'));
 });
+
+test('the faster-JavaScript marker is added or removed from the relaunch args without disturbing the rest, and never duplicated', () => {
+  assert.deepEqual(P.relaunchArgv(['--no-sandbox', '.'], true), ['--no-sandbox', '.', P.FAST_JS_ARG]);
+  assert.deepEqual(P.relaunchArgv(['--no-sandbox', '.', P.FAST_JS_ARG], false), ['--no-sandbox', '.']);
+  assert.deepEqual(P.relaunchArgv(['--no-sandbox', '.', P.FAST_JS_ARG], true), ['--no-sandbox', '.', P.FAST_JS_ARG]);
+  assert.deepEqual(P.relaunchArgv([], false), []);
+  assert.ok(P.unsafeSwitches([P.FAST_JS_ARG]).length === 0, 'the marker itself is never treated as an unsafe switch');
+});

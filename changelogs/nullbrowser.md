@@ -1,6 +1,14 @@
 # Null Browser changelog
 
-Current version: `0.3.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.4.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.4.0 (2026-11-25)
+
+A "Faster JavaScript" switch, on only for the run you turn it on in.
+
+- **A toolbar button** reads **JIT: Off**. Clicking it asks first — "Turn on faster JavaScript? Null Browser restarts now, and goes back to JIT off the next time you start it." **Restart** closes the browser and reopens it at once with the JIT compiler on (WebAssembly and heavy scripted pages run faster, at the cost of the class of exploits `--jitless` closes off); **Cancel** leaves it off. The button then reads **JIT: On**, and clicking it again asks to turn it back off, restarting again. Nothing is written to disk to remember the choice between runs: start Null Browser again, normally or after a restart for anything else, and it is `--jitless` again.
+- **How it works.** The browser relaunches itself as a whole new process with (or without) a marker on its own command line; nothing else about the process changes. The RAM folder and everything in it are still removed and recreated on each relaunch, the same as any other restart.
+- **Tests.** The command-line marker is added, removed or left alone without disturbing the rest of the argument list, and is never treated as one of the unsafe switches a packaged build refuses, as unit tests; in a real window: the ask-first bar's text and Cancel; and, in a second run started with the marker already on its command line, that the JIT switch is not passed and the button reads **JIT: On**.
 
 ## 0.3.0 (2026-11-25)
 

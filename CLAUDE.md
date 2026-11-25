@@ -279,8 +279,11 @@
   links are read in; everything else in the file is skipped. The imported
   list lives only in memory, capped at 500, and is gone once Null Browser
   closes; nothing is written to disk.
-- **Planned:** 0.4.0 a per-run "Faster JavaScript" switch; 0.5.0 the
-  packaged AppImage, launcher and icon.
+- **Faster JavaScript.** A toolbar button (**JIT: Off**/**JIT: On**) asks
+  first, then restarts Null Browser as a whole new process with the JIT
+  compiler on or off for that run only; nothing is written to disk to
+  remember the choice, so the next start is `--jitless` again.
+- **Planned:** 0.5.0 the packaged AppImage, launcher and icon.
 
 ## Workflow
 

@@ -35,9 +35,11 @@ app.setPath('temp', ram.sub.temp);
 app.setPath('logs', path.join(ram.sub.temp, 'logs'));
 app.setPath('crashDumps', path.join(ram.sub.temp, 'crash'));
 
+const fastJs = process.argv.slice(1).includes(P.FAST_JS_ARG);
+
 app.commandLine.appendSwitch('disable-features', P.DISABLED_FEATURES.join(','));
 for (const sw of P.SWITCHES) app.commandLine.appendSwitch(sw);
-app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
+if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const TOOLBAR = 44;
@@ -64,6 +66,7 @@ let pendingFile = null;
 let fileSeq = 0;
 let bookmarks = [];
 let bookmarkSeq = 0;
+let pendingJs = null;
 
 let cleanerStarted = false;
 
@@ -104,12 +107,14 @@ function state() {
     allowed: allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
     bookmarks: bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
+    fastJs,
+    jsAsk: pendingJs,
   };
 }
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1);
 }
 
 function layout() {
@@ -618,6 +623,25 @@ function register() {
     if (!fromShell(e)) return { ok: false };
     bookmarks = bookmarks.filter((b) => b.id !== id);
     push();
+    return { ok: true };
+  });
+  ipcMain.handle('request-fast-js', (e, on) => {
+    if (!fromShell(e)) return { ok: false };
+    if (Boolean(on) === fastJs) return { ok: true };
+    pendingJs = Boolean(on);
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('cancel-fast-js', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    pendingJs = null;
+    push();
+    return { ok: true };
+  });
+  ipcMain.handle('confirm-fast-js', (e) => {
+    if (!fromShell(e) || pendingJs === null) return { ok: false };
+    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), pendingJs) });
+    app.quit();
     return { ok: true };
   });
 }

@@ -119,9 +119,9 @@ async function main() {
   const openLog = path.join(tmp, 'opened.log');
   fs.mkdirSync(ramBase);
   fs.mkdirSync(realHome);
-  const launch = () => _electron.launch({
+  const launch = (extra = []) => _electron.launch({
     executablePath: require('electron'),
-    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1'],
+    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1', ...extra],
     env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache') },
   });
   const warm = await launch();
@@ -300,6 +300,13 @@ async function main() {
   await win.waitForSelector('#bm-empty:not([hidden])');
   assert.match(await win.textContent('#bm'), /☆/, 'the bookmark star shows empty once the list is empty');
 
+  assert.match(await win.textContent('#fastjs'), /JIT: Off/);
+  await win.click('#fastjs');
+  await win.waitForSelector('#jsbar:not([hidden])');
+  assert.match(await win.textContent('#jsbar-text'), /Turn on faster JavaScript/);
+  await win.click('#jsbar-no');
+  await win.waitForFunction(() => document.getElementById('jsbar').hidden);
+
   await win.click('#home');
   await win.waitForSelector('#blank:not([hidden])');
 
@@ -314,6 +321,18 @@ async function main() {
   }
   assert.deepEqual(fs.readdirSync(ramBase), [], 'nothing is left in the RAM base');
   assert.deepEqual(snapshot(realHome), homeBefore, 'nothing was added to or changed in the real home folder');
+
+  const fast = await launch(['--nb-fast-js']);
+  await waitFor(() => fast.windows().some((w) => w.url().endsWith('/ui/index.html')), 'the faster-JavaScript window');
+  const fastWin = fast.windows().find((w) => w.url().endsWith('/ui/index.html'));
+  await fastWin.waitForLoadState('domcontentloaded');
+  await fastWin.waitForFunction(() => window.nb !== undefined);
+  const fastState = await fastWin.evaluate(() => window.nb.state());
+  assert.equal(fastState.fastJs, true, 'the marker switches JIT back on for this run');
+  assert.match(await fastWin.textContent('#fastjs'), /JIT: On/);
+  assert.equal(await fast.evaluate(({ app: a2 }) => a2.commandLine.getSwitchValue('js-flags')), '', 'no --jitless is passed this run');
+  await fast.close();
+  await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the faster-JavaScript run also cleans up its RAM folder');
 
   for (const sv of [a, b, plain, tls]) sv.close();
   console.log('smoke ok');

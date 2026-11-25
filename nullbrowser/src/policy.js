@@ -27,6 +27,13 @@ const SWITCHES = [
 ];
 
 const JS_FLAGS = '--jitless';
+const FAST_JS_ARG = '--nb-fast-js';
+
+function relaunchArgv(argv, on) {
+  const kept = (argv || []).filter((a) => a !== FAST_JS_ARG);
+  if (on) kept.push(FAST_JS_ARG);
+  return kept;
+}
 
 const UNSAFE_SWITCHES = [
   'remote-debugging-port',
@@ -204,6 +211,8 @@ module.exports = {
   DISABLED_FEATURES,
   SWITCHES,
   JS_FLAGS,
+  FAST_JS_ARG,
+  relaunchArgv,
   UNSAFE_SWITCHES,
   unsafeSwitches,
   hostOf,
