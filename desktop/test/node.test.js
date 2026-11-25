@@ -210,13 +210,14 @@ test('a link to one of the node pages matches on either scheme, and a wrong sche
   assert.deepEqual(N.SCHEME_FLIP_CODES, [-107, -113, -101, -324]);
 });
 
-test('scheme flips: wrong-scheme errors flip, a second failure reverts, a page that loaded keeps its scheme through a reset', () => {
+test('scheme flips: wrong-scheme errors flip, any failure right after a flip reverts, an address that loaded never flips', () => {
   assert.equal(N.flipDecision({ code: -107, via: 'home', recent: false, confirmed: false }), 'flip');
-  assert.equal(N.flipDecision({ code: -107, via: 'home', recent: false, confirmed: true }), 'flip');
-  assert.equal(N.flipDecision({ code: -107, via: 'home', recent: true, confirmed: false }), 'revert');
+  assert.equal(N.flipDecision({ code: -324, via: 'home', recent: false, confirmed: false }), 'flip');
+  assert.equal(N.flipDecision({ code: -107, via: 'home', recent: false, confirmed: true }), 'none');
   assert.equal(N.flipDecision({ code: -101, via: 'home', recent: false, confirmed: true }), 'none');
   assert.equal(N.flipDecision({ code: -324, via: 'lan', recent: false, confirmed: true }), 'none');
-  assert.equal(N.flipDecision({ code: -324, via: 'home', recent: false, confirmed: false }), 'flip');
-  assert.equal(N.flipDecision({ code: -107, via: 'away', recent: false, confirmed: false }), 'none');
+  assert.equal(N.flipDecision({ code: -107, via: 'home', recent: true, confirmed: false }), 'revert');
+  assert.equal(N.flipDecision({ code: -370, via: 'home', recent: true, confirmed: false }), 'revert');
   assert.equal(N.flipDecision({ code: -105, via: 'home', recent: false, confirmed: false }), 'none');
+  assert.equal(N.flipDecision({ code: -107, via: 'away', recent: false, confirmed: false }), 'none');
 });
