@@ -433,6 +433,7 @@ function createView() {
   win.contentView.addChildView(view);
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  wc.on('will-prevent-unload', (ev) => ev.preventDefault());
   wc.on('before-input-event', onKey);
   wc.on('input-event', (ev, input) => {
     if (input && (input.type === 'mouseDown' || input.type === 'keyDown')) lastInput = Date.now();
@@ -571,6 +572,7 @@ function realPopup(child) {
   const wc = child.webContents;
   child.setMenu(null);
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  wc.on('will-prevent-unload', (ev) => ev.preventDefault());
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (ev, url) => {
     if (!P.allowPageUrl(url)) ev.preventDefault();

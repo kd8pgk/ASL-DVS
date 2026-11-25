@@ -1,6 +1,11 @@
 # Null Browser changelog
 
-Current version: `0.8.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.9.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.9.0 (2026-11-25)
+
+- **A page can no longer trap you with "Leave site?".** A page that asks to stay (a `beforeunload` handler) after one tap could stop you leaving: a typed address did nothing, and closing the window was refused, with no question shown. Null Browser now always lets the page go, in the main page and in an allowed pop-up.
+- **Attack lab:** three new tests, the "Leave site?" trap, a print-dialog loop, and files a page builds itself (a program from a `data:` or `blob:` address or an `<a download>` link, and a fake and a real PDF made in the page).
 
 ## 0.8.0 (2026-11-25)
 

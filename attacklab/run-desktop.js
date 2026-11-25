@@ -85,9 +85,11 @@ async function main() {
   await sleep(1000);
 
   step('disguised files');
-  const tryFile = async (name) => {
+  const tryFile = async (name, act) => {
     const before = opened().length;
-    await go(`${base}/dl/${name}`);
+    await win.evaluate(() => { document.getElementById('notice').textContent = ''; });
+    if (act) await act();
+    else await go(`${base}/dl/${name}`);
     let early = '';
     await waitFor(async () => {
       if (await win.evaluate(() => !document.getElementById('ask').hidden)) return true;
@@ -179,6 +181,65 @@ async function main() {
   const alive = await waitFor(async () => (await pageEval('location.pathname')) === '/', 8000);
   mark('alerts', alive ? 'pass' : 'FAIL', `could leave the page=${alive}`);
 
+  step('"Leave site?" trap');
+  const tapPage = async (sel) => {
+    const r = await pageEval(`(function(){var r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2]})()`);
+    await app.evaluate(({ BrowserWindow }, [x, y]) => {
+      const wc = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents;
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    }, r.map(Math.round));
+  };
+  const armTrap = async () => {
+    await go(`${base}/t/leave-trap`);
+    await waitFor(async () => (await pageEval('location.pathname')) === '/t/leave-trap', 6000);
+    await sleep(800);
+    await tapPage('#go');
+    await sleep(800);
+  };
+  await armTrap();
+  await go(`${base}/`);
+  const leftByAddress = await waitFor(async () => (await pageEval('location.pathname')) === '/', 6000);
+  await armTrap();
+  const closed = await new Promise((resolve) => {
+    const t = setTimeout(() => resolve(false), 8000);
+    app.once('close', () => {
+      clearTimeout(t);
+      resolve(true);
+    });
+    app.evaluate(({ BrowserWindow }) => {
+      for (const w of BrowserWindow.getAllWindows()) if (w.contentView && w.contentView.children.length > 0) w.close();
+    }).catch(() => {});
+  });
+  if (!closed) await app.close().catch(() => {});
+  app = await launch();
+  await attach();
+  mark('leave-trap', leftByAddress && closed ? 'pass' : 'FAIL', `new address left the page=${leftByAddress}; window closed=${closed}`);
+
+  step('print dialog loop');
+  await go(`${base}/t/print-loop`);
+  await sleep(1500);
+  pageEval("document.getElementById('go').click(); true").catch(() => {});
+  await sleep(3000);
+  await go(`${base}/`);
+  const printOut = await waitFor(async () => (await pageEval('location.pathname')) === '/', 10000);
+  mark('print-loop', printOut ? 'pass' : 'FAIL', `could leave the page=${printOut}`);
+
+  step('files made by the page');
+  await go(`${base}/t/page-files`);
+  await sleep(1500);
+  const made = {};
+  for (const id of ['dexe', 'bexe', 'aexe', 'bfake', 'breal']) {
+    made[id] = await tryFile(id, () => pageEval(`document.getElementById('${id}').click(); true`));
+    await win.evaluate(() => { const a = document.getElementById('ask'); if (!a.hidden) document.getElementById('ask-cancel').click(); });
+    await sleep(500);
+  }
+  const progsOk = ['dexe', 'bexe', 'aexe'].every((id) => !made[id].opened && !made[id].asked);
+  const fakeOk = !made.bfake.opened;
+  const realOk2 = made.breal.opened;
+  mark('page-files', progsOk && fakeOk && realOk2 ? 'pass' : 'FAIL',
+    Object.entries(made).map(([k, v]) => `${k}: asked=${v.asked} opened=${v.opened} "${v.notice}"`).join('; '));
+
   step('memory bomb');
   await go(`${base}/t/crash`);
   await sleep(1500);
@@ -217,6 +278,8 @@ async function main() {
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(0);
 }
+
+process.on('unhandledRejection', () => {});
 
 main().catch((e) => {
   console.error(e);
