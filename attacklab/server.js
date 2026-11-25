@@ -40,7 +40,7 @@ const TESTS = [
   { id: 'size-declared', kind: 'auto', title: 'Oversize file (size declared)', expect: 'A video that says it is 600 MB is refused before most of it is fetched.' },
   { id: 'size-stream', kind: 'auto', title: 'Oversize file (size hidden)', expect: 'A video that never says its size is cut off by 512 MB, not fetched to 600 MB.' },
   { id: 'redirects', kind: 'auto', title: 'Redirect loop', expect: 'The browser gives up on a long redirect chain instead of following all 30 hops.' },
-  { id: 'clickfix', kind: 'auto', title: 'ClickFix copy trick', expect: 'Known gap: a page can still put text on the clipboard with execCommand("copy"). Recorded, not fixed.' },
+  { id: 'clickfix', kind: 'auto', title: 'ClickFix copy trick', expect: 'The clipboard is off: the page cannot put text on it with execCommand("copy").' },
   { id: 'disguised', kind: 'look', title: 'Disguised files', expect: 'Each fake (program, script, web page, EICAR test file) is refused with an "is not really" notice; only the real PDF opens.' },
   { id: 'polyglot', kind: 'look', title: 'Polyglot PDF', expect: 'Known limit: a real %PDF- file that also carries script passes the type check. The PDF viewer is the last defense.' },
   { id: 'traversal', kind: 'look', title: 'Path in the file name', expect: 'A file named ../../../evil.pdf is saved under a safe name; nothing lands outside the browser.' },
@@ -129,7 +129,7 @@ function createLab({ thirdParty = '', httpsPort = 0 } = {}) {
       case 'clickfix': {
         const r = last('clickfix', 'copied');
         if (!r) return { status: 'not run', note: 'tap the button' };
-        return r.data === 'true' ? { status: 'known gap', note: 'the page wrote to the clipboard' } : { status: 'pass', note: 'the copy was refused' };
+        return r.data === 'true' ? { status: 'FAIL', note: 'the page wrote to the clipboard' } : { status: 'pass', note: 'the copy was refused' };
       }
       default: {
         const files = list.filter((e) => e.what === 'fetch').map((e) => e.data);

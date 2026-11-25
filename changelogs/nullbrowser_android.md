@@ -1,6 +1,16 @@
 # Null Browser Mobile changelog
 
-Current version: `0.2.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.3.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.3.0 (2026-11-25)
+
+The clipboard is off, as in the desktop build.
+
+- **No copy, cut, paste or share.** Long-pressing text in a page or in the address bar no longer opens the copy and paste menu; the keyboard's own paste, cut and copy commands and a hardware keyboard's Ctrl+C/X/V, Ctrl+Insert, Shift+Insert and Shift+Delete do nothing; pasted images and dropped text are refused. Type addresses by hand.
+- **Pages cannot use the clipboard.** The same small script as the desktop build turns off `execCommand` copy, cut and paste, the Clipboard API and the copy, cut and paste events in the page.
+- **A backstop.** Android's WebView gives an app no supported way to run that script before a page's own code, or in every frame, without an extra library, so anything a page still manages to put on the clipboard while Null Browser is open is cleared the moment it lands.
+- **Known limit.** A keyboard app's own clipboard history (for example Gboard's clipboard suggestions) types the text in like typing, and an app cannot tell the two apart.
+- **Tests.** The clipboard keys as a unit test.
 
 ## 0.2.0 (2026-11-25)
 

@@ -1,6 +1,14 @@
 # Null Browser changelog
 
-Current version: `0.9.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.10.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.10.0 (2026-11-25)
+
+The clipboard is off, everywhere.
+
+- **Pages cannot use the clipboard.** A small script runs in every page and every frame before the page's own code and turns off `execCommand` copy, cut and paste, the Clipboard API (`navigator.clipboard`, already refused by permission) and the copy, cut and paste events, so a page can neither put text on your clipboard (the ClickFix trick, the lab's one known gap, is closed) nor read from it. It cannot be undone by the page.
+- **You cannot copy or paste either.** Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Insert, Shift+Insert and Shift+Delete do nothing in pages, allowed pop-ups and the address bar; middle-click paste and dropped text do nothing either. There is no right-click menu. Type addresses by hand.
+- **Tests.** The smoke test tries every way a page can write or read the clipboard (including from another frame and with a fresh copy of `execCommand` from a new frame) and every clipboard key in a page and in the address bar, and checks that the clipboard is unchanged and nothing is pasted. The attack lab's ClickFix test now counts a copy as a failure, not a known gap.
 
 ## 0.9.0 (2026-11-25)
 

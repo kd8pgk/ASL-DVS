@@ -2,6 +2,7 @@ package io.github.kd8pgk.nullbrowser
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -45,6 +46,14 @@ private val SPACE_RE = Regex("\\s")
 private const val MAX_REDIRECTS = 5
 
 class BrowserActivity : Activity() {
+    private var clearingClip = false
+    private val clipGuard = ClipboardManager.OnPrimaryClipChangedListener {
+        if (!clearingClip) {
+            clearingClip = true
+            runCatching { getSystemService(ClipboardManager::class.java)?.let { NoClip.clear(it) } }
+            clearingClip = false
+        }
+    }
     private lateinit var web: WebView
     private lateinit var addr: EditText
     private lateinit var notice: TextView
@@ -127,9 +136,11 @@ class BrowserActivity : Activity() {
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 loadingHost = Uri.parse(url).host
                 hideError()
+                view.evaluateJavascript(NoClip.JS, null)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                view.evaluateJavascript(NoClip.JS, null)
                 refreshUi()
             }
 
@@ -507,6 +518,16 @@ class BrowserActivity : Activity() {
     @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() {
         if (!handleBack()) super.onBackPressed()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        getSystemService(ClipboardManager::class.java)?.addPrimaryClipChangedListener(clipGuard)
+    }
+
+    override fun onPause() {
+        getSystemService(ClipboardManager::class.java)?.removePrimaryClipChangedListener(clipGuard)
+        super.onPause()
     }
 
     private fun wipe() {

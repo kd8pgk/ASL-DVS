@@ -415,8 +415,23 @@ function load(url) {
   push();
 }
 
+function clipKey(input) {
+  if (input.type !== 'keyDown' && input.type !== 'rawKeyDown' && input.type !== 'char') return false;
+  const k = String(input.key).toLowerCase();
+  if ((input.control || input.meta) && (k === 'c' || k === 'x' || k === 'v' || k === 'insert')) return true;
+  return Boolean(input.shift) && (k === 'insert' || k === 'delete');
+}
+
+function noClipKeys(event, input) {
+  if (clipKey(input)) event.preventDefault();
+}
+
 function onKey(event, input) {
   if (input.type === 'mouseDown' || input.type === 'keyDown') lastInput = Date.now();
+  if (clipKey(input)) {
+    event.preventDefault();
+    return;
+  }
   if (input.type !== 'keyDown') return;
   const k = String(input.key).toLowerCase();
   let act = null;
@@ -448,6 +463,7 @@ function createView() {
       plugins: false,
       safeDialogs: true,
       navigateOnDragDrop: false,
+      nodeIntegrationInSubFrames: true,
     },
   });
   win.contentView.addChildView(view);
@@ -554,6 +570,7 @@ const POPUP_PREFS = {
   plugins: false,
   safeDialogs: true,
   navigateOnDragDrop: false,
+  nodeIntegrationInSubFrames: true,
 };
 
 const LITTERBUG_OPTIONS = {
@@ -601,6 +618,7 @@ function realPopup(child) {
   const wc = child.webContents;
   child.setMenu(null);
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  wc.on('before-input-event', noClipKeys);
   wc.on('will-prevent-unload', (ev) => ev.preventDefault());
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (ev, url) => {
@@ -831,6 +849,7 @@ app.whenReady().then(() => {
   hardenShell(shellSession());
   ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
   hardenPage(ses);
+  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
   register();
   createWindow();
   setInterval(watchdogCpuPoll, W.CPU_IDLE_MS).unref();
