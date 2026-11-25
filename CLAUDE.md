@@ -175,7 +175,9 @@
   request only their own node; Last Heard is the one tile that may use the
   public internet, never private addresses unless a saved node. No devtools,
   remote debugging, updater, telemetry or crash reporter; the Chromium sandbox
-  stays on; the packaged app refuses debugging switches. The file protocol
+  stays on (where the AppImage's start script turns it off because the system
+  blocks unprivileged user namespaces, the app still starts, as the owner
+  chose, and writes a WARNING line to `diagnostics.log`, since 0.12.1); the packaged app refuses debugging switches. The file protocol
   fuse stays on: with it off the app cannot read its page from its archive and
   shows a blank window (0.7.0). `desktop/test/policy.test.js`
   and `desktop/test/package.js` hold this: a change that weakens it fails them,

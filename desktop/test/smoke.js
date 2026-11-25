@@ -325,6 +325,7 @@ async function main() {
   assert.ok((await classes(page(0))).includes('failed'));
   const diag = path.join(data, 'diagnostics.log');
   await waitFor(() => fs.existsSync(diag) && /page process gone: .*:controller reason=/.test(fs.readFileSync(diag, 'utf8')), 'the crash is written to diagnostics.log');
+  assert.match(fs.readFileSync(diag, 'utf8'), /WARNING: running without the Chromium sandbox/, 'the smoke run uses --no-sandbox, so the warning is logged');
   assert.equal(await win.title(), 'Node Controller Desktop');
   await win.click('.pane-msg button:has-text("Try again")');
   await showing(U('controller'));
