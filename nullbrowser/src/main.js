@@ -271,6 +271,7 @@ function hardenPage(s) {
   s.setPermissionCheckHandler(() => false);
   s.setDevicePermissionHandler(() => false);
   s.setSpellCheckerEnabled(false);
+  s.setSpellCheckerLanguages([]);
   s.setUserAgent(P.chromiumUserAgent(s.getUserAgent()));
   s.on('will-download', onDownload);
   s.webRequest.onBeforeRequest((details, callback) => {
@@ -317,6 +318,7 @@ function hardenShell(s) {
   s.setPermissionCheckHandler(() => false);
   s.setDevicePermissionHandler(() => false);
   s.setSpellCheckerEnabled(false);
+  s.setSpellCheckerLanguages([]);
   s.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !/^(file|data):/i.test(details.url) }));
 }
 

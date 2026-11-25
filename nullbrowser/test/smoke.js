@@ -152,6 +152,13 @@ async function main() {
   const ramDirs = fs.readdirSync(ramBase).filter((n) => n.startsWith('null-browser-'));
   assert.equal(ramDirs.length, 1);
 
+  const spell = await app.evaluate(({ session: s2, BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0];
+    return { default: s2.defaultSession.getSpellCheckerLanguages(), page: view.webContents.session.getSpellCheckerLanguages() };
+  });
+  assert.deepEqual(spell.default, [], 'no dictionary is ever fetched for the default session');
+  assert.deepEqual(spell.page, [], 'no dictionary is ever fetched for the page session');
+
   await go(`127.0.0.1:${portA}/`.replace(/^/, 'http://'));
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'the first page');
   await waitFor(() => seenB.length >= 1, 'the third-party pixel');
