@@ -680,6 +680,11 @@
   async function removeNode() {
     if (!editing) return;
     const r = await window.nc.removeNode(editing.id);
+    if (!r || r.error) {
+      $('f-error').textContent = (r && r.error) || 'The node could not be deleted.';
+      $('f-error').hidden = false;
+      return;
+    }
     nodes = r.nodes || nodes;
     closeDialog();
     renderPages();

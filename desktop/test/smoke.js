@@ -693,7 +693,19 @@ async function main() {
   await win.waitForFunction(() => !document.getElementById('dlg').open);
   assert.deepEqual(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes[0].schemes, {});
 
+  await app.evaluate(({ ipcMain }) => {
+    const real = ipcMain._invokeHandlers.get('nodes:remove');
+    ipcMain._invokeHandlers.set('nodes:remove', async () => {
+      ipcMain._invokeHandlers.set('nodes:remove', real);
+      return { error: 'Not allowed.' };
+    });
+  });
   await win.click('.group-head button');
+  await win.click('#f-delete');
+  await win.waitForSelector('#f-error:not([hidden])');
+  assert.equal(await win.textContent('#f-error'), 'Not allowed.');
+  assert.equal(await win.evaluate(() => document.getElementById('dlg').open), true, 'a failed delete keeps the dialog open');
+  assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes.length, 1);
   await win.click('#f-delete');
   await win.waitForFunction(() => document.querySelectorAll('#pages .group').length === 0);
   assert.equal(JSON.parse(fs.readFileSync(nodesFile, 'utf8')).nodes.length, 0);

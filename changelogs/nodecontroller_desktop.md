@@ -1,6 +1,13 @@
 # Node Controller Desktop changelog
 
-Current version: `0.11.17`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.11.18`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.11.18 (2026-11-25)
+
+A node delete that fails says so.
+
+- **Delete errors show.** Deleting a node always closed the dialog and said "Node deleted.", even when the app refused. The error now shows in the dialog, which stays open, and the node stays in the list.
+- **Tests.** In the real window: a refused delete shows its message and keeps the dialog open and the node saved; the next delete works.
 
 ## 0.11.17 (2026-11-25)
 
