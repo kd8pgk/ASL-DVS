@@ -1,6 +1,13 @@
 # Null Browser changelog
 
-Current version: `0.16.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.16.1`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.16.1 (2026-11-26)
+
+Code reorganised into modules; nothing you see changes.
+
+- The app's code is split into smaller files: the shared page state (`src/state.js`), downloads (`src/downloads.js`), screenshots (`src/screenshot.js`), network helpers (`src/network.js`) and the slow line (`src/slowline.js`). The main file keeps the window, the toolbar and the wiring.
+- Nothing a page or a user can do is different. The unit tests and the smoke test pass unchanged.
 
 ## 0.16.0 (2026-11-26)
 
