@@ -57,38 +57,14 @@ if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const st = {
-  win: null,
-  view: null,
-  ses: null,
-  lastInput: 0,
-  commits: 0,
-  unsticking: null,
-  leaving: 0,
-  notice: '',
-  error: null,
-  pendingCert: null,
-  allowHttp: new Set(),
-  upgraded: new Set(),
-  trusted: new Set(),
-  allowedSites: new Set(),
-  litterbugIds: new Set(),
-  blockedSite: '',
-  nextPopup: '',
-  pendingFile: null,
-  pendingShot: null,
-  dlAllowed: false,
-  dlAsking: true,
-  dlList: [],
-  dlListFor: '',
-  dlWarn: false,
-  dlPanelOpen: false,
-  dlQueueOpen: false,
-  shotSeq: 0,
-  fileSeq: 0,
-  bookmarks: [],
-  bookmarkSeq: 0,
-  pendingJs: null,
-  watchdog: W.createWatchdog({ onFlag: watchdogFlag }),
+  win: null, view: null, ses: null, lastInput: 0, commits: 0,
+  leaving: 0, unsticking: null, notice: '', error: null, pendingCert: null,
+  allowHttp: new Set(), upgraded: new Set(), trusted: new Set(),
+  allowedSites: new Set(), litterbugIds: new Set(), blockedSite: '', nextPopup: '',
+  pendingFile: null, pendingShot: null, dlAllowed: false, dlAsking: true,
+  dlList: [], dlListFor: '', dlWarn: false, dlPanelOpen: false, dlQueueOpen: false,
+  shotSeq: 0, fileSeq: 0, bookmarks: [], bookmarkSeq: 0, pendingJs: null,
+  watchdog: null,
 };
 
 const TOOLBAR = 44;
@@ -135,7 +111,7 @@ function state() {
     error: st.error,
     notice: st.notice,
     ask: st.pendingFile ? { id: st.pendingFile.id, text: st.pendingFile.text, busy: st.pendingFile.state !== 'ask' } : null,
-    popup: st.blockedSite && !st.allowedSites.has(st.blockedSite) ? blockedSite : '',
+    popup: st.blockedSite && !st.allowedSites.has(st.blockedSite) ? st.blockedSite : '',
     allowed: st.allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
     bookmarks: st.bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
@@ -215,14 +191,14 @@ function purgeOrigin(origin) {
 }
 
 function purgeIfSiteChanged(nextUrl) {
-  const fromUrl = pageUrl();
-  if (!fromUrl) return;
-  const leavingSite = P.siteOf(P.hostOf(fromUrl));
+  const leaving = pageUrl();
+  if (!leaving) return;
+  const leavingSite = P.siteOf(P.hostOf(leaving));
   const nextSite = P.siteOf(P.hostOf(nextUrl));
   if (!leavingSite || leavingSite === nextSite) return;
   clearAhead();
   if (st.allowedSites.has(leavingSite)) return;
-  purgeOrigin(P.originOf(fromUrl));
+  purgeOrigin(P.originOf(leaving));
 }
 
 function wipeAll() {
@@ -272,6 +248,7 @@ function watchdogFlag(site, reason) {
   say(`Watchdog: ${site} ${reason}, so it was cleared.`);
 }
 
+st.watchdog = W.createWatchdog({ onFlag: watchdogFlag });
 
 const CPU_CORES = Math.max(os.cpus().length, 1);
 
@@ -335,9 +312,9 @@ function endFile(rec) {
   push();
 }
 
-function finishFile(rec, outcome) {
-  rec.done = outcome;
-  if (outcome !== 'completed') {
+function finishFile(rec, st) {
+  rec.done = st;
+  if (st !== 'completed') {
     rammaidFile(rec.file);
     if (rec.tooBig) say(`${rec.name} is too big to open from memory.`);
     else if (rec.answer === true) say(`${rec.name} could not be fetched.`);
@@ -386,7 +363,7 @@ function onDownload(event, item) {
   }
   if (st.pendingFile) {
     item.cancel();
-    say('Answer the question about the other file fir');
+    say('Answer the question about the other file first.');
     return;
   }
   st.fileSeq += 1;
@@ -397,7 +374,7 @@ function onDownload(event, item) {
     rec.tooBig = true;
     item.cancel();
   });
-  item.once('done', (e, outcome) => finishFile(rec, outcome));
+  item.once('done', (e, st) => finishFile(rec, st));
   st.pendingFile = rec;
   push();
 }
@@ -907,7 +884,7 @@ function fetchFile(item, cookie) {
       timer = null;
       if (settled) return;
       try {
-        req = net.request({ method: 'GET', url, session: ses, credentials: 'omit', redirect: 'manual' });
+        req = net.request({ method: 'GET', url, session: st.ses, credentials: 'omit', redirect: 'manual' });
       } catch {
         finish({ ok: false, reason: 'the address could not be opened' });
         return;
@@ -1336,7 +1313,7 @@ function onKey(event, input) {
   if (input.type !== 'keyDown') return;
   const k = String(input.key).toLowerCase();
   let act = null;
-  if ((input.control || input.meta) && k === 'l') act = () => alive() && win.webContents.send('focus-address');
+  if ((input.control || input.meta) && k === 'l') act = () => alive() && st.win.webContents.send('focus-address');
   else if ((input.control || input.meta) && k === 'r') act = () => (st.error ? retry() : st.view.webContents.reload());
   else if (input.alt && k === 'arrowleft') act = () => st.view.webContents.navigationHistory.goBack();
   else if (input.alt && k === 'arrowright') act = () => st.view.webContents.navigationHistory.goForward();
@@ -1440,7 +1417,7 @@ function createView() {
   wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;
     if (st.pendingCert && st.pendingCert.host === P.hostOf(url)) {
-      st.error = { kind: 'cert', url, message: desc, ...pendingCert };
+      st.error = { kind: 'cert', url, message: desc, ...st.pendingCert };
     } else if (st.upgraded.has(url)) {
       const http = url.replace(/^https:/, 'http:');
       st.error = { kind: 'nohttps', url: http, host: P.hostOf(url), message: desc };
@@ -1750,8 +1727,8 @@ function register() {
     if (res.canceled || !res.filePaths[0]) return { ok: false };
     let text = '';
     try {
-      const picked = fs.statSync(res.filePaths[0]);
-      if (picked.size > B.MAX_FILE_BYTES) {
+      const st = fs.statSync(res.filePaths[0]);
+      if (st.size > B.MAX_FILE_BYTES) {
         say('That bookmarks file is too big to import.');
         return { ok: false };
       }
