@@ -1,6 +1,22 @@
 # Null Browser changelog
 
-Current version: `0.14.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.15.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.15.0 (2026-11-26)
+
+Downloads, off unless you turn them on for the run.
+
+- **Off by default, asked each run.** A bar asks **Allow downloads this run?** at every start. Nothing is stored: the answer lasts until the browser closes. Until you say yes, the **Download** button only asks again.
+- **Download** (in the toolbar) opens a list of the page's own links to PDF, MP3, WebM, MP4, JPG, WAV and MPEG files. Each line shows the file name, the path and the host. Links inside embedded frames are not listed.
+- **Download all** is at the top of the list. It opens a warning (how many files, the one-at-a-time rule, the 200-file and 2 GB limits, and that a check cannot prove a file is safe). Only **Download all N files** queues them.
+- **One at a time.** Files queue in path order. The queue bar shows progress and offers **Cancel queue**; the queue panel shows each file's state and lets you cancel, retry or remove it.
+- **Cookies only when needed, and never kept.** The first request sends no cookies. A 401 or 403 answer offers **Retry with sign-in** for that one file, sending that site's cookies in memory for that one request only.
+- **Checked before saving.** Each file goes to the RAM folder first. It must match its type (structure: PDF pages, MP4 boxes, WebM header, MP3 frames, WAV size, JPG markers, MPEG start codes) and contain no hidden code: no Windows or Linux program, no script, no web page markup, and no PDF action that runs code. Its SHA-256 is checked again before saving. These checks catch disguises and hidden code; they cannot prove a file is safe.
+- **Atomic save.** The file is written to a `.nb-partial-` name in Downloads, synced to disk, checked again, then linked to its final name. An existing file is never replaced; a second copy gets a number. A failed save leaves nothing under the real name.
+- **Names come from the server**, with the path removed and the right extension added. The names the page lists are never used for saving.
+- **Dropped lines** resume from the byte they stopped at (up to five tries). Redirects are followed up to five hops and never from https to http.
+- **The ✕ button** also cancels the queue and clears the list; saved files stay in Downloads, because they are yours.
+- **Tests.** Unit tests for each type's check, each hidden-code rule, the list, the queue (order, one at a time, refusals, cancel, cookies not kept) and the names. The smoke test downloads real files from a local page: a good PDF and picture are saved; a PDF with a script action, an HTML page named as MP4, and a file type that is not allowed are refused and never saved; a sign-in file is refused, then saved only through the retry; the warning can be cancelled; a batch saves the good files and keeps the first copy.
 
 ## 0.14.0 (2026-11-26)
 
