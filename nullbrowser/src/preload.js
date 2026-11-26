@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('nb', {
   lineSet: (key, value) => ipcRenderer.invoke('line-set', key, value),
   stopImages: () => ipcRenderer.invoke('stop-images'),
   screenshot: () => ipcRenderer.invoke('screenshot'),
+  wipeAll: () => ipcRenderer.invoke('wipe-all'),
   shotAnswer: (save) => ipcRenderer.invoke('shot-answer', save),
   onState: (cb) => ipcRenderer.on('state', (e, s) => cb(s)),
   onFocusAddress: (cb) => ipcRenderer.on('focus-address', () => cb()),
