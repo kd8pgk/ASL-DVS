@@ -1,6 +1,16 @@
 # Null Browser changelog
 
-Current version: `0.12.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.13.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.13.0 (2026-11-26)
+
+A screenshot, saved only when you say so.
+
+- **Screenshot** (in the **Line** row). Makes a PDF of the whole web page, including the parts above and below the screen. Electron prints the page itself, so there is no debugger and no new library. Tick **Include toolbar** first (off by default) to make the PDF of the whole window instead.
+- **Checked before anything is saved.** The PDF is written to a `quarantine` folder inside the RAM folder, then checked: it must start with `%PDF-` and end with `%%EOF`, have a readable page, be under 64 MB, and match the hash recorded when it was made. A file that fails is deleted and a notice says why.
+- **Saved only on Save.** A bar asks before anything is written. Save copies the PDF to your Downloads folder (read from `~/.config/user-dirs.dirs`, falling back to `~/Downloads`) as `Null-Browser-YYYY-MM-DD-HHMMSS.pdf`. The name has no site name in it, and an existing file is never overwritten. Cancel deletes the PDF.
+- **This is the one written exception.** Null Browser still writes nothing else to disk, and nothing is saved unless you press Save.
+- **Tests.** Unit tests for the checks, the Downloads lookup and the file name; the smoke test makes, cancels and saves a screenshot, checks it is a PDF in Downloads, and checks that nothing else was written to the home folder.
 
 ## 0.12.0 (2026-11-25)
 

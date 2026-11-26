@@ -334,6 +334,34 @@ async function main() {
 
   await go(`http://127.0.0.1:${portA}/fp`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/fp`, 'the minimal-info page');
+  const shotBefore = fs.existsSync(path.join(realHome, 'Downloads')) ? fs.readdirSync(path.join(realHome, 'Downloads')).length : 0;
+  await win.click('#line');
+  await win.waitForSelector('#lineset:not([hidden])');
+  await win.click('#ls-shot');
+  await win.waitForSelector('#shotbar:not([hidden])', { timeout: 30000 });
+  await win.waitForFunction(() => !/Making/.test(document.getElementById('shot-text').textContent), null, { timeout: 30000 });
+  assert.match(await win.textContent('#shot-text'), /^Save the screenshot \(PDF, \d+ KB, \d+ pages?\) to your Downloads folder\?$/, 'the question says what the file is');
+  assert.equal(fs.existsSync(path.join(realHome, 'Downloads')) ? fs.readdirSync(path.join(realHome, 'Downloads')).length : 0, shotBefore, 'nothing is saved until Save is pressed');
+  await win.click('#shot-cancel');
+  await win.waitForSelector('#shotbar', { state: 'hidden' });
+  assert.equal(fs.existsSync(path.join(realHome, 'Downloads')) ? fs.readdirSync(path.join(realHome, 'Downloads')).length : 0, shotBefore, 'a cancelled screenshot is not saved');
+  assert.equal(await win.isChecked('#ls-shotwin'), false, 'the toolbar option is off by default');
+  await win.check('#ls-shotwin');
+  await waitFor(async () => (await win.evaluate(() => document.getElementById('ls-shotwin').checked)) === true, 'the toolbar option is on');
+  await win.click('#ls-shot');
+  await win.waitForSelector('#shotbar:not([hidden])', { timeout: 30000 });
+  await win.waitForFunction(() => !/Making/.test(document.getElementById('shot-text').textContent), null, { timeout: 30000 });
+  assert.match(await win.textContent('#shot-text'), /^Save the screenshot \(PDF, \d+ KB, 1 page\) to your Downloads folder\?$/, 'the whole window is one page');
+  await win.click('#shot-cancel');
+  await win.waitForSelector('#shotbar', { state: 'hidden' });
+  await win.uncheck('#ls-shotwin');
+  await win.click('#ls-shot');
+  await win.waitForSelector('#shotbar:not([hidden])', { timeout: 30000 });
+  await win.click('#shot-save');
+  await waitFor(() => fs.existsSync(path.join(realHome, 'Downloads')) && fs.readdirSync(path.join(realHome, 'Downloads')).length === shotBefore + 1, 'the screenshot is saved to Downloads');
+  await win.waitForSelector('#shotbar', { state: 'hidden' });
+  await win.click('#line');
+  await win.waitForSelector('#lineset', { state: 'hidden' });
   await go(`http://127.0.0.1:${portA}/two`);
   await go(`http://127.0.0.1:${portA}/fp`);
   await waitFor(() => fpSeen.length >= 2, 'the minimal-info page twice');
@@ -604,7 +632,13 @@ async function main() {
     throw e;
   }
   assert.deepEqual(fs.readdirSync(ramBase), [], 'nothing is left in the RAM base');
-  assert.deepEqual(snapshot(realHome), homeBefore, 'nothing was added to or changed in the real home folder');
+  const homeNow = snapshot(realHome);
+  const shotFiles = Object.keys(homeNow).filter((k) => k.startsWith('/Downloads/'));
+  const otherChanges = Object.keys(homeNow).filter((k) => !k.startsWith('/Downloads') && homeNow[k] !== homeBefore[k]);
+  assert.deepEqual(otherChanges, [], 'nothing else in the real home folder was added or changed');
+  assert.equal(shotFiles.length, 1, 'the only file added is the one screenshot the user saved');
+  assert.match(shotFiles[0], /^\/Downloads\/Null-Browser-\d{4}-\d{2}-\d{2}-\d{6}\.pdf$/, 'and it has the screenshot name, with no site name');
+  assert.equal(fs.readFileSync(path.join(realHome, shotFiles[0].slice(1)), 'latin1').slice(0, 5), '%PDF-', 'and it is a PDF');
 
   const preDir = path.join(ramBase, 'null-browser-0-999999-prelaunch');
   fs.mkdirSync(preDir, { mode: 0o700 });
