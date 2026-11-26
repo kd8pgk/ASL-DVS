@@ -1,6 +1,14 @@
 # Null Browser changelog
 
-Current version: `0.13.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.14.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.14.0 (2026-11-26)
+
+A clear-everything button, in the same place as the Android build's X.
+
+- **The ✕ button** (far right of the toolbar, after JIT) wipes this run: every page and its cookies, storage, cache and sign-ins; the allowed sites and trusted certificates; the image and read-ahead queues; the watchdog's counts; and any file waiting for an answer, plus the downloaded files in the RAM folder. The page goes back to the blank start page.
+- **What it keeps:** your bookmarks (in memory, until the browser closes) and anything in the `quarantine` folder, such as a screenshot waiting for Save. The toolbar settings (Slow, Images, Save-Data, Read ahead, JIT, Include toolbar) are not browsing data, so they stay too.
+- **Tests.** The smoke test sets a cookie on the test site, makes a screenshot, presses ✕, and checks the cookie is gone while the screenshot is still waiting.
 
 ## 0.13.0 (2026-11-26)
 
