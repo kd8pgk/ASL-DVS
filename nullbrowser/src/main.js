@@ -56,6 +56,41 @@ for (const sw of P.SWITCHES) {
 if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
+const st = {
+  win: null,
+  view: null,
+  ses: null,
+  lastInput: 0,
+  commits: 0,
+  unsticking: null,
+  leaving: 0,
+  notice: '',
+  error: null,
+  pendingCert: null,
+  allowHttp: new Set(),
+  upgraded: new Set(),
+  trusted: new Set(),
+  allowedSites: new Set(),
+  litterbugIds: new Set(),
+  blockedSite: '',
+  nextPopup: '',
+  pendingFile: null,
+  pendingShot: null,
+  dlAllowed: false,
+  dlAsking: true,
+  dlList: [],
+  dlListFor: '',
+  dlWarn: false,
+  dlPanelOpen: false,
+  dlQueueOpen: false,
+  shotSeq: 0,
+  fileSeq: 0,
+  bookmarks: [],
+  bookmarkSeq: 0,
+  pendingJs: null,
+  watchdog: W.createWatchdog({ onFlag: watchdogFlag }),
+};
+
 const TOOLBAR = 44;
 const BAR = 34;
 const GESTURE_MS = 1000;
@@ -63,38 +98,7 @@ const LITTERBUG_MS = 3000;
 const STUCK_MS = 2000;
 const MAX_LITTERBUGS = 3;
 
-let win = null;
-let view = null;
-let ses = null;
-let lastInput = 0;
-let commits = 0;
-let leaving = 0;
-let unsticking = null;
-let notice = '';
-let error = null;
-let pendingCert = null;
-const allowHttp = new Set();
-const upgraded = new Set();
-const trusted = new Set();
-const allowedSites = new Set();
-const litterbugIds = new Set();
-let blockedSite = '';
-let nextPopup = '';
-let pendingFile = null;
-let pendingShot = null;
-let dlAllowed = false;
-let dlAsking = true;
-let dlList = [];
-let dlListFor = '';
-let dlWarn = false;
-let dlPanelOpen = false;
-let dlQueueOpen = false;
 const dlQueue = DL.createQueue(runDownload);
-let shotSeq = 0;
-let fileSeq = 0;
-let bookmarks = [];
-let bookmarkSeq = 0;
-let pendingJs = null;
 
 let cleanerStarted = false;
 
@@ -107,17 +111,17 @@ function rammaid() {
 }
 
 function alive() {
-  return win && !win.isDestroyed();
+  return st.win && !st.win.isDestroyed();
 }
 
 function pageUrl() {
-  if (!view || view.webContents.isDestroyed()) return '';
-  const u = view.webContents.getURL();
+  if (!st.view || st.view.webContents.isDestroyed()) return '';
+  const u = st.view.webContents.getURL();
   return u === 'about:blank' ? '' : u;
 }
 
 function state() {
-  const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
+  const wc = st.view && !st.view.webContents.isDestroyed() ? st.view.webContents : null;
   const url = pageUrl();
   return {
     url,
@@ -125,27 +129,27 @@ function state() {
     canBack: Boolean(wc && wc.navigationHistory.canGoBack()),
     canForward: Boolean(wc && wc.navigationHistory.canGoForward()),
     loading: Boolean(wc && wc.isLoading()),
-    secure: url.startsWith('https:') && !error,
+    secure: url.startsWith('https:') && !st.error,
     insecure: url.startsWith('http:'),
-    blank: !url && !error,
-    error,
-    notice,
-    ask: pendingFile ? { id: pendingFile.id, text: pendingFile.text, busy: pendingFile.state !== 'ask' } : null,
-    popup: blockedSite && !allowedSites.has(blockedSite) ? blockedSite : '',
-    allowed: allowedSites.has(P.siteOf(P.hostOf(url))),
+    blank: !url && !st.error,
+    error: st.error,
+    notice: st.notice,
+    ask: st.pendingFile ? { id: st.pendingFile.id, text: st.pendingFile.text, busy: st.pendingFile.state !== 'ask' } : null,
+    popup: st.blockedSite && !st.allowedSites.has(st.blockedSite) ? blockedSite : '',
+    allowed: st.allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
-    bookmarks: bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
+    bookmarks: st.bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
     fastJs,
-    jsAsk: pendingJs,
+    jsAsk: st.pendingJs,
     line: lineState(),
-    shot: pendingShot ? { text: pendingShot.text, busy: pendingShot.busy } : null,
+    shot: st.pendingShot ? { text: st.pendingShot.text, busy: st.pendingShot.busy } : null,
     dl: {
-      allowed: dlAllowed,
-      asking: dlAsking,
-      panel: dlPanelOpen,
-      queuePanel: dlQueueOpen,
-      warn: dlWarn,
-      list: dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })),
+      allowed: st.dlAllowed,
+      asking: st.dlAsking,
+      panel: st.dlPanelOpen,
+      queuePanel: st.dlQueueOpen,
+      warn: st.dlWarn,
+      list: st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })),
       queue: dlQueue.snapshot(),
       busy: dlQueue.busy(),
     },
@@ -162,24 +166,24 @@ function bars() {
 }
 
 function layout() {
-  if (!alive() || !view) return;
-  const [w, h] = win.getContentSize();
+  if (!alive() || !st.view) return;
+  const [w, h] = st.win.getContentSize();
   const top = TOOLBAR + BAR * bars();
-  view.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
-  view.setVisible(Boolean(pageUrl()) && !error);
+  st.view.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
+  st.view.setVisible(Boolean(pageUrl()) && !st.error);
 }
 
 function push() {
   layout();
-  if (alive()) win.webContents.send('state', state());
+  if (alive()) st.win.webContents.send('state', state());
 }
 
 function say(text) {
-  notice = text;
+  st.notice = text;
   push();
   setTimeout(() => {
-    if (notice === text) {
-      notice = '';
+    if (st.notice === text) {
+      st.notice = '';
       push();
     }
   }, 6000);
@@ -195,51 +199,51 @@ function topUrlOf(details) {
 }
 
 function litterbugRequest(details) {
-  return litterbugIds.has(details.webContentsId);
+  return st.litterbugIds.has(details.webContentsId);
 }
 
 function thirdParty(details) {
   if (details.resourceType === 'mainFrame') return false;
   const top = topUrlOf(details);
-  if (allowedSites.has(P.siteOf(P.hostOf(top)))) return false;
+  if (st.allowedSites.has(P.siteOf(P.hostOf(top)))) return false;
   return P.isThirdParty(details.url, top);
 }
 
 function purgeOrigin(origin) {
-  if (origin) ses.clearStorageData({ origin }).catch(() => {});
-  ses.clearCache().catch(() => {});
+  if (origin) st.ses.clearStorageData({ origin }).catch(() => {});
+  st.ses.clearCache().catch(() => {});
 }
 
 function purgeIfSiteChanged(nextUrl) {
-  const leaving = pageUrl();
-  if (!leaving) return;
-  const leavingSite = P.siteOf(P.hostOf(leaving));
+  const fromUrl = pageUrl();
+  if (!fromUrl) return;
+  const leavingSite = P.siteOf(P.hostOf(fromUrl));
   const nextSite = P.siteOf(P.hostOf(nextUrl));
   if (!leavingSite || leavingSite === nextSite) return;
   clearAhead();
-  if (allowedSites.has(leavingSite)) return;
-  purgeOrigin(P.originOf(leaving));
+  if (st.allowedSites.has(leavingSite)) return;
+  purgeOrigin(P.originOf(fromUrl));
 }
 
 function wipeAll() {
   dlQueue.cancelAll();
   dlQueue.clear();
-  dlAllowed = false;
-  dlAsking = true;
-  dlQueueOpen = false;
+  st.dlAllowed = false;
+  st.dlAsking = true;
+  st.dlQueueOpen = false;
   resetLine();
   clearAhead();
-  allowHttp.clear();
-  upgraded.clear();
-  trusted.clear();
-  allowedSites.clear();
-  blockedSite = '';
-  nextPopup = '';
-  pendingCert = null;
-  error = null;
-  if (pendingFile) {
-    const rec = pendingFile;
-    pendingFile = null;
+  st.allowHttp.clear();
+  st.upgraded.clear();
+  st.trusted.clear();
+  st.allowedSites.clear();
+  st.blockedSite = '';
+  st.nextPopup = '';
+  st.pendingCert = null;
+  st.error = null;
+  if (st.pendingFile) {
+    const rec = st.pendingFile;
+    st.pendingFile = null;
     try {
       rec.item.cancel();
     } catch {}
@@ -251,34 +255,33 @@ function wipeAll() {
       fs.rmSync(path.join(ram.sub.files, name), { recursive: true, force: true });
     } catch {}
   }
-  watchdog = W.createWatchdog({ onFlag: watchdogFlag });
-  if (ses) {
-    ses.clearStorageData().catch(() => {});
-    ses.clearCache().catch(() => {});
-    ses.clearAuthCache().catch(() => {});
-    ses.clearHostResolverCache().catch(() => {});
+  st.watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+  if (st.ses) {
+    st.ses.clearStorageData().catch(() => {});
+    st.ses.clearCache().catch(() => {});
+    st.ses.clearAuthCache().catch(() => {});
+    st.ses.clearHostResolverCache().catch(() => {});
   }
-  if (view && !view.webContents.isDestroyed()) view.webContents.loadURL('about:blank').catch(() => {});
+  if (st.view && !st.view.webContents.isDestroyed()) st.view.webContents.loadURL('about:blank').catch(() => {});
   say('Cleared: this run\'s pages, cookies, storage, cache, sign-ins, allowed sites and downloads. Kept: bookmarks and quarantined screenshots.');
 }
 
 function watchdogFlag(site, reason) {
-  if (!site || allowedSites.has(site)) return;
+  if (!site || st.allowedSites.has(site)) return;
   purgeOrigin(P.originOf(pageUrl()));
   say(`Watchdog: ${site} ${reason}, so it was cleared.`);
 }
 
-let watchdog = W.createWatchdog({ onFlag: watchdogFlag });
 
 const CPU_CORES = Math.max(os.cpus().length, 1);
 
 function watchdogCpuPoll() {
-  if (!view || view.webContents.isDestroyed()) return;
-  const pid = view.webContents.getOSProcessId();
+  if (!st.view || st.view.webContents.isDestroyed()) return;
+  const pid = st.view.webContents.getOSProcessId();
   const m = app.getAppMetrics().find((x) => x.pid === pid);
   if (!m) return;
-  const idle = Date.now() - lastInput > W.CPU_IDLE_MS;
-  watchdog.noteCpu(P.siteOf(P.hostOf(pageUrl())), idle, m.cpu.percentCPUUsage * CPU_CORES);
+  const idle = Date.now() - st.lastInput > W.CPU_IDLE_MS;
+  st.watchdog.noteCpu(P.siteOf(P.hostOf(pageUrl())), idle, m.cpu.percentCPUUsage * CPU_CORES);
 }
 
 function rammaidFile(file) {
@@ -320,7 +323,7 @@ function checkAndOpen(rec) {
         return '';
       }
     })();
-    watchdog.noteFakeFile(P.siteOf(P.hostOf(from || pageUrl())));
+    st.watchdog.noteFakeFile(P.siteOf(P.hostOf(from || pageUrl())));
     return;
   }
   openFile(rec.file);
@@ -328,13 +331,13 @@ function checkAndOpen(rec) {
 }
 
 function endFile(rec) {
-  if (pendingFile === rec) pendingFile = null;
+  if (st.pendingFile === rec) st.pendingFile = null;
   push();
 }
 
-function finishFile(rec, st) {
-  rec.done = st;
-  if (st !== 'completed') {
+function finishFile(rec, outcome) {
+  rec.done = outcome;
+  if (outcome !== 'completed') {
     rammaidFile(rec.file);
     if (rec.tooBig) say(`${rec.name} is too big to open from memory.`);
     else if (rec.answer === true) say(`${rec.name} could not be fetched.`);
@@ -381,21 +384,21 @@ function onDownload(event, item) {
     say(`${name} is too big to open from memory.`);
     return;
   }
-  if (pendingFile) {
+  if (st.pendingFile) {
     item.cancel();
-    say('Answer the question about the other file first.');
+    say('Answer the question about the other file fir');
     return;
   }
-  fileSeq += 1;
-  const rec = { id: fileSeq, item, file: path.join(ram.sub.files, `${fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
+  st.fileSeq += 1;
+  const rec = { id: st.fileSeq, item, file: path.join(ram.sub.files, `${st.fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
   item.setSavePath(rec.file);
   item.on('updated', () => {
     if (rec.tooBig || item.getReceivedBytes() <= MAX_BYTES) return;
     rec.tooBig = true;
     item.cancel();
   });
-  item.once('done', (e, st) => finishFile(rec, st));
-  pendingFile = rec;
+  item.once('done', (e, outcome) => finishFile(rec, outcome));
+  st.pendingFile = rec;
   push();
 }
 
@@ -423,7 +426,7 @@ let askTimer = null;
 let reportDeadline = 0;
 
 function pageId() {
-  return view && !view.webContents.isDestroyed() ? view.webContents.id : -1;
+  return st.view && !st.view.webContents.isDestroyed() ? st.view.webContents.id : -1;
 }
 
 function slowActive() {
@@ -458,9 +461,9 @@ function linePush() {
 }
 
 function tellPage(extra = {}) {
-  if (!view || view.webContents.isDestroyed()) return;
+  if (!st.view || st.view.webContents.isDestroyed()) return;
   try {
-    view.webContents.send('nb-line', { active: slowActive(), ...extra });
+    st.view.webContents.send('nb-line', { active: slowActive(), ...extra });
   } catch {}
 }
 
@@ -494,9 +497,9 @@ function serve(hit) {
 }
 
 function resetLine() {
-  dlList = [];
-  dlWarn = false;
-  dlPanelOpen = false;
+  st.dlList = [];
+  st.dlWarn = false;
+  st.dlPanelOpen = false;
   pageGen += 1;
   for (const e of queue) e.cb({ cancel: true });
   queue = [];
@@ -589,7 +592,7 @@ function fetchBytes(job) {
     const t0 = Date.now();
     let bytesNow = 0;
     try {
-      req = net.request({ url, session: ses, useSessionCookies: true, credentials: 'include', redirect: 'follow', method: 'GET' });
+      req = net.request({ url, session: st.ses, useSessionCookies: true, credentials: 'include', redirect: 'follow', method: 'GET' });
     } catch {
       return finish(() => job.fail());
     }
@@ -725,7 +728,7 @@ function pump() {
 
 function maybeReadAhead() {
   if (!line.readAhead || current || queue.length || stopped || !line.images) return;
-  const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
+  const wc = st.view && !st.view.webContents.isDestroyed() ? st.view.webContents : null;
   if (!wc || wc.isLoading() || !pageUrl() || aheadFor === pageUrl()) return;
   aheadFor = pageUrl();
   askReport(true);
@@ -788,7 +791,7 @@ function readAheadFrom(nextUrl) {
 }
 
 function onReport(e, r) {
-  if (!view || e.sender !== view.webContents || e.senderFrame !== e.sender.mainFrame) return;
+  if (!st.view || e.sender !== st.view.webContents || e.senderFrame !== e.sender.mainFrame) return;
   if (!r || typeof r !== 'object') return;
   const items = Array.isArray(r.items) ? r.items.slice(0, 500).filter((i) => i && typeof i.src === 'string').map((i) => ({ src: i.src.slice(0, 4096), top: Number(i.top) || 0, x: Number(i.x) || 0, w: Number(i.w) || 0, h: Number(i.h) || 0 })) : [];
   report = { vh: Number(r.vh) || 0, vw: Number(r.vw) || 0, items };
@@ -1017,7 +1020,7 @@ function fetchFile(item, cookie) {
 const W_BACKOFF = (attempt) => S.backoffMs(attempt);
 
 async function runDownload(item, ctx) {
-  if (!dlAllowed) return { ok: false, reason: 'Downloads are off.' };
+  if (!st.dlAllowed) return { ok: false, reason: 'Downloads are off.' };
   const cookie = item.cookie || '';
   const got = await fetchFile(item, cookie);
   item.cookie = '';
@@ -1046,27 +1049,27 @@ async function runDownload(item, ctx) {
 const FILE_SCAN = `(function(){var out=[];var n=document.querySelectorAll('a[href],audio[src],video[src],source[src],img[src]');for(var i=0;i<n.length&&out.length<300;i++){var e=n[i];var h=e.tagName==='A'?e.href:(e.currentSrc||e.src||'');if(h&&String(h).length<=4096)out.push({href:String(h)})}return out})()`;
 
 async function scanFiles() {
-  if (!view || view.webContents.isDestroyed()) return;
+  if (!st.view || st.view.webContents.isDestroyed()) return;
   const url = pageUrl();
   if (!url || !/^https?:/.test(url)) {
-    dlList = [];
+    st.dlList = [];
     push();
     return;
   }
   let links = [];
   try {
-    links = await view.webContents.mainFrame.executeJavaScript(FILE_SCAN, false);
+    links = await st.view.webContents.mainFrame.executeJavaScript(FILE_SCAN, false);
   } catch {
     links = [];
   }
   if (pageUrl() !== url) return;
-  dlList = DL.buildList(Array.isArray(links) ? links : [], url);
-  dlListFor = url;
+  st.dlList = DL.buildList(Array.isArray(links) ? links : [], url);
+  st.dlListFor = url;
   push();
 }
 
 function entryOf(href) {
-  return dlList.find((x) => x.href === href) || null;
+  return st.dlList.find((x) => x.href === href) || null;
 }
 
 function shotDir() {
@@ -1076,9 +1079,9 @@ function shotDir() {
 }
 
 function discardShot() {
-  if (!pendingShot) return;
-  const file = pendingShot.file;
-  pendingShot = null;
+  if (!st.pendingShot) return;
+  const file = st.pendingShot.file;
+  st.pendingShot = null;
   try {
     fs.rmSync(file, { force: true });
     fs.rmdirSync(path.dirname(file));
@@ -1090,11 +1093,11 @@ async function printPage(wc) {
 }
 
 async function windowPdf() {
-  const img = await win.webContents.capturePage();
+  const img = await st.win.webContents.capturePage();
   const size = img.getSize();
   const png = img.toPNG().toString('base64');
   const html = `<!doctype html><html><head><style>@page{margin:0}html,body{margin:0;padding:0}img{display:block;width:${size.width}px;height:${size.height}px}</style></head><body><img src="data:image/png;base64,${png}"></body></html>`;
-  const shot = new BrowserWindow({ show: false, width: size.width, height: size.height, webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, plugins: false, spellcheck: false } });
+  const shot = new BrowserWindow({ show: false, width: size.width, height: size.height, webPreferences: { session: st.ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, plugins: false, spellcheck: false } });
   try {
     await shot.loadURL(`data:text/html;base64,${Buffer.from(html).toString('base64')}`);
     return await shot.webContents.printToPDF({ printBackground: true, pageSize: { width: size.width / 96, height: size.height / 96 } });
@@ -1104,19 +1107,19 @@ async function windowPdf() {
 }
 
 async function makeShot(withWindow) {
-  if (pendingShot || !alive() || !view || view.webContents.isDestroyed()) return;
-  shotSeq += 1;
-  const file = path.join(shotDir(), `shot-${shotSeq}.pdf`);
-  pendingShot = { id: shotSeq, file, sha: '', text: 'Making the screenshot…', busy: true };
+  if (st.pendingShot || !alive() || !st.view || st.view.webContents.isDestroyed()) return;
+  st.shotSeq += 1;
+  const file = path.join(shotDir(), `shot-${st.shotSeq}.pdf`);
+  st.pendingShot = { id: st.shotSeq, file, sha: '', text: 'Making the screenshot…', busy: true };
   push();
   let buf;
   try {
-    buf = withWindow ? await windowPdf() : await printPage(view.webContents);
+    buf = withWindow ? await windowPdf() : await printPage(st.view.webContents);
   } catch {
     buf = null;
   }
   if (!buf) {
-    pendingShot = null;
+    st.pendingShot = null;
     say('The screenshot could not be made.');
     return;
   }
@@ -1129,18 +1132,18 @@ async function makeShot(withWindow) {
     say(`The screenshot was not saved: ${check.reason}.`);
     return;
   }
-  pendingShot = { id: shotSeq, file, sha, text: `Save the screenshot (PDF, ${Math.max(1, Math.round(back.length / 1024))} KB, ${check.pages} page${check.pages === 1 ? '' : 's'}) to your Downloads folder?`, busy: false };
+  st.pendingShot = { id: st.shotSeq, file, sha, text: `Save the screenshot (PDF, ${Math.max(1, Math.round(back.length / 1024))} KB, ${check.pages} page${check.pages === 1 ? '' : 's'}) to your Downloads folder?`, busy: false };
   push();
 }
 
 function answerShot(save) {
-  const rec = pendingShot;
+  const rec = st.pendingShot;
   if (!save) {
     discardShot();
     push();
     return;
   }
-  pendingShot = { ...rec, text: 'Saving…', busy: true };
+  st.pendingShot = { ...rec, text: 'Saving…', busy: true };
   push();
   try {
     const buf = fs.readFileSync(rec.file);
@@ -1180,13 +1183,13 @@ function hardenPage(s) {
     if (details.url.startsWith(`${S.SCHEME}://`)) return callback({});
     if (details.url !== 'about:blank' && !P.allowSubresource(details.url)) return callback({ cancel: true });
     if (details.resourceType === 'mainFrame') {
-      const up = P.httpsUpgrade(details.url, allowHttp);
+      const up = P.httpsUpgrade(details.url, st.allowHttp);
       if (up) {
-        upgraded.add(up);
+        st.upgraded.add(up);
         return callback({ redirectURL: up });
       }
     } else if (!(details.webContentsId === undefined && own.has(details.url))) {
-      watchdog.noteSubresource(P.siteOf(P.hostOf(topUrlOf(details))), P.hostOf(details.url));
+      st.watchdog.noteSubresource(P.siteOf(P.hostOf(topUrlOf(details))), P.hostOf(details.url));
     }
     if (details.webContentsId === pageId() && details.resourceType !== 'mainFrame') {
       const type = details.resourceType;
@@ -1291,25 +1294,25 @@ function showFingerprint(hex) {
 }
 
 function unstick(redo) {
-  const wc = view.webContents;
-  const id = ++leaving;
-  const seen = commits;
+  const wc = st.view.webContents;
+  const id = ++st.leaving;
+  const seen = st.commits;
   let answered = false;
   const frame = wc.mainFrame;
   if (!frame) return;
   frame.executeJavaScript('1').then(() => { answered = true; }, () => { answered = true; });
   setTimeout(() => {
-      if (answered || id !== leaving || seen !== commits || wc.isDestroyed() || wc.isCrashed()) return;
-      unsticking = redo;
+      if (answered || id !== st.leaving || seen !== st.commits || wc.isDestroyed() || wc.isCrashed()) return;
+      st.unsticking = redo;
     wc.forcefullyCrashRenderer();
   }, STUCK_MS).unref();
 }
 
 function load(url) {
-  error = null;
-  pendingCert = null;
-  view.webContents.loadURL(url).catch(() => {});
-  unstick(() => view.webContents.loadURL(url).catch(() => {}));
+  st.error = null;
+  st.pendingCert = null;
+  st.view.webContents.loadURL(url).catch(() => {});
+  unstick(() => st.view.webContents.loadURL(url).catch(() => {}));
   push();
 }
 
@@ -1325,7 +1328,7 @@ function noClipKeys(event, input) {
 }
 
 function onKey(event, input) {
-  if (input.type === 'mouseDown' || input.type === 'keyDown') lastInput = Date.now();
+  if (input.type === 'mouseDown' || input.type === 'keyDown') st.lastInput = Date.now();
   if (clipKey(input)) {
     event.preventDefault();
     return;
@@ -1334,25 +1337,25 @@ function onKey(event, input) {
   const k = String(input.key).toLowerCase();
   let act = null;
   if ((input.control || input.meta) && k === 'l') act = () => alive() && win.webContents.send('focus-address');
-  else if ((input.control || input.meta) && k === 'r') act = () => (error ? retry() : view.webContents.reload());
-  else if (input.alt && k === 'arrowleft') act = () => view.webContents.navigationHistory.goBack();
-  else if (input.alt && k === 'arrowright') act = () => view.webContents.navigationHistory.goForward();
-  else if (k === 'escape') act = () => view.webContents.stop();
+  else if ((input.control || input.meta) && k === 'r') act = () => (st.error ? retry() : st.view.webContents.reload());
+  else if (input.alt && k === 'arrowleft') act = () => st.view.webContents.navigationHistory.goBack();
+  else if (input.alt && k === 'arrowright') act = () => st.view.webContents.navigationHistory.goForward();
+  else if (k === 'escape') act = () => st.view.webContents.stop();
   if (!act) return;
   event.preventDefault();
   setImmediate(act);
 }
 
 function retry() {
-  const last = error && error.url;
+  const last = st.error && st.error.url;
   if (last) load(last);
-  else view.webContents.reload();
+  else st.view.webContents.reload();
 }
 
 function createView() {
-  view = new WebContentsView({
+  st.view = new WebContentsView({
     webPreferences: {
-      session: ses,
+      session: st.ses,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -1364,13 +1367,13 @@ function createView() {
       nodeIntegrationInSubFrames: true,
     },
   });
-  win.contentView.addChildView(view);
-  const wc = view.webContents;
+  st.win.contentView.addChildView(st.view);
+  const wc = st.view.webContents;
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   wc.on('will-prevent-unload', (ev) => ev.preventDefault());
   wc.on('before-input-event', onKey);
   wc.on('input-event', (ev, input) => {
-    if (input && (input.type === 'mouseDown' || input.type === 'keyDown')) lastInput = Date.now();
+    if (input && (input.type === 'mouseDown' || input.type === 'keyDown')) st.lastInput = Date.now();
   });
   for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'page-title-updated']) wc.on(ev, push);
   wc.on('did-stop-loading', () => {
@@ -1381,36 +1384,36 @@ function createView() {
     if (isMainFrame && !isInPlace) {
       purgeIfSiteChanged(url);
       resetLine();
-      error = null;
-      pendingCert = null;
+      st.error = null;
+      st.pendingCert = null;
     }
   });
   wc.setWindowOpenHandler(({ url, disposition, features, frameName }) => {
     const tab = disposition === 'foreground-tab' || disposition === 'background-tab';
-    const clicked = Date.now() - lastInput < GESTURE_MS;
+    const clicked = Date.now() - st.lastInput < GESTURE_MS;
     if (tab && clicked && !features && !frameName && P.allowPageUrl(url)) {
       setImmediate(() => load(url));
       return { action: 'deny' };
     }
     const site = P.siteOf(P.hostOf(pageUrl()));
-    if (site && allowedSites.has(site) && P.allowPageUrl(url)) {
-      nextPopup = 'real';
+    if (site && st.allowedSites.has(site) && P.allowPageUrl(url)) {
+      st.nextPopup = 'real';
       return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: realPopupOptions(features) };
     }
     if (site) {
-      blockedSite = site;
+      st.blockedSite = site;
       setImmediate(push);
     }
-    if (litterbugIds.size >= MAX_LITTERBUGS) {
-      watchdog.notePopupCapped(site);
+    if (st.litterbugIds.size >= MAX_LITTERBUGS) {
+      st.watchdog.notePopupCapped(site);
       return { action: 'deny' };
     }
-    nextPopup = 'litterbug';
+    st.nextPopup = 'litterbug';
     return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: LITTERBUG_OPTIONS };
   });
   wc.on('did-create-window', (child) => {
-    const kind = nextPopup;
-    nextPopup = '';
+    const kind = st.nextPopup;
+    st.nextPopup = '';
     if (kind === 'litterbug') litterbugSink(child);
     else if (kind === 'real') realPopup(child);
     else child.destroy();
@@ -1418,7 +1421,7 @@ function createView() {
   wc.on('did-navigate', (ev, url) => {
     litterbugClose();
     const site = P.siteOf(P.hostOf(url));
-    if (blockedSite && blockedSite !== site) blockedSite = '';
+    if (st.blockedSite && st.blockedSite !== site) st.blockedSite = '';
   });
   wc.on('will-navigate', (ev, url) => {
     if (!P.allowPageUrl(url)) {
@@ -1430,35 +1433,35 @@ function createView() {
     const host = P.hostOf(url);
     const fp = fingerprint(cert);
     event.preventDefault();
-    if (fp && trusted.has(`${host} ${fp}`)) return callback(true);
-    pendingCert = { host, fingerprint: fp, shown: showFingerprint(fp), reason: err, trustable: P.certTrustable(host) };
+    if (fp && st.trusted.has(`${host} ${fp}`)) return callback(true);
+    st.pendingCert = { host, fingerprint: fp, shown: showFingerprint(fp), reason: err, trustable: P.certTrustable(host) };
     return callback(false);
   });
   wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;
-    if (pendingCert && pendingCert.host === P.hostOf(url)) {
-      error = { kind: 'cert', url, message: desc, ...pendingCert };
-    } else if (upgraded.has(url)) {
+    if (st.pendingCert && st.pendingCert.host === P.hostOf(url)) {
+      st.error = { kind: 'cert', url, message: desc, ...pendingCert };
+    } else if (st.upgraded.has(url)) {
       const http = url.replace(/^https:/, 'http:');
-      error = { kind: 'nohttps', url: http, host: P.hostOf(url), message: desc };
+      st.error = { kind: 'nohttps', url: http, host: P.hostOf(url), message: desc };
     } else {
-      error = { kind: 'fail', url, message: desc, code };
+      st.error = { kind: 'fail', url, message: desc, code };
     }
     push();
   });
   wc.on('did-navigate', () => {
-    commits += 1;
+    st.commits += 1;
   });
   wc.on('render-process-gone', (ev, details) => {
-    if (unsticking) {
-      const redo = unsticking;
-      unsticking = null;
+    if (st.unsticking) {
+      const redo = st.unsticking;
+      st.unsticking = null;
       redo();
       return;
     }
     const url = pageUrl();
-    error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
-    watchdog.noteCrash(P.siteOf(P.hostOf(url)));
+    st.error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
+    st.watchdog.noteCrash(P.siteOf(P.hostOf(url)));
     push();
   });
   wc.loadURL('about:blank').catch(() => {});
@@ -1502,16 +1505,16 @@ function realPopupOptions(features) {
 
 function litterbugClose() {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (litterbugIds.has(w.webContents.id)) w.destroy();
+    if (st.litterbugIds.has(w.webContents.id)) w.destroy();
   }
 }
 
 function litterbugSink(child) {
   const id = child.webContents.id;
-  litterbugIds.add(id);
+  st.litterbugIds.add(id);
   child.webContents.setAudioMuted(true);
   child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  child.on('closed', () => litterbugIds.delete(id));
+  child.on('closed', () => st.litterbugIds.delete(id));
   setTimeout(() => {
     if (!child.isDestroyed()) child.destroy();
   }, LITTERBUG_MS).unref();
@@ -1534,7 +1537,7 @@ function realPopup(child) {
 }
 
 function fromShell(e) {
-  return alive() && e.sender === win.webContents;
+  return alive() && e.sender === st.win.webContents;
 }
 
 let shellReady = false;
@@ -1543,24 +1546,24 @@ function register() {
   ipcMain.on('nb-report', onReport);
   ipcMain.handle('dl-answer', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlAllowed = on === true;
-    dlAsking = false;
-    if (!dlAllowed) dlQueue.cancelAll();
+    st.dlAllowed = on === true;
+    st.dlAsking = false;
+    if (!st.dlAllowed) dlQueue.cancelAll();
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-ask', (e) => {
     if (!fromShell(e)) return { ok: false };
-    dlAsking = true;
+    st.dlAsking = true;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-panel', async (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlPanelOpen = on === true && dlAllowed;
-    dlWarn = false;
-    if (dlPanelOpen) {
-      dlQueueOpen = false;
+    st.dlPanelOpen = on === true && st.dlAllowed;
+    st.dlWarn = false;
+    if (st.dlPanelOpen) {
+      st.dlQueueOpen = false;
       await scanFiles();
     }
     push();
@@ -1568,30 +1571,30 @@ function register() {
   });
   ipcMain.handle('dl-queue-panel', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlQueueOpen = on === true;
+    st.dlQueueOpen = on === true;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-warn', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlWarn = on === true && dlAllowed && dlList.length > 0;
+    st.dlWarn = on === true && st.dlAllowed && st.dlList.length > 0;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-all', (e) => {
-    if (!fromShell(e) || !dlAllowed || dlList.length === 0) return { ok: false };
-    dlQueue.add(dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })));
-    dlWarn = false;
-    dlPanelOpen = false;
+    if (!fromShell(e) || !st.dlAllowed || st.dlList.length === 0) return { ok: false };
+    dlQueue.add(st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })));
+    st.dlWarn = false;
+    st.dlPanelOpen = false;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-one', (e, href) => {
-    if (!fromShell(e) || !dlAllowed) return { ok: false };
+    if (!fromShell(e) || !st.dlAllowed) return { ok: false };
     const f = entryOf(href);
     if (!f) return { ok: false };
     dlQueue.add([{ href: f.href, kind: f.kind, name: f.name, path: f.path, host: f.host }]);
-    dlPanelOpen = false;
+    st.dlPanelOpen = false;
     push();
     return { ok: true };
   });
@@ -1619,10 +1622,10 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('dl-retry', async (e, id) => {
-    if (!fromShell(e) || !dlAllowed) return { ok: false };
+    if (!fromShell(e) || !st.dlAllowed) return { ok: false };
     const item = dlQueue.get(Number(id));
     if (!item || item.state !== 'login') return { ok: false };
-    const cookies = await ses.cookies.get({ url: item.href }).catch(() => []);
+    const cookies = await st.ses.cookies.get({ url: item.href }).catch(() => []);
     const header = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
     if (!header) {
       say('This site has no sign-in cookie to send, so the file was not fetched.');
@@ -1633,7 +1636,7 @@ function register() {
     return { ok: true };
   });
   ipcMain.on('nb-line-now', (e) => {
-    e.returnValue = { active: Boolean(view && e.sender === view.webContents && slowActive()) };
+    e.returnValue = { active: Boolean(st.view && e.sender === st.view.webContents && slowActive()) };
   });
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
@@ -1645,7 +1648,7 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('shot-answer', (e, save) => {
-    if (!fromShell(e) || !pendingShot || pendingShot.busy) return { ok: false };
+    if (!fromShell(e) || !st.pendingShot || st.pendingShot.busy) return { ok: false };
     answerShot(Boolean(save));
     return { ok: true };
   });
@@ -1671,9 +1674,9 @@ function register() {
       return r;
     }
     if (r.blank) {
-      error = null;
-      view.webContents.loadURL('about:blank').catch(() => {});
-      unstick(() => view.webContents.loadURL('about:blank').catch(() => {}));
+      st.error = null;
+      st.view.webContents.loadURL('about:blank').catch(() => {});
+      unstick(() => st.view.webContents.loadURL('about:blank').catch(() => {}));
       push();
       return { ok: true };
     }
@@ -1687,7 +1690,7 @@ function register() {
   });
   ipcMain.handle('nav', (e, what) => {
     if (!fromShell(e)) return { ok: false };
-    const wc = view.webContents;
+    const wc = st.view.webContents;
     if (what === 'back' && wc.navigationHistory.canGoBack()) {
       const to = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() - 1);
       wc.navigationHistory.goBack();
@@ -1699,7 +1702,7 @@ function register() {
     } else if (what === 'reload') retry();
     else if (what === 'stop') wc.stop();
     else if (what === 'home') {
-      error = null;
+      st.error = null;
       wc.loadURL('about:blank').catch(() => {});
       unstick(() => wc.loadURL('about:blank').catch(() => {}));
     }
@@ -1707,39 +1710,39 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('allow-http', (e) => {
-    if (!fromShell(e) || !error || error.kind !== 'nohttps') return { ok: false };
-    allowHttp.add(error.host);
-    load(error.url);
+    if (!fromShell(e) || !st.error || st.error.kind !== 'nohttps') return { ok: false };
+    st.allowHttp.add(st.error.host);
+    load(st.error.url);
     return { ok: true };
   });
   ipcMain.handle('file-answer', (e, id, open) => {
-    if (!fromShell(e) || !pendingFile || pendingFile.id !== id || pendingFile.state !== 'ask') return { ok: false };
-    answerFile(pendingFile, open);
+    if (!fromShell(e) || !st.pendingFile || st.pendingFile.id !== id || st.pendingFile.state !== 'ask') return { ok: false };
+    answerFile(st.pendingFile, open);
     return { ok: true };
   });
   ipcMain.handle('allow-site', (e) => {
-    if (!fromShell(e) || !blockedSite) return { ok: false };
-    const site = blockedSite;
-    allowedSites.add(site);
-    blockedSite = '';
+    if (!fromShell(e) || !st.blockedSite) return { ok: false };
+    const site = st.blockedSite;
+    st.allowedSites.add(site);
+    st.blockedSite = '';
     say(`Pop-ups and sign-in cookies are allowed for ${site} until Null Browser closes.`);
     return { ok: true };
   });
   ipcMain.handle('dismiss-popup', (e) => {
     if (!fromShell(e)) return { ok: false };
-    blockedSite = '';
+    st.blockedSite = '';
     push();
     return { ok: true };
   });
   ipcMain.handle('trust-cert', (e) => {
-    if (!fromShell(e) || !error || error.kind !== 'cert' || !error.trustable || !error.fingerprint) return { ok: false };
-    trusted.add(`${error.host} ${error.fingerprint}`);
-    load(error.url);
+    if (!fromShell(e) || !st.error || st.error.kind !== 'cert' || !st.error.trustable || !st.error.fingerprint) return { ok: false };
+    st.trusted.add(`${st.error.host} ${st.error.fingerprint}`);
+    load(st.error.url);
     return { ok: true };
   });
   ipcMain.handle('import-bookmarks', async (e) => {
     if (!fromShell(e)) return { ok: false };
-    const res = await dialog.showOpenDialog(win, {
+    const res = await dialog.showOpenDialog(st.win, {
       title: 'Import bookmarks',
       filters: [{ name: 'Bookmarks', extensions: ['html', 'htm'] }],
       properties: ['openFile'],
@@ -1747,8 +1750,8 @@ function register() {
     if (res.canceled || !res.filePaths[0]) return { ok: false };
     let text = '';
     try {
-      const st = fs.statSync(res.filePaths[0]);
-      if (st.size > B.MAX_FILE_BYTES) {
+      const picked = fs.statSync(res.filePaths[0]);
+      if (picked.size > B.MAX_FILE_BYTES) {
         say('That bookmarks file is too big to import.');
         return { ok: false };
       }
@@ -1758,18 +1761,18 @@ function register() {
       return { ok: false };
     }
     const found = B.parseBookmarks(text);
-    const have = new Set(bookmarks.map((b) => b.url));
+    const have = new Set(st.bookmarks.map((b) => b.url));
     let added = 0;
     let full = false;
     for (const f of found) {
       if (have.has(f.url)) continue;
-      if (bookmarks.length >= B.MAX_BOOKMARKS) {
+      if (st.bookmarks.length >= B.MAX_BOOKMARKS) {
         full = true;
         continue;
       }
       have.add(f.url);
-      bookmarkSeq += 1;
-      bookmarks.push({ id: bookmarkSeq, url: f.url, title: f.title });
+      st.bookmarkSeq += 1;
+      st.bookmarks.push({ id: st.bookmarkSeq, url: f.url, title: f.title });
       added += 1;
     }
     if (added) say(`${added} bookmark${added === 1 ? '' : 's'} imported${full ? ' (the list is now full)' : ''}.`);
@@ -1779,26 +1782,26 @@ function register() {
   });
   ipcMain.handle('remove-bookmark', (e, id) => {
     if (!fromShell(e)) return { ok: false };
-    bookmarks = bookmarks.filter((b) => b.id !== id);
+    st.bookmarks = st.bookmarks.filter((b) => b.id !== id);
     push();
     return { ok: true };
   });
   ipcMain.handle('request-fast-js', (e, on) => {
     if (!fromShell(e)) return { ok: false };
     if (Boolean(on) === fastJs) return { ok: true };
-    pendingJs = Boolean(on);
+    st.pendingJs = Boolean(on);
     push();
     return { ok: true };
   });
   ipcMain.handle('cancel-fast-js', (e) => {
     if (!fromShell(e)) return { ok: false };
-    pendingJs = null;
+    st.pendingJs = null;
     push();
     return { ok: true };
   });
   ipcMain.handle('confirm-fast-js', (e) => {
-    if (!fromShell(e) || pendingJs === null) return { ok: false };
-    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), pendingJs) });
+    if (!fromShell(e) || st.pendingJs === null) return { ok: false };
+    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), st.pendingJs) });
     app.quit();
     return { ok: true };
   });
@@ -1813,7 +1816,7 @@ function shellSession() {
 
 function createWindow() {
   const work = screen.getPrimaryDisplay().workAreaSize;
-  win = new BrowserWindow({
+  st.win = new BrowserWindow({
     width: Math.min(1280, work.width),
     height: Math.min(860, work.height),
     minWidth: Math.min(640, work.width),
@@ -1830,16 +1833,16 @@ function createWindow() {
       spellcheck: false,
     },
   });
-  win.webContents.on('before-input-event', onKey);
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.on('resize', layout);
-  win.on('closed', () => {
-    win = null;
+  st.win.webContents.on('before-input-event', onKey);
+  st.win.webContents.on('will-navigate', (e) => e.preventDefault());
+  st.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  st.win.on('resize', layout);
+  st.win.on('closed', () => {
+    st.win = null;
   });
   createView();
-  win.webContents.once('did-finish-load', push);
-  win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
+  st.win.webContents.once('did-finish-load', push);
+  st.win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
 }
 
 app.on('web-contents-created', (e, contents) => {
@@ -1861,8 +1864,8 @@ if (!primary) {
 
 app.on('second-instance', () => {
   if (alive()) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
+    if (st.win.isMinimized()) st.win.restore();
+    st.win.focus();
   }
 });
 
@@ -1871,9 +1874,9 @@ app.whenReady().then(() => {
   app.userAgentFallback = P.chromiumUserAgent(app.userAgentFallback);
   hardenShell(session.defaultSession);
   hardenShell(shellSession());
-  ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
-  hardenPage(ses);
-  ses.protocol.handle(S.SCHEME, (req) => {
+  st.ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
+  hardenPage(st.ses);
+  st.ses.protocol.handle(S.SCHEME, (req) => {
     let token = '';
     try {
       token = new URL(req.url).pathname.slice(1);
@@ -1884,9 +1887,9 @@ app.whenReady().then(() => {
     if (!hit) return new Response('', { status: 404 });
     return new Response(hit.buf, { headers: { 'content-type': hit.type || 'application/octet-stream', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
   });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
   register();
   createWindow();
   setInterval(watchdogCpuPoll, W.CPU_IDLE_MS).unref();
@@ -1895,9 +1898,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 
 app.on('will-quit', () => {
-  if (ses) {
-    ses.clearStorageData().catch(() => {});
-    ses.clearCache().catch(() => {});
+  if (st.ses) {
+    st.ses.clearStorageData().catch(() => {});
+    st.ses.clearCache().catch(() => {});
   }
 });
 
