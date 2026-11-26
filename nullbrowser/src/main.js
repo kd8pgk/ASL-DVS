@@ -60,6 +60,7 @@ const { st } = require('./state');
 const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
+const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
 
 const TOOLBAR = 44;
 const BAR = 34;
@@ -158,26 +159,6 @@ function say(text) {
       push();
     }
   }, 6000);
-}
-
-function topUrlOf(details) {
-  try {
-    if (details.frame && details.frame.top && details.frame.top.url) return details.frame.top.url;
-  } catch {
-    return pageUrl();
-  }
-  return pageUrl();
-}
-
-function litterbugRequest(details) {
-  return st.litterbugIds.has(details.webContentsId);
-}
-
-function thirdParty(details) {
-  if (details.resourceType === 'mainFrame') return false;
-  const top = topUrlOf(details);
-  if (st.allowedSites.has(P.siteOf(P.hostOf(top)))) return false;
-  return P.isThirdParty(details.url, top);
 }
 
 function purgeOrigin(origin) {
@@ -780,32 +761,6 @@ function hardenPage(s) {
     const r = P.stripCookieHeaders(details.responseHeaders);
     return callback(r.removed ? { responseHeaders: r.headers } : {});
   });
-}
-
-let langCache = '';
-
-function pageLang() {
-  if (!langCache) langCache = P.firstLanguage(app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [], app.getLocale());
-  return langCache;
-}
-
-function hardenShell(s) {
-  s.setPermissionRequestHandler((wc, permission, callback) => callback(false));
-  s.setPermissionCheckHandler(() => false);
-  s.setDevicePermissionHandler(() => false);
-  s.setSpellCheckerEnabled(false);
-  s.setSpellCheckerLanguages([]);
-  s.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !/^(file|data):/i.test(details.url) }));
-}
-
-function fingerprint(cert) {
-  const body = String((cert && cert.data) || '').replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, '');
-  const der = Buffer.from(body, 'base64');
-  return der.length ? crypto.createHash('sha256').update(der).digest('hex') : '';
-}
-
-function showFingerprint(hex) {
-  return (hex.toUpperCase().match(/.{1,2}/g) || []).join(':');
 }
 
 function unstick(redo) {
