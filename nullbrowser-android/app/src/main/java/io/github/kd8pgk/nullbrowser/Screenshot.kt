@@ -3,56 +3,50 @@ package io.github.kd8pgk.nullbrowser
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfDocument
-import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
-import android.print.PageRange
-import android.print.PrintAttributes
-import android.print.PrintDocumentAdapter
-import android.print.PrintDocumentInfo
 import android.view.PixelCopy
+import android.view.ViewGroup
 import android.webkit.WebView
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.roundToInt
 
 object Screenshot {
     private val main = Handler(Looper.getMainLooper())
+    private const val MAX_PAGE_PX = 14000
+    private const val LAYOUT_WAIT_MS = 400L
 
     fun page(web: WebView, dest: File, done: (Boolean) -> Unit) {
-        val attrs = PrintAttributes.Builder()
-            .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-            .setResolution(PrintAttributes.Resolution("nb", "nb", 300, 300))
-            .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-            .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
-            .build()
-        val adapter = web.createPrintDocumentAdapter("Null Browser page")
-        val cancel = CancellationSignal()
-        adapter.onLayout(null, attrs, cancel, object : PrintDocumentAdapter.LayoutResultCallback() {
-            override fun onLayoutFinished(info: PrintDocumentInfo, changed: Boolean) {
-                val pfd = try {
-                    ParcelFileDescriptor.open(dest, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_TRUNCATE)
-                } catch (e: Exception) {
-                    finish(done, false)
-                    return
+        val width = web.width
+        if (width <= 0) {
+            finish(done, false)
+            return
+        }
+        val saved = web.layoutParams
+        val screenHeight = web.height
+        val wanted = (web.contentHeight * web.scale).roundToInt().coerceIn(screenHeight, MAX_PAGE_PX)
+        web.layoutParams = ViewGroup.LayoutParams(width, wanted)
+        web.requestLayout()
+        main.postDelayed({
+            val ok = try {
+                val doc = PdfDocument()
+                try {
+                    val page = doc.startPage(PdfDocument.PageInfo.Builder(width, wanted, 1).create())
+                    web.draw(page.canvas)
+                    doc.finishPage(page)
+                    FileOutputStream(dest).use { doc.writeTo(it) }
+                    true
+                } finally {
+                    doc.close()
                 }
-                adapter.onWrite(arrayOf(PageRange.ALL_PAGES), pfd, cancel, object : PrintDocumentAdapter.WriteResultCallback() {
-                    override fun onWriteFinished(pages: Array<PageRange>) {
-                        closeQuietly(pfd)
-                        finish(done, true)
-                    }
-
-                    override fun onWriteFailed(error: CharSequence?) {
-                        closeQuietly(pfd)
-                        finish(done, false)
-                    }
-                })
+            } catch (e: Exception) {
+                false
             }
-
-            override fun onLayoutFailed(error: CharSequence?) {
-                finish(done, false)
-            }
-        }, null)
+            web.layoutParams = saved
+            web.requestLayout()
+            finish(done, ok)
+        }, LAYOUT_WAIT_MS)
     }
 
     fun window(activity: Activity, dest: File, done: (Boolean) -> Unit) {
@@ -90,11 +84,5 @@ object Screenshot {
     private fun finish(done: (Boolean) -> Unit, ok: Boolean) {
         main.post { done(ok) }
     }
-
-    private fun closeQuietly(pfd: ParcelFileDescriptor) {
-        try {
-            pfd.close()
-        } catch (_: Exception) {
-        }
     }
 }
