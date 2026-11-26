@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.116"
+VERSION      = "9.3.117"
 BUILD_DATE   = "2026-11-21"
 
 ASL_NODE        = "652702"
@@ -10975,7 +10975,7 @@ function _gridClick(e){
   const lh=e.target.closest('[data-role="lh-btn"]');
   if(lh){
     e.stopPropagation();
-    if(!lh.classList.contains('lh-off'))openLast(lh.dataset.url||'');
+    if(!lh.classList.contains('lh-off'))openLast(lh.dataset.url||'',lh.dataset.name||'');
     return;
   }
   const row=e.target.closest('[data-role]');
@@ -11028,7 +11028,7 @@ function renderDmrNetSelect(servers,activeServer){
       const cls=active?'row-grid active-dmr':'row-grid';
       const dotCls=active?'dot-on':'dot-off';
       const sUrl=s.net_url||'';
-      const sLh=`<button class="btn-last${sUrl?'':' lh-off'}" data-role="lh-btn" data-url="${esc(sUrl)}" title="Last Heard">LH</button>`;
+      const sLh=`<button class="btn-last${sUrl?'':' lh-off'}" data-role="lh-btn" data-url="${esc(sUrl)}" data-name="${esc(s.name)}" title="Last Heard">LH</button>`;
       const sCls=cls+' has-lh';
       return `<div class="${sCls}" data-role="dmr-net-row" data-name="${esc(s.name)}" title="${esc(s.name)}">
         <span class="row-num">${n}</span>
@@ -11064,7 +11064,7 @@ function renderTGGrid(elId,tgs,mode){
     const sfx=`${showLh?' has-lh':''}${hasPvt?' has-pvt':''}`;
     const cls=disc?'row-grid disc':active?`row-grid active-${m}${sfx}`:`row-grid${sfx}`;
     const dotCls=active?'dot-on':'dot-off';
-    const lhBtn=showLh?`<button class="btn-last${url?'':' lh-off'}" data-role="lh-btn" data-url="${esc(url)}" title="Last Heard">LH</button>`:'';
+    const lhBtn=showLh?`<button class="btn-last${url?'':' lh-off'}" data-role="lh-btn" data-url="${esc(url)}" data-name="${esc(mode)}" title="Last Heard">LH</button>`:'';
     const pvtChip=hasPvt?'<span class="pvt-chip" title="Private call">PVT</span>':'';
     const rowAttrs=disc?'':`data-role="tg-row" data-mode="${esc(mode)}" data-tg="${esc(tg.tg)}" data-name="${esc(tg.name)}"`;
     return `<div class="${cls}" ${rowAttrs} ${disc?'':`title="${esc(tg.name)}"` }>
@@ -11293,7 +11293,15 @@ function renderM17Grid(refs,activeFav){
 }
 // ── Last Heard helpers ────────────────────────────────────────────────────────
 let _lhWin=null;
-function openLast(url){
+function lhNamed(u,name){
+  const n=String(name||'').replace(/[^A-Za-z0-9 .+/&_-]/g,'').trim().slice(0,24);
+  if(!u||!n)return u;
+  const h=u.indexOf('#');
+  const base=h<0?u:u.slice(0,h);
+  const frag=h<0?'':u.slice(h+1);
+  return base+'#'+(frag?frag+'&':'')+'nc-name='+encodeURIComponent(n);
+}
+function openLast(url,name){
   if(!url)return;
   let u=String(url).trim();
   // Bare host/IP (no scheme) would resolve relative to the dashboard origin
@@ -11307,6 +11315,7 @@ function openLast(url){
   // v8.7.7: an IP-address host has no certificate — use http even when the
   // stored link says https (same rule as _lh_url_ip_http() on save).
   u=u.replace(/^https:\/\/((?:[^\/?#@]*@)?(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:.]+\]))(?=[:\/?#]|$)/i,'http://$1');
+  u=lhNamed(u,name);
   // Track the actual window handle (not just the 'asl_dvs_lh' name target).
   // Relying on the name alone let some browsers get into a stuck state after
   // the user manually closed the popup — later window.open() calls with the
@@ -11324,9 +11333,9 @@ function openDmrLast(){
   // Use _lastDmrServers (live from /api/status) — always available,
   // not dependent on edit tab having been opened.
   const activeSrv=(_lastDmrServers||[]).find(s=>s.name===_lastActiveDmrServer);
-  openLast(activeSrv?activeSrv.net_url||'':'');
+  openLast(activeSrv?activeSrv.net_url||'':'',activeSrv?activeSrv.name:'');
 }
-function openModeLast(m){openLast(modeNetUrls[m]||'');}
+function openModeLast(m){openLast(modeNetUrls[m]||'',m);}
 function _updateLhBtn(id,url){const el=byId(id);if(el)el.classList.toggle('lh-off',!url);}
 function _refreshLhBtns(){
   // Use _lastDmrServers (live from /api/status) rather than dmrSrvRows
@@ -11505,7 +11514,7 @@ async function fcsSave(){
 function fcsLhUrl(s){return (s&&s.lh_url)||modeNetUrls.FCS||'';}
 function openFcsLast(){
   const ssel=byId('fcs-srv-select');
-  openLast(fcsLhUrl(ssel?_fcs.byId[ssel.value]:null));
+  openLast(fcsLhUrl(ssel?_fcs.byId[ssel.value]:null),'FCS');
 }
 
 
@@ -11725,7 +11734,7 @@ async function lcSave(k){
 }
 function lcOpenLast(k){
   const r=lcSelected(k);
-  openLast(r?LC_CFG[k].lh(r):'');
+  openLast(r?LC_CFG[k].lh(r):'',k);
 }
 function lcHostUrl(a){
   // An address -> http://address/ with no port (IPv6 in brackets).
@@ -11967,7 +11976,7 @@ async function m17CardSave(){
 function openM17Last(){
   const rsel=byId('m17-ref-select');
   const r=rsel?_m17c.byId[rsel.value]:null;
-  openLast(r?lcHostUrl(r.ip):'');
+  openLast(r?lcHostUrl(r.ip):'','M17');
 }
 
 /* ── XLX / D-STAR reflector cards (v8.9.1, v8.9.3; engine v9.0.3) ───────────

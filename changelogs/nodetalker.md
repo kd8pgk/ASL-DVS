@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_15_0_20261124.py`. Newest entries first.
+Current file: `nodetalker_v0_16_0_20261126.py`. Newest entries first.
+
+## 0.16.0 (2026-11-26)
+
+Last Heard links name their network. This is a release: the Last Heard link carries a new part after `#`.
+
+- **Named Last Heard.** The Last Heard button opens its link with a `#nc-name=` part: the network's name for a DMR network, or the mode (ASL, YSF, D-STAR, XLX, P25, NXDN, FCS, M17). Browsers never send the part after `#` to the server, so the page opened is the same. Node Controller Desktop uses it to name the Last Heard panel.
+- Nothing else changes.
 
 ## 0.15.0 (2026-11-24)
 
