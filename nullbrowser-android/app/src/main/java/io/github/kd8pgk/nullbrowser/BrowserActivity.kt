@@ -2,7 +2,12 @@ package io.github.kd8pgk.nullbrowser
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.Manifest
 import android.content.ClipboardManager
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.CheckBox
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -79,6 +84,13 @@ class BrowserActivity : Activity() {
     private var customCallback: WebChromeClient.CustomViewCallback? = null
     private var backCallback: Any? = null
     private var rendererGone = false
+    private var shotWindow = false
+    private var shotSeq = 0
+    private var pendingShot: ShotRec? = null
+    private lateinit var lineShot: Button
+    private lateinit var lineWindow: CheckBox
+
+    private class ShotRec(val file: File, val sha: String, val pages: Int)
     private lateinit var line: SlowLine
     private lateinit var lineBtn: Button
     private lateinit var lineRow: View
@@ -117,6 +129,8 @@ class BrowserActivity : Activity() {
         errorMain = findViewById(R.id.errorMain)
         errorRetry = findViewById(R.id.errorRetry)
         lineBtn = findViewById(R.id.lineBtn)
+        lineShot = findViewById(R.id.lineShot)
+        lineWindow = findViewById(R.id.lineWindow)
         lineRow = findViewById(R.id.lineRow)
         lineStatus = findViewById(R.id.lineStatus)
         lineText = findViewById(R.id.lineText)
@@ -264,7 +278,7 @@ class BrowserActivity : Activity() {
                 showNotice(getString(R.string.downloads_off))
                 return@setDownloadListener
             }
-            if (pending != null) {
+            if (pending != null || pendingShot != null) {
                 showNotice("Answer the question about the other file first.")
                 return@setDownloadListener
             }
@@ -278,13 +292,13 @@ class BrowserActivity : Activity() {
             askBar.visibility = View.VISIBLE
         }
 
-        askOpen.setOnClickListener { answerPending(true) }
-        askCancel.setOnClickListener { answerPending(false) }
+        askOpen.setOnClickListener { if (pendingShot != null) saveShot() else answerPending(true) }
+        askCancel.setOnClickListener { if (pendingShot != null) discardShot() else answerPending(false) }
 
         findViewById<ImageButton>(R.id.back).setOnClickListener { if (web.canGoBack()) web.goBack() }
         findViewById<ImageButton>(R.id.forward).setOnClickListener { if (web.canGoForward()) web.goForward() }
         findViewById<ImageButton>(R.id.reload).setOnClickListener { web.reload() }
-        findViewById<ImageButton>(R.id.home).setOnClickListener { goBlank() }
+        findViewById<ImageButton>(R.id.home).setOnClickListener { wipeAll() }
         errorRetry.setOnClickListener { lastMainError?.let { navigate(it) } ?: web.reload() }
         lineBtn.setOnClickListener {
             lineRow.visibility = if (lineRow.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -300,6 +314,9 @@ class BrowserActivity : Activity() {
         lineImages.setOnClickListener { line.setImages(!line.images) }
         lineSave.setOnClickListener { line.setSaveData(!line.saveData) }
         lineAhead.setOnClickListener { line.setReadAhead(!line.readAhead) }
+        lineWindow.isChecked = false
+        lineWindow.setOnCheckedChangeListener { _, on -> shotWindow = on }
+        lineShot.setOnClickListener { takeShot() }
         findViewById<Button>(R.id.lineStop).setOnClickListener { line.stop() }
         renderLine()
 
@@ -387,6 +404,107 @@ class BrowserActivity : Activity() {
         } else if (!want && current != null) {
             onBackInvokedDispatcher.unregisterOnBackInvokedCallback(current)
             backCallback = null
+        }
+    }
+
+    private fun quarantineDir(): File = File(cacheDir, "quarantine").apply { mkdirs() }
+
+    private fun takeShot() {
+        if (pending != null || pendingShot != null) {
+            showNotice("Answer the question about the other file first.")
+            return
+        }
+        shotSeq += 1
+        val file = File(quarantineDir(), "shot-$shotSeq.pdf")
+        askText.text = getString(R.string.shot_making)
+        askOpen.isEnabled = false
+        askCancel.isEnabled = false
+        askBar.visibility = View.VISIBLE
+        val done: (Boolean) -> Unit = { ok -> onShotMade(file, ok) }
+        if (shotWindow) Screenshot.window(this, file, done) else Screenshot.page(web, file, done)
+    }
+
+    private fun onShotMade(file: File, ok: Boolean) {
+        if (isDestroyed) return
+        val bytes = if (ok && file.exists()) file.readBytes() else null
+        val sha = bytes?.let { ShotCheck.sha256(it) } ?: ""
+        val check = if (bytes != null) ShotCheck.check(bytes, sha) else ShotCheck.Result(false, "the screenshot could not be made")
+        if (!check.ok) {
+            file.delete()
+            askBar.visibility = View.GONE
+            showNotice("The screenshot was not saved: ${check.reason}.")
+            return
+        }
+        pendingShot = ShotRec(file, sha, check.pages)
+        val kb = maxOf(1L, bytes!!.size / 1024L)
+        askText.text = getString(R.string.shot_ask, kb, check.pages)
+        askOpen.isEnabled = true
+        askCancel.isEnabled = true
+    }
+
+    private fun discardShot() {
+        val rec = pendingShot ?: return
+        pendingShot = null
+        rec.file.delete()
+        askBar.visibility = View.GONE
+    }
+
+    private fun saveShot() {
+        val rec = pendingShot ?: return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQ_SHOT_STORAGE)
+            return
+        }
+        askOpen.isEnabled = false
+        askCancel.isEnabled = false
+        askText.text = getString(R.string.shot_saving)
+        Thread {
+            val result = try {
+                val bytes = rec.file.readBytes()
+                val check = ShotCheck.check(bytes, rec.sha)
+                if (!check.ok) throw IllegalStateException(check.reason)
+                writeToDownloads(bytes, ShotCheck.downloadName(System.currentTimeMillis()))
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                discardShot()
+                showNotice(if (result != null) getString(R.string.shot_saved, result) else getString(R.string.shot_failed))
+            }
+        }.start()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun writeToDownloads(bytes: ByteArray, name: String): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return null
+            val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+            contentResolver.update(uri, done, null, null)
+            return name
+        }
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!dir.exists() && !dir.mkdirs()) return null
+        val unique = ShotCheck.uniqueName(name) { File(dir, it).exists() } ?: return null
+        File(dir, unique).writeBytes(bytes)
+        return unique
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_SHOT_STORAGE || pendingShot == null) return
+        if (grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            saveShot()
+        } else {
+            discardShot()
+            showNotice(getString(R.string.shot_needs_storage))
         }
     }
 
@@ -573,6 +691,27 @@ class BrowserActivity : Activity() {
         navigate(candidate)
     }
 
+    @Suppress("DEPRECATION")
+    private fun wipeAll() {
+        pending = null
+        askBar.visibility = View.GONE
+        line.clearAhead()
+        line.stop()
+        upgradedHosts.clear()
+        allowHttp.clear()
+        lastMainError = null
+        web.stopLoading()
+        web.clearHistory()
+        web.clearCache(true)
+        web.clearFormData()
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+        WebStorage.getInstance().deleteAllData()
+        downloadsDir(cacheDir).deleteRecursively()
+        goBlank()
+        showNotice(getString(R.string.wipe_done))
+    }
+
     private fun goBlank() {
         hideError()
         web.loadUrl("about:blank")
@@ -625,6 +764,10 @@ class BrowserActivity : Activity() {
         blank.visibility = View.GONE
     }
 
+    companion object {
+        private const val REQ_SHOT_STORAGE = 71
+    }
+
     @SuppressLint("GestureBackNavigation")
     override fun onBackPressed() {
         if (!handleBack()) super.onBackPressed()
@@ -641,6 +784,7 @@ class BrowserActivity : Activity() {
     }
 
     private fun wipe() {
+        File(cacheDir, "quarantine").deleteRecursively()
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         WebStorage.getInstance().deleteAllData()

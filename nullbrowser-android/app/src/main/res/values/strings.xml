@@ -32,4 +32,13 @@
     <string name="read_ahead_off">Read ahead: Off</string>
     <string name="close">Close</string>
     <string name="stop_images">Stop images</string>
+    <string name="screenshot">Screenshot</string>
+    <string name="shot_window">Include toolbar</string>
+    <string name="shot_making">Making the screenshot…</string>
+    <string name="shot_ask">Save the screenshot (PDF, %1$d KB, %2$d pages) to your Downloads folder?</string>
+    <string name="shot_saving">Saving…</string>
+    <string name="shot_saved">Saved %1$s to your Downloads folder.</string>
+    <string name="shot_failed">The screenshot could not be saved.</string>
+    <string name="shot_needs_storage">Saving a screenshot needs storage permission. It was not kept.</string>
+    <string name="wipe_done">Cleared: this run\'s pages, cookies, storage, cache, sign-ins, allowed sites and downloads. Kept: quarantined screenshots.</string>
 </resources>

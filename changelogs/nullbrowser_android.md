@@ -1,6 +1,17 @@
 # Null Browser Mobile changelog
 
-Current version: `0.5.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.0 (2026-11-26)
+
+A screenshot, saved only when you say so, as in the desktop build (0.13.0).
+
+- **The ✕ button clears everything.** It used to go to the blank page only. Now it wipes this run the way the desktop ✕ does (0.14.0): pages, cookies, storage, cache, form data, history, sign-ins, allowed sites, queued images and downloads, then goes to the blank page. A screenshot waiting in quarantine is kept. Closing the app still clears the quarantine too.
+- **Screenshot** (in the **Line** row). Makes a PDF of the whole web page, including the parts above and below the screen, using Android's own print path, with no print dialog shown. Tick **Include toolbar** first (off by default) to make a PDF of the screen as it is now, toolbar included; that option captures what is on screen, not the page's hidden parts.
+- **Checked before anything is saved.** The PDF is written to the app's private cache (a `quarantine` folder), then checked: it must start with `%PDF-` and end with `%%EOF`, have a readable page, be under 64 MB, and match the SHA-256 recorded when it was made. A file that fails is deleted and a notice says why.
+- **Saved only on Save.** A bar asks before anything is written. Save copies the PDF to your Downloads folder as `Null-Browser-YYYY-MM-DD-HHMMSS.pdf`, with no site name. Android 10 and later use the Downloads collection (MediaStore), which needs no permission. Android 8 and 9 ask for storage permission the first time you save; if you refuse, the screenshot is discarded. Cancel deletes it.
+- **Size.** No library is added (framework classes only). The APK size change is measured by the build and recorded in the pull request.
+- **Tests.** Unit tests for the checks and the file names. The print and screen-copy paths are compiled by CI but not yet run on a phone.
 
 ## 0.5.0 (2026-11-25)
 
