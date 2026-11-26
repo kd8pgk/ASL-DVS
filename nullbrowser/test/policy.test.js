@@ -15,6 +15,16 @@ test('typed addresses: a bare name gets https, other schemes and spaces are refu
   assert.match(P.normalizeInput('https://user:pw@example.com/').error, /user name or password/);
 });
 
+test('leaving the page: only a link to another site counts, and only when a page is open', () => {
+  assert.equal(P.leavesPage('https://example.com/a', 'https://example.com/b'), false);
+  assert.equal(P.leavesPage('https://www.example.com/', 'https://example.com/'), false);
+  assert.equal(P.leavesPage('https://example.com/', 'https://other.org/'), true);
+  assert.equal(P.leavesPage('https://a.example.co.uk/', 'https://b.example.co.uk/'), false);
+  assert.equal(P.leavesPage('https://example.co.uk/', 'https://other.co.uk/'), true);
+  assert.equal(P.leavesPage('', 'https://other.org/'), false);
+  assert.equal(P.leavesPage('https://example.com/', ''), false);
+});
+
 test('https first: public http is upgraded, private addresses and allowed hosts are not', () => {
   assert.equal(P.httpsUpgrade('http://example.com/a', new Set()), 'https://example.com/a');
   assert.equal(P.httpsUpgrade('http://example.com:8080/', new Set()), 'https://example.com:8080/');

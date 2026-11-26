@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('nb', {
   allowHttp: () => ipcRenderer.invoke('allow-http'),
   trustCert: () => ipcRenderer.invoke('trust-cert'),
   fileAnswer: (id, open) => ipcRenderer.invoke('file-answer', id, open),
+  leaveAnswer: (id, go) => ipcRenderer.invoke('leave-answer', id, go),
   allowSite: () => ipcRenderer.invoke('allow-site'),
   dismissPopup: () => ipcRenderer.invoke('dismiss-popup'),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),

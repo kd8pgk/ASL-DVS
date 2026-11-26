@@ -127,6 +127,14 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>page two</title><p>two</p>');
     }
+    if (q.url === '/leave') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end(`<!doctype html><title>leave</title><a id="elsewhere" href="http://localhost:${portA}/landing">Elsewhere</a>`);
+    }
+    if (q.url === '/landing') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>landing</title><p>landing</p>');
+    }
     if (q.url === '/fanout') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       const imgs = Array.from({ length: 15 }, (_, i) => `<img src="https://fanout-${i}.invalid/x.png">`).join('');
@@ -330,6 +338,22 @@ async function main() {
   });
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/two`, 'a clicked new-tab link opens in the same page');
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
+
+  await go(`http://127.0.0.1:${portA}/leave`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/leave`, 'the page with a link to another site');
+  await pageEval(`document.getElementById('elsewhere').click()`, true);
+  await win.waitForSelector('#leavebar:not([hidden])');
+  assert.match(await win.textContent('#leave-text'), /Leave 127\.0\.0\.1 for localhost\?/);
+  await sleep(300);
+  assert.equal(await pageUrl(), `http://127.0.0.1:${portA}/leave`, 'a link to another site waits for an answer');
+  await win.click('#leave-stay');
+  await win.waitForSelector('#leavebar', { state: 'hidden' });
+  assert.equal(await pageUrl(), `http://127.0.0.1:${portA}/leave`, 'Stay keeps the page');
+  await pageEval(`document.getElementById('elsewhere').click()`, true);
+  await win.waitForSelector('#leavebar:not([hidden])');
+  await win.click('#leave-go');
+  await waitFor(async () => (await pageUrl()) === `http://localhost:${portA}/landing`, 'Go opens the other site');
+  await win.waitForSelector('#leavebar', { state: 'hidden' });
 
   await go(`http://127.0.0.1:${portA}/trap`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/trap`, 'the leave-site trap page');

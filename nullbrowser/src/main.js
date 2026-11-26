@@ -64,6 +64,7 @@ const st = {
   pendingFile: null, pendingShot: null, dlAllowed: false, dlAsking: true,
   dlList: [], dlListFor: '', dlWarn: false, dlPanelOpen: false, dlQueueOpen: false,
   shotSeq: 0, fileSeq: 0, bookmarks: [], bookmarkSeq: 0, pendingJs: null,
+  pendingLeave: null, leaveSeq: 0,
   watchdog: null,
 };
 
@@ -117,6 +118,7 @@ function state() {
     bookmarks: st.bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
     fastJs,
     jsAsk: st.pendingJs,
+    leave: st.pendingLeave ? { id: st.pendingLeave.id, text: st.pendingLeave.text } : null,
     line: lineState(),
     shot: st.pendingShot ? { text: st.pendingShot.text, busy: st.pendingShot.busy } : null,
     dl: {
@@ -138,7 +140,7 @@ function lineRows(l) {
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0);
 }
 
 function layout() {
@@ -232,6 +234,7 @@ function wipeAll() {
     } catch {}
   }
   st.watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+  st.pendingLeave = null;
   if (st.ses) {
     st.ses.clearStorageData().catch(() => {});
     st.ses.clearCache().catch(() => {});
@@ -1285,7 +1288,19 @@ function unstick(redo) {
   }, STUCK_MS).unref();
 }
 
+function askLeave(url) {
+  const from = pageUrl();
+  if (!P.leavesPage(from, url)) return false;
+  const leaving = P.siteOf(P.hostOf(from));
+  const cleared = st.allowedSites.has(leaving) ? '' : ' Its cookies and storage are cleared.';
+  st.leaveSeq += 1;
+  st.pendingLeave = { id: st.leaveSeq, url, text: `Leave ${P.hostOf(from)} for ${P.hostOf(url)}?${cleared}` };
+  push();
+  return true;
+}
+
 function load(url) {
+  st.pendingLeave = null;
   st.error = null;
   st.pendingCert = null;
   st.view.webContents.loadURL(url).catch(() => {});
@@ -1359,6 +1374,7 @@ function createView() {
   });
   wc.on('did-start-navigation', (ev, url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      st.pendingLeave = null;
       purgeIfSiteChanged(url);
       resetLine();
       st.error = null;
@@ -1369,7 +1385,7 @@ function createView() {
     const tab = disposition === 'foreground-tab' || disposition === 'background-tab';
     const clicked = Date.now() - st.lastInput < GESTURE_MS;
     if (tab && clicked && !features && !frameName && P.allowPageUrl(url)) {
-      setImmediate(() => load(url));
+      if (!askLeave(url)) setImmediate(() => load(url));
       return { action: 'deny' };
     }
     const site = P.siteOf(P.hostOf(pageUrl()));
@@ -1404,7 +1420,9 @@ function createView() {
     if (!P.allowPageUrl(url)) {
       ev.preventDefault();
       say('Only web addresses (http and https) are opened here.');
+      return;
     }
+    if (askLeave(url)) ev.preventDefault();
   });
   wc.on('certificate-error', (event, url, err, cert, callback) => {
     const host = P.hostOf(url);
@@ -1690,6 +1708,14 @@ function register() {
     if (!fromShell(e) || !st.error || st.error.kind !== 'nohttps') return { ok: false };
     st.allowHttp.add(st.error.host);
     load(st.error.url);
+    return { ok: true };
+  });
+  ipcMain.handle('leave-answer', (e, id, go) => {
+    if (!fromShell(e) || !st.pendingLeave || st.pendingLeave.id !== id) return { ok: false };
+    const { url } = st.pendingLeave;
+    st.pendingLeave = null;
+    if (go) load(url);
+    else push();
     return { ok: true };
   });
   ipcMain.handle('file-answer', (e, id, open) => {
