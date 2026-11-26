@@ -376,6 +376,27 @@ async function main() {
   assert.equal(await pageEval("navigator.userAgentData.getHighEntropyValues(['model','platformVersion','fullVersionList','architecture']).then(function(v){return Object.keys(v).sort().join(',')})"), 'brands,mobile,platform', 'only the basic hints are given to scripts');
 
   const clip = (text) => app.evaluate(({ clipboard }, t) => (t === undefined ? clipboard.readText() : clipboard.writeText(t)), text);
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'the page that sets a cookie');
+  await win.click('#line');
+  await win.waitForSelector('#lineset:not([hidden])');
+  await win.click('#ls-shot');
+  await win.waitForSelector('#shotbar:not([hidden])', { timeout: 30000 });
+  await win.waitForFunction(() => !/Making/.test(document.getElementById('shot-text').textContent), null, { timeout: 30000 });
+  await win.click('#line');
+  await win.waitForSelector('#lineset', { state: 'hidden' });
+  const seenBefore = seenA.length;
+  await win.click('#wipe');
+  await win.waitForFunction(() => /Cleared: this run/.test(document.getElementById('notice').textContent), null, { timeout: 10000 });
+  assert.equal(await win.isVisible('#shotbar'), true, 'the quarantined screenshot is kept by the X');
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(() => seenA.length > seenBefore, 'the page is asked for again after the X');
+  const last = seenA[seenA.length - 1];
+  assert.doesNotMatch(last.cookie, /fp=1/, 'the X wipes the cookies the site set');
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'back on the page after the X');
+  await win.click('#shot-cancel');
+  await win.waitForSelector('#shotbar', { state: 'hidden' });
+
   await go(`http://127.0.0.1:${portA}/clip`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/clip`, 'the clipboard page');
   await sleep(800);

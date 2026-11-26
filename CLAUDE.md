@@ -240,6 +240,10 @@
     does not need the warm-up: its launcher (below) sets the folders before
     Chromium starts at all.
   - No log file, crash reporter, telemetry, updater, history or saved setting.
+  - The ✕ button (0.14.0, `wipeAll` in `src/main.js`) clears everything the
+    run kept (pages, storage, cache, sign-ins, allowed sites, trusted
+    certificates, queues, watchdog counts, downloads in the RAM folder). It
+    keeps bookmarks and `quarantine/`, and the toolbar settings.
   - One written exception (0.13.0): the **Screenshot** button writes a PDF to
     the Downloads folder, and only when you press Save. It is made in
     `quarantine/` inside the RAM folder and checked there first

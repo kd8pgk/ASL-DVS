@@ -202,13 +202,49 @@ function purgeIfSiteChanged(nextUrl) {
   purgeOrigin(P.originOf(leaving));
 }
 
+function wipeAll() {
+  resetLine();
+  clearAhead();
+  allowHttp.clear();
+  upgraded.clear();
+  trusted.clear();
+  allowedSites.clear();
+  blockedSite = '';
+  nextPopup = '';
+  pendingCert = null;
+  error = null;
+  if (pendingFile) {
+    const rec = pendingFile;
+    pendingFile = null;
+    try {
+      rec.item.cancel();
+    } catch {}
+    rammaidFile(rec.file);
+  }
+  for (const name of fs.readdirSync(ram.sub.files)) {
+    if (name === 'quarantine') continue;
+    try {
+      fs.rmSync(path.join(ram.sub.files, name), { recursive: true, force: true });
+    } catch {}
+  }
+  watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+  if (ses) {
+    ses.clearStorageData().catch(() => {});
+    ses.clearCache().catch(() => {});
+    ses.clearAuthCache().catch(() => {});
+    ses.clearHostResolverCache().catch(() => {});
+  }
+  if (view && !view.webContents.isDestroyed()) view.webContents.loadURL('about:blank').catch(() => {});
+  say('Cleared: this run\'s pages, cookies, storage, cache, sign-ins, allowed sites and downloads. Kept: bookmarks and quarantined screenshots.');
+}
+
 function watchdogFlag(site, reason) {
   if (!site || allowedSites.has(site)) return;
   purgeOrigin(P.originOf(pageUrl()));
   say(`Watchdog: ${site} ${reason}, so it was cleared.`);
 }
 
-const watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+let watchdog = W.createWatchdog({ onFlag: watchdogFlag });
 
 const CPU_CORES = Math.max(os.cpus().length, 1);
 
@@ -1271,6 +1307,11 @@ function register() {
       return { ok: true };
     }
     load(r.url);
+    return { ok: true };
+  });
+  ipcMain.handle('wipe-all', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    wipeAll();
     return { ok: true };
   });
   ipcMain.handle('nav', (e, what) => {
