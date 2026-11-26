@@ -62,6 +62,7 @@ button:active:not(:disabled) { transform: scale(.96); }
 button:disabled { opacity: .35; cursor: default; }
 button.primary { color: var(--green); border-color: var(--green-dim); }
 #line.on { color: var(--amber); border-color: var(--amber); }
+.ls-check { display: inline-flex; align-items: center; gap: .3rem; font-size: var(--fs-sm); color: var(--text); font-weight: bold; }
 #form { flex: 1; min-width: 0; }
 #addr {
   width: 100%;

@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('nb', {
   confirmFastJs: () => ipcRenderer.invoke('confirm-fast-js'),
   lineSet: (key, value) => ipcRenderer.invoke('line-set', key, value),
   stopImages: () => ipcRenderer.invoke('stop-images'),
+  screenshot: () => ipcRenderer.invoke('screenshot'),
+  shotAnswer: (save) => ipcRenderer.invoke('shot-answer', save),
   onState: (cb) => ipcRenderer.on('state', (e, s) => cb(s)),
   onFocusAddress: (cb) => ipcRenderer.on('focus-address', () => cb()),
 });

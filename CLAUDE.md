@@ -240,6 +240,11 @@
     does not need the warm-up: its launcher (below) sets the folders before
     Chromium starts at all.
   - No log file, crash reporter, telemetry, updater, history or saved setting.
+  - One written exception (0.13.0): the **Screenshot** button writes a PDF to
+    the Downloads folder, and only when you press Save. It is made in
+    `quarantine/` inside the RAM folder and checked there first
+    (`src/shot.js`: `%PDF-`/`%%EOF`, a page, a size limit, the recorded hash).
+    No other code path may write outside the RAM folder.
   - No downloads. A PDF, audio or video file (by type, checked against its
     first bytes) is fetched into the RAM folder and handed to the system app
     only after the user answers **Open** (never before; a file that finishes

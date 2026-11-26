@@ -9,6 +9,9 @@ const F = require('./files');
 const B = require('./bookmarks');
 const W = require('./watchdog');
 const S = require('./slow');
+const SH = require('./shot');
+
+const REAL_HOME = os.homedir();
 
 app.setName('Null Browser');
 protocol.registerSchemesAsPrivileged([{ scheme: S.SCHEME, privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: true } }]);
@@ -77,6 +80,8 @@ const litterbugIds = new Set();
 let blockedSite = '';
 let nextPopup = '';
 let pendingFile = null;
+let pendingShot = null;
+let shotSeq = 0;
 let fileSeq = 0;
 let bookmarks = [];
 let bookmarkSeq = 0;
@@ -124,6 +129,7 @@ function state() {
     fastJs,
     jsAsk: pendingJs,
     line: lineState(),
+    shot: pendingShot ? { text: pendingShot.text, busy: pendingShot.busy } : null,
   };
 }
 
@@ -133,7 +139,7 @@ function lineRows(l) {
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + lineRows(s.line);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.shot ? 1 : 0) + lineRows(s.line);
 }
 
 function layout() {
@@ -333,7 +339,7 @@ function onDownload(event, item) {
   push();
 }
 
-const line = { mode: 'auto', images: true, saveData: false, readAhead: false, open: false };
+const line = { mode: 'auto', images: true, saveData: false, readAhead: false, open: false, shotWindow: false };
 const meter = S.createMeter();
 const starts = new Map();
 const served = new Map();
@@ -372,6 +378,7 @@ function lineState() {
     saveData: line.saveData,
     readAhead: line.readAhead,
     open: line.open,
+    shotWindow: line.shotWindow,
     rate: meter.rate() ? S.sizeLabel(meter.rate()) : '',
     done: imgDone,
     total: imgTotal,
@@ -738,7 +745,7 @@ function setLine(key, value) {
       stopped = false;
       tellPage({ reloadImages: true });
     }
-  } else if ((key === 'saveData' || key === 'readAhead' || key === 'open') && typeof value === 'boolean') line[key] = value;
+  } else if ((key === 'saveData' || key === 'readAhead' || key === 'open' || key === 'shotWindow') && typeof value === 'boolean') line[key] = value;
   else return false;
   if (key === 'readAhead' && value) {
     aheadFor = '';
@@ -747,6 +754,104 @@ function setLine(key, value) {
   lineChanged();
   push();
   return true;
+}
+
+function shotDir() {
+  const dir = path.join(ram.sub.files, 'quarantine');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+function discardShot() {
+  if (!pendingShot) return;
+  const file = pendingShot.file;
+  pendingShot = null;
+  try {
+    fs.rmSync(file, { force: true });
+    fs.rmdirSync(path.dirname(file));
+  } catch {}
+}
+
+async function printPage(wc) {
+  return wc.printToPDF({ printBackground: true, pageSize: 'A4' });
+}
+
+async function windowPdf() {
+  const img = await win.webContents.capturePage();
+  const size = img.getSize();
+  const png = img.toPNG().toString('base64');
+  const html = `<!doctype html><html><head><style>@page{margin:0}html,body{margin:0;padding:0}img{display:block;width:${size.width}px;height:${size.height}px}</style></head><body><img src="data:image/png;base64,${png}"></body></html>`;
+  const shot = new BrowserWindow({ show: false, width: size.width, height: size.height, webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, plugins: false, spellcheck: false } });
+  try {
+    await shot.loadURL(`data:text/html;base64,${Buffer.from(html).toString('base64')}`);
+    return await shot.webContents.printToPDF({ printBackground: true, pageSize: { width: size.width / 96, height: size.height / 96 } });
+  } finally {
+    shot.destroy();
+  }
+}
+
+async function makeShot(withWindow) {
+  if (pendingShot || !alive() || !view || view.webContents.isDestroyed()) return;
+  shotSeq += 1;
+  const file = path.join(shotDir(), `shot-${shotSeq}.pdf`);
+  pendingShot = { id: shotSeq, file, sha: '', text: 'Making the screenshot…', busy: true };
+  push();
+  let buf;
+  try {
+    buf = withWindow ? await windowPdf() : await printPage(view.webContents);
+  } catch {
+    buf = null;
+  }
+  if (!buf) {
+    pendingShot = null;
+    say('The screenshot could not be made.');
+    return;
+  }
+  const sha = SH.sha256(buf);
+  fs.writeFileSync(file, buf, { mode: 0o600 });
+  const back = fs.readFileSync(file);
+  const check = SH.checkPdf(back, sha);
+  if (!check.ok) {
+    discardShot();
+    say(`The screenshot was not saved: ${check.reason}.`);
+    return;
+  }
+  pendingShot = { id: shotSeq, file, sha, text: `Save the screenshot (PDF, ${Math.max(1, Math.round(back.length / 1024))} KB, ${check.pages} page${check.pages === 1 ? '' : 's'}) to your Downloads folder?`, busy: false };
+  push();
+}
+
+function answerShot(save) {
+  const rec = pendingShot;
+  if (!save) {
+    discardShot();
+    push();
+    return;
+  }
+  pendingShot = { ...rec, text: 'Saving…', busy: true };
+  push();
+  try {
+    const buf = fs.readFileSync(rec.file);
+    const check = SH.checkPdf(buf, rec.sha);
+    if (!check.ok) throw new Error(check.reason);
+    const dir = SH.downloadsFromUserDirs(readUserDirs(), REAL_HOME);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = SH.uniqueName(SH.shotName(new Date()), (n) => fs.existsSync(path.join(dir, n)));
+    if (!name) throw new Error('no free file name');
+    fs.writeFileSync(path.join(dir, name), buf, { flag: 'wx', mode: 0o644 });
+    discardShot();
+    say(`Saved ${name} to your Downloads folder.`);
+  } catch (err) {
+    discardShot();
+    say(`The screenshot was not saved: ${err.message}.`);
+  }
+}
+
+function readUserDirs() {
+  try {
+    return fs.readFileSync(path.join(REAL_HOME, '.config', 'user-dirs.dirs'), 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function hardenPage(s) {
@@ -1126,6 +1231,16 @@ function register() {
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
     return { ok: setLine(key, value) };
+  });
+  ipcMain.handle('screenshot', async (e) => {
+    if (!fromShell(e)) return { ok: false };
+    await makeShot(line.shotWindow);
+    return { ok: true };
+  });
+  ipcMain.handle('shot-answer', (e, save) => {
+    if (!fromShell(e) || !pendingShot || pendingShot.busy) return { ok: false };
+    answerShot(Boolean(save));
+    return { ok: true };
   });
   ipcMain.handle('stop-images', (e) => {
     if (!fromShell(e)) return { ok: false };

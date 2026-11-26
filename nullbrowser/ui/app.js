@@ -19,6 +19,7 @@
     $('ls-images').textContent = l.images ? 'Images: On' : 'Images: Off';
     $('ls-save').textContent = l.saveData ? 'Save-Data: On' : 'Save-Data: Off';
     $('ls-ahead').textContent = l.readAhead ? 'Read ahead: On' : 'Read ahead: Off';
+    $('ls-shotwin').checked = Boolean(l.shotWindow);
     const loading = Boolean(l.active && (l.busy || l.retrying));
     show($('linebar'), loading || Boolean(l.ahead));
     const parts = [];
@@ -114,7 +115,13 @@
         : 'Turn off faster JavaScript and go back to JIT off? Null Browser restarts now.';
     }
     const lineRows = renderLine(s.line || lineNow);
-    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + lineRows;
+    show($('shotbar'), Boolean(s.shot));
+    if (s.shot) {
+      $('shot-text').textContent = s.shot.text;
+      $('shot-save').disabled = s.shot.busy;
+      $('shot-cancel').disabled = s.shot.busy;
+    }
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.shot ? 1 : 0) + lineRows;
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
@@ -215,6 +222,10 @@
   $('ls-save').addEventListener('click', () => window.nb.lineSet('saveData', !lineNow.saveData));
   $('ls-ahead').addEventListener('click', () => window.nb.lineSet('readAhead', !lineNow.readAhead));
   $('ls-stop').addEventListener('click', () => window.nb.stopImages());
+  $('ls-shot').addEventListener('click', () => window.nb.screenshot());
+  $('ls-shotwin').addEventListener('change', (ev) => window.nb.lineSet('shotWindow', ev.target.checked));
+  $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
+  $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
   $('jsbar-yes').addEventListener('click', () => window.nb.confirmFastJs());
   $('jsbar-no').addEventListener('click', () => window.nb.cancelFastJs());
