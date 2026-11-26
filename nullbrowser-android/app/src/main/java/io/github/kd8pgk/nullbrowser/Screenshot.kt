@@ -84,5 +84,4 @@ object Screenshot {
     private fun finish(done: (Boolean) -> Unit, ok: Boolean) {
         main.post { done(ok) }
     }
-    }
 }
