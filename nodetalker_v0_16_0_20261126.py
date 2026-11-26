@@ -34,7 +34,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 DATE_STR = "2026-11-23"
 APP_NAME = "Node Talker"
 
@@ -11847,11 +11847,22 @@ function tnButtons() {
   $('t-lh').disabled = !tnLink();
 }
 
+function lhNamed(u, name) {
+  const n = String(name || '').replace(/[^A-Za-z0-9 .+/&_-]/g, '').trim().slice(0, 24);
+  if (!u || !n) return u;
+  const h = u.indexOf('#');
+  const base = h < 0 ? u : u.slice(0, h);
+  const frag = h < 0 ? '' : u.slice(h + 1);
+  return base + '#' + (frag ? frag + '&' : '') + 'nc-name=' + encodeURIComponent(n);
+}
+
 function tnOpenLink() {
   const u = tnLink();
   if (!u) return;
-  if (tnWin && !tnWin.closed) { tnWin.location.href = u; tnWin.focus(); }
-  else tnWin = window.open(u, 'nt_lh');
+  const m = $('t-mode').value;
+  const named = lhNamed(u, m === 'DMR' ? $('t-net').value : m);
+  if (tnWin && !tnWin.closed) { tnWin.location.href = named; tnWin.focus(); }
+  else tnWin = window.open(named, 'nt_lh');
 }
 
 async function tnConnect() {

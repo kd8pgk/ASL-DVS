@@ -1,6 +1,14 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_122_20261123.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_123_20261126.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.123-pi02w (2026-11-26)
+
+Last Heard links name their network. This is a release: the Last Heard link carries a new part after `#`.
+
+- **Named Last Heard.** Each Last Heard link now ends in a `#nc-name=` part that names the network: the DMR server's name for a DMR server, or the mode (ASL, STFU, FCS, YSF, D-STAR, XLX, P25, NXDN, M17). Browsers never send the part after `#` to the server, so the page a Last Heard opens is the same. Node Controller Desktop uses it to name the Last Heard panel.
+- **Grid rows** (DMR servers and talkgroups) carry the name in `data-name` on their LH button. Reflector rows do not yet; the desktop names those from the address it knows, or by host.
+- Nothing else changes.
 
 ## 9.3.122-pi02w (2026-11-23)
 
