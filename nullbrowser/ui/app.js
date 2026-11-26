@@ -121,12 +121,123 @@
       $('shot-save').disabled = s.shot.busy;
       $('shot-cancel').disabled = s.shot.busy;
     }
-    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.shot ? 1 : 0) + lineRows;
+    renderDownloads(s.dl || {});
+    const dlRows = (s.dl && s.dl.asking ? 1 : 0) + (s.dl && s.dl.queue && s.dl.queue.length ? 1 : 0);
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.shot ? 1 : 0) + lineRows + dlRows;
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
     renderBookmarks(s.bookmarks || []);
     renderError(s.error);
+  }
+
+  let dlState = {};
+  let dlWarnShown = false;
+
+  function linkRow(item) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dl-item';
+    b.title = item.href;
+    const name = document.createElement('b');
+    name.textContent = item.name;
+    const where = document.createElement('small');
+    where.textContent = `${item.path}  ·  ${item.host}`;
+    b.appendChild(name);
+    b.appendChild(where);
+    b.addEventListener('click', () => window.nb.dlOne(item.href));
+    const badge = document.createElement('span');
+    badge.className = 'dl-badge';
+    badge.textContent = { pdf: 'PDF', mp3: 'MP3', wav: 'WAV', webm: 'WebM', mp4: 'MP4', jpg: 'JPG', mpeg: 'MPEG' }[item.kind] || item.kind;
+    li.appendChild(b);
+    li.appendChild(badge);
+    return li;
+  }
+
+  function queueRow(item) {
+    const li = document.createElement('li');
+    const name = document.createElement('b');
+    name.className = 'dl-item';
+    name.style.display = 'block';
+    name.textContent = item.name;
+    name.title = item.href;
+    const state = document.createElement('span');
+    const labels = { waiting: 'Waiting', downloading: 'Downloading…', done: `Saved as ${item.saved}`, refused: item.reason, login: item.reason, cancelled: 'Cancelled' };
+    state.className = 'dl-state' + (item.state === 'done' ? ' ok' : item.state === 'refused' || item.state === 'login' ? ' bad' : '');
+    state.textContent = labels[item.state] || item.state;
+    state.style.flex = '1';
+    li.appendChild(name);
+    li.appendChild(state);
+    if (item.state === 'waiting' || item.state === 'downloading') {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.textContent = 'Cancel';
+      c.addEventListener('click', () => window.nb.dlCancel(item.id));
+      li.appendChild(c);
+    } else if (item.state === 'login') {
+      const r = document.createElement('button');
+      r.type = 'button';
+      r.textContent = 'Retry with sign-in';
+      r.addEventListener('click', () => window.nb.dlRetry(item.id));
+      li.appendChild(r);
+    }
+    if (item.state !== 'waiting' && item.state !== 'downloading') {
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.textContent = '✕';
+      rm.setAttribute('aria-label', `Remove ${item.name}`);
+      rm.addEventListener('click', () => window.nb.dlRemove(item.id));
+      li.appendChild(rm);
+    }
+    return li;
+  }
+
+  function renderDownloads(d) {
+    dlState = d;
+    const dl = $('dl');
+    dl.classList.toggle('on', Boolean(d.allowed));
+    dl.setAttribute('aria-expanded', d.panel ? 'true' : 'false');
+    dl.title = d.allowed ? 'Download files from this page' : 'Downloads are off. Click to allow them for this run.';
+    show($('dlallow'), Boolean(d.asking));
+    const list = d.list || [];
+    const queue = d.queue || [];
+    show($('dl-panel'), Boolean(d.panel && d.allowed));
+    const ul = $('dl-list');
+    ul.textContent = '';
+    if (d.panel && d.allowed) {
+      const all = document.createElement('li');
+      const allBtn = document.createElement('button');
+      allBtn.type = 'button';
+      allBtn.className = 'dl-item dl-all';
+      allBtn.textContent = list.length ? `Download all ${list.length} files…` : 'Download all';
+      allBtn.disabled = list.length === 0;
+      allBtn.addEventListener('click', () => window.nb.dlWarn(true));
+      all.appendChild(allBtn);
+      ul.appendChild(all);
+      for (const item of list) ul.appendChild(linkRow(item));
+      show($('dl-empty'), list.length === 0);
+    }
+    show($('dl-warn'), Boolean(d.warn && d.allowed && list.length));
+    if (d.warn && d.allowed && list.length) {
+      const n = list.length;
+      $('dl-warn-title').textContent = `Download all ${n} files from this page?`;
+      $('dl-warn-text').textContent = 'These files download one at a time into your Downloads folder, up to 200 files and 2 GB in total. Each file is checked, but a check cannot prove a file is safe. Only do this for a page you trust.';
+      $('dl-warn-go').textContent = `Download all ${n} files`;
+      if (!dlWarnShown) $('dl-warn-cancel').focus();
+      dlWarnShown = true;
+    } else {
+      dlWarnShown = false;
+    }
+    const qDone = queue.filter((i) => i.state === 'done').length;
+    const current = queue.find((i) => i.state === 'downloading');
+    show($('dlqbar'), queue.length > 0);
+    $('dlq-text').textContent = `Queue: ${qDone} of ${queue.length} done${current ? ` · ${current.name}` : ''}`;
+    show($('dl-qpanel'), Boolean(d.queuePanel && queue.length));
+    const ql = $('dl-qlist');
+    ql.textContent = '';
+    for (const item of queue) ql.appendChild(queueRow(item));
+    show($('dl-qempty'), queue.length === 0);
   }
 
   function renderError(e) {
@@ -235,6 +346,28 @@
       bmOpen = false;
       show($('bm-panel'), false);
     }
+  });
+  $('dl').addEventListener('click', () => {
+    if (!dlState.allowed) {
+      window.nb.dlAsk();
+      return;
+    }
+    window.nb.dlPanel(!dlState.panel);
+  });
+  $('dl-close').addEventListener('click', () => window.nb.dlPanel(false));
+  $('dl-yes').addEventListener('click', () => window.nb.dlAnswer(true));
+  $('dl-no').addEventListener('click', () => window.nb.dlAnswer(false));
+  $('dl-warn-cancel').addEventListener('click', () => window.nb.dlWarn(false));
+  $('dl-warn-go').addEventListener('click', () => window.nb.dlAll());
+  $('dl-qclose').addEventListener('click', () => window.nb.dlQueuePanel(false));
+  $('dl-qclear').addEventListener('click', () => window.nb.dlClear());
+  $('dlq-open').addEventListener('click', () => window.nb.dlQueuePanel(!dlState.queuePanel));
+  $('dlq-cancel').addEventListener('click', () => window.nb.dlCancelAll());
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    if (dlState.warn) window.nb.dlWarn(false);
+    else if (dlState.panel) window.nb.dlPanel(false);
+    else if (dlState.queuePanel) window.nb.dlQueuePanel(false);
   });
   window.nb.onState(render);
   window.nb.onFocusAddress(() => $('addr').focus());

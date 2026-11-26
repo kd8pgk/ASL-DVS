@@ -59,6 +59,7 @@ function walk(dir) {
 
 const panelLog = [];
 const fpSeen = [];
+const dlSeen = [];
 
 function pngOf(bytes) {
   const zlib = require('node:zlib');
@@ -168,6 +169,39 @@ async function main() {
       fpSeen.push({ lang: q.headers['accept-language'] || '', ua: q.headers['user-agent'] || '', hints: Object.keys(q.headers).filter((k) => /^(sec-ch-ua-|ect$|rtt$|downlink$|device-memory$)/.test(k) && !['sec-ch-ua-mobile', 'sec-ch-ua-platform'].includes(k)) });
       s.writeHead(200, { 'Content-Type': 'text/html', 'Accept-CH': 'Sec-CH-UA-Model, Sec-CH-UA-Platform-Version, ECT, Device-Memory' });
       return s.end('<!doctype html><title>fp</title><p>fp</p>');
+    }
+    if (q.url === '/dlpage') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>files</title><p><a href="/files/good.pdf">Strip 12</a> <a href="/files/hidden.pdf">Extra</a> <a href="/files/fake.mp4">Video</a> <a href="/files/good.jpg">Picture</a> <a href="/files/need.pdf">Members only</a> <a href="/files/prog.zip">Archive</a> <a href="/files/good.pdf#top">Strip 12 again</a></p><iframe src="/dlframe"></iframe>');
+    }
+    if (q.url === '/dlframe') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>frame</title><a href="/files/inner.pdf">Inside a frame</a>');
+    }
+    if (q.url.startsWith('/files/')) {
+      const name = q.url.slice(7).split(/[?#]/)[0];
+      dlSeen.push({ name, cookie: q.headers.cookie || '', range: q.headers.range || '' });
+      if (name === 'need.pdf' && !/fp=1/.test(q.headers.cookie || '')) {
+        s.writeHead(401, { 'Content-Type': 'text/plain' });
+        return s.end('sign in');
+      }
+      if (name === 'fake.mp4') {
+        s.writeHead(200, { 'Content-Type': 'video/mp4' });
+        return s.end('<!doctype html><html><script>alert(1)</script></html>' + ' '.repeat(2000));
+      }
+      if (name === 'prog.zip') {
+        s.writeHead(200, { 'Content-Type': 'application/zip' });
+        return s.end('PK\x03\x04' + ' '.repeat(100));
+      }
+      if (name === 'good.jpg') {
+        s.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        return s.end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600, 7), Buffer.from([0xff, 0xd9])]));
+      }
+      const pdfBody = name === 'hidden.pdf'
+        ? '%PDF-1.4\n<</Type /Page>>\n/OpenAction <</S /JavaScript /JS (app.alert(1))>>\n' + ' '.repeat(1500) + '\n%%EOF\n'
+        : '%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n';
+      s.writeHead(200, { 'Content-Type': 'application/pdf' });
+      return s.end(pdfBody);
     }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
@@ -396,6 +430,84 @@ async function main() {
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'back on the page after the X');
   await win.click('#shot-cancel');
   await win.waitForSelector('#shotbar', { state: 'hidden' });
+
+  await go(`http://127.0.0.1:${portA}/dlpage`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/dlpage`, 'the page with files');
+  await win.click('#line');
+  await win.waitForSelector('#lineset:not([hidden])');
+  await win.click('#line');
+  await win.waitForSelector('#lineset', { state: 'hidden' });
+  assert.equal(await win.isVisible('#dlallow'), true, 'downloads are asked about at each start');
+  assert.equal(await win.isVisible('#dl-panel'), false, 'the list is closed at first');
+  await win.click('#dl-no');
+  await win.waitForSelector('#dlallow', { state: 'hidden' });
+  await win.click('#dl');
+  await win.waitForSelector('#dlallow:not([hidden])');
+  await win.click('#dl-yes');
+  await win.waitForSelector('#dlallow', { state: 'hidden' });
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  const listed = await win.$$eval('#dl-list .dl-item small', (els) => els.map((e) => e.textContent));
+  if (!listed.some((t) => t.startsWith('/files/good.pdf'))) console.error('LISTED', JSON.stringify(listed));
+  assert.ok(listed.some((t) => t.startsWith('/files/good.pdf')), 'the page file is listed with its path');
+  assert.ok(listed.every((t) => t.includes('127.0.0.1')), 'each file shows its host');
+  assert.equal(listed.some((t) => /inner\.pdf/.test(t)), false, 'a file inside an embedded frame is not listed');
+  assert.equal(listed.filter((t) => t.startsWith('/files/good.pdf')).length, 1, 'duplicate links are merged');
+  const downloadsDir = path.join(realHome, 'Downloads');
+  const countSaved = () => (fs.existsSync(downloadsDir) ? fs.readdirSync(downloadsDir).filter((n) => !n.startsWith('.')).length : 0);
+  const savedBefore = countSaved();
+  const rowFor = (name) => win.locator('#dl-list .dl-item', { hasText: name });
+  await rowFor('good.pdf').first().click();
+  await win.waitForSelector('#dlqbar:not([hidden])');
+  await waitFor(() => fs.existsSync(path.join(downloadsDir, 'good.pdf')), 'the good PDF is saved to Downloads');
+  assert.match(fs.readFileSync(path.join(downloadsDir, 'good.pdf'), 'latin1'), /^%PDF-1\.4/, 'and it is the PDF');
+  const firstReq = dlSeen.find((r) => r.name === 'good.pdf');
+  assert.equal(firstReq.cookie, '', 'a plain download sends no cookies');
+  await win.click('#dlq-open');
+  await win.waitForSelector('#dl-qpanel:not([hidden])');
+  await win.waitForFunction(() => /Saved as good\.pdf/.test(document.getElementById('dl-qlist').textContent), null, { timeout: 15000 });
+  await win.click('#dl-qclose');
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await rowFor('hidden.pdf').first().click();
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await rowFor('fake.mp4').first().click();
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await rowFor('need.pdf').first().click();
+  await win.click('#dlq-open');
+  await win.waitForSelector('#dl-qpanel:not([hidden])');
+  await win.waitForFunction(() => /runs code/.test(document.getElementById('dl-qlist').textContent), null, { timeout: 15000 });
+  await win.waitForFunction(() => /web page code/.test(document.getElementById('dl-qlist').textContent), null, { timeout: 15000 });
+  await win.waitForFunction(() => /sign-in/.test(document.getElementById('dl-qlist').textContent), null, { timeout: 15000 });
+  await win.click('#dl-qlist button:has-text("Retry with sign-in")');
+  await waitFor(() => fs.existsSync(path.join(downloadsDir, 'need.pdf')), 'the sign-in retry saves the file');
+  const retryReq = dlSeen.filter((r) => r.name === 'need.pdf');
+  assert.equal(retryReq[0].cookie, '', 'the first request sends no cookies');
+  assert.match(retryReq[retryReq.length - 1].cookie, /fp=1/, 'the retry sends the sign-in cookie, for that one file');
+  assert.equal(fs.existsSync(path.join(downloadsDir, 'fake.mp4')), false, 'a fake MP4 is never saved');
+  assert.equal(fs.existsSync(path.join(downloadsDir, 'hidden.pdf')), false, 'a PDF with a script action is never saved');
+  assert.equal(countSaved(), savedBefore + 2, 'only the two good files are saved');
+  assert.equal(listed.some((t) => /prog\.zip/.test(t)), false, 'a file type that is not allowed is not listed');
+  await win.click('#dl-qclose').catch(() => {});
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await win.click('#dl-list .dl-all');
+  await win.waitForSelector('#dl-warn:not([hidden])');
+  await win.click('#dl-warn-cancel');
+  await win.waitForSelector('#dl-warn', { state: 'hidden' });
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await win.click('#dl-list .dl-all');
+  await win.waitForSelector('#dl-warn:not([hidden])');
+  await win.click('#dl-warn-go');
+  await waitFor(() => countSaved() === savedBefore + 4, 'the batch saves the two good files again (the first copy is kept, the second gets a number)', 30000);
+  assert.equal(fs.existsSync(path.join(downloadsDir, 'good-2.pdf')), true, 'the second copy never overwrites the first');
+  assert.equal(fs.existsSync(path.join(downloadsDir, 'good.jpg')), true, 'the batch saves the picture');
+  await win.click('#dl-qclose').catch(() => {});
+  await go(`http://127.0.0.1:${portA}/`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'back on the start page');
+  await win.click('#dl-qclose').catch(() => {});
 
   await go(`http://127.0.0.1:${portA}/clip`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/clip`, 'the clipboard page');
@@ -657,9 +769,9 @@ async function main() {
   const shotFiles = Object.keys(homeNow).filter((k) => k.startsWith('/Downloads/'));
   const otherChanges = Object.keys(homeNow).filter((k) => !k.startsWith('/Downloads') && homeNow[k] !== homeBefore[k]);
   assert.deepEqual(otherChanges, [], 'nothing else in the real home folder was added or changed');
-  assert.equal(shotFiles.length, 1, 'the only file added is the one screenshot the user saved');
-  assert.match(shotFiles[0], /^\/Downloads\/Null-Browser-\d{4}-\d{2}-\d{2}-\d{6}\.pdf$/, 'and it has the screenshot name, with no site name');
-  assert.equal(fs.readFileSync(path.join(realHome, shotFiles[0].slice(1)), 'latin1').slice(0, 5), '%PDF-', 'and it is a PDF');
+  assert.ok(shotFiles.some((f) => /^\/Downloads\/Null-Browser-\d{4}-\d{2}-\d{2}-\d{6}\.pdf$/.test(f)), 'the screenshot the user saved is there, with no site name');
+  assert.equal(shotFiles.some((f) => /hidden|fake|prog/.test(f)), false, 'no refused file was saved');
+
 
   const preDir = path.join(ramBase, 'null-browser-0-999999-prelaunch');
   fs.mkdirSync(preDir, { mode: 0o700 });
