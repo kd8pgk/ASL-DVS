@@ -74,13 +74,13 @@
    "version": "9.3.118-pi02w"
   },
   "nodemon": {
-   "blob": "d65682e6c681df6c7269ee969b6d8d36af3b1ce5",
-   "commit": "5dc48cec5891dacb7a2e9ac5547ba77fa2280634",
-   "file": "nodemon_v0_7_0_20261117.py",
-   "landed": "2026-11-18T12:44:58Z",
-   "promoted": "2026-11-23T08:21:58Z",
+   "blob": "83602a07ccaadd40d4ce5b85651db6e1a0234d63",
+   "commit": "eac029f301e561af924349c3804afdc04ae0f99c",
+   "file": "nodemon_v0_8_1_20261122.py",
+   "landed": "2026-11-22T23:32:50Z",
+   "promoted": "2026-11-25T23:32:50Z",
    "reason": "count",
-   "version": "0.7.0"
+   "version": "0.8.1"
   },
   "noderecorder": {
    "blob": "3eeb22695802af006e5aed5d21482f8e1ba361ee",
@@ -92,13 +92,13 @@
    "version": "0.17.6"
   },
   "nodetalker": {
-   "blob": "bdcc5714d77fcc71da7f6cdcedd5ff5cf8767b4f",
-   "commit": "4d1403bb1a366536e5290ce7bf6e9f3b6142a6be",
-   "file": "nodetalker_v0_11_0_20261121.py",
-   "landed": "2026-11-21T18:07:36Z",
-   "promoted": "2026-11-24T18:07:36Z",
+   "blob": "3b1cfc9104f04d24679cdc8c9db55067e9b4329c",
+   "commit": "9fdbd39c1ca6f3a581845161857f2469b422aa7c",
+   "file": "nodetalker_v0_14_0_20261123.py",
+   "landed": "2026-11-23T07:54:15Z",
+   "promoted": "2026-11-26T07:54:15Z",
    "reason": "count",
-   "version": "0.11.0"
+   "version": "0.14.0"
   },
   "pibrary": {
    "blob": "00013a0665069affaf18fc1af50181550d4a305a",
@@ -119,13 +119,13 @@
    "version": "6.13.102"
   },
   "sysmon_pi02w": {
-   "blob": "1a2b9fbfdc235924927ebbce4587300003127128",
-   "commit": "523ae3a2afd63341fe6ffe7ac682677ccd3462e4",
-   "file": "sysmon_pi02w_v6_13_90_20261121.py",
-   "landed": "2026-11-21T17:27:37Z",
-   "promoted": "2026-11-24T17:27:37Z",
+   "blob": "617986a50bc2c69329eda5439d8386272a527c3d",
+   "commit": "eac029f301e561af924349c3804afdc04ae0f99c",
+   "file": "sysmon_pi02w_v6_13_91_20261122.py",
+   "landed": "2026-11-22T23:32:50Z",
+   "promoted": "2026-11-25T23:32:50Z",
    "reason": "count",
-   "version": "6.13.90-pi02w"
+   "version": "6.13.91-pi02w"
   },
   "termon": {
    "blob": "d3f4d73ade58a7dd6efa4b2b731dbcbc01cad745",
