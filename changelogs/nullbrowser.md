@@ -1,6 +1,21 @@
 # Null Browser changelog
 
-Current version: `0.15.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.16.1`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.16.1 (2026-11-26)
+
+Code reorganised into modules; nothing you see changes.
+
+- The app's code is split into smaller files: the shared page state (`src/state.js`), downloads (`src/downloads.js`), screenshots (`src/screenshot.js`), network helpers (`src/network.js`) and the slow line (`src/slowline.js`). The main file keeps the window, the toolbar and the wiring.
+- Nothing a page or a user can do is different. The unit tests and the smoke test pass unchanged.
+
+## 0.16.0 (2026-11-26)
+
+Links that leave the page ask first.
+
+- **Leaving the page asks.** A link, a tapped new-tab link, or a page's own move to another site now opens a bar: **Leave example.com for other.org?** with **Go** and **Stay**. Stay keeps the page as it is. Go opens the link; the site you leave has its cookies and storage cleared, as before, unless you allowed it.
+- **Same-site links do not ask.** Moving within one site (including between its subdomains) works as it did.
+- **Nothing is stored.** The question lives only while the bar is open; it is dropped when the page changes, the page is cleared, or Null Browser closes.
 
 ## 0.15.0 (2026-11-26)
 

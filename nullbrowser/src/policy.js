@@ -295,7 +295,14 @@ function dropHintAsks(headers) {
   return changed ? out : null;
 }
 
+function leavesPage(current, next) {
+  if (!current || !next) return false;
+  const from = siteOf(hostOf(current));
+  return Boolean(from) && from !== siteOf(hostOf(next));
+}
+
 module.exports = {
+  leavesPage,
   firstLanguage,
   isExtraHint,
   trimReferer,

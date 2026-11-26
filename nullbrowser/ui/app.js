@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
   let editing = false;
   let askId = 0;
+  let leaveId = 0;
   let bmOpen = false;
   let fastJsNow = false;
   let lineNow = { mode: 'auto', images: true, saveData: false, readAhead: false, open: false };
@@ -107,6 +108,9 @@
     $('fastjs').title = s.fastJs
       ? 'Faster JavaScript is on for this run. Turning it off restarts Null Browser.'
       : 'Turn on faster JavaScript (restarts Null Browser now; off again next time you start it).';
+    leaveId = s.leave ? s.leave.id : 0;
+    show($('leavebar'), Boolean(s.leave));
+    if (s.leave) $('leave-text').textContent = s.leave.text;
     const jsAsking = s.jsAsk !== null && s.jsAsk !== undefined;
     show($('jsbar'), jsAsking);
     if (jsAsking) {
@@ -123,7 +127,7 @@
     }
     renderDownloads(s.dl || {});
     const dlRows = (s.dl && s.dl.asking ? 1 : 0) + (s.dl && s.dl.queue && s.dl.queue.length ? 1 : 0);
-    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.shot ? 1 : 0) + lineRows + dlRows;
+    const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows + dlRows;
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
     show($('blank-ram'), !s.ram);
@@ -339,6 +343,8 @@
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
   $('wipe').addEventListener('click', () => window.nb.wipeAll());
+  $('leave-go').addEventListener('click', () => window.nb.leaveAnswer(leaveId, true));
+  $('leave-stay').addEventListener('click', () => window.nb.leaveAnswer(leaveId, false));
   $('jsbar-yes').addEventListener('click', () => window.nb.confirmFastJs());
   $('jsbar-no').addEventListener('click', () => window.nb.cancelFastJs());
   document.addEventListener('click', (ev) => {

@@ -56,6 +56,13 @@ for (const sw of P.SWITCHES) {
 if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
+const { st } = require('./state');
+const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, entryOf } = require('./downloads');
+const shared = require('./ctx');
+const { makeShot, answerShot } = require('./screenshot');
+const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
+const { line, meter, starts, served, ahead, own, pageId, slowActive, lineState, lineChanged, serve, resetLine, clearAhead, stopImages, holdImage, pump, onReport, setLine, lineErrored } = require('./slowline');
+
 const TOOLBAR = 44;
 const BAR = 34;
 const GESTURE_MS = 1000;
@@ -63,38 +70,7 @@ const LITTERBUG_MS = 3000;
 const STUCK_MS = 2000;
 const MAX_LITTERBUGS = 3;
 
-let win = null;
-let view = null;
-let ses = null;
-let lastInput = 0;
-let commits = 0;
-let leaving = 0;
-let unsticking = null;
-let notice = '';
-let error = null;
-let pendingCert = null;
-const allowHttp = new Set();
-const upgraded = new Set();
-const trusted = new Set();
-const allowedSites = new Set();
-const litterbugIds = new Set();
-let blockedSite = '';
-let nextPopup = '';
-let pendingFile = null;
-let pendingShot = null;
-let dlAllowed = false;
-let dlAsking = true;
-let dlList = [];
-let dlListFor = '';
-let dlWarn = false;
-let dlPanelOpen = false;
-let dlQueueOpen = false;
 const dlQueue = DL.createQueue(runDownload);
-let shotSeq = 0;
-let fileSeq = 0;
-let bookmarks = [];
-let bookmarkSeq = 0;
-let pendingJs = null;
 
 let cleanerStarted = false;
 
@@ -107,17 +83,17 @@ function rammaid() {
 }
 
 function alive() {
-  return win && !win.isDestroyed();
+  return st.win && !st.win.isDestroyed();
 }
 
 function pageUrl() {
-  if (!view || view.webContents.isDestroyed()) return '';
-  const u = view.webContents.getURL();
+  if (!st.view || st.view.webContents.isDestroyed()) return '';
+  const u = st.view.webContents.getURL();
   return u === 'about:blank' ? '' : u;
 }
 
 function state() {
-  const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
+  const wc = st.view && !st.view.webContents.isDestroyed() ? st.view.webContents : null;
   const url = pageUrl();
   return {
     url,
@@ -125,27 +101,28 @@ function state() {
     canBack: Boolean(wc && wc.navigationHistory.canGoBack()),
     canForward: Boolean(wc && wc.navigationHistory.canGoForward()),
     loading: Boolean(wc && wc.isLoading()),
-    secure: url.startsWith('https:') && !error,
+    secure: url.startsWith('https:') && !st.error,
     insecure: url.startsWith('http:'),
-    blank: !url && !error,
-    error,
-    notice,
-    ask: pendingFile ? { id: pendingFile.id, text: pendingFile.text, busy: pendingFile.state !== 'ask' } : null,
-    popup: blockedSite && !allowedSites.has(blockedSite) ? blockedSite : '',
-    allowed: allowedSites.has(P.siteOf(P.hostOf(url))),
+    blank: !url && !st.error,
+    error: st.error,
+    notice: st.notice,
+    ask: st.pendingFile ? { id: st.pendingFile.id, text: st.pendingFile.text, busy: st.pendingFile.state !== 'ask' } : null,
+    popup: st.blockedSite && !st.allowedSites.has(st.blockedSite) ? st.blockedSite : '',
+    allowed: st.allowedSites.has(P.siteOf(P.hostOf(url))),
     ram: base.ram,
-    bookmarks: bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
+    bookmarks: st.bookmarks.map(({ id, url: u, title }) => ({ id, url: u, title })),
     fastJs,
-    jsAsk: pendingJs,
+    jsAsk: st.pendingJs,
+    leave: st.pendingLeave ? { id: st.pendingLeave.id, text: st.pendingLeave.text } : null,
     line: lineState(),
-    shot: pendingShot ? { text: pendingShot.text, busy: pendingShot.busy } : null,
+    shot: st.pendingShot ? { text: st.pendingShot.text, busy: st.pendingShot.busy } : null,
     dl: {
-      allowed: dlAllowed,
-      asking: dlAsking,
-      panel: dlPanelOpen,
-      queuePanel: dlQueueOpen,
-      warn: dlWarn,
-      list: dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })),
+      allowed: st.dlAllowed,
+      asking: st.dlAsking,
+      panel: st.dlPanelOpen,
+      queuePanel: st.dlQueueOpen,
+      warn: st.dlWarn,
+      list: st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })),
       queue: dlQueue.snapshot(),
       busy: dlQueue.busy(),
     },
@@ -158,56 +135,36 @@ function lineRows(l) {
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0);
 }
 
 function layout() {
-  if (!alive() || !view) return;
-  const [w, h] = win.getContentSize();
+  if (!alive() || !st.view) return;
+  const [w, h] = st.win.getContentSize();
   const top = TOOLBAR + BAR * bars();
-  view.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
-  view.setVisible(Boolean(pageUrl()) && !error);
+  st.view.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
+  st.view.setVisible(Boolean(pageUrl()) && !st.error);
 }
 
 function push() {
   layout();
-  if (alive()) win.webContents.send('state', state());
+  if (alive()) st.win.webContents.send('state', state());
 }
 
 function say(text) {
-  notice = text;
+  st.notice = text;
   push();
   setTimeout(() => {
-    if (notice === text) {
-      notice = '';
+    if (st.notice === text) {
+      st.notice = '';
       push();
     }
   }, 6000);
 }
 
-function topUrlOf(details) {
-  try {
-    if (details.frame && details.frame.top && details.frame.top.url) return details.frame.top.url;
-  } catch {
-    return pageUrl();
-  }
-  return pageUrl();
-}
-
-function litterbugRequest(details) {
-  return litterbugIds.has(details.webContentsId);
-}
-
-function thirdParty(details) {
-  if (details.resourceType === 'mainFrame') return false;
-  const top = topUrlOf(details);
-  if (allowedSites.has(P.siteOf(P.hostOf(top)))) return false;
-  return P.isThirdParty(details.url, top);
-}
-
 function purgeOrigin(origin) {
-  if (origin) ses.clearStorageData({ origin }).catch(() => {});
-  ses.clearCache().catch(() => {});
+  if (origin) st.ses.clearStorageData({ origin }).catch(() => {});
+  st.ses.clearCache().catch(() => {});
 }
 
 function purgeIfSiteChanged(nextUrl) {
@@ -217,29 +174,29 @@ function purgeIfSiteChanged(nextUrl) {
   const nextSite = P.siteOf(P.hostOf(nextUrl));
   if (!leavingSite || leavingSite === nextSite) return;
   clearAhead();
-  if (allowedSites.has(leavingSite)) return;
+  if (st.allowedSites.has(leavingSite)) return;
   purgeOrigin(P.originOf(leaving));
 }
 
 function wipeAll() {
   dlQueue.cancelAll();
   dlQueue.clear();
-  dlAllowed = false;
-  dlAsking = true;
-  dlQueueOpen = false;
+  st.dlAllowed = false;
+  st.dlAsking = true;
+  st.dlQueueOpen = false;
   resetLine();
   clearAhead();
-  allowHttp.clear();
-  upgraded.clear();
-  trusted.clear();
-  allowedSites.clear();
-  blockedSite = '';
-  nextPopup = '';
-  pendingCert = null;
-  error = null;
-  if (pendingFile) {
-    const rec = pendingFile;
-    pendingFile = null;
+  st.allowHttp.clear();
+  st.upgraded.clear();
+  st.trusted.clear();
+  st.allowedSites.clear();
+  st.blockedSite = '';
+  st.nextPopup = '';
+  st.pendingCert = null;
+  st.error = null;
+  if (st.pendingFile) {
+    const rec = st.pendingFile;
+    st.pendingFile = null;
     try {
       rec.item.cancel();
     } catch {}
@@ -251,912 +208,35 @@ function wipeAll() {
       fs.rmSync(path.join(ram.sub.files, name), { recursive: true, force: true });
     } catch {}
   }
-  watchdog = W.createWatchdog({ onFlag: watchdogFlag });
-  if (ses) {
-    ses.clearStorageData().catch(() => {});
-    ses.clearCache().catch(() => {});
-    ses.clearAuthCache().catch(() => {});
-    ses.clearHostResolverCache().catch(() => {});
+  st.watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+  st.pendingLeave = null;
+  if (st.ses) {
+    st.ses.clearStorageData().catch(() => {});
+    st.ses.clearCache().catch(() => {});
+    st.ses.clearAuthCache().catch(() => {});
+    st.ses.clearHostResolverCache().catch(() => {});
   }
-  if (view && !view.webContents.isDestroyed()) view.webContents.loadURL('about:blank').catch(() => {});
+  if (st.view && !st.view.webContents.isDestroyed()) st.view.webContents.loadURL('about:blank').catch(() => {});
   say('Cleared: this run\'s pages, cookies, storage, cache, sign-ins, allowed sites and downloads. Kept: bookmarks and quarantined screenshots.');
 }
 
 function watchdogFlag(site, reason) {
-  if (!site || allowedSites.has(site)) return;
+  if (!site || st.allowedSites.has(site)) return;
   purgeOrigin(P.originOf(pageUrl()));
   say(`Watchdog: ${site} ${reason}, so it was cleared.`);
 }
 
-let watchdog = W.createWatchdog({ onFlag: watchdogFlag });
+st.watchdog = W.createWatchdog({ onFlag: watchdogFlag });
 
 const CPU_CORES = Math.max(os.cpus().length, 1);
 
 function watchdogCpuPoll() {
-  if (!view || view.webContents.isDestroyed()) return;
-  const pid = view.webContents.getOSProcessId();
+  if (!st.view || st.view.webContents.isDestroyed()) return;
+  const pid = st.view.webContents.getOSProcessId();
   const m = app.getAppMetrics().find((x) => x.pid === pid);
   if (!m) return;
-  const idle = Date.now() - lastInput > W.CPU_IDLE_MS;
-  watchdog.noteCpu(P.siteOf(P.hostOf(pageUrl())), idle, m.cpu.percentCPUUsage * CPU_CORES);
-}
-
-function rammaidFile(file) {
-  try {
-    fs.rmSync(file, { force: true });
-  } catch {
-    return;
-  }
-}
-
-function openFile(file) {
-  if (!app.isPackaged && process.env.NULLBROWSER_OPEN_LOG) {
-    fs.appendFileSync(process.env.NULLBROWSER_OPEN_LOG, `${file}\n`);
-    return;
-  }
-  shell.openPath(file).then((err) => {
-    if (err) say(`No app on this computer could open ${path.basename(file)}.`);
-  });
-}
-
-function checkAndOpen(rec) {
-  let head = Buffer.alloc(0);
-  try {
-    const fd = fs.openSync(rec.file, 'r');
-    head = Buffer.alloc(64);
-    const n = fs.readSync(fd, head, 0, 64, 0);
-    fs.closeSync(fd);
-    head = head.subarray(0, n);
-  } catch {
-    head = Buffer.alloc(0);
-  }
-  if (!F.contentMatches(rec.kind, head)) {
-    rammaidFile(rec.file);
-    say(`${rec.name} is not really ${rec.kind === 'pdf' ? 'a PDF' : rec.kind}, so it was not opened.`);
-    const from = (() => {
-      try {
-        return rec.item.getURL();
-      } catch {
-        return '';
-      }
-    })();
-    watchdog.noteFakeFile(P.siteOf(P.hostOf(from || pageUrl())));
-    return;
-  }
-  openFile(rec.file);
-  push();
-}
-
-function endFile(rec) {
-  if (pendingFile === rec) pendingFile = null;
-  push();
-}
-
-function finishFile(rec, st) {
-  rec.done = st;
-  if (st !== 'completed') {
-    rammaidFile(rec.file);
-    if (rec.tooBig) say(`${rec.name} is too big to open from memory.`);
-    else if (rec.answer === true) say(`${rec.name} could not be fetched.`);
-    endFile(rec);
-    return;
-  }
-  if (rec.answer === undefined) return;
-  endFile(rec);
-  if (rec.answer === true) checkAndOpen(rec);
-  else rammaidFile(rec.file);
-}
-
-function answerFile(rec, open) {
-  rec.answer = open === true;
-  if (rec.done === 'completed') {
-    endFile(rec);
-    if (rec.answer) checkAndOpen(rec);
-    else rammaidFile(rec.file);
-    return;
-  }
-  if (rec.done) {
-    endFile(rec);
-    return;
-  }
-  if (!rec.answer) {
-    rec.item.cancel();
-    return;
-  }
-  rec.state = 'loading';
-  push();
-}
-
-function onDownload(event, item) {
-  const name = F.safeName(item.getFilename());
-  const kind = F.classify(item.getMimeType(), name);
-  const total = item.getTotalBytes();
-  if (!kind) {
-    item.cancel();
-    say('Downloads are off in Null Browser.');
-    return;
-  }
-  if (total > MAX_BYTES) {
-    item.cancel();
-    say(`${name} is too big to open from memory.`);
-    return;
-  }
-  if (pendingFile) {
-    item.cancel();
-    say('Answer the question about the other file first.');
-    return;
-  }
-  fileSeq += 1;
-  const rec = { id: fileSeq, item, file: path.join(ram.sub.files, `${fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
-  item.setSavePath(rec.file);
-  item.on('updated', () => {
-    if (rec.tooBig || item.getReceivedBytes() <= MAX_BYTES) return;
-    rec.tooBig = true;
-    item.cancel();
-  });
-  item.once('done', (e, st) => finishFile(rec, st));
-  pendingFile = rec;
-  push();
-}
-
-const line = { mode: 'auto', images: true, saveData: false, readAhead: false, open: false, shotWindow: false };
-const meter = S.createMeter();
-const starts = new Map();
-const served = new Map();
-const ahead = new Map();
-const own = new Set();
-let lineWasActive = false;
-let queue = [];
-let current = null;
-let report = null;
-let seqNo = 0;
-let pageGen = 0;
-let imgDone = 0;
-let imgTotal = 0;
-let stopped = false;
-let aheadBytes = 0;
-let aheadFor = '';
-let aheadNote = '';
-let aheadJobs = [];
-let lineTimer = null;
-let askTimer = null;
-let reportDeadline = 0;
-
-function pageId() {
-  return view && !view.webContents.isDestroyed() ? view.webContents.id : -1;
-}
-
-function slowActive() {
-  return S.isActive(line.mode, meter.isSlow());
-}
-
-function lineState() {
-  return {
-    mode: line.mode,
-    active: slowActive(),
-    images: line.images,
-    saveData: line.saveData,
-    readAhead: line.readAhead,
-    open: line.open,
-    shotWindow: line.shotWindow,
-    rate: meter.rate() ? S.sizeLabel(meter.rate()) : '',
-    done: imgDone,
-    total: imgTotal,
-    busy: Boolean(current && current.kind === 'image') || queue.length > 0,
-    retrying: Boolean(current && current.waiting),
-    stopped,
-    ahead: aheadNote,
-  };
-}
-
-function linePush() {
-  if (lineTimer) return;
-  lineTimer = setTimeout(() => {
-    lineTimer = null;
-    push();
-  }, 400);
-}
-
-function tellPage(extra = {}) {
-  if (!view || view.webContents.isDestroyed()) return;
-  try {
-    view.webContents.send('nb-line', { active: slowActive(), ...extra });
-  } catch {}
-}
-
-function lineChanged() {
-  const now = slowActive();
-  if (now !== lineWasActive) {
-    lineWasActive = now;
-    tellPage();
-    if (!now) {
-      const waiting = queue;
-      queue = [];
-      for (const e of waiting) e.cb({});
-    }
-  }
-  linePush();
-}
-
-function askReport(links = false) {
-  if (links) return tellPage({ report: true, links: true });
-  if (askTimer) return;
-  askTimer = setTimeout(() => {
-    askTimer = null;
-    tellPage({ report: true });
-  }, 150);
-}
-
-function serve(hit) {
-  const token = crypto.randomBytes(16).toString('hex');
-  served.set(token, hit);
-  return `${S.SCHEME}://i/${token}`;
-}
-
-function resetLine() {
-  dlList = [];
-  dlWarn = false;
-  dlPanelOpen = false;
-  pageGen += 1;
-  for (const e of queue) e.cb({ cancel: true });
-  queue = [];
-  if (current) {
-    current.abandon();
-    current = null;
-  }
-  aheadJobs = [];
-  report = null;
-  stopped = false;
-  imgDone = 0;
-  imgTotal = 0;
-  served.clear();
-  linePush();
-}
-
-function clearAhead() {
-  ahead.clear();
-  aheadBytes = 0;
-  aheadFor = '';
-  aheadNote = '';
-  aheadJobs = [];
-}
-
-function stopImages() {
-  stopped = true;
-  for (const e of queue) e.cb({ cancel: true });
-  imgDone += queue.length;
-  queue = [];
-  if (current && current.kind === 'image') {
-    current.entry.cb({ cancel: true });
-    imgDone += 1;
-    current.abandon();
-    current = null;
-  }
-  linePush();
-  pump();
-}
-
-function holdImage(details, callback) {
-  if (stopped) return callback({ cancel: true });
-  if (!report && !queue.length && !current) reportDeadline = Date.now() + 600;
-  queue.push({ id: details.id, url: details.url, referrer: details.referrer || pageUrl(), cb: callback, seq: (seqNo += 1), gen: pageGen, late: false });
-  imgTotal += 1;
-  askReport();
-  linePush();
-  setImmediate(pump);
-  return undefined;
-}
-
-function fetchBytes(job) {
-  const url = job.url;
-  let got = 0;
-  let total = 0;
-  let type = '';
-  let validator = '';
-  let chunks = [];
-  let tries = 0;
-  let req = null;
-  let dead = false;
-  let timer = null;
-  own.add(url);
-  const finish = (fn) => {
-    if (dead) return;
-    dead = true;
-    own.delete(url);
-    if (timer) clearTimeout(timer);
-    fn();
-  };
-  const retry = () => {
-    if (dead) return;
-    if (req) {
-      try {
-        req.abort();
-      } catch {}
-      req = null;
-    }
-    tries += 1;
-    if (tries > S.RETRIES) return finish(() => job.fail());
-    job.waiting = true;
-    linePush();
-    timer = setTimeout(() => {
-      timer = null;
-      job.waiting = false;
-      attempt();
-    }, S.backoffMs(tries));
-  };
-  const attempt = () => {
-    if (dead) return;
-    const t0 = Date.now();
-    let bytesNow = 0;
-    try {
-      req = net.request({ url, session: ses, useSessionCookies: true, credentials: 'include', redirect: 'follow', method: 'GET' });
-    } catch {
-      return finish(() => job.fail());
-    }
-    if (job.referrer) {
-      try {
-        req.setHeader('Referer', job.referrer);
-      } catch {}
-    }
-    req.setHeader('Accept', job.accept || '*/*');
-    if (line.saveData) req.setHeader('Save-Data', 'on');
-    if (got > 0) {
-      req.setHeader('Range', `bytes=${got}-`);
-      if (validator) req.setHeader('If-Range', validator);
-    }
-    req.on('response', (res) => {
-      if (dead) return;
-      meter.wait(Date.now() - t0);
-      lineChanged();
-      const h = res.headers || {};
-      const status = res.statusCode;
-      if (status === 206 && got > 0) {
-        const cr = S.parseContentRange(S.header(h, 'content-range'));
-        if (!cr || cr.start !== got) {
-          got = 0;
-          chunks = [];
-          return retry();
-        }
-        if (cr.total) total = cr.total;
-      } else if (status >= 200 && status < 300) {
-        got = 0;
-        chunks = [];
-        const len = Number(S.header(h, 'content-length'));
-        total = len > 0 ? len : 0;
-      } else if (status >= 500 || status === 408 || status === 429) {
-        return retry();
-      } else {
-        return finish(() => job.fail());
-      }
-      if (total > job.max) return finish(() => job.fail());
-      type = S.header(h, 'content-type') || type;
-      validator = S.header(h, 'etag') || S.header(h, 'last-modified') || validator;
-      res.on('data', (c) => {
-        if (dead) return;
-        chunks.push(c);
-        got += c.length;
-        bytesNow += c.length;
-        if (got > job.max) {
-          try {
-            req.abort();
-          } catch {}
-          finish(() => job.fail());
-        }
-      });
-      res.on('end', () => {
-        if (dead) return;
-        meter.transfer(bytesNow, Date.now() - t0);
-        lineChanged();
-        if (total && got < total) return retry();
-        const buf = Buffer.concat(chunks);
-        finish(() => job.done({ buf, type }));
-      });
-      res.on('aborted', retry);
-      res.on('error', retry);
-    });
-    req.on('error', retry);
-    req.end();
-  };
-  job.abandon = () => finish(() => {
-    if (req) {
-      try {
-        req.abort();
-      } catch {}
-    }
-  });
-  attempt();
-}
-
-function pump() {
-  if (current) return;
-  if (queue.length && !report && Date.now() < reportDeadline) {
-    setTimeout(pump, reportDeadline - Date.now() + 10);
-    return;
-  }
-  if (queue.length) {
-    const entry = S.pickNext(queue, report);
-    queue = queue.filter((e) => e !== entry);
-    const gen = pageGen;
-    const job = {
-      kind: 'image',
-      url: entry.url,
-      referrer: entry.referrer,
-      accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-      max: S.MAX_IMAGE_BYTES,
-      entry,
-      waiting: false,
-      done(hit) {
-        current = null;
-        if (gen === pageGen) {
-          entry.cb({ redirectURL: serve(hit) });
-          imgDone += 1;
-        }
-        linePush();
-        pump();
-      },
-      fail() {
-        current = null;
-        if (gen === pageGen) {
-          if (!entry.late) {
-            entry.late = true;
-            queue.push(entry);
-          } else {
-            entry.cb({ cancel: true });
-            imgDone += 1;
-          }
-        }
-        linePush();
-        pump();
-      },
-    };
-    current = job;
-    linePush();
-    fetchBytes(job);
-    return;
-  }
-  if (aheadJobs.length) {
-    const next = aheadJobs.shift();
-    current = next;
-    fetchBytes(next);
-    return;
-  }
-  maybeReadAhead();
-}
-
-function maybeReadAhead() {
-  if (!line.readAhead || current || queue.length || stopped || !line.images) return;
-  const wc = view && !view.webContents.isDestroyed() ? view.webContents : null;
-  if (!wc || wc.isLoading() || !pageUrl() || aheadFor === pageUrl()) return;
-  aheadFor = pageUrl();
-  askReport(true);
-}
-
-function readAheadFrom(nextUrl) {
-  if (!nextUrl || !line.readAhead) return;
-  const gen = pageGen;
-  aheadNote = 'Reading ahead the next page…';
-  linePush();
-  const pageJob = {
-    kind: 'ahead',
-    url: nextUrl,
-    referrer: pageUrl(),
-    accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-    max: 4 * 1024 * 1024,
-    waiting: false,
-    done(hit) {
-      current = null;
-      if (gen === pageGen) {
-        const urls = S.imageUrlsIn(hit.buf.toString('utf8'), nextUrl).filter((u) => !ahead.has(u));
-        for (const u of urls) {
-          aheadJobs.push({
-            kind: 'ahead',
-            url: u,
-            referrer: nextUrl,
-            accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-            max: S.MAX_IMAGE_BYTES,
-            waiting: false,
-            done(img) {
-              current = null;
-              if (aheadBytes + img.buf.length <= S.READ_AHEAD_BYTES) {
-                ahead.set(u, img);
-                aheadBytes += img.buf.length;
-              }
-              aheadNote = aheadJobs.length ? `Reading ahead: ${ahead.size} image(s) of the next page ready` : `Next page ready (${ahead.size} image(s))`;
-              linePush();
-              pump();
-            },
-            fail() {
-              current = null;
-              pump();
-            },
-          });
-        }
-        aheadNote = urls.length ? 'Reading ahead the next page…' : 'Next page ready';
-      }
-      linePush();
-      pump();
-    },
-    fail() {
-      current = null;
-      aheadNote = '';
-      linePush();
-      pump();
-    },
-  };
-  aheadJobs.unshift(pageJob);
-  pump();
-}
-
-function onReport(e, r) {
-  if (!view || e.sender !== view.webContents || e.senderFrame !== e.sender.mainFrame) return;
-  if (!r || typeof r !== 'object') return;
-  const items = Array.isArray(r.items) ? r.items.slice(0, 500).filter((i) => i && typeof i.src === 'string').map((i) => ({ src: i.src.slice(0, 4096), top: Number(i.top) || 0, x: Number(i.x) || 0, w: Number(i.w) || 0, h: Number(i.h) || 0 })) : [];
-  report = { vh: Number(r.vh) || 0, vw: Number(r.vw) || 0, items };
-  setImmediate(pump);
-  if (Array.isArray(r.links) && line.readAhead && aheadFor === pageUrl()) {
-    const links = r.links.slice(0, 300).filter((l) => l && typeof l.href === 'string').map((l) => ({ rel: String(l.rel || '').slice(0, 100), href: l.href.slice(0, 4096), text: String(l.text || '').slice(0, 40) }));
-    readAheadFrom(S.pickNextLink(links, pageUrl()));
-  }
-}
-
-function setLine(key, value) {
-  if (key === 'mode' && ['auto', 'on', 'off'].includes(value)) line.mode = value;
-  else if (key === 'images' && typeof value === 'boolean') {
-    line.images = value;
-    if (!value) stopImages();
-    else {
-      stopped = false;
-      tellPage({ reloadImages: true });
-    }
-  } else if ((key === 'saveData' || key === 'readAhead' || key === 'open' || key === 'shotWindow') && typeof value === 'boolean') line[key] = value;
-  else return false;
-  if (key === 'readAhead' && value) {
-    aheadFor = '';
-    setImmediate(pump);
-  }
-  lineChanged();
-  push();
-  return true;
-}
-
-function dlDir() {
-  const dir = path.join(ram.sub.files, 'dlq');
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
-}
-
-function fsyncDir(dir) {
-  try {
-    const fd = fs.openSync(dir, 'r');
-    try {
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {}
-}
-
-function saveAtomic(dir, name, bytes, sha) {
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.nb-partial-${crypto.randomBytes(6).toString('hex')}`);
-  try {
-    const fd = fs.openSync(tmp, 'wx', 0o644);
-    try {
-      let off = 0;
-      while (off < bytes.length) off += fs.writeSync(fd, bytes, off, bytes.length - off);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    if (DL.sha256(fs.readFileSync(tmp)) !== sha) throw new Error('the file changed while it was saved');
-    let candidate = DL.uniqueName(name, (n) => fs.existsSync(path.join(dir, n)));
-    for (let i = 0; i < 50 && candidate; i += 1) {
-      try {
-        fs.linkSync(tmp, path.join(dir, candidate));
-        fsyncDir(dir);
-        return candidate;
-      } catch (err) {
-        if (err.code === 'EEXIST') {
-          candidate = DL.uniqueName(candidate, (n) => fs.existsSync(path.join(dir, n)));
-          continue;
-        }
-        if (err.code === 'EPERM' || err.code === 'ENOTSUP' || err.code === 'EXDEV' || err.code === 'EOPNOTSUPP') throw new Error('this folder does not support safe saves');
-        throw err;
-      }
-    }
-    throw new Error('no free file name');
-  } finally {
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch {}
-  }
-}
-
-function fetchFile(item, cookie) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    let got = 0;
-    let expected = -1;
-    let validator = '';
-    let serverName = '';
-    let url = item.href;
-    let hops = 0;
-    let tries = 0;
-    let settled = false;
-    let req = null;
-    let timer = null;
-    const finish = (r) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve(r);
-    };
-    const retryFetch = () => {
-      if (settled) return;
-      tries += 1;
-      if (tries > DL.MAX_TRIES) {
-        finish({ ok: false, reason: 'the line dropped too many times' });
-        return;
-      }
-      timer = setTimeout(start, W_BACKOFF(tries));
-    };
-    const start = () => {
-      timer = null;
-      if (settled) return;
-      try {
-        req = net.request({ method: 'GET', url, session: ses, credentials: 'omit', redirect: 'manual' });
-      } catch {
-        finish({ ok: false, reason: 'the address could not be opened' });
-        return;
-      }
-      req.setHeader('Accept', '*/*');
-      if (cookie) req.setHeader('Cookie', cookie);
-      if (got > 0) {
-        req.setHeader('Range', `bytes=${got}-`);
-        if (validator) req.setHeader('If-Range', validator);
-      }
-      req.on('redirect', (statusCode, method, redirectUrl) => {
-        let next;
-        try {
-          next = new URL(redirectUrl);
-        } catch {
-          finish({ ok: false, reason: 'the site sent a bad redirect' });
-          try {
-            req.abort();
-          } catch {}
-          return;
-        }
-        const was = new URL(url).protocol;
-        hops += 1;
-        if (hops > 5 || (next.protocol !== 'https:' && next.protocol !== 'http:') || (was === 'https:' && next.protocol === 'http:')) {
-          finish({ ok: false, reason: 'the redirect is not followed' });
-          try {
-            req.abort();
-          } catch {}
-          return;
-        }
-        url = next.href;
-        req.followRedirect();
-      });
-      req.on('response', (res) => {
-        if (settled) return;
-        const code = res.statusCode;
-        const hdr = (name) => {
-          const v = res.headers[name];
-          return v === undefined ? '' : String([].concat(v)[0]);
-        };
-        if (code === 401 || code === 403) {
-          finish(cookie ? { ok: false, reason: 'the sign-in was refused' } : { ok: false, login: true, reason: 'This site asks for a sign-in.' });
-          return;
-        }
-        if (code === 206 && got > 0) {
-          const m = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(hdr('content-range').trim());
-          if (!m || Number(m[1]) !== got) {
-            got = 0;
-            chunks.length = 0;
-          } else if (m[3] !== '*') {
-            expected = Number(m[3]);
-          }
-        } else if (code >= 200 && code < 300) {
-          got = 0;
-          chunks.length = 0;
-          const len = Number(hdr('content-length'));
-          expected = len > 0 ? len : -1;
-        } else if (code >= 500 || code === 408 || code === 429) {
-          retryFetch();
-          return;
-        } else {
-          finish({ ok: false, reason: `the site answered ${code}` });
-          return;
-        }
-        const cd = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(hdr('content-disposition'));
-        if (cd) {
-          try {
-            serverName = decodeURIComponent(cd[1]);
-          } catch {
-            serverName = cd[1];
-          }
-        }
-        validator = hdr('etag') || hdr('last-modified') || validator;
-        res.on('data', (c) => {
-          if (settled) return;
-          got += c.length;
-          if (got > DL.MAX_FILE_BYTES) {
-            finish({ ok: false, reason: 'the file is too big' });
-            try {
-              req.abort();
-            } catch {}
-            return;
-          }
-          chunks.push(c);
-        });
-        res.on('end', () => {
-          if (settled) return;
-          if (expected > 0 && got < expected) {
-            retryFetch();
-            return;
-          }
-          finish({ ok: true, buf: Buffer.concat(chunks), serverName });
-        });
-        res.on('aborted', retryFetch);
-        res.on('error', retryFetch);
-      });
-      req.on('error', retryFetch);
-      req.end();
-    };
-    item.abort = () => {
-      finish({ ok: false, reason: 'cancelled' });
-      try {
-        if (req) req.abort();
-      } catch {}
-    };
-    start();
-  });
-}
-
-const W_BACKOFF = (attempt) => S.backoffMs(attempt);
-
-async function runDownload(item, ctx) {
-  if (!dlAllowed) return { ok: false, reason: 'Downloads are off.' };
-  const cookie = item.cookie || '';
-  const got = await fetchFile(item, cookie);
-  item.cookie = '';
-  if (!got.ok) return got;
-  if (ctx.batchBytes + got.buf.length > ctx.batchLimit) return { ok: false, reason: 'the 2 GB limit for one batch was reached', bytes: got.buf.length };
-  const sha = DL.sha256(got.buf);
-  const file = path.join(dlDir(), `${item.id}-${crypto.randomBytes(4).toString('hex')}.part`);
-  try {
-    fs.writeFileSync(file, got.buf, { mode: 0o600, flag: 'wx' });
-    const back = fs.readFileSync(file);
-    const check = DL.checkDownload(item.kind, back, sha);
-    if (!check.ok) return { ok: false, reason: check.reason, bytes: got.buf.length };
-    const dest = SH.downloadsFromUserDirs(readUserDirs(), REAL_HOME);
-    const name = saveAtomic(dest, DL.safeName(got.serverName || item.name, item.kind), back, sha);
-    return { ok: true, saved: name, bytes: got.buf.length };
-  } catch (err) {
-    return { ok: false, reason: err.message || 'could not be saved', bytes: got.buf.length };
-  } finally {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmdirSync(path.dirname(file));
-    } catch {}
-  }
-}
-
-const FILE_SCAN = `(function(){var out=[];var n=document.querySelectorAll('a[href],audio[src],video[src],source[src],img[src]');for(var i=0;i<n.length&&out.length<300;i++){var e=n[i];var h=e.tagName==='A'?e.href:(e.currentSrc||e.src||'');if(h&&String(h).length<=4096)out.push({href:String(h)})}return out})()`;
-
-async function scanFiles() {
-  if (!view || view.webContents.isDestroyed()) return;
-  const url = pageUrl();
-  if (!url || !/^https?:/.test(url)) {
-    dlList = [];
-    push();
-    return;
-  }
-  let links = [];
-  try {
-    links = await view.webContents.mainFrame.executeJavaScript(FILE_SCAN, false);
-  } catch {
-    links = [];
-  }
-  if (pageUrl() !== url) return;
-  dlList = DL.buildList(Array.isArray(links) ? links : [], url);
-  dlListFor = url;
-  push();
-}
-
-function entryOf(href) {
-  return dlList.find((x) => x.href === href) || null;
-}
-
-function shotDir() {
-  const dir = path.join(ram.sub.files, 'quarantine');
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
-}
-
-function discardShot() {
-  if (!pendingShot) return;
-  const file = pendingShot.file;
-  pendingShot = null;
-  try {
-    fs.rmSync(file, { force: true });
-    fs.rmdirSync(path.dirname(file));
-  } catch {}
-}
-
-async function printPage(wc) {
-  return wc.printToPDF({ printBackground: true, pageSize: 'A4' });
-}
-
-async function windowPdf() {
-  const img = await win.webContents.capturePage();
-  const size = img.getSize();
-  const png = img.toPNG().toString('base64');
-  const html = `<!doctype html><html><head><style>@page{margin:0}html,body{margin:0;padding:0}img{display:block;width:${size.width}px;height:${size.height}px}</style></head><body><img src="data:image/png;base64,${png}"></body></html>`;
-  const shot = new BrowserWindow({ show: false, width: size.width, height: size.height, webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: false, plugins: false, spellcheck: false } });
-  try {
-    await shot.loadURL(`data:text/html;base64,${Buffer.from(html).toString('base64')}`);
-    return await shot.webContents.printToPDF({ printBackground: true, pageSize: { width: size.width / 96, height: size.height / 96 } });
-  } finally {
-    shot.destroy();
-  }
-}
-
-async function makeShot(withWindow) {
-  if (pendingShot || !alive() || !view || view.webContents.isDestroyed()) return;
-  shotSeq += 1;
-  const file = path.join(shotDir(), `shot-${shotSeq}.pdf`);
-  pendingShot = { id: shotSeq, file, sha: '', text: 'Making the screenshot…', busy: true };
-  push();
-  let buf;
-  try {
-    buf = withWindow ? await windowPdf() : await printPage(view.webContents);
-  } catch {
-    buf = null;
-  }
-  if (!buf) {
-    pendingShot = null;
-    say('The screenshot could not be made.');
-    return;
-  }
-  const sha = SH.sha256(buf);
-  fs.writeFileSync(file, buf, { mode: 0o600 });
-  const back = fs.readFileSync(file);
-  const check = SH.checkPdf(back, sha);
-  if (!check.ok) {
-    discardShot();
-    say(`The screenshot was not saved: ${check.reason}.`);
-    return;
-  }
-  pendingShot = { id: shotSeq, file, sha, text: `Save the screenshot (PDF, ${Math.max(1, Math.round(back.length / 1024))} KB, ${check.pages} page${check.pages === 1 ? '' : 's'}) to your Downloads folder?`, busy: false };
-  push();
-}
-
-function answerShot(save) {
-  const rec = pendingShot;
-  if (!save) {
-    discardShot();
-    push();
-    return;
-  }
-  pendingShot = { ...rec, text: 'Saving…', busy: true };
-  push();
-  try {
-    const buf = fs.readFileSync(rec.file);
-    const check = SH.checkPdf(buf, rec.sha);
-    if (!check.ok) throw new Error(check.reason);
-    const dir = SH.downloadsFromUserDirs(readUserDirs(), REAL_HOME);
-    fs.mkdirSync(dir, { recursive: true });
-    const name = SH.uniqueName(SH.shotName(new Date()), (n) => fs.existsSync(path.join(dir, n)));
-    if (!name) throw new Error('no free file name');
-    fs.writeFileSync(path.join(dir, name), buf, { flag: 'wx', mode: 0o644 });
-    discardShot();
-    say(`Saved ${name} to your Downloads folder.`);
-  } catch (err) {
-    discardShot();
-    say(`The screenshot was not saved: ${err.message}.`);
-  }
+  const idle = Date.now() - st.lastInput > W.CPU_IDLE_MS;
+  st.watchdog.noteCpu(P.siteOf(P.hostOf(pageUrl())), idle, m.cpu.percentCPUUsage * CPU_CORES);
 }
 
 function readUserDirs() {
@@ -1180,13 +260,13 @@ function hardenPage(s) {
     if (details.url.startsWith(`${S.SCHEME}://`)) return callback({});
     if (details.url !== 'about:blank' && !P.allowSubresource(details.url)) return callback({ cancel: true });
     if (details.resourceType === 'mainFrame') {
-      const up = P.httpsUpgrade(details.url, allowHttp);
+      const up = P.httpsUpgrade(details.url, st.allowHttp);
       if (up) {
-        upgraded.add(up);
+        st.upgraded.add(up);
         return callback({ redirectURL: up });
       }
     } else if (!(details.webContentsId === undefined && own.has(details.url))) {
-      watchdog.noteSubresource(P.siteOf(P.hostOf(topUrlOf(details))), P.hostOf(details.url));
+      st.watchdog.noteSubresource(P.siteOf(P.hostOf(topUrlOf(details))), P.hostOf(details.url));
     }
     if (details.webContentsId === pageId() && details.resourceType !== 'mainFrame') {
       const type = details.resourceType;
@@ -1229,15 +309,7 @@ function hardenPage(s) {
     }
     if (details.resourceType === 'mainFrame' || details.resourceType === 'image') setImmediate(pump);
   });
-  s.webRequest.onErrorOccurred((details) => {
-    starts.delete(details.id);
-    const before = queue.length;
-    queue = queue.filter((e) => e.id !== details.id || e.gen !== pageGen);
-    if (queue.length !== before) {
-      imgDone += before - queue.length;
-      linePush();
-    }
-  });
+  s.webRequest.onErrorOccurred(lineErrored);
   s.webRequest.onHeadersReceived((details, callback) => {
     const doc = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
     const asks = P.dropHintAsks(details.responseHeaders);
@@ -1264,52 +336,38 @@ function hardenPage(s) {
   });
 }
 
-let langCache = '';
-
-function pageLang() {
-  if (!langCache) langCache = P.firstLanguage(app.getPreferredSystemLanguages ? app.getPreferredSystemLanguages() : [], app.getLocale());
-  return langCache;
-}
-
-function hardenShell(s) {
-  s.setPermissionRequestHandler((wc, permission, callback) => callback(false));
-  s.setPermissionCheckHandler(() => false);
-  s.setDevicePermissionHandler(() => false);
-  s.setSpellCheckerEnabled(false);
-  s.setSpellCheckerLanguages([]);
-  s.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !/^(file|data):/i.test(details.url) }));
-}
-
-function fingerprint(cert) {
-  const body = String((cert && cert.data) || '').replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, '');
-  const der = Buffer.from(body, 'base64');
-  return der.length ? crypto.createHash('sha256').update(der).digest('hex') : '';
-}
-
-function showFingerprint(hex) {
-  return (hex.toUpperCase().match(/.{1,2}/g) || []).join(':');
-}
-
 function unstick(redo) {
-  const wc = view.webContents;
-  const id = ++leaving;
-  const seen = commits;
+  const wc = st.view.webContents;
+  const id = ++st.leaving;
+  const seen = st.commits;
   let answered = false;
   const frame = wc.mainFrame;
   if (!frame) return;
   frame.executeJavaScript('1').then(() => { answered = true; }, () => { answered = true; });
   setTimeout(() => {
-      if (answered || id !== leaving || seen !== commits || wc.isDestroyed() || wc.isCrashed()) return;
-      unsticking = redo;
+      if (answered || id !== st.leaving || seen !== st.commits || wc.isDestroyed() || wc.isCrashed()) return;
+      st.unsticking = redo;
     wc.forcefullyCrashRenderer();
   }, STUCK_MS).unref();
 }
 
+function askLeave(url) {
+  const from = pageUrl();
+  if (!P.leavesPage(from, url)) return false;
+  const leaving = P.siteOf(P.hostOf(from));
+  const cleared = st.allowedSites.has(leaving) ? '' : ' Its cookies and storage are cleared.';
+  st.leaveSeq += 1;
+  st.pendingLeave = { id: st.leaveSeq, url, text: `Leave ${P.hostOf(from)} for ${P.hostOf(url)}?${cleared}` };
+  push();
+  return true;
+}
+
 function load(url) {
-  error = null;
-  pendingCert = null;
-  view.webContents.loadURL(url).catch(() => {});
-  unstick(() => view.webContents.loadURL(url).catch(() => {}));
+  st.pendingLeave = null;
+  st.error = null;
+  st.pendingCert = null;
+  st.view.webContents.loadURL(url).catch(() => {});
+  unstick(() => st.view.webContents.loadURL(url).catch(() => {}));
   push();
 }
 
@@ -1325,7 +383,7 @@ function noClipKeys(event, input) {
 }
 
 function onKey(event, input) {
-  if (input.type === 'mouseDown' || input.type === 'keyDown') lastInput = Date.now();
+  if (input.type === 'mouseDown' || input.type === 'keyDown') st.lastInput = Date.now();
   if (clipKey(input)) {
     event.preventDefault();
     return;
@@ -1333,26 +391,26 @@ function onKey(event, input) {
   if (input.type !== 'keyDown') return;
   const k = String(input.key).toLowerCase();
   let act = null;
-  if ((input.control || input.meta) && k === 'l') act = () => alive() && win.webContents.send('focus-address');
-  else if ((input.control || input.meta) && k === 'r') act = () => (error ? retry() : view.webContents.reload());
-  else if (input.alt && k === 'arrowleft') act = () => view.webContents.navigationHistory.goBack();
-  else if (input.alt && k === 'arrowright') act = () => view.webContents.navigationHistory.goForward();
-  else if (k === 'escape') act = () => view.webContents.stop();
+  if ((input.control || input.meta) && k === 'l') act = () => alive() && st.win.webContents.send('focus-address');
+  else if ((input.control || input.meta) && k === 'r') act = () => (st.error ? retry() : st.view.webContents.reload());
+  else if (input.alt && k === 'arrowleft') act = () => st.view.webContents.navigationHistory.goBack();
+  else if (input.alt && k === 'arrowright') act = () => st.view.webContents.navigationHistory.goForward();
+  else if (k === 'escape') act = () => st.view.webContents.stop();
   if (!act) return;
   event.preventDefault();
   setImmediate(act);
 }
 
 function retry() {
-  const last = error && error.url;
+  const last = st.error && st.error.url;
   if (last) load(last);
-  else view.webContents.reload();
+  else st.view.webContents.reload();
 }
 
 function createView() {
-  view = new WebContentsView({
+  st.view = new WebContentsView({
     webPreferences: {
-      session: ses,
+      session: st.ses,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -1364,13 +422,13 @@ function createView() {
       nodeIntegrationInSubFrames: true,
     },
   });
-  win.contentView.addChildView(view);
-  const wc = view.webContents;
+  st.win.contentView.addChildView(st.view);
+  const wc = st.view.webContents;
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   wc.on('will-prevent-unload', (ev) => ev.preventDefault());
   wc.on('before-input-event', onKey);
   wc.on('input-event', (ev, input) => {
-    if (input && (input.type === 'mouseDown' || input.type === 'keyDown')) lastInput = Date.now();
+    if (input && (input.type === 'mouseDown' || input.type === 'keyDown')) st.lastInput = Date.now();
   });
   for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'page-title-updated']) wc.on(ev, push);
   wc.on('did-stop-loading', () => {
@@ -1379,38 +437,39 @@ function createView() {
   });
   wc.on('did-start-navigation', (ev, url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      st.pendingLeave = null;
       purgeIfSiteChanged(url);
       resetLine();
-      error = null;
-      pendingCert = null;
+      st.error = null;
+      st.pendingCert = null;
     }
   });
   wc.setWindowOpenHandler(({ url, disposition, features, frameName }) => {
     const tab = disposition === 'foreground-tab' || disposition === 'background-tab';
-    const clicked = Date.now() - lastInput < GESTURE_MS;
+    const clicked = Date.now() - st.lastInput < GESTURE_MS;
     if (tab && clicked && !features && !frameName && P.allowPageUrl(url)) {
-      setImmediate(() => load(url));
+      if (!askLeave(url)) setImmediate(() => load(url));
       return { action: 'deny' };
     }
     const site = P.siteOf(P.hostOf(pageUrl()));
-    if (site && allowedSites.has(site) && P.allowPageUrl(url)) {
-      nextPopup = 'real';
+    if (site && st.allowedSites.has(site) && P.allowPageUrl(url)) {
+      st.nextPopup = 'real';
       return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: realPopupOptions(features) };
     }
     if (site) {
-      blockedSite = site;
+      st.blockedSite = site;
       setImmediate(push);
     }
-    if (litterbugIds.size >= MAX_LITTERBUGS) {
-      watchdog.notePopupCapped(site);
+    if (st.litterbugIds.size >= MAX_LITTERBUGS) {
+      st.watchdog.notePopupCapped(site);
       return { action: 'deny' };
     }
-    nextPopup = 'litterbug';
+    st.nextPopup = 'litterbug';
     return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: LITTERBUG_OPTIONS };
   });
   wc.on('did-create-window', (child) => {
-    const kind = nextPopup;
-    nextPopup = '';
+    const kind = st.nextPopup;
+    st.nextPopup = '';
     if (kind === 'litterbug') litterbugSink(child);
     else if (kind === 'real') realPopup(child);
     else child.destroy();
@@ -1418,47 +477,49 @@ function createView() {
   wc.on('did-navigate', (ev, url) => {
     litterbugClose();
     const site = P.siteOf(P.hostOf(url));
-    if (blockedSite && blockedSite !== site) blockedSite = '';
+    if (st.blockedSite && st.blockedSite !== site) st.blockedSite = '';
   });
   wc.on('will-navigate', (ev, url) => {
     if (!P.allowPageUrl(url)) {
       ev.preventDefault();
       say('Only web addresses (http and https) are opened here.');
+      return;
     }
+    if (askLeave(url)) ev.preventDefault();
   });
   wc.on('certificate-error', (event, url, err, cert, callback) => {
     const host = P.hostOf(url);
     const fp = fingerprint(cert);
     event.preventDefault();
-    if (fp && trusted.has(`${host} ${fp}`)) return callback(true);
-    pendingCert = { host, fingerprint: fp, shown: showFingerprint(fp), reason: err, trustable: P.certTrustable(host) };
+    if (fp && st.trusted.has(`${host} ${fp}`)) return callback(true);
+    st.pendingCert = { host, fingerprint: fp, shown: showFingerprint(fp), reason: err, trustable: P.certTrustable(host) };
     return callback(false);
   });
   wc.on('did-fail-load', (ev, code, desc, url, isMain) => {
     if (!isMain || code === -3) return;
-    if (pendingCert && pendingCert.host === P.hostOf(url)) {
-      error = { kind: 'cert', url, message: desc, ...pendingCert };
-    } else if (upgraded.has(url)) {
+    if (st.pendingCert && st.pendingCert.host === P.hostOf(url)) {
+      st.error = { kind: 'cert', url, message: desc, ...st.pendingCert };
+    } else if (st.upgraded.has(url)) {
       const http = url.replace(/^https:/, 'http:');
-      error = { kind: 'nohttps', url: http, host: P.hostOf(url), message: desc };
+      st.error = { kind: 'nohttps', url: http, host: P.hostOf(url), message: desc };
     } else {
-      error = { kind: 'fail', url, message: desc, code };
+      st.error = { kind: 'fail', url, message: desc, code };
     }
     push();
   });
   wc.on('did-navigate', () => {
-    commits += 1;
+    st.commits += 1;
   });
   wc.on('render-process-gone', (ev, details) => {
-    if (unsticking) {
-      const redo = unsticking;
-      unsticking = null;
+    if (st.unsticking) {
+      const redo = st.unsticking;
+      st.unsticking = null;
       redo();
       return;
     }
     const url = pageUrl();
-    error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
-    watchdog.noteCrash(P.siteOf(P.hostOf(url)));
+    st.error = { kind: 'fail', url, message: `The page stopped working (${details.reason}).`, code: 0 };
+    st.watchdog.noteCrash(P.siteOf(P.hostOf(url)));
     push();
   });
   wc.loadURL('about:blank').catch(() => {});
@@ -1502,16 +563,16 @@ function realPopupOptions(features) {
 
 function litterbugClose() {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (litterbugIds.has(w.webContents.id)) w.destroy();
+    if (st.litterbugIds.has(w.webContents.id)) w.destroy();
   }
 }
 
 function litterbugSink(child) {
   const id = child.webContents.id;
-  litterbugIds.add(id);
+  st.litterbugIds.add(id);
   child.webContents.setAudioMuted(true);
   child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  child.on('closed', () => litterbugIds.delete(id));
+  child.on('closed', () => st.litterbugIds.delete(id));
   setTimeout(() => {
     if (!child.isDestroyed()) child.destroy();
   }, LITTERBUG_MS).unref();
@@ -1534,7 +595,7 @@ function realPopup(child) {
 }
 
 function fromShell(e) {
-  return alive() && e.sender === win.webContents;
+  return alive() && e.sender === st.win.webContents;
 }
 
 let shellReady = false;
@@ -1543,24 +604,24 @@ function register() {
   ipcMain.on('nb-report', onReport);
   ipcMain.handle('dl-answer', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlAllowed = on === true;
-    dlAsking = false;
-    if (!dlAllowed) dlQueue.cancelAll();
+    st.dlAllowed = on === true;
+    st.dlAsking = false;
+    if (!st.dlAllowed) dlQueue.cancelAll();
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-ask', (e) => {
     if (!fromShell(e)) return { ok: false };
-    dlAsking = true;
+    st.dlAsking = true;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-panel', async (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlPanelOpen = on === true && dlAllowed;
-    dlWarn = false;
-    if (dlPanelOpen) {
-      dlQueueOpen = false;
+    st.dlPanelOpen = on === true && st.dlAllowed;
+    st.dlWarn = false;
+    if (st.dlPanelOpen) {
+      st.dlQueueOpen = false;
       await scanFiles();
     }
     push();
@@ -1568,30 +629,30 @@ function register() {
   });
   ipcMain.handle('dl-queue-panel', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlQueueOpen = on === true;
+    st.dlQueueOpen = on === true;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-warn', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    dlWarn = on === true && dlAllowed && dlList.length > 0;
+    st.dlWarn = on === true && st.dlAllowed && st.dlList.length > 0;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-all', (e) => {
-    if (!fromShell(e) || !dlAllowed || dlList.length === 0) return { ok: false };
-    dlQueue.add(dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })));
-    dlWarn = false;
-    dlPanelOpen = false;
+    if (!fromShell(e) || !st.dlAllowed || st.dlList.length === 0) return { ok: false };
+    dlQueue.add(st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })));
+    st.dlWarn = false;
+    st.dlPanelOpen = false;
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-one', (e, href) => {
-    if (!fromShell(e) || !dlAllowed) return { ok: false };
+    if (!fromShell(e) || !st.dlAllowed) return { ok: false };
     const f = entryOf(href);
     if (!f) return { ok: false };
     dlQueue.add([{ href: f.href, kind: f.kind, name: f.name, path: f.path, host: f.host }]);
-    dlPanelOpen = false;
+    st.dlPanelOpen = false;
     push();
     return { ok: true };
   });
@@ -1619,10 +680,10 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('dl-retry', async (e, id) => {
-    if (!fromShell(e) || !dlAllowed) return { ok: false };
+    if (!fromShell(e) || !st.dlAllowed) return { ok: false };
     const item = dlQueue.get(Number(id));
     if (!item || item.state !== 'login') return { ok: false };
-    const cookies = await ses.cookies.get({ url: item.href }).catch(() => []);
+    const cookies = await st.ses.cookies.get({ url: item.href }).catch(() => []);
     const header = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
     if (!header) {
       say('This site has no sign-in cookie to send, so the file was not fetched.');
@@ -1633,7 +694,7 @@ function register() {
     return { ok: true };
   });
   ipcMain.on('nb-line-now', (e) => {
-    e.returnValue = { active: Boolean(view && e.sender === view.webContents && slowActive()) };
+    e.returnValue = { active: Boolean(st.view && e.sender === st.view.webContents && slowActive()) };
   });
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
@@ -1645,7 +706,7 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('shot-answer', (e, save) => {
-    if (!fromShell(e) || !pendingShot || pendingShot.busy) return { ok: false };
+    if (!fromShell(e) || !st.pendingShot || st.pendingShot.busy) return { ok: false };
     answerShot(Boolean(save));
     return { ok: true };
   });
@@ -1671,9 +732,9 @@ function register() {
       return r;
     }
     if (r.blank) {
-      error = null;
-      view.webContents.loadURL('about:blank').catch(() => {});
-      unstick(() => view.webContents.loadURL('about:blank').catch(() => {}));
+      st.error = null;
+      st.view.webContents.loadURL('about:blank').catch(() => {});
+      unstick(() => st.view.webContents.loadURL('about:blank').catch(() => {}));
       push();
       return { ok: true };
     }
@@ -1687,7 +748,7 @@ function register() {
   });
   ipcMain.handle('nav', (e, what) => {
     if (!fromShell(e)) return { ok: false };
-    const wc = view.webContents;
+    const wc = st.view.webContents;
     if (what === 'back' && wc.navigationHistory.canGoBack()) {
       const to = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() - 1);
       wc.navigationHistory.goBack();
@@ -1699,7 +760,7 @@ function register() {
     } else if (what === 'reload') retry();
     else if (what === 'stop') wc.stop();
     else if (what === 'home') {
-      error = null;
+      st.error = null;
       wc.loadURL('about:blank').catch(() => {});
       unstick(() => wc.loadURL('about:blank').catch(() => {}));
     }
@@ -1707,39 +768,47 @@ function register() {
     return { ok: true };
   });
   ipcMain.handle('allow-http', (e) => {
-    if (!fromShell(e) || !error || error.kind !== 'nohttps') return { ok: false };
-    allowHttp.add(error.host);
-    load(error.url);
+    if (!fromShell(e) || !st.error || st.error.kind !== 'nohttps') return { ok: false };
+    st.allowHttp.add(st.error.host);
+    load(st.error.url);
+    return { ok: true };
+  });
+  ipcMain.handle('leave-answer', (e, id, go) => {
+    if (!fromShell(e) || !st.pendingLeave || st.pendingLeave.id !== id) return { ok: false };
+    const { url } = st.pendingLeave;
+    st.pendingLeave = null;
+    if (go) load(url);
+    else push();
     return { ok: true };
   });
   ipcMain.handle('file-answer', (e, id, open) => {
-    if (!fromShell(e) || !pendingFile || pendingFile.id !== id || pendingFile.state !== 'ask') return { ok: false };
-    answerFile(pendingFile, open);
+    if (!fromShell(e) || !st.pendingFile || st.pendingFile.id !== id || st.pendingFile.state !== 'ask') return { ok: false };
+    answerFile(st.pendingFile, open);
     return { ok: true };
   });
   ipcMain.handle('allow-site', (e) => {
-    if (!fromShell(e) || !blockedSite) return { ok: false };
-    const site = blockedSite;
-    allowedSites.add(site);
-    blockedSite = '';
+    if (!fromShell(e) || !st.blockedSite) return { ok: false };
+    const site = st.blockedSite;
+    st.allowedSites.add(site);
+    st.blockedSite = '';
     say(`Pop-ups and sign-in cookies are allowed for ${site} until Null Browser closes.`);
     return { ok: true };
   });
   ipcMain.handle('dismiss-popup', (e) => {
     if (!fromShell(e)) return { ok: false };
-    blockedSite = '';
+    st.blockedSite = '';
     push();
     return { ok: true };
   });
   ipcMain.handle('trust-cert', (e) => {
-    if (!fromShell(e) || !error || error.kind !== 'cert' || !error.trustable || !error.fingerprint) return { ok: false };
-    trusted.add(`${error.host} ${error.fingerprint}`);
-    load(error.url);
+    if (!fromShell(e) || !st.error || st.error.kind !== 'cert' || !st.error.trustable || !st.error.fingerprint) return { ok: false };
+    st.trusted.add(`${st.error.host} ${st.error.fingerprint}`);
+    load(st.error.url);
     return { ok: true };
   });
   ipcMain.handle('import-bookmarks', async (e) => {
     if (!fromShell(e)) return { ok: false };
-    const res = await dialog.showOpenDialog(win, {
+    const res = await dialog.showOpenDialog(st.win, {
       title: 'Import bookmarks',
       filters: [{ name: 'Bookmarks', extensions: ['html', 'htm'] }],
       properties: ['openFile'],
@@ -1758,18 +827,18 @@ function register() {
       return { ok: false };
     }
     const found = B.parseBookmarks(text);
-    const have = new Set(bookmarks.map((b) => b.url));
+    const have = new Set(st.bookmarks.map((b) => b.url));
     let added = 0;
     let full = false;
     for (const f of found) {
       if (have.has(f.url)) continue;
-      if (bookmarks.length >= B.MAX_BOOKMARKS) {
+      if (st.bookmarks.length >= B.MAX_BOOKMARKS) {
         full = true;
         continue;
       }
       have.add(f.url);
-      bookmarkSeq += 1;
-      bookmarks.push({ id: bookmarkSeq, url: f.url, title: f.title });
+      st.bookmarkSeq += 1;
+      st.bookmarks.push({ id: st.bookmarkSeq, url: f.url, title: f.title });
       added += 1;
     }
     if (added) say(`${added} bookmark${added === 1 ? '' : 's'} imported${full ? ' (the list is now full)' : ''}.`);
@@ -1779,26 +848,26 @@ function register() {
   });
   ipcMain.handle('remove-bookmark', (e, id) => {
     if (!fromShell(e)) return { ok: false };
-    bookmarks = bookmarks.filter((b) => b.id !== id);
+    st.bookmarks = st.bookmarks.filter((b) => b.id !== id);
     push();
     return { ok: true };
   });
   ipcMain.handle('request-fast-js', (e, on) => {
     if (!fromShell(e)) return { ok: false };
     if (Boolean(on) === fastJs) return { ok: true };
-    pendingJs = Boolean(on);
+    st.pendingJs = Boolean(on);
     push();
     return { ok: true };
   });
   ipcMain.handle('cancel-fast-js', (e) => {
     if (!fromShell(e)) return { ok: false };
-    pendingJs = null;
+    st.pendingJs = null;
     push();
     return { ok: true };
   });
   ipcMain.handle('confirm-fast-js', (e) => {
-    if (!fromShell(e) || pendingJs === null) return { ok: false };
-    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), pendingJs) });
+    if (!fromShell(e) || st.pendingJs === null) return { ok: false };
+    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), st.pendingJs) });
     app.quit();
     return { ok: true };
   });
@@ -1813,7 +882,7 @@ function shellSession() {
 
 function createWindow() {
   const work = screen.getPrimaryDisplay().workAreaSize;
-  win = new BrowserWindow({
+  st.win = new BrowserWindow({
     width: Math.min(1280, work.width),
     height: Math.min(860, work.height),
     minWidth: Math.min(640, work.width),
@@ -1830,16 +899,16 @@ function createWindow() {
       spellcheck: false,
     },
   });
-  win.webContents.on('before-input-event', onKey);
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.on('resize', layout);
-  win.on('closed', () => {
-    win = null;
+  st.win.webContents.on('before-input-event', onKey);
+  st.win.webContents.on('will-navigate', (e) => e.preventDefault());
+  st.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  st.win.on('resize', layout);
+  st.win.on('closed', () => {
+    st.win = null;
   });
   createView();
-  win.webContents.once('did-finish-load', push);
-  win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
+  st.win.webContents.once('did-finish-load', push);
+  st.win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
 }
 
 app.on('web-contents-created', (e, contents) => {
@@ -1853,6 +922,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   });
 }
 
+Object.assign(shared, { MAX_BYTES, REAL_HOME, alive, pageUrl, push, ram, readUserDirs, say });
+
 const primary = app.requestSingleInstanceLock();
 if (!primary) {
   rammaid();
@@ -1861,8 +932,8 @@ if (!primary) {
 
 app.on('second-instance', () => {
   if (alive()) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
+    if (st.win.isMinimized()) st.win.restore();
+    st.win.focus();
   }
 });
 
@@ -1871,9 +942,9 @@ app.whenReady().then(() => {
   app.userAgentFallback = P.chromiumUserAgent(app.userAgentFallback);
   hardenShell(session.defaultSession);
   hardenShell(shellSession());
-  ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
-  hardenPage(ses);
-  ses.protocol.handle(S.SCHEME, (req) => {
+  st.ses = session.fromPartition(`nullbrowser-${crypto.randomBytes(8).toString('hex')}`);
+  hardenPage(st.ses);
+  st.ses.protocol.handle(S.SCHEME, (req) => {
     let token = '';
     try {
       token = new URL(req.url).pathname.slice(1);
@@ -1884,9 +955,9 @@ app.whenReady().then(() => {
     if (!hit) return new Response('', { status: 404 });
     return new Response(hit.buf, { headers: { 'content-type': hit.type || 'application/octet-stream', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
   });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
-  ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
   register();
   createWindow();
   setInterval(watchdogCpuPoll, W.CPU_IDLE_MS).unref();
@@ -1895,9 +966,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 
 app.on('will-quit', () => {
-  if (ses) {
-    ses.clearStorageData().catch(() => {});
-    ses.clearCache().catch(() => {});
+  if (st.ses) {
+    st.ses.clearStorageData().catch(() => {});
+    st.ses.clearCache().catch(() => {});
   }
 });
 
