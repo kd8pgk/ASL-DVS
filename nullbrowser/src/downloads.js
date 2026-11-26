@@ -8,7 +8,7 @@ const S = require('./slow');
 const SH = require('./shot');
 const DL = require('./download');
 const { st } = require('./state');
-const ctx = require('./ctx');
+const shared = require('./ctx');
 
 function rammaidFile(file) {
   try {
@@ -24,7 +24,7 @@ function openFile(file) {
     return;
   }
   shell.openPath(file).then((err) => {
-    if (err) ctx.say(`No app on this computer could open ${path.basename(file)}.`);
+    if (err) shared.say(`No app on this computer could open ${path.basename(file)}.`);
   });
 }
 
@@ -41,7 +41,7 @@ function checkAndOpen(rec) {
   }
   if (!F.contentMatches(rec.kind, head)) {
     rammaidFile(rec.file);
-    ctx.say(`${rec.name} is not really ${rec.kind === 'pdf' ? 'a PDF' : rec.kind}, so it was not opened.`);
+    shared.say(`${rec.name} is not really ${rec.kind === 'pdf' ? 'a PDF' : rec.kind}, so it was not opened.`);
     const from = (() => {
       try {
         return rec.item.getURL();
@@ -49,24 +49,24 @@ function checkAndOpen(rec) {
         return '';
       }
     })();
-    st.watchdog.noteFakeFile(P.siteOf(P.hostOf(from || ctx.pageUrl())));
+    st.watchdog.noteFakeFile(P.siteOf(P.hostOf(from || shared.pageUrl())));
     return;
   }
   openFile(rec.file);
-  ctx.push();
+  shared.push();
 }
 
 function endFile(rec) {
   if (st.pendingFile === rec) st.pendingFile = null;
-  ctx.push();
+  shared.push();
 }
 
 function finishFile(rec, st) {
   rec.done = st;
   if (st !== 'completed') {
     rammaidFile(rec.file);
-    if (rec.tooBig) ctx.say(`${rec.name} is too big to open from memory.`);
-    else if (rec.answer === true) ctx.say(`${rec.name} could not be fetched.`);
+    if (rec.tooBig) shared.say(`${rec.name} is too big to open from memory.`);
+    else if (rec.answer === true) shared.say(`${rec.name} could not be fetched.`);
     endFile(rec);
     return;
   }
@@ -93,7 +93,7 @@ function answerFile(rec, open) {
     return;
   }
   rec.state = 'loading';
-  ctx.push();
+  shared.push();
 }
 
 function onDownload(event, item) {
@@ -102,34 +102,34 @@ function onDownload(event, item) {
   const total = item.getTotalBytes();
   if (!kind) {
     item.cancel();
-    ctx.say('Downloads are off in Null Browser.');
+    shared.say('Downloads are off in Null Browser.');
     return;
   }
-  if (total > ctx.MAX_BYTES) {
+  if (total > shared.MAX_BYTES) {
     item.cancel();
-    ctx.say(`${name} is too big to open from memory.`);
+    shared.say(`${name} is too big to open from memory.`);
     return;
   }
   if (st.pendingFile) {
     item.cancel();
-    ctx.say('Answer the question about the other file first.');
+    shared.say('Answer the question about the other file first.');
     return;
   }
   st.fileSeq += 1;
-  const rec = { id: st.fileSeq, item, file: path.join(ctx.ram.sub.files, `${st.fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
+  const rec = { id: st.fileSeq, item, file: path.join(shared.ram.sub.files, `${st.fileSeq}-${name}`), kind, name, text: F.question(name, kind, total), state: 'ask' };
   item.setSavePath(rec.file);
   item.on('updated', () => {
-    if (rec.tooBig || item.getReceivedBytes() <= ctx.MAX_BYTES) return;
+    if (rec.tooBig || item.getReceivedBytes() <= shared.MAX_BYTES) return;
     rec.tooBig = true;
     item.cancel();
   });
   item.once('done', (e, st) => finishFile(rec, st));
   st.pendingFile = rec;
-  ctx.push();
+  shared.push();
 }
 
 function dlDir() {
-  const dir = path.join(ctx.ram.sub.files, 'dlq');
+  const dir = path.join(shared.ram.sub.files, 'dlq');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
@@ -339,7 +339,7 @@ async function runDownload(item, ctx) {
     const back = fs.readFileSync(file);
     const check = DL.checkDownload(item.kind, back, sha);
     if (!check.ok) return { ok: false, reason: check.reason, bytes: got.buf.length };
-    const dest = SH.downloadsFromUserDirs(ctx.readUserDirs(), ctx.REAL_HOME);
+    const dest = SH.downloadsFromUserDirs(shared.readUserDirs(), shared.REAL_HOME);
     const name = saveAtomic(dest, DL.safeName(got.serverName || item.name, item.kind), back, sha);
     return { ok: true, saved: name, bytes: got.buf.length };
   } catch (err) {
@@ -356,10 +356,10 @@ const FILE_SCAN = `(function(){var out=[];var n=document.querySelectorAll('a[hre
 
 async function scanFiles() {
   if (!st.view || st.view.webContents.isDestroyed()) return;
-  const url = ctx.pageUrl();
+  const url = shared.pageUrl();
   if (!url || !/^https?:/.test(url)) {
     st.dlList = [];
-    ctx.push();
+    shared.push();
     return;
   }
   let links = [];
@@ -368,10 +368,10 @@ async function scanFiles() {
   } catch {
     links = [];
   }
-  if (ctx.pageUrl() !== url) return;
+  if (shared.pageUrl() !== url) return;
   st.dlList = DL.buildList(Array.isArray(links) ? links : [], url);
   st.dlListFor = url;
-  ctx.push();
+  shared.push();
 }
 
 function entryOf(href) {

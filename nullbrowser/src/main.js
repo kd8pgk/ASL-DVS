@@ -58,7 +58,7 @@ app.disableHardwareAcceleration();
 
 const { st } = require('./state');
 const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, entryOf } = require('./downloads');
-const ctx = require('./ctx');
+const shared = require('./ctx');
 
 const TOOLBAR = 44;
 const BAR = 34;
@@ -1483,7 +1483,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   });
 }
 
-Object.assign(ctx, { MAX_BYTES, REAL_HOME, pageUrl, push, ram, readUserDirs, say });
+Object.assign(shared, { MAX_BYTES, REAL_HOME, pageUrl, push, ram, readUserDirs, say });
 
 const primary = app.requestSingleInstanceLock();
 if (!primary) {
