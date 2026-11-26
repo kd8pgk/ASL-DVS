@@ -185,7 +185,7 @@ test('closing the page shown alone goes back to the slots, or to another page', 
 });
 
 test('closing a node closes all its pages, Last Heard from it too', () => {
-  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x');
+  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x', 'TGIF');
   s = L.openTab(s, 'b', 'talker');
   s = L.closeNode(s, 'a');
   assert.deepEqual(s.tabs.map((t) => t.key), ['b:talker']);
@@ -204,17 +204,28 @@ test('the view buttons: single shows the focused page alone, slots brings the sl
   assert.equal(L.setView(none, 'slots'), none);
 });
 
-test('Last Heard opens as a single page and can be put in a slot like any page', () => {
-  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x');
+test('Last Heard opens as a single page named for its network, and can be put in a slot like any page', () => {
+  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x', 'TGIF');
   assert.equal(s.view, 'single');
-  assert.deepEqual(L.shown(s), ['lh']);
-  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/x');
-  s = L.openLastHeard(s, 'a', 'https://lh.example/y');
-  assert.equal(s.tabs.filter((t) => t.key === 'lh').length, 1);
-  assert.equal(s.tabs.find((t) => t.key === 'lh').url, 'https://lh.example/y');
-  s = L.putInSlot(s, 'lh', 'lower');
-  assert.deepEqual(s.slots.lower, ['a:nodemon', 'lh']);
-  assert.equal(s.sel.lower, 'lh');
+  assert.deepEqual(L.shown(s), ['lh:tgif']);
+  assert.equal(s.tabs.find((t) => t.key === 'lh:tgif').name, 'TGIF');
+  assert.equal(s.tabs.find((t) => t.key === 'lh:tgif').url, 'https://lh.example/x');
+  s = L.putInSlot(s, 'lh:tgif', 'lower');
+  assert.deepEqual(s.slots.lower, ['a:nodemon', 'lh:tgif']);
+  assert.equal(s.sel.lower, 'lh:tgif');
+});
+
+test('the same Last Heard name reloads its panel; a different name opens a new panel and keeps the old one', () => {
+  let s = L.openLastHeard(example(), 'a', 'https://lh.example/x', 'TGIF');
+  s = L.putInSlot(s, 'lh:tgif', 'lower');
+  s = L.openLastHeard(s, 'a', 'https://lh.example/y', 'tgif');
+  assert.equal(s.tabs.filter((t) => t.kind === 'lh').length, 1);
+  assert.equal(s.tabs.find((t) => t.key === 'lh:tgif').url, 'https://lh.example/y');
+  s = L.openLastHeard(s, 'b', 'https://lh.example/z', 'YSF');
+  assert.deepEqual(L.shown(s), ['lh:ysf']);
+  assert.deepEqual(s.tabs.filter((t) => t.kind === 'lh').map((t) => t.key), ['lh:tgif', 'lh:ysf']);
+  assert.deepEqual(s.slots.lower, ['a:nodemon', 'lh:tgif']);
+  assert.equal(L.keyOf('a', 'nodemon') !== L.lhKey('x'), true);
 });
 
 test('focus follows the page that was clicked into, only for the selected page of a slot', () => {
@@ -320,14 +331,27 @@ test('serialize then restore gives the same layout', () => {
   for (const k of ['slots', 'sel', 'single', 'view', 'focus', 'ratio']) assert.deepEqual(back[k], s[k], k);
 });
 
-test('Last Heard is not saved', () => {
-  let s = L.putInSlot(L.openLastHeard(example(), 'a', 'https://lh.example/x'), 'lh', 'lower');
-  const saved = L.serialize(s);
-  assert.equal(JSON.stringify(saved).includes('lh'), false);
-  assert.equal(saved.tabs.some((t) => t.pageId === 'lasthard'), false);
-  const back = L.restore(JSON.parse(JSON.stringify(saved)), NODES, PAGES);
-  assert.equal(back.tabs.some((t) => t.key === 'lh'), false);
-  assert.equal(back.sel.lower, 'a:nodemon');
+test('Last Heard panels are saved with their name and address, and restored', () => {
+  const s = L.putInSlot(L.openLastHeard(example(), 'a', 'https://lh.example/x', 'TGIF'), 'lh:tgif', 'lower');
+  const saved = JSON.parse(JSON.stringify(L.serialize(s)));
+  assert.deepEqual(saved.tabs.find((t) => t.kind === 'lh'), { kind: 'lh', nodeId: 'a', name: 'TGIF', url: 'https://lh.example/x' });
+  const back = L.restore(saved, NODES, PAGES);
+  assert.equal(back.tabs.find((t) => t.key === 'lh:tgif').url, 'https://lh.example/x');
+  assert.equal(back.sel.lower, 'lh:tgif');
+  const odd = L.restore({ tabs: [
+    { kind: 'lh', nodeId: 'a', name: 'bad<name>', url: 'https://x.example/' },
+    { kind: 'lh', nodeId: 'gone', name: 'TGIF', url: 'https://x.example/' },
+    { kind: 'lh', nodeId: 'a', name: 'TGIF', url: 5 },
+    { kind: 'lh', nodeId: 'a', name: 'DMR', url: 'https://x.example/' },
+  ] }, NODES, PAGES);
+  assert.deepEqual(odd.tabs.map((t) => t.key), ['lh:dmr']);
+});
+
+test('dropLastHeard closes the Last Heard panels whose address no longer passes', () => {
+  const s = L.openLastHeard(example(), 'a', 'https://lh.example/x', 'TGIF');
+  const none = L.dropLastHeard(s, () => false);
+  assert.equal(none.tabs.some((t) => t.kind === 'lh'), false);
+  assert.equal(L.dropLastHeard(s, () => true), s);
 });
 
 test('restore drops pages of missing nodes or pages and repairs the rest', () => {
@@ -413,13 +437,13 @@ test('a manual zoom wins over the automatic one, steps by a tenth within limits,
   assert.equal(L.setZoom(s, 'a:talker', 99).zooms['a:talker'], L.ZOOM_MAX);
 });
 
-test('zooms are kept for open pages only, saved and restored, and Last Heard is not saved', () => {
+test('zooms are kept for open pages only, saved and restored, Last Heard panels included', () => {
   let s = L.setZoom(L.setZoom(example(), 'a:controller', 0.8), 'a:talker', 0.55);
-  s = L.setZoom(L.openLastHeard(s, 'a', 'https://lh.example/x'), 'lh', 0.7);
+  s = L.setZoom(L.openLastHeard(s, 'a', 'https://lh.example/x', 'TGIF'), 'lh:tgif', 0.7);
   const saved = L.serialize(s);
-  assert.deepEqual(saved.zooms, { 'a:controller': 0.8, 'a:talker': 0.55 });
+  assert.deepEqual(saved.zooms, { 'a:controller': 0.8, 'a:talker': 0.55, 'lh:tgif': 0.7 });
   const back = L.restore(JSON.parse(JSON.stringify(saved)), NODES, PAGES);
-  assert.deepEqual(back.zooms, { 'a:controller': 0.8, 'a:talker': 0.55 });
+  assert.deepEqual(back.zooms, { 'a:controller': 0.8, 'a:talker': 0.55, 'lh:tgif': 0.7 });
   const closed = L.closeTab(s, 'a:controller');
   assert.equal(closed.zooms['a:controller'], undefined);
   assert.equal(closed.zooms['a:talker'], 0.55);

@@ -165,6 +165,7 @@ async function main() {
 
   const U = (n) => `http://127.0.0.1:${P[n]}/`;
   const LHU = `http://127.0.0.1:${lp}/lh`;
+  const LHN = `${LHU}#nc-name=Test%20Net`;
   const visible = async () => (await views(app)).filter((v) => v.visible);
   const view = () => win.locator('#views button.on').getAttribute('data-view');
   const PG = ['Node Controller', 'Node Talker', 'SysMon', 'Node Monitor', 'Node Recorder', 'WifiMon', '44helper', 'Install Monitor', 'Terminal Monitor', 'Pi-Piper ↗', 'Pibrary ↗'];
@@ -332,11 +333,12 @@ async function main() {
   await waitFor(async () => (await win.locator('.pane-msg').count()) === 0, 'the page is back after a crash');
   assert.ok(!(await classes(page(0))).includes('failed'));
 
-  await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${LHU}', 'asl_dvs_lh') && 1`);
+  await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${LHN}', 'asl_dvs_lh') && 1`);
   await showing(LHU);
   assert.equal(await view(), 'single');
-  assert.equal(await win.locator('#pages .entry[data-key="lh"]').count(), 1);
-  await win.locator('#pages .entry[data-key="lh"] .x').click();
+  assert.equal(await win.locator('#pages .entry[data-key="lh:test net"]').count(), 1);
+  assert.equal(await win.locator('#pages .entry', { hasText: 'Test Net' }).count(), 1);
+  await win.locator('#pages .entry[data-key="lh:test net"] .x').click();
   await showing(U('controller'));
 
   await inPage(app, `127.0.0.1:${P.controller}/`, `window.open('${U('talker')}', 'asl_dvs_listen') && 1`);
@@ -512,7 +514,7 @@ async function main() {
 
   await inPage(app, `127.0.0.1:${P.talker}/`, `window.open('http://10.9.9.9/x', 'nt_lh') && 1`);
   await win.waitForFunction(() => /refused/.test(document.getElementById('notice').textContent));
-  await inPage(app, `127.0.0.1:${P.talker}/`, `window.open('${LHU}', 'nt_lh') && 1`);
+  await inPage(app, `127.0.0.1:${P.talker}/`, `window.open('${LHN}', 'nt_lh') && 1`);
   await showing(LHU);
   assert.equal(await view(), 'single');
   same((await visible())[0].bounds, g.area, 'Last Heard fills the page area');
@@ -524,20 +526,12 @@ async function main() {
   assert.deepEqual(ext.hits, []);
   await win.click('#views button[data-view="slots"]');
   await showing(U('sysmon'), U('talker'), U('nodemon'));
-  await win.locator('#pages .entry[data-key="lh"] .entry-main').click();
+  await win.locator('#pages .entry[data-key="lh:test net"] .entry-main').click();
   await showing(LHU);
-  await win.locator('#pages .entry[data-key="lh"]').click({ button: 'right' });
+  await win.locator('#pages .entry[data-key="lh:test net"]').click({ button: 'right' });
   await win.locator('#menu .menu-item', { hasText: 'Put in Lower slot' }).click();
   await showing(U('sysmon'), U('talker'), LHU);
-  assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor'), 'Last Heard']);
-  await win.click('#save-split');
-  await win.fill('#n-name', 'Nope');
-  await win.click('#form-name button[type="submit"]');
-  assert.match(await win.textContent('#n-error'), /Last Heard/);
-  await win.click('#n-cancel');
-  await win.locator('.slot[data-slot="lower"] .entry', { hasText: 'Last Heard' }).locator('.x').click();
-  await win.locator('#pages .entry[data-key="lh"] .x').click();
-  await showing(U('sysmon'), U('talker'), U('nodemon'));
+  assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor'), 'Test Net']);
 
   await win.click('#save-split');
   await win.fill('#n-name', 'Desk');
@@ -549,7 +543,8 @@ async function main() {
   assert.equal(sp1.length, 1);
   assert.deepEqual(sp1[0].slots.left.map((i) => i.pageId), ['controller', 'sysmon']);
   assert.deepEqual(sp1[0].slots.right.map((i) => i.pageId), ['talker', 'recorder', 'wifimon']);
-  assert.deepEqual(sp1[0].slots.lower.map((i) => i.pageId), ['nodemon']);
+  assert.deepEqual(sp1[0].slots.lower.map((i) => i.kind || i.pageId), ['nodemon', 'lh']);
+  assert.deepEqual(sp1[0].slots.lower[1], { kind: 'lh', nodeId: sp1[0].slots.lower[1].nodeId, name: 'Test Net', url: LHU });
   assert.equal(sp1[0].sel.left.pageId, 'sysmon');
 
   await win.locator('.slot[data-slot="right"] .entry', { hasText: 'Node Recorder' }).locator('.x').click();
@@ -570,10 +565,10 @@ async function main() {
   assert.equal(await view(), 'slots');
   assert.deepEqual(await slotEntries('left'), [Lb('Node Controller'), Lb('SysMon')]);
   assert.deepEqual(await slotEntries('right'), [Lb('Node Talker'), Lb('Node Recorder'), Lb('WifiMon')]);
-  assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor')]);
+  assert.deepEqual(await slotEntries('lower'), [Lb('Node Monitor'), 'Test Net']);
   assert.deepEqual(await win.locator('.split-name').allTextContents(), ['Desk']);
   assert.equal((await views(app)).length, 3);
-  assert.equal(await openCount(), 9);
+  assert.equal(await openCount(), 10);
 
   await closeAll();
   await waitFor(async () => (await views(app)).length === 0, 'all tabs closed');
@@ -581,7 +576,7 @@ async function main() {
   assert.deepEqual(await slotEntries('left'), []);
   await win.click('.split-name');
   await waitFor(async () => (await visible()).length === 3, 'saved split opens its pages');
-  assert.equal(await openCount(), 6);
+  assert.equal(await openCount(), 7);
 
   {
     const running = path.join(data, 'running.json');
@@ -597,7 +592,7 @@ async function main() {
     assert.equal(code, 0, 'a second copy hands over and quits');
     assert.equal(await win.title(), 'Node Controller Desktop');
     assert.ok(fs.existsSync(running), 'the first copy keeps its marker');
-    assert.equal(await openCount(), 6);
+    assert.equal(await openCount(), 7);
 
     const pid = app.process().pid;
     app.process().kill('SIGKILL');
@@ -623,7 +618,7 @@ async function main() {
     assert.match(fs.readFileSync(path.join(data, 'diagnostics.log'), 'utf8'), /did not exit cleanly/);
     await win.click('.split-name');
     await waitFor(async () => (await visible()).length === 3, 'a saved split still opens after the reset');
-    assert.equal(await openCount(), 6);
+    assert.equal(await openCount(), 7);
     await app.close();
     assert.equal(fs.existsSync(running), false);
     app = await launch();

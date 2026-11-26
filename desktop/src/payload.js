@@ -3,7 +3,7 @@ const PR = require('./presets');
 const { PAGES } = require('./node');
 
 function labelOf(tab, nodes) {
-  if (tab.kind === 'lh') return 'Last Heard';
+  if (tab.kind === 'lh') return tab.name;
   const n = nodes.find((x) => x.id === tab.nodeId);
   const p = PAGES.find((x) => x.id === tab.pageId);
   return `${n ? n.name || n.host : '?'} · ${p ? p.label : '?'}`;
@@ -12,7 +12,7 @@ function labelOf(tab, nodes) {
 function shortLabel(ls, key) {
   const t = ls.tabs.find((x) => x.key === key);
   if (!t) return '';
-  if (t.kind === 'lh') return 'Last Heard';
+  if (t.kind === 'lh') return t.name;
   const p = PAGES.find((x) => x.id === t.pageId);
   return p ? p.label : t.pageId;
 }

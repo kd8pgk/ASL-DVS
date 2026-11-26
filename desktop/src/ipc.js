@@ -13,7 +13,7 @@ function registerIpc(ctx) {
   const {
     S, SES, INTERNAL, refused, router, monitor, presetStore,
     fromShell, payload, persist, push, sync, update, focusView, closeRt, closeTab, reloadTab, zoomKey,
-    snapshot, emitNotice, openExternalPage, logLine, launcherPaths, runningAppImage,
+    snapshot, emitNotice, openExternalPage, logLine, launcherPaths, runningAppImage, lhOk,
   } = ctx;
   let shellReady = false;
   let startupNotice = ctx.startupNotice || '';
@@ -198,8 +198,13 @@ function registerIpc(ctx) {
     if (!fromShell(e) || !str(id)) return { error: 'Not allowed.' };
     const preset = S.splits.find((p) => p.id === id);
     if (!preset) return { error: 'That split is gone.' };
-    const r = PR.apply(S.ls, preset, S.nodes, INTERNAL);
+    const r = PR.apply(S.ls, preset, S.nodes, INTERNAL, lhOk);
     if (r.error) return { error: r.error };
+    for (const t of S.ls.tabs) {
+      if (t.kind !== 'lh') continue;
+      const next = r.state.tabs.find((x) => x.key === t.key);
+      if (next && next.url !== t.url) closeRt(t.key);
+    }
     update(r.state);
     focusView();
     return { ok: true };

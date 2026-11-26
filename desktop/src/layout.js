@@ -1,3 +1,5 @@
+const P = require('./policy');
+
 const MIN_PANE = 240;
 const GAP = 6;
 const STRIP = 28;
@@ -5,7 +7,7 @@ const SLOTS = ['left', 'right', 'lower'];
 const SLOT_LABEL = { left: 'Left', right: 'Right', lower: 'Lower' };
 const SINGLE_ONLY = new Set(['h44', 'instmon', 'termon']);
 const MAX_SAVED_PAGES = 12;
-const LH_KEY = 'lh';
+const LH_PAGE = 'lasthard';
 const REF_W = 800;
 const REF_H = 500;
 const ZOOM_MIN = 0.4;
@@ -55,6 +57,14 @@ function emptyState() {
 
 function keyOf(nodeId, pageId) {
   return `${nodeId}:${pageId}`;
+}
+
+function lhKey(name) {
+  return `lh:${String(name).toLowerCase()}`;
+}
+
+function itemKey(it) {
+  return it.kind === 'lh' ? lhKey(it.name) : keyOf(it.nodeId, it.pageId);
 }
 
 function hasTab(s, k) {
@@ -136,12 +146,21 @@ function openTab(s, nodeId, pageId) {
   return openKey(addTab(s, nodeId, pageId), keyOf(nodeId, pageId));
 }
 
-function openLastHeard(s, nodeId, url) {
-  const has = s.tabs.some((t) => t.key === LH_KEY);
-  const tabs = has
-    ? s.tabs.map((t) => (t.key === LH_KEY ? { ...t, nodeId, url } : t))
-    : [...s.tabs, { key: LH_KEY, nodeId, pageId: 'lasthard', kind: 'lh', url }];
-  return showAlone({ ...s, tabs }, LH_KEY);
+function putLastHeard(s, nodeId, url, name) {
+  const key = lhKey(name);
+  const tab = { key, nodeId, pageId: LH_PAGE, kind: 'lh', name, url };
+  const has = s.tabs.some((t) => t.key === key);
+  return { ...s, tabs: has ? s.tabs.map((t) => (t.key === key ? tab : t)) : [...s.tabs, tab] };
+}
+
+function openLastHeard(s, nodeId, url, name) {
+  return showAlone(putLastHeard(s, nodeId, url, name), lhKey(name));
+}
+
+function dropLastHeard(s, ok) {
+  let out = s;
+  for (const t of s.tabs) if (t.kind === 'lh' && !ok(t)) out = closeTab(out, t.key);
+  return out;
 }
 
 function putInSlot(s, key, slot) {
@@ -332,7 +351,7 @@ function dropZones(area) {
 }
 
 function serialize(s) {
-  const keep = s.tabs.filter((t) => t.kind !== 'lh');
+  const keep = s.tabs;
   const ok = (k) => keep.some((t) => t.key === k);
   const slots = {};
   const sel = {};
@@ -342,7 +361,7 @@ function serialize(s) {
   }
   return {
     version: 2,
-    tabs: keep.map((t) => ({ nodeId: t.nodeId, pageId: t.pageId })),
+    tabs: keep.map((t) => (t.kind === 'lh' ? { kind: 'lh', nodeId: t.nodeId, name: t.name, url: t.url } : { nodeId: t.nodeId, pageId: t.pageId })),
     slots,
     sel,
     single: ok(s.single) ? s.single : null,
@@ -371,8 +390,17 @@ function restore(saved, nodes, pages) {
   const seen = new Set();
   const tabs = [];
   for (const t of saved.tabs) {
-    if (!t || typeof t.nodeId !== 'string' || typeof t.pageId !== 'string') continue;
-    if (!nodes.some((n) => n.id === t.nodeId) || !pages.some((p) => p.id === t.pageId)) continue;
+    if (!t || typeof t.nodeId !== 'string' || !nodes.some((n) => n.id === t.nodeId)) continue;
+    if (t.kind === 'lh') {
+      const name = P.cleanLastHeardName(t.name);
+      if (!name || typeof t.url !== 'string') continue;
+      const key = lhKey(name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tabs.push({ key, nodeId: t.nodeId, pageId: LH_PAGE, kind: 'lh', name, url: t.url });
+      continue;
+    }
+    if (typeof t.pageId !== 'string' || !pages.some((p) => p.id === t.pageId)) continue;
     const key = keyOf(t.nodeId, t.pageId);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -406,7 +434,8 @@ module.exports = {
   SLOT_LABEL,
   SINGLE_ONLY,
   MAX_SAVED_PAGES,
-  LH_KEY,
+  lhKey,
+  itemKey,
   REF_W,
   REF_H,
   ZOOM_MIN,
@@ -431,6 +460,8 @@ module.exports = {
   openKey,
   openTab,
   openLastHeard,
+  putLastHeard,
+  dropLastHeard,
   putInSlot,
   dropKey,
   unslot,

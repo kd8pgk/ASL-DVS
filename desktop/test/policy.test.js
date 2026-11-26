@@ -198,3 +198,19 @@ test('running without the sandbox is noticed, so it can be written to the log', 
   assert.equal(P.sandboxOff(['--no-sandboxes']), false);
   assert.equal(P.sandboxOff([]), false);
 });
+
+test('a Last Heard name comes from the page link when given, else from the known networks, else the host', () => {
+  const split = P.splitLastHeardName('https://tgif.network/activetg.php#nc-name=TGIF');
+  assert.deepEqual(split, { url: 'https://tgif.network/activetg.php', name: 'TGIF' });
+  assert.deepEqual(P.splitLastHeardName('https://x.example/lh#view=1&nc-name=System%20X'), { url: 'https://x.example/lh#view=1', name: 'System X' });
+  assert.deepEqual(P.splitLastHeardName('https://x.example/lh'), { url: 'https://x.example/lh', name: '' });
+  assert.deepEqual(P.splitLastHeardName('https://x.example/lh#nc-name=%E0%A4%A'), { url: 'https://x.example/lh', name: '' });
+  assert.equal(P.splitLastHeardName('https://x.example/#nc-name=' + 'a'.repeat(30)).name, '');
+  assert.equal(P.splitLastHeardName('https://x.example/#nc-name=<b>').name, '');
+  assert.equal(P.lastHeardName('https://tgif.network/activetg.php', 'Custom'), 'Custom');
+  assert.equal(P.lastHeardName('https://tgif.network/activetg.php', ''), 'TGIF');
+  assert.equal(P.lastHeardName('https://www.fcs00.xreflector.net/last_heard', ''), 'FCS');
+  assert.equal(P.lastHeardName('https://stats.allstarlink.org/', ''), 'ASL');
+  assert.equal(P.lastHeardName('https://lh.example.org/x', ''), 'lh.example.org');
+  assert.equal(P.lastHeardName('https://lh.example.org/x', 'bad<name>'), 'lh.example.org');
+});

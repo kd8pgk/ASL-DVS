@@ -272,14 +272,14 @@
       grp.append(ul);
       box.append(grp);
     }
-    const lh = lay && lay.tabs.find((t) => t.key === 'lh' && !t.slot);
-    if (lh) {
+    const lhs = lay ? lay.tabs.filter((t) => t.kind === 'lh' && !t.slot) : [];
+    if (lhs.length) {
       const grp = el('div', 'group');
       const head = el('div', 'group-head');
       head.append(el('span', 'group-name', 'Last Heard'));
       grp.append(head);
       const ul = el('ul', 'entries');
-      ul.append(entry({ key: lh.key }, 'Last Heard', entryClasses(lh, false, {}), smallButton('×', 'Close Last Heard', () => window.nc.closeTab(lh.key)), true, lh.key));
+      for (const lh of lhs) ul.append(entry({ key: lh.key }, lh.label, entryClasses(lh, false, {}), smallButton('×', `Close ${lh.label}`, () => window.nc.closeTab(lh.key)), true, lh.key));
       grp.append(ul);
       box.append(grp);
     }
