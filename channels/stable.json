@@ -56,22 +56,22 @@
    "version": "2.115.0"
   },
   "nodecontrol": {
-   "blob": "3048647192a793761052308aa873bd074926bf41",
-   "commit": "e9ad16126fab792e2a3f6edfb360a0ef40a7c912",
-   "file": "nodecontrol_v9_3_112_20261116.py",
-   "landed": "2026-11-16T08:44:08Z",
-   "promoted": "2026-11-23T08:21:58Z",
+   "blob": "e91fa632ef0cd13a47a9f661f96fe0a8d2faaed8",
+   "commit": "3a1d6c9ca71f63be750ef657dc3916c2b87f0101",
+   "file": "nodecontrol_v9_3_113_20261116.py",
+   "landed": "2026-11-16T17:33:20Z",
+   "promoted": "2026-11-26T12:52:09Z",
    "reason": "count",
-   "version": "9.3.112"
+   "version": "9.3.113"
   },
   "nodecontrol_pi02w": {
-   "blob": "5362937907ae137bcf3f42cc6b5516ac71d0d310",
-   "commit": "6b41927c353a7d8c5579a4da2979a6b3b98962b8",
-   "file": "nodecontrol_pi02w_v9_3_118_20261116.py",
-   "landed": "2026-11-16T17:56:31Z",
-   "promoted": "2026-11-23T16:13:57Z",
+   "blob": "e55d54858d1f2cf883f049396edccc2554c2cb74",
+   "commit": "523ae3a2afd63341fe6ffe7ac682677ccd3462e4",
+   "file": "nodecontrol_pi02w_v9_3_119_20261121.py",
+   "landed": "2026-11-21T17:27:37Z",
+   "promoted": "2026-11-26T12:52:09Z",
    "reason": "count",
-   "version": "9.3.118-pi02w"
+   "version": "9.3.119-pi02w"
   },
   "nodemon": {
    "blob": "83602a07ccaadd40d4ce5b85651db6e1a0234d63",
@@ -92,13 +92,13 @@
    "version": "0.17.6"
   },
   "nodetalker": {
-   "blob": "3b1cfc9104f04d24679cdc8c9db55067e9b4329c",
-   "commit": "9fdbd39c1ca6f3a581845161857f2469b422aa7c",
-   "file": "nodetalker_v0_14_0_20261123.py",
-   "landed": "2026-11-23T07:54:15Z",
-   "promoted": "2026-11-26T07:54:15Z",
+   "blob": "84acae0072a032ac8d28fc2156fb7c17de4220af",
+   "commit": "88bea081fd306a62b8a9ad4a9236983825bb1ad0",
+   "file": "nodetalker_v0_14_1_20261123.py",
+   "landed": "2026-11-23T08:21:58Z",
+   "promoted": "2026-11-26T12:52:09Z",
    "reason": "count",
-   "version": "0.14.0"
+   "version": "0.14.1"
   },
   "pibrary": {
    "blob": "00013a0665069affaf18fc1af50181550d4a305a",
