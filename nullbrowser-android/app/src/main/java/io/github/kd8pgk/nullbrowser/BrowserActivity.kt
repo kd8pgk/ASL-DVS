@@ -298,7 +298,7 @@ class BrowserActivity : Activity() {
         findViewById<ImageButton>(R.id.back).setOnClickListener { if (web.canGoBack()) web.goBack() }
         findViewById<ImageButton>(R.id.forward).setOnClickListener { if (web.canGoForward()) web.goForward() }
         findViewById<ImageButton>(R.id.reload).setOnClickListener { web.reload() }
-        findViewById<ImageButton>(R.id.home).setOnClickListener { goBlank() }
+        findViewById<ImageButton>(R.id.home).setOnClickListener { wipeAll() }
         errorRetry.setOnClickListener { lastMainError?.let { navigate(it) } ?: web.reload() }
         lineBtn.setOnClickListener {
             lineRow.visibility = if (lineRow.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -689,6 +689,27 @@ class BrowserActivity : Activity() {
             return
         }
         navigate(candidate)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun wipeAll() {
+        pending = null
+        askBar.visibility = View.GONE
+        line.clearAhead()
+        line.stop()
+        upgradedHosts.clear()
+        allowHttp.clear()
+        lastMainError = null
+        web.stopLoading()
+        web.clearHistory()
+        web.clearCache(true)
+        web.clearFormData()
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+        WebStorage.getInstance().deleteAllData()
+        downloadsDir(cacheDir).deleteRecursively()
+        goBlank()
+        showNotice(getString(R.string.wipe_done))
     }
 
     private fun goBlank() {
