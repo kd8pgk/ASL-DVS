@@ -1,6 +1,16 @@
 # Node Controller Desktop changelog
 
-Current version: `0.12.2`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+Current version: `0.13.0`. The app is in `desktop/`; its version is `version` in `desktop/package.json`. Newest entries first.
+
+## 0.13.0 (2026-11-26)
+
+Last Heard panels are named for their network, and they are kept in the saved layout and in saved splits.
+
+- **Named panels.** A Last Heard panel is named for its network or mode (for example TGIF, YSF or Brandmeister) instead of "Last Heard". The name comes from the link the node opens when it sends one (a `nc-name` part after `#`, which browsers never send to the server), else from a built-in list of the known networks' addresses, else from the address's host name. Each panel has its own × and its own entry in the sidebar's Last Heard group.
+- **More than one.** Opening a Last Heard with the same name reloads its panel. A different name opens a new panel and leaves the others open.
+- **Kept.** Open Last Heard panels are saved in the layout and in saved splits, and come back after a restart. Each address is checked again when it is restored or applied; one that is no longer allowed is dropped (or refused, for a split).
+- **Splits.** A saved split may hold Last Heard panels, so saving no longer refuses them.
+- **Desktop only.** Node Controller and Node Talker are not changed by this release; their Last Heard links still open with the built-in names until their own releases send the name.
 
 ## 0.12.2 (2026-11-25)
 

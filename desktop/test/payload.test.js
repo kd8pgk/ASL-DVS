@@ -12,11 +12,11 @@ function base(extra = {}) {
   return { ls, nodes, splits: [], rt: new Map(), grid, down: [], overlay: false, restart: false, ...extra };
 }
 
-test('labels name the node (or its host) and the page; Last Heard is Last Heard', () => {
+test('labels name the node (or its host) and the page; Last Heard is named for its network', () => {
   assert.equal(labelOf({ nodeId: 'a', pageId: 'talker' }, nodes), 'magicbox · Node Talker');
   assert.equal(labelOf({ nodeId: 'b', pageId: 'sysmon' }, nodes), 'pi.local · SysMon');
   assert.equal(labelOf({ nodeId: 'gone', pageId: 'nope' }, nodes), '? · ?');
-  assert.equal(labelOf({ kind: 'lh' }, nodes), 'Last Heard');
+  assert.equal(labelOf({ kind: 'lh', name: 'TGIF' }, nodes), 'TGIF');
   const ls = L.openTab(L.emptyState(), 'a', 'nodemon');
   assert.equal(shortLabel(ls, ls.tabs[0].key), 'Node Monitor');
   assert.equal(shortLabel(ls, 'missing'), '');

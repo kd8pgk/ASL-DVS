@@ -67,12 +67,31 @@ test('saving takes the slots with their stacks, selections and divider position'
   assert.equal(P.fromState(alone, 'Back').preset.slots.left.length, 2);
 });
 
-test('saving refuses with fewer than two pages in slots, no name, or Last Heard in a slot', () => {
+test('saving refuses with fewer than two pages in slots, or no name', () => {
   const one = L.putInSlot(L.openTab(L.emptyState(), 'a', 'controller'), 'a:controller', 'left');
   assert.match(P.fromState(one, 'x').error, /nothing to save/);
   assert.match(P.fromState(built(), '   ').error, /name/);
-  const lh = L.putInSlot(L.putInSlot(L.openLastHeard(L.addTab(L.emptyState(), 'a', 'talker'), 'a', 'https://lh.example/x'), 'lh', 'left'), 'a:talker', 'right');
-  assert.match(P.fromState(lh, 'x').error, /Last Heard/);
+});
+
+test('a split keeps its Last Heard panels by name and address, and applying it reopens them', () => {
+  const lh = L.putInSlot(L.putInSlot(L.openLastHeard(L.addTab(L.emptyState(), 'a', 'talker'), 'a', 'https://lh.example/x', 'TGIF'), 'lh:tgif', 'left'), 'a:talker', 'right');
+  const made = P.fromState(lh, 'Both');
+  assert.equal(made.error, undefined);
+  assert.deepEqual(made.preset.slots.left, [{ kind: 'lh', nodeId: 'a', name: 'TGIF', url: 'https://lh.example/x' }]);
+  const list = P.put([], made.preset).list;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nc-splits-'));
+  const store = P.createPresetStore(path.join(dir, 'splits.json'));
+  store.save(list);
+  const loaded = store.load();
+  assert.deepEqual(loaded[0].slots.left, [{ kind: 'lh', nodeId: 'a', name: 'TGIF', url: 'https://lh.example/x' }]);
+  const ok = (u) => u.startsWith('https://lh.example/');
+  const r = P.apply(L.emptyState(), loaded[0], NODES, PAGES, ok);
+  assert.equal(r.error, undefined);
+  assert.equal(r.state.tabs.find((t) => t.key === 'lh:tgif').url, 'https://lh.example/x');
+  assert.equal(r.state.sel.left, 'lh:tgif');
+  const bad = P.apply(L.emptyState(), loaded[0], NODES, PAGES, () => false);
+  assert.match(bad.error, /not allowed/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('saving under an existing name replaces it, and the list is capped', () => {

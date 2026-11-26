@@ -107,6 +107,8 @@ function needsRestart() {
 
 const SES = createSessions({ session, getNodes: () => S.nodes, log: (t) => logLine(t) });
 const { nodeSession, lastHeardSession, harden, allNodeHosts } = SES;
+const lhOk = (url) => P.lastHeardOk(url, allNodeHosts());
+S.ls = L.dropLastHeard(S.ls, (t) => lhOk(t.url));
 
 S.win = null;
 S.overlay = false;
@@ -326,14 +328,15 @@ function runKey(k, shift) {
   }
 }
 
-function openLastHeard(nodeId, url) {
-  if (!P.lastHeardOk(url, allNodeHosts())) {
+function openLastHeard(nodeId, frameUrl) {
+  const parts = P.splitLastHeardName(frameUrl);
+  if (!lhOk(parts.url)) {
     emitNotice('That Last Heard address was refused: only web addresses on the public internet, or on one of your nodes, are opened here.', true);
     return;
   }
-  const had = S.ls.tabs.find((t) => t.key === L.LH_KEY);
-  S.ls = L.openLastHeard(S.ls, nodeId, url);
-  if (had && had.url !== url) closeRt(L.LH_KEY);
+  const name = P.lastHeardName(parts.url, parts.name);
+  closeRt(L.lhKey(name));
+  S.ls = L.openLastHeard(S.ls, nodeId, parts.url, name);
   sync();
   focusView();
 }
@@ -601,7 +604,7 @@ app.whenReady().then(() => {
   registerIpc({
     S, SES, INTERNAL, refused, router, monitor, presetStore, startupNotice,
     fromShell, payload, persist, push, sync, update, focusView, closeRt, closeTab, reloadTab, zoomKey,
-    snapshot, emitNotice, openExternalPage, logLine, launcherPaths, runningAppImage,
+    snapshot, emitNotice, openExternalPage, logLine, launcherPaths, runningAppImage, lhOk,
   });
   createWindow();
   monitor.start();

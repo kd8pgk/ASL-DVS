@@ -156,6 +156,62 @@ function allowLastHeardRequest(url, nodeHosts) {
   return !isPrivateHost(host) || nodeHosts.includes(host);
 }
 
+const LAST_HEARD_NAME_HOSTS = {
+  'stats.allstarlink.org': 'ASL',
+  'hose.brandmeister.network': 'Brandmeister',
+  'tgif.network': 'TGIF',
+  'freedmr.uk': 'FreeDMR',
+  'openquad.net': 'QuadNet',
+  'amcomm.network': 'AMCOMM',
+  'kc3ol.net': 'QRM',
+  'dmr.freestar.network': 'FreeStar',
+  'register.ysfreflector.de': 'YSF',
+  'xreflector.net': 'FCS',
+  'fcs00.xreflector.net': 'FCS',
+  'dstarusers.org': 'D-STAR',
+  'xlx.ham-digital.net': 'XLX',
+  'p25.mwtelemetry.com': 'P25',
+  'nxdn.mwtelemetry.com': 'NXDN',
+};
+const NAME_PARAM = 'nc-name';
+const NAME_MAX = 24;
+const NAME_RE = /^[A-Za-z0-9 .+/&_-]+$/;
+
+function cleanLastHeardName(value) {
+  const s = String(value == null ? '' : value).trim();
+  return s && s.length <= NAME_MAX && NAME_RE.test(s) ? s : '';
+}
+
+function splitLastHeardName(url) {
+  const text = String(url || '');
+  const i = text.indexOf('#');
+  if (i < 0) return { url: text, name: '' };
+  const parts = text.slice(i + 1).split('&');
+  const hit = parts.find((p) => p.startsWith(`${NAME_PARAM}=`));
+  if (!hit) return { url: text, name: '' };
+  let raw = '';
+  try {
+    raw = decodeURIComponent(hit.slice(NAME_PARAM.length + 1));
+  } catch {
+    raw = '';
+  }
+  const rest = parts.filter((p) => p !== hit).join('&');
+  return { url: text.slice(0, i) + (rest ? `#${rest}` : ''), name: cleanLastHeardName(raw) };
+}
+
+function lastHeardName(url, given) {
+  const name = cleanLastHeardName(given);
+  if (name) return name;
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    host = '';
+  }
+  if (Object.prototype.hasOwnProperty.call(LAST_HEARD_NAME_HOSTS, host)) return LAST_HEARD_NAME_HOSTS[host];
+  return cleanLastHeardName(host) || 'Last Heard';
+}
+
 function hostsOfNode(node) {
   return [node.host, node.lanIp, node.awayHost].filter(Boolean).map((h) => h.toLowerCase());
 }
@@ -178,4 +234,7 @@ module.exports = {
   lastHeardOk,
   allowLastHeardRequest,
   hostsOfNode,
+  cleanLastHeardName,
+  splitLastHeardName,
+  lastHeardName,
 };
