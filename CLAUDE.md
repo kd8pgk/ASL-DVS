@@ -422,6 +422,11 @@
     as the desktop build removes the line, memory, core and battery
     readouts. Languages, Referer and hint headers cannot be set in WebView
     without AndroidX.
+  - One written exception (0.6.0): the **Screenshot** button writes a PDF to
+    Downloads, and only when you press Save. It is made in `quarantine/`
+    inside the app's cache and checked first (`ShotCheck.kt`: `%PDF-`/`%%EOF`,
+    a page, a size limit, the recorded hash). Android 8 and 9 use the old
+    storage permission (`maxSdkVersion="28"`) for this only.
   - https tried first; a certificate error is refused outright, with no
     trust-for-session yet. No downloads except a PDF, audio or video file,
     content-sniffed against its first bytes the same way the desktop build

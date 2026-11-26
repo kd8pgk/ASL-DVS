@@ -161,6 +161,20 @@
                 android:text="@string/read_ahead_off" />
 
             <Button
+                android:id="@+id/lineShot"
+                style="?android:attr/buttonStyleSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/screenshot" />
+
+            <CheckBox
+                android:id="@+id/lineWindow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/shot_window"
+                android:textColor="@color/text" />
+
+            <Button
                 android:id="@+id/lineClose"
                 style="?android:attr/buttonStyleSmall"
                 android:layout_width="wrap_content"
