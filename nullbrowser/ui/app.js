@@ -227,7 +227,6 @@
   $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
-  $('wipe').addEventListener('click', () => window.nb.wipeAll());
   $('jsbar-yes').addEventListener('click', () => window.nb.confirmFastJs());
   $('jsbar-no').addEventListener('click', () => window.nb.cancelFastJs());
   document.addEventListener('click', (ev) => {
