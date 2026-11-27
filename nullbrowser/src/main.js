@@ -12,7 +12,7 @@ const S = require('./slow');
 const SH = require('./shot');
 const DL = require('./download');
 
-const REAL_HOME = os.homedir();
+const REAL_HOME = R.realHome(process.env, os.homedir());
 
 app.setName('Null Browser');
 protocol.registerSchemesAsPrivileged([{ scheme: S.SCHEME, privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: true } }]);
@@ -31,6 +31,7 @@ R.rammaidSweep(base.dir);
 const preDir = R.prelaunchDir(process.env.NULLBROWSER_PRELAUNCH_DIR);
 const ram = preDir ? R.adoptRamDir(preDir) : R.createRamDir(base.dir);
 
+process.env.NULLBROWSER_REAL_HOME = REAL_HOME;
 process.env.HOME = ram.sub.home;
 process.env.XDG_CONFIG_HOME = ram.sub.config;
 process.env.XDG_CACHE_HOME = ram.sub.cache;
@@ -57,7 +58,7 @@ if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const { st } = require('./state');
-const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
+const { onDownload, openFile, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
@@ -145,7 +146,7 @@ function bars() {
 function layout() {
   if (!alive() || !st.view) return;
   const [w, h] = st.win.getContentSize();
-  const top = TOOLBAR + BAR * bars();
+  const top = Math.max(TOOLBAR + BAR * bars(), st.panelSpace);
   st.view.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
   st.view.setVisible(Boolean(pageUrl()) && !st.error);
 }
@@ -623,6 +624,13 @@ function register() {
     push();
     return { ok: true };
   });
+  ipcMain.handle('panel-space', (e, px) => {
+    if (!fromShell(e)) return { ok: false };
+    const n = Number(px);
+    st.panelSpace = Number.isFinite(n) ? Math.min(Math.max(Math.round(n), 0), 600) : 0;
+    layout();
+    return { ok: true };
+  });
   ipcMain.handle('dl-ask', (e) => {
     if (!fromShell(e)) return { ok: false };
     st.dlAsking = true;
@@ -728,6 +736,12 @@ function register() {
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
     return { ok: setLine(key, value) };
+  });
+  ipcMain.handle('open-ram', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    openFile(ram.dir, 'the RAM folder');
+    say(`This run's RAM folder is ${ram.dir}. It is removed when Null Browser closes.`);
+    return { ok: true };
   });
   ipcMain.handle('screenshot', async (e) => {
     if (!fromShell(e)) return { ok: false };
@@ -896,7 +910,20 @@ function register() {
   });
   ipcMain.handle('confirm-fast-js', (e) => {
     if (!fromShell(e) || st.pendingJs === null) return { ok: false };
-    app.relaunch({ args: P.relaunchArgv(process.argv.slice(1), st.pendingJs) });
+    const isFile = (f) => {
+      try {
+        fs.accessSync(f, fs.constants.X_OK);
+        return fs.statSync(f).isFile();
+      } catch {
+        return false;
+      }
+    };
+    const execPath = P.relaunchExec(process.env, process.execPath, app.isPackaged, isFile);
+    for (const [k, v] of Object.entries(R.relaunchEnv(process.env, ram.dir, REAL_HOME))) {
+      if (v === null) delete process.env[k];
+      else process.env[k] = v;
+    }
+    app.relaunch(execPath ? { execPath, args: P.relaunchArgv(process.argv.slice(1), st.pendingJs) } : { args: P.relaunchArgv(process.argv.slice(1), st.pendingJs) });
     app.quit();
     return { ok: true };
   });

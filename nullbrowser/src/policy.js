@@ -32,6 +32,16 @@ const SWITCHES = [
 const JS_FLAGS = '--jitless';
 const FAST_JS_ARG = '--nb-fast-js';
 
+function relaunchExec(env, execPath, packaged, isFile) {
+  const image = env && env.APPIMAGE;
+  if (image && image.startsWith('/') && isFile(image)) return image;
+  if (packaged && String(execPath).endsWith('-bin')) {
+    const wrapper = String(execPath).slice(0, -4);
+    if (isFile(wrapper)) return wrapper;
+  }
+  return '';
+}
+
 function relaunchArgv(argv, on) {
   const kept = (argv || []).filter((a) => a !== FAST_JS_ARG);
   if (on) kept.push(FAST_JS_ARG);
@@ -313,6 +323,7 @@ module.exports = {
   JS_FLAGS,
   FAST_JS_ARG,
   relaunchArgv,
+  relaunchExec,
   UNSAFE_SWITCHES,
   unsafeSwitches,
   hostOf,

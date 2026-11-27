@@ -14,6 +14,10 @@ if [ -d /dev/shm ] && [ -w /dev/shm ]; then
 else
   BASE=\${TMPDIR:-/tmp}
 fi
+if [ -z "$NULLBROWSER_REAL_HOME" ]; then
+  NULLBROWSER_REAL_HOME="$HOME"
+fi
+export NULLBROWSER_REAL_HOME
 NB_DIR=$(mktemp -d "$BASE/null-browser-$UID_N-$$-XXXXXX" 2>/dev/null) || exec "$BIN" "$@"
 chmod 700 "$NB_DIR"
 for s in home config cache data state chromium session temp files; do

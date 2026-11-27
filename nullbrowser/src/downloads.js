@@ -19,13 +19,13 @@ function rammaidFile(file) {
   }
 }
 
-function openFile(file) {
+function openFile(file, what) {
   if (!app.isPackaged && process.env.NULLBROWSER_OPEN_LOG) {
     fs.appendFileSync(process.env.NULLBROWSER_OPEN_LOG, `${file}\n`);
     return;
   }
   shell.openPath(file).then((err) => {
-    if (err) shared.say(`No app on this computer could open ${path.basename(file)}.`);
+    if (err) shared.say(`No app on this computer could open ${what || path.basename(file)}.`);
   });
 }
 

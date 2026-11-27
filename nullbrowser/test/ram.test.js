@@ -80,3 +80,17 @@ test('after quit a detached cleaner waits for the browser to end, then removes t
   assert.equal(R.rammaidAfterExit('relative/null-browser-x', 1, fake), false);
   assert.equal(calls.length, 1);
 });
+
+test('the real home comes from the launcher, never from a RAM folder, and a restart gets the original environment back', () => {
+  const b = base();
+  const home = path.join(b, 'user');
+  fs.mkdirSync(home);
+  assert.equal(R.realHome({ NULLBROWSER_REAL_HOME: home }, '/fallback'), home);
+  assert.equal(R.realHome({}, '/fallback'), '/fallback');
+  assert.equal(R.realHome({ NULLBROWSER_REAL_HOME: 'relative' }, '/fallback'), '/fallback');
+  assert.equal(R.realHome({ NULLBROWSER_REAL_HOME: path.join(b, 'gone') }, '/fallback'), '/fallback');
+  assert.equal(R.realHome({ NULLBROWSER_REAL_HOME: path.join(b, `${R.PREFIX}0-1-x`) }, '/fallback'), '/fallback');
+  const ram = path.join(b, `${R.PREFIX}0-1-x`);
+  const env = R.relaunchEnv({ HOME: path.join(ram, 'home'), TMPDIR: path.join(ram, 'temp'), XDG_CONFIG_HOME: '/home/u/.config', XDG_CACHE_HOME: path.join(ram, 'cache') }, ram, '/home/u');
+  assert.deepEqual(env, { NULLBROWSER_PRELAUNCH_DIR: null, NULLBROWSER_REAL_HOME: '/home/u', HOME: '/home/u', TMPDIR: null, XDG_CACHE_HOME: null });
+});

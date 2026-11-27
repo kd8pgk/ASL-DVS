@@ -1,6 +1,22 @@
 # Null Browser changelog
 
-Current version: `0.17.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.17.2`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.17.2 (2026-11-27)
+
+A **RAM folder** button in the toolbar.
+
+- **RAM folder** opens this run's RAM folder (`/dev/shm/null-browser-…`) in your default file manager (Caja, Thunar and others), and a notice shows its path. It holds the run's cache and session data, screenshots waiting in `quarantine/`, and files being checked.
+- **Nothing is written by the browser.** It only hands the folder to the system, the way Open hands a PDF on. A file manager may keep the path in its own history. The folder is still removed when Null Browser closes.
+
+## 0.17.1 (2026-11-27)
+
+Screenshots and downloads reach your real Downloads folder again, the JIT button restarts properly, and the download list is no longer hidden behind the page.
+
+- **Screenshots and downloads saved into the RAM folder.** The AppImage launcher points `HOME` at the RAM folder before the app starts, and the app took "your home" from `HOME`, so Save and the download queue wrote to `Downloads` inside the RAM folder, which is deleted when Null Browser closes. The launcher now passes the real home folder (`NULLBROWSER_REAL_HOME`) and the app uses it. A source run was never affected, which is why the tests missed it. Pressing Save still asks nothing more: the bar is the question, and the file goes to Downloads with a "Saved … to your Downloads folder" notice.
+- **JIT: Off / On restarts as asked.** The restart ran the program from inside the AppImage's temporary mount, with the old RAM folder, `HOME` and `TMPDIR` still set, and could not come back as a clean new run. It now starts the AppImage itself (or the launcher script of an unpacked build), with the old RAM folder left out of its environment, so the new run builds its own RAM folder and starts with the other JIT setting. The browser still closes and reopens as one step; nothing else is kept.
+- **The download list, queue and bookmarks panels are visible.** They sit in the toolbar window and the page was drawn over them. The page now moves down below an open panel and back up when it closes.
+- The smoke test now runs a launcher-style start (home pointing at the RAM folder), saves a screenshot to the real Downloads folder and follows a JIT restart through a stand-in AppImage; the package check looks for the real-home line in the launcher.
 
 ## 0.17.0 (2026-11-27)
 

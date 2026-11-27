@@ -352,6 +352,7 @@
   $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
+  $('ramopen').addEventListener('click', () => window.nb.openRam());
   $('wipe').addEventListener('click', () => window.nb.wipeAll());
   $('leave-go').addEventListener('click', () => window.nb.leaveAnswer(leaveId, true));
   $('leave-stay').addEventListener('click', () => window.nb.leaveAnswer(leaveId, false));
@@ -370,6 +371,20 @@
     }
     window.nb.dlPanel(!dlState.panel);
   });
+  let panelSent = 0;
+  function reportPanels() {
+    let bottom = 0;
+    for (const el of document.querySelectorAll('.panel')) {
+      if (el.hidden) continue;
+      bottom = Math.max(bottom, Math.ceil(el.getBoundingClientRect().bottom));
+    }
+    if (bottom !== panelSent) {
+      panelSent = bottom;
+      window.nb.panelSpace(bottom);
+    }
+  }
+  const panelWatch = new ResizeObserver(reportPanels);
+  for (const el of document.querySelectorAll('.panel')) panelWatch.observe(el);
   $('dl-rescan').addEventListener('click', () => window.nb.dlRescan());
   $('dl-close').addEventListener('click', () => window.nb.dlPanel(false));
   $('dl-yes').addEventListener('click', () => window.nb.dlAnswer(true));
