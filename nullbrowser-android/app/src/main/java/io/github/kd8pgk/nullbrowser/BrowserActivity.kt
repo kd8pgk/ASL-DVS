@@ -92,6 +92,10 @@ class BrowserActivity : Activity() {
 
     private class ShotRec(val file: File, val sha: String, val pages: Int)
     private lateinit var line: SlowLine
+    private lateinit var pop: PopGuard
+    private lateinit var popSheet: PopSheet
+    private var popNoticed = false
+    private var starvedActive = 0
     private lateinit var lineBtn: Button
     private lateinit var lineRow: View
     private lateinit var lineStatus: View
@@ -153,12 +157,28 @@ class BrowserActivity : Activity() {
         web.settings.javaScriptCanOpenWindowsAutomatically = false
         web.settings.userAgentString = LessInfo.userAgent(web.settings.userAgentString)
         line = SlowLine(web) { renderLine() }
+        pop = PopGuard(web, { showNotice(it) }) { if (::popSheet.isInitialized) popSheet.refresh() }
+        popSheet = PopSheet(this, pop) { chooseBlockList() }
+        pop.onPicked = { popSheet.show() }
+        findViewById<Button>(R.id.popBtn).setOnClickListener { popSheet.show() }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame) return false
                 val url = request.url
                 if (url.scheme != "http" && url.scheme != "https") return true
+                val target = url.host ?: ""
+                val here = Sites.hostOfUrl(view.url)
+                val listed = pop.blockedBy(target)
+                if (listed.isNotEmpty()) {
+                    pop.logPop("jump", Sites.siteOfHost(here), target, "blocked")
+                    pop.noteBlocked(listed)
+                    showNotice("Blocked a jump to $target (it is on your block list).")
+                    return true
+                }
+                if (here.isNotEmpty() && Sites.siteOfHost(target) != Sites.siteOfHost(here)) {
+                    pop.logPop("jump", Sites.siteOfHost(here), target, if (request.hasGesture()) "tapped" else "went")
+                }
                 val up = upgradeIfNeeded(url)
                 if (up != null) {
                     view.loadUrl(up, extraHeaders())
@@ -171,23 +191,28 @@ class BrowserActivity : Activity() {
                 return false
             }
 
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = line.intercept(request)
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = pop.intercept(request) ?: line.intercept(request)
 
             override fun onPageCommitVisible(view: WebView, url: String) {
+                pop.applyCss(view, url)
                 line.pageVisible()
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 loadingHost = Uri.parse(url).host
                 hideError()
+                pop.resetPage()
+                popNoticed = false
                 view.evaluateJavascript(NoClip.JS, null)
                 view.evaluateJavascript(LessInfo.JS, null)
+                pop.applyCss(view, url)
                 line.pageStarted(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 view.evaluateJavascript(NoClip.JS, null)
                 view.evaluateJavascript(LessInfo.JS, null)
+                pop.applyCss(view, url)
                 line.pageFinished()
                 refreshUi()
             }
@@ -231,16 +256,58 @@ class BrowserActivity : Activity() {
             }
 
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-                if (!isUserGesture) {
-                    showNotice(getString(R.string.popups_off))
+                val from = Sites.siteOfHost(Sites.hostOfUrl(view.url))
+                if (!isUserGesture && starvedActive >= MAX_STARVED) {
+                    pop.logPop("window", from, "", "dropped")
                     return false
                 }
                 val temp = WebView(this@BrowserActivity)
+                temp.settings.javaScriptEnabled = false
+                temp.settings.allowFileAccess = false
+                temp.settings.allowContentAccess = false
+                var gone = false
+                val closeTemp = {
+                    if (!gone) {
+                        gone = true
+                        if (!isUserGesture) starvedActive -= 1
+                        temp.post { temp.destroy() }
+                    }
+                }
+                if (!isUserGesture) {
+                    starvedActive += 1
+                    temp.postDelayed({ closeTemp() }, STARVE_MS)
+                    if (!popNoticed) {
+                        popNoticed = true
+                        showNotice(getString(R.string.popup_dropped))
+                    }
+                }
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                        navigate(request.url.toString())
-                        v.post { v.destroy() }
+                        val host = request.url.host ?: ""
+                        val listed = pop.blockedBy(host)
+                        if (!isUserGesture) {
+                            pop.logPop("window", from, host, if (listed.isNotEmpty()) "blocked" else "dropped")
+                            if (listed.isNotEmpty()) pop.noteBlocked(listed)
+                        } else if (listed.isNotEmpty()) {
+                            pop.logPop("window", from, host, "blocked")
+                            pop.noteBlocked(listed)
+                            showNotice("Blocked a pop-up to $host (it is on your block list).")
+                        } else if (request.url.scheme == "http" || request.url.scheme == "https") {
+                            navigate(request.url.toString())
+                        }
+                        closeTemp()
                         return true
+                    }
+
+                    override fun shouldInterceptRequest(v: WebView, request: WebResourceRequest): WebResourceResponse? {
+                        if (isUserGesture) return null
+                        val host = request.url.host ?: ""
+                        if (request.isForMainFrame) {
+                            val listed = pop.blockedBy(host)
+                            pop.logPop("window", from, host, if (listed.isNotEmpty()) "blocked" else "dropped")
+                            if (listed.isNotEmpty()) pop.noteBlocked(listed)
+                        }
+                        return WebResourceResponse("text/plain", "utf-8", 403, "Dropped", emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
                     }
                 }
                 val transport = resultMsg.obj as WebView.WebViewTransport
@@ -695,6 +762,7 @@ class BrowserActivity : Activity() {
     private fun wipeAll() {
         pending = null
         askBar.visibility = View.GONE
+        pop.resetRun()
         line.clearAhead()
         line.stop()
         upgradedHosts.clear()
@@ -766,6 +834,46 @@ class BrowserActivity : Activity() {
 
     companion object {
         private const val REQ_SHOT_STORAGE = 71
+        private const val REQ_POP_IMPORT = 72
+        private const val MAX_STARVED = 3
+        private const val STARVE_MS = 3000L
+    }
+
+    private fun chooseBlockList() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.type = "*/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQ_POP_IMPORT)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_POP_IMPORT || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        Thread {
+            val text = try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        if (out.size() > BlockRules.MAX_FILE_BYTES) return@use null
+                    }
+                    out.toString("UTF-8")
+                }
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (text == null) showNotice("That block list could not be read, or it is too big.") else pop.importText(text)
+                popSheet.show()
+            }
+        }.start()
     }
 
     @SuppressLint("GestureBackNavigation")
@@ -792,6 +900,8 @@ class BrowserActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (::popSheet.isInitialized) popSheet.dismiss()
+        if (::pop.isInitialized) pop.cancelPick()
         if (::line.isInitialized) line.shutdown()
         if (::web.isInitialized) {
             if (!rendererGone) {

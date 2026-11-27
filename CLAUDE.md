@@ -489,6 +489,15 @@
     app only after they say Open. A script pop-up without a real tap on the
     page is refused outright, with a notice; a tapped link that would open a
     new window loads in the same page instead.
+  - **Pop-ups and block list (0.7.0, `BlockList.kt`, `PopGuard.kt`,
+    `PopSheet.kt`, `PopScripts.kt`).** The same idea as the desktop block list
+    (in memory for one run; host rules in `shouldInterceptRequest`, the
+    new-window handler and the jump check; element rules as injected CSS),
+    plus a log of where pop-ups pointed. A pop-up without a tap is taken into
+    a script-less temporary window that loads nothing, its address recorded,
+    and destroyed after 3 s (at most 3). The in-page scripts are generated
+    from the desktop `src/popups.js`; what a page reports is untrusted and
+    cleaned by `PopItems`. The **Line** button is now **Tools**.
   - **What WebView does not give an app a supported way to control, and so
     is not attempted:** disabling the JIT compiler, passing Chromium
     command-line switches (closing the ones the desktop build closes, such

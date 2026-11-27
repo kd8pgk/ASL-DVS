@@ -175,6 +175,13 @@
                 android:textColor="@color/text" />
 
             <Button
+                android:id="@+id/popBtn"
+                style="?android:attr/buttonStyleSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/pop" />
+
+            <Button
                 android:id="@+id/lineClose"
                 style="?android:attr/buttonStyleSmall"
                 android:layout_width="wrap_content"
