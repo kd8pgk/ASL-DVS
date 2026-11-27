@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('nb', {
   dlAsk: () => ipcRenderer.invoke('dl-ask'),
   dlPanel: (on) => ipcRenderer.invoke('dl-panel', on),
   dlQueuePanel: (on) => ipcRenderer.invoke('dl-queue-panel', on),
+  dlRescan: () => ipcRenderer.invoke('dl-rescan'),
   dlWarn: (on) => ipcRenderer.invoke('dl-warn', on),
   dlAll: () => ipcRenderer.invoke('dl-all'),
   dlOne: (href) => ipcRenderer.invoke('dl-one', href),

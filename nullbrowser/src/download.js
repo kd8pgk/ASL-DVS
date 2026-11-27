@@ -14,6 +14,7 @@ const KINDS = {
   mp4: { ext: '.mp4', mimes: ['video/mp4'], label: 'MP4' },
   jpg: { ext: '.jpg', mimes: ['image/jpeg'], label: 'JPG' },
   mpeg: { ext: '.mpeg', mimes: ['video/mpeg'], label: 'MPEG' },
+  webp: { ext: '.webp', mimes: ['image/webp'], label: 'WebP' },
 };
 
 const EXT_KIND = {
@@ -26,11 +27,52 @@ const EXT_KIND = {
   '.jpeg': 'jpg',
   '.mpeg': 'mpeg',
   '.mpg': 'mpeg',
+  '.webp': 'webp',
 };
+
+const DYNAMIC_EXTS = ['php', 'asp', 'aspx', 'jsp', 'cgi', 'do', 'action', 'pl', 'py', 'cfm', 'ashx', 'axd'];
+const MAX_PROBES = 60;
+const MAX_LIST = MAX_BATCH_FILES;
 
 function kindOfPath(pathname) {
   const ext = path.extname(String(pathname || '')).toLowerCase();
   return EXT_KIND[ext] || '';
+}
+
+function kindOfMime(mime) {
+  const m = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (!m) return '';
+  for (const [kind, k] of Object.entries(KINDS)) if (k.mimes.includes(m)) return kind;
+  return '';
+}
+
+function kindOfQuery(u) {
+  for (const v of u.searchParams.values()) {
+    const k = kindOfPath(v.split(/[?#]/)[0]);
+    if (k) return k;
+  }
+  return '';
+}
+
+function kindOfHint(l, u) {
+  return kindOfPath(u.pathname) || kindOfPath(String(l.name || '')) || kindOfMime(l.type) || kindOfQuery(u);
+}
+
+function kindOfHead(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return '';
+  if (startsWith(buf, Buffer.from('%PDF-'))) return 'pdf';
+  if (startsWith(buf, [0x1a, 0x45, 0xdf, 0xa3])) return buf.subarray(0, 64).toString('latin1').includes('webm') ? 'webm' : '';
+  if (startsWith(buf, Buffer.from('ftyp'), 4)) return 'mp4';
+  if (startsWith(buf, Buffer.from('RIFF'))) {
+    if (startsWith(buf, Buffer.from('WAVE'), 8)) return 'wav';
+    if (startsWith(buf, Buffer.from('WEBP'), 8)) return 'webp';
+    return '';
+  }
+  if (startsWith(buf, [0xff, 0xd8, 0xff])) return 'jpg';
+  if (startsWith(buf, [0, 0, 1, 0xba]) || startsWith(buf, [0, 0, 1, 0xb3])) return 'mpeg';
+  if (startsWith(buf, Buffer.from('ID3'))) return 'mp3';
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return 'mp3';
+  return '';
 }
 
 function startsWith(buf, bytes, at = 0) {
@@ -97,6 +139,13 @@ function structureOk(kind, buf) {
   if (kind === 'jpg') {
     if (!startsWith(buf, [0xff, 0xd8, 0xff])) return { ok: false, reason: 'it does not start like a JPG' };
     if (!startsWith(buf, [0xff, 0xd9], buf.length - 2)) return { ok: false, reason: 'it does not end like a JPG' };
+    return { ok: true };
+  }
+  if (kind === 'webp') {
+    if (!startsWith(buf, Buffer.from('RIFF')) || !startsWith(buf, Buffer.from('WEBP'), 8)) return { ok: false, reason: 'it is not a WebP file' };
+    if (buf.readUInt32LE(4) + 8 > buf.length) return { ok: false, reason: 'it is cut short' };
+    const chunk = buf.toString('latin1', 12, 16);
+    if (chunk !== 'VP8 ' && chunk !== 'VP8L' && chunk !== 'VP8X') return { ok: false, reason: 'it has no image data' };
     return { ok: true };
   }
   if (kind === 'mpeg') {
@@ -190,14 +239,34 @@ function displayOf(url) {
   return { name: name.slice(0, 140), path: pathname.slice(0, 300), host: u.host };
 }
 
-function buildList(links, pageUrl) {
+function byPath(a, b) {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : a.href < b.href ? -1 : a.href > b.href ? 1 : 0;
+}
+
+function sortCap(entries) {
+  const all = [...entries].sort(byPath);
+  return { list: all.slice(0, MAX_LIST), total: all.length };
+}
+
+function skippedExt(pathname) {
+  const m = /\.([A-Za-z][A-Za-z0-9]{1,4})$/.exec(pathname);
+  return Boolean(m) && !DYNAMIC_EXTS.includes(m[1].toLowerCase());
+}
+
+function sameSite(a, b) {
+  const root = (h) => h.split('.').slice(-2).join('.');
+  return root(a.hostname) === root(b.hostname);
+}
+
+function buildScan(links, pageUrl) {
   let base;
   try {
     base = new URL(pageUrl);
   } catch {
-    return [];
+    return { list: [], total: 0, candidates: [], skipped: 0 };
   }
-  const seen = new Map();
+  const known = new Map();
+  const cands = new Map();
   for (const l of Array.isArray(links) ? links : []) {
     if (!l || typeof l.href !== 'string' || l.href.length > 4096) continue;
     let u;
@@ -208,12 +277,134 @@ function buildList(links, pageUrl) {
     }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
     u.hash = '';
-    const kind = kindOfPath(u.pathname);
-    if (!kind) continue;
     const key = u.href;
-    if (!seen.has(key)) seen.set(key, { href: key, kind, ...displayOf(key) });
+    if (known.has(key)) continue;
+    const kind = kindOfHint(l, u);
+    if (kind) {
+      const shown = displayOf(key);
+      const named = !kindOfPath(u.pathname) && kindOfPath(String(l.name || '')) ? path.posix.basename(String(l.name)).slice(0, 140) : '';
+      known.set(key, { href: key, kind, ...shown, ...(named ? { name: named } : {}) });
+      cands.delete(key);
+      continue;
+    }
+    if (cands.has(key) || key === base.href.split('#')[0]) continue;
+    if (!l.media && !l.name && !l.type && !u.search && skippedExt(u.pathname)) continue;
+    const tier = l.media ? 0 : sameSite(u, base) ? 1 : 2;
+    cands.set(key, { href: key, tier, order: cands.size });
   }
-  return [...seen.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.href < b.href ? -1 : a.href > b.href ? 1 : 0)).slice(0, MAX_BATCH_FILES);
+  const ranked = [...cands.values()].sort((a, b) => a.tier - b.tier || a.order - b.order);
+  const { list, total } = sortCap(known.values());
+  return { list, total, candidates: ranked.slice(0, MAX_PROBES).map((c) => c.href), skipped: Math.max(0, ranked.length - MAX_PROBES) };
+}
+
+function buildList(links, pageUrl) {
+  return buildScan(links, pageUrl).list;
+}
+
+function entryFor(href, kind) {
+  return { href, kind, ...displayOf(href) };
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  const limit = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+
+async function collectFrames(frames, runFrame, ms = 3000) {
+  const out = [];
+  let failed = 0;
+  let mainFailed = false;
+  const results = await Promise.all(frames.map((f) => withTimeout(Promise.resolve().then(() => runFrame(f)), ms).then((r) => ({ f, r }), () => ({ f, r: null }))));
+  for (const { f, r } of results) {
+    if (r && Array.isArray(r.items)) {
+      for (const it of r.items) out.push(it);
+    } else if (f.main) {
+      mainFailed = true;
+    } else {
+      failed += 1;
+    }
+  }
+  return { items: out, failed, mainFailed };
+}
+
+function scanFn(E, D, doc) {
+  var seen = {};
+  var media = [];
+  var strong = [];
+  var weak = [];
+  var visited = 0;
+  var nodes = doc.querySelectorAll('a[href],audio,video,source,img,object,embed');
+  function ext(p) {
+    var m = /\.([A-Za-z][A-Za-z0-9]{1,4})$/.exec(p);
+    return m ? m[1].toLowerCase() : '';
+  }
+  function take(arr, cap, href, name, type, isMedia) {
+    if (!href || typeof href !== 'string' || href.length > 4096 || arr.length >= cap) return;
+    var u;
+    try {
+      u = new URL(href, doc.baseURI);
+    } catch (e) {
+      return;
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return;
+    u.hash = '';
+    if (seen[u.href]) return;
+    seen[u.href] = 1;
+    arr.push({ href: u.href, name: name || '', type: type || '', media: isMedia });
+  }
+  for (var i = 0; i < nodes.length && visited < 20000; i++) {
+    var e = nodes[i];
+    visited++;
+    var tag = String(e.tagName || '').toUpperCase();
+    if (tag === 'A') {
+      var h = e.href;
+      var dn = e.getAttribute('download') || '';
+      var ty = e.getAttribute('type') || '';
+      var p = '';
+      var q = '';
+      try {
+        var uu = new URL(h);
+        p = uu.pathname;
+        q = uu.search;
+      } catch (err) {
+        continue;
+      }
+      var x = ext(p);
+      var hinted = E.indexOf(x) >= 0 || Boolean(dn) || Boolean(ty);
+      if (!hinted && q) {
+        var vals = Array.from(uu.searchParams.values());
+        for (var k = 0; k < vals.length && !hinted; k++) hinted = E.indexOf(ext(vals[k].split(/[?#]/)[0])) >= 0;
+      }
+      if (hinted) take(strong, 1000, h, dn, ty, false);
+      else if (!x || D.indexOf(x) >= 0 || q) take(weak, 400, h, '', '', false);
+      continue;
+    }
+    var ts = e.getAttribute('type') || '';
+    take(media, 600, e.currentSrc || e.src || e.data || '', '', ts, true);
+    if (tag === 'IMG' || tag === 'SOURCE') {
+      var ss = e.getAttribute('srcset') || '';
+      var parts = ss.split(',');
+      for (var j = 0; j < parts.length && j < 20; j++) take(media, 600, parts[j].trim().split(/\s+/)[0], '', '', true);
+    }
+    if (tag === 'VIDEO') take(media, 600, e.poster || '', '', '', true);
+  }
+  return { items: media.concat(strong, weak), visited: visited };
+}
+
+function scanScript() {
+  const exts = Object.keys(EXT_KIND).map((e) => e.slice(1));
+  return `(${scanFn.toString()})(${JSON.stringify(exts)},${JSON.stringify(DYNAMIC_EXTS)},document)`;
+}
+
+function kindOfProbe(head, contentType) {
+  const byHead = kindOfHead(head);
+  if (!byHead) return '';
+  const byMime = kindOfMime(contentType);
+  if (byMime && byMime !== byHead) return '';
+  return byHead;
 }
 
 function createQueue(run) {
@@ -340,5 +531,19 @@ module.exports = {
   uniqueName,
   displayOf,
   buildList,
+  buildScan,
+  sortCap,
+  entryFor,
+  collectFrames,
+  scanFn,
+  scanScript,
+  kindOfHead,
+  kindOfMime,
+  kindOfProbe,
+  skippedExt,
+  EXT_KIND,
+  DYNAMIC_EXTS,
+  MAX_PROBES,
+  MAX_LIST,
   createQueue,
 };

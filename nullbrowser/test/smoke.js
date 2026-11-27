@@ -60,6 +60,7 @@ function walk(dir) {
 const panelLog = [];
 const fpSeen = [];
 const dlSeen = [];
+const probeSeen = [];
 
 function pngOf(bytes) {
   const zlib = require('node:zlib');
@@ -201,6 +202,14 @@ async function main() {
         s.writeHead(200, { 'Content-Type': 'application/zip' });
         return s.end('PK\x03\x04' + ' '.repeat(100));
       }
+      if (name === 'good.webp') {
+        const w = Buffer.alloc(300, 3);
+        w.write('RIFF', 0, 'latin1');
+        w.writeUInt32LE(w.length - 8, 4);
+        w.write('WEBPVP8 ', 8, 'latin1');
+        s.writeHead(200, { 'Content-Type': 'image/webp' });
+        return s.end(w);
+      }
       if (name === 'good.jpg') {
         s.writeHead(200, { 'Content-Type': 'image/jpeg' });
         return s.end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600, 7), Buffer.from([0xff, 0xd9])]));
@@ -210,6 +219,32 @@ async function main() {
         : '%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n';
       s.writeHead(200, { 'Content-Type': 'application/pdf' });
       return s.end(pdfBody);
+    }
+    if (q.url === '/dlmore') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      const filler = Array.from({ length: 420 }, (_, i) => `<a href="/page/${i}.html">p${i}</a>`).join(' ');
+      return s.end(`<!doctype html><title>more</title><p>${filler}</p><img src="/dlimg/abc"><a href="/dlget?id=7">Get seven</a> <a href="/dlnav?id=1">Next</a> <a href="/dlfake?id=2">Fake</a> <a href="/files/good.webp">Webp</a> <a href="/dlq?file=song.mp3">Song</a> <a href="/late/last.pdf">Last</a><iframe src="http://127.0.0.1:${portB}/dlframeB"></iframe>`);
+    }
+    if (q.url.startsWith('/dlimg/') || q.url.startsWith('/dlget') || q.url.startsWith('/dlnav') || q.url.startsWith('/dlfake')) {
+      probeSeen.push({ url: q.url, cookie: q.headers.cookie || '', range: q.headers.range || '', referer: q.headers.referer || '' });
+      if (q.url.startsWith('/dlnav')) {
+        s.writeHead(200, { 'Content-Type': 'text/html' });
+        return s.end('<!doctype html><title>next</title><p>next</p>');
+      }
+      if (q.url.startsWith('/dlfake')) {
+        s.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        return s.end('%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n');
+      }
+      s.writeHead(200, { 'Content-Type': 'image/jpeg' });
+      return s.end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600, 7), Buffer.from([0xff, 0xd9])]));
+    }
+    if (q.url.startsWith('/dlq')) {
+      s.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+      return s.end(Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(600, 1)]));
+    }
+    if (q.url === '/late/last.pdf') {
+      s.writeHead(200, { 'Content-Type': 'application/pdf' });
+      return s.end('%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n');
     }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
@@ -230,6 +265,14 @@ async function main() {
   });
   const b = http.createServer((q, s) => {
     seenB.push({ url: q.url, cookie: q.headers.cookie || '' });
+    if (q.url === '/dlframeB') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>frame b</title><a href="/dlB/inner.pdf">Inside a foreign frame</a>');
+    }
+    if (q.url === '/dlB/inner.pdf') {
+      s.writeHead(200, { 'Content-Type': 'application/pdf' });
+      return s.end('%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n');
+    }
     s.writeHead(200, { 'Content-Type': 'image/gif', 'Set-Cookie': 'tp=1; Path=/; SameSite=None; Secure' });
     s.end(Buffer.from('R0lGODlhAQABAAAAACw=', 'base64'));
   });
@@ -475,7 +518,7 @@ async function main() {
   if (!listed.some((t) => t.startsWith('/files/good.pdf'))) console.error('LISTED', JSON.stringify(listed));
   assert.ok(listed.some((t) => t.startsWith('/files/good.pdf')), 'the page file is listed with its path');
   assert.ok(listed.every((t) => t.includes('127.0.0.1')), 'each file shows its host');
-  assert.equal(listed.some((t) => /inner\.pdf/.test(t)), false, 'a file inside an embedded frame is not listed');
+  assert.equal(listed.some((t) => /inner\.pdf/.test(t)), true, 'a file inside an embedded frame is listed');
   assert.equal(listed.filter((t) => t.startsWith('/files/good.pdf')).length, 1, 'duplicate links are merged');
   const downloadsDir = path.join(realHome, 'Downloads');
   const countSaved = () => (fs.existsSync(downloadsDir) ? fs.readdirSync(downloadsDir).filter((n) => !n.startsWith('.')).length : 0);
@@ -525,12 +568,36 @@ async function main() {
   await win.click('#dl-list .dl-all');
   await win.waitForSelector('#dl-warn:not([hidden])');
   await win.click('#dl-warn-go');
-  await waitFor(() => countSaved() === savedBefore + 4, 'the batch saves the two good files again (the first copy is kept, the second gets a number)', 30000);
+  await waitFor(() => countSaved() === savedBefore + 5, 'the batch saves the good files again (the first copy is kept, the second gets a number)', 30000);
   assert.equal(fs.existsSync(path.join(downloadsDir, 'good-2.pdf')), true, 'the second copy never overwrites the first');
   assert.equal(fs.existsSync(path.join(downloadsDir, 'good.jpg')), true, 'the batch saves the picture');
   await win.click('#dl-qclose').catch(() => {});
+
+  await go(`http://127.0.0.1:${portA}/dlmore`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/dlmore`, 'the long page with more files');
+  await win.click('#dl');
+  await win.waitForSelector('#dl-panel:not([hidden])');
+  await win.waitForFunction(() => /dlget/.test(document.getElementById('dl-list').textContent), null, { timeout: 20000 });
+  await win.waitForFunction(() => !/Checking/.test(document.getElementById('dl-note').textContent), null, { timeout: 20000 });
+  const more = await win.$$eval('#dl-list .dl-item small', (els) => els.map((e) => e.textContent));
+  const has = (re) => more.some((t) => re.test(t));
+  assert.equal(has(/\/late\/last\.pdf/), true, 'a file after 400 other links is listed');
+  assert.equal(has(/\/dlimg\/abc/), true, 'an extensionless picture is listed once it is checked');
+  assert.equal(has(/\/dlget/), true, 'an extensionless link to a picture is listed once it is checked');
+  assert.equal(has(/good\.webp/), true, 'a WebP link is listed');
+  assert.equal(has(/\/dlq/), true, 'a link that names its file in the query is listed');
+  assert.equal(has(/\/dlB\/inner\.pdf/), true, 'a file in a frame from another site is listed');
+  assert.equal(has(/\/dlnav/), false, 'an extensionless link to a web page is not listed');
+  assert.equal(has(/\/dlfake/), false, 'a link whose type and bytes disagree is not listed');
+  assert.equal(has(/\/page\/\d+\.html/), false, 'page links are not listed');
+  const checks = probeSeen.filter((r) => r.range);
+  assert.ok(checks.length >= 3, 'the extensionless links were checked');
+  assert.ok(checks.every((r) => r.cookie === '' && r.range === 'bytes=0-511' && r.referer === ''), 'a check sends no cookies, no referer and asks for the first bytes only');
+  await win.click('#dl-close');
   await go(`http://127.0.0.1:${portA}/`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'back on the start page');
+  const afterNav = await win.evaluate(() => window.nb.state());
+  assert.equal(afterNav.dl.list.length, 0, 'the list of the old page is gone after leaving it');
   await win.click('#dl-qclose').catch(() => {});
 
   await go(`http://127.0.0.1:${portA}/clip`);

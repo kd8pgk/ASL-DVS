@@ -153,7 +153,7 @@
     b.addEventListener('click', () => window.nb.dlOne(item.href));
     const badge = document.createElement('span');
     badge.className = 'dl-badge';
-    badge.textContent = { pdf: 'PDF', mp3: 'MP3', wav: 'WAV', webm: 'WebM', mp4: 'MP4', jpg: 'JPG', mpeg: 'MPEG' }[item.kind] || item.kind;
+    badge.textContent = { pdf: 'PDF', mp3: 'MP3', wav: 'WAV', webm: 'WebM', mp4: 'MP4', jpg: 'JPG', mpeg: 'MPEG', webp: 'WebP' }[item.kind] || item.kind;
     li.appendChild(b);
     li.appendChild(badge);
     return li;
@@ -220,7 +220,17 @@
       all.appendChild(allBtn);
       ul.appendChild(all);
       for (const item of list) ul.appendChild(linkRow(item));
-      show($('dl-empty'), list.length === 0);
+      const notes = [];
+      const err = String(d.scanError || '');
+      if (err === 'page') notes.push('Could not read this page.');
+      else if (err.startsWith('frames:')) notes.push(`${err.slice(7)} embedded frame${err === 'frames:1' ? '' : 's'} could not be read.`);
+      if (d.probing > 0) notes.push(`Checking ${d.probing} more link${d.probing === 1 ? '' : 's'}…`);
+      if (d.total > list.length) notes.push(`Showing the first ${list.length} of ${d.total} files.`);
+      if (d.skipped > 0) notes.push(`${d.skipped} more link${d.skipped === 1 ? '' : 's'} were not checked (limit 60).`);
+      $('dl-note').textContent = notes.join(' ');
+      show($('dl-note'), notes.length > 0);
+      show($('dl-rescanrow'), err === 'page');
+      show($('dl-empty'), list.length === 0 && !err && !(d.probing > 0));
     }
     show($('dl-warn'), Boolean(d.warn && d.allowed && list.length));
     if (d.warn && d.allowed && list.length) {
@@ -360,6 +370,7 @@
     }
     window.nb.dlPanel(!dlState.panel);
   });
+  $('dl-rescan').addEventListener('click', () => window.nb.dlRescan());
   $('dl-close').addEventListener('click', () => window.nb.dlPanel(false));
   $('dl-yes').addEventListener('click', () => window.nb.dlAnswer(true));
   $('dl-no').addEventListener('click', () => window.nb.dlAnswer(false));
