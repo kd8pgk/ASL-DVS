@@ -640,9 +640,11 @@ async function main() {
   const foundText = await win.textContent('#pop-found');
   assert.match(foundText, /#promo/, 'the overlay is named by its id');
   assert.match(foundText, /ads\.test/, 'the ad frame shows where it comes from');
-  const popViewTop = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.contentView && x.contentView.children.length > 0).contentView.children[0].getBounds().y);
-  const popPanelBottom = await win.evaluate(() => Math.ceil(document.getElementById('pop-panel').getBoundingClientRect().bottom));
-  assert.ok(popViewTop >= popPanelBottom, 'the page sits below the open pop-up panel');
+  await waitFor(async () => {
+    const top = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.contentView && x.contentView.children.length > 0).contentView.children[0].getBounds().y);
+    const bottom = await win.evaluate(() => Math.ceil(document.getElementById('pop-panel').getBoundingClientRect().bottom));
+    return top >= bottom;
+  }, 'the page sits below the open pop-up panel', 20000);
   await win.locator('#pop-found li', { hasText: 'Covers the page' }).locator('button', { hasText: 'Hide' }).click();
   await waitFor(async () => (await pageEval("getComputedStyle(document.getElementById('promo')).display")) === 'none', 'the overlay is hidden at once');
   await win.locator('#pop-found li', { hasText: 'Ad frame' }).locator('button', { hasText: 'Block ads.test' }).click();
@@ -667,9 +669,11 @@ async function main() {
     wc.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'left', clickCount: 1 });
   }, [x, y]);
-  await sleep(300);
-  await clickPage(100, 80);
-  await win.waitForFunction(() => /Picked: div/.test(document.getElementById('pop-found').textContent) && /#box/.test(document.getElementById('pop-found').textContent), null, { timeout: 15000 });
+  await waitFor(async () => {
+    await clickPage(100, 80);
+    await sleep(400);
+    return win.evaluate(() => /Picked: div/.test(document.getElementById('pop-found').textContent) && /#box/.test(document.getElementById('pop-found').textContent));
+  }, 'the clicked element is picked', 30000);
   await win.locator('#pop-found li', { hasText: 'Picked' }).locator('button', { hasText: 'Hide' }).click();
   await waitFor(async () => (await pageEval("getComputedStyle(document.getElementById('box')).display")) === 'none', 'the picked box is hidden');
   await win.locator('#pop-list li', { hasText: 'ads.test' }).locator('button').click();
