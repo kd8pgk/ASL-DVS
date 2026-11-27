@@ -1,6 +1,28 @@
 # Null Browser changelog
 
-Current version: `0.17.2`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.19.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.19.0 (2026-11-27)
+
+Pop-ups: find them, and block them with a list that lasts one run.
+
+- **Pop-ups** button (toolbar) opens a panel with three parts.
+  - **Tried this run.** Every pop-up window a page tried to open, and every jump to another site, with the site it came from and the host it pointed at (`dropped`, `blocked`, `opened` or `asked`). Each line has **Block host**. Nothing was shown about the target before; the old bar only named the site that tried.
+  - **On this page.** **Find on this page** looks in every frame, including ads from other sites, for elements fixed over the page that cover a large part of it, sit on a high layer, or are cross-site frames. Each row names the element (an id or class where there is one), the frame's host and the hosts inside it, with **Show** (outlines it on the page for two seconds), **Hide** and **Block <host>**. **Pick** lets you click the pop-up on the page itself (Esc cancels), which finds fake dialogs and click traps the scan misses.
+  - **Block list.** The rules you made, with how many requests each blocked host stopped, and **✕** to remove one. **Import list…** adds hosts and element rules from a text file: plain hosts, hosts-file lines, `||host^`, and `site##selector`; other lines are skipped (up to 5 MB and 20,000 rules).
+- **Host rules** cancel every request to the host and its subdomains (frames, scripts, images, anything but the page you navigated to), drop a pop-up window aimed at it before a window is made, and stop a jump to it without asking. A site's own host cannot be blocked from the panel, so a click cannot lock you out of a page.
+- **Element rules** hide matching elements on a host and its subdomains. They are applied by a small frame script as each page and frame loads (from a list built once, not rebuilt per page) and at once on the page you are looking at. Selectors are checked first: no braces, semicolons, `@`, `url(` or the whole page (`body`, `html`, `*`).
+- **Run-long.** The list, the log and the counts live in memory only and are gone when Null Browser closes; the ✕ button clears the log but keeps the list, like bookmarks. Nothing is exported or written. What a page reports about an element is cleaned and length-limited before it is shown, and a rule is only made from the list the browser itself built.
+- Not covered: JavaScript `alert()` loops (still held back by the safe-dialog setting) and server redirects of the page itself to a listed host.
+
+## 0.18.0 (2026-11-27)
+
+**Add to menu**, the same install as Node Controller Desktop.
+
+- A toolbar button, shown only when Null Browser runs from an AppImage. **Add to menu** copies the AppImage to `~/.local/share/null-browser/`, writes the menu entry `~/.local/share/applications/nullbrowser.desktop` (name Null Browser, category Network and Web Browser), the icon under `~/.local/share/icons/hicolor/256x256/apps/` and the same entry on your Desktop folder (taken from your `user-dirs.dirs`, so a renamed Desktop folder works). The entry is then in Caja and Thunar menus, and the desktop icon starts the copy.
+- The button then reads **Remove from menu**, which deletes all of those files. If you run a newer AppImage than the menu copy, it reads **Update menu copy**.
+- **Written only when you press the button**, a third deliberate exception next to the screenshot and downloads. It writes to your real home folder (never the RAM folder, which it refuses), with the usual atomic writes. Nothing is written at start-up, and a run that is not an AppImage shows no button.
+- The window class is `nullbrowser`, so docks group the window with the menu entry.
 
 ## 0.17.2 (2026-11-27)
 

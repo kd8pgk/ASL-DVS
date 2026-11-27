@@ -61,6 +61,8 @@ const { st } = require('./state');
 const { onDownload, openFile, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
+const LN = require('./launcher');
+const PG = require('./popguard');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
 const { line, meter, starts, served, ahead, own, pageId, slowActive, lineState, lineChanged, serve, resetLine, clearAhead, stopImages, holdImage, pump, onReport, setLine, lineErrored } = require('./slowline');
 
@@ -117,6 +119,7 @@ function state() {
     leave: st.pendingLeave ? { id: st.pendingLeave.id, text: st.pendingLeave.text } : null,
     line: lineState(),
     shot: st.pendingShot ? { text: st.pendingShot.text, busy: st.pendingShot.busy } : null,
+    pop: PG.popState(),
     dl: {
       allowed: st.dlAllowed,
       asking: st.dlAsking,
@@ -187,6 +190,7 @@ function wipeAll() {
   dlQueue.cancelAll();
   dlQueue.clear();
   resetDownloads();
+  PG.resetRun();
   st.dlAllowed = false;
   st.dlAsking = true;
   st.dlQueueOpen = false;
@@ -264,6 +268,13 @@ function hardenPage(s) {
   s.webRequest.onBeforeRequest((details, callback) => {
     if (litterbugRequest(details)) return callback({ cancel: true });
     if (details.url.startsWith(`${S.SCHEME}://`)) return callback({});
+    if (details.resourceType !== 'mainFrame') {
+      const hit = PG.blockedBy(P.hostOf(details.url));
+      if (hit) {
+        PG.noteBlocked(hit);
+        return callback({ cancel: true });
+      }
+    }
     if (details.url !== 'about:blank' && !P.allowSubresource(details.url)) return callback({ cancel: true });
     if (details.resourceType === 'mainFrame') {
       const up = P.httpsUpgrade(details.url, st.allowHttp);
@@ -361,6 +372,15 @@ function askLeave(url) {
   const from = pageUrl();
   if (!P.leavesPage(from, url)) return false;
   const leaving = P.siteOf(P.hostOf(from));
+  const target = P.hostOf(url);
+  const hit = PG.blockedBy(target);
+  if (hit) {
+    PG.logPop('leave', leaving, target, 'blocked');
+    PG.noteBlocked(hit);
+    say(`Blocked a jump to ${target} (it is on your block list).`);
+    return true;
+  }
+  PG.logPop('leave', leaving, target, 'asked');
   const cleared = st.allowedSites.has(leaving) ? '' : ' Its cookies and storage are cleared.';
   st.leaveSeq += 1;
   st.pendingLeave = { id: st.leaveSeq, url, text: `Leave ${P.hostOf(from)} for ${P.hostOf(url)}?${cleared}` };
@@ -449,6 +469,7 @@ function createView() {
     if (isMainFrame && !isInPlace) {
       st.pendingLeave = null;
       resetDownloads();
+      PG.resetPage();
       purgeIfSiteChanged(url);
       resetLine();
       st.error = null;
@@ -458,12 +479,21 @@ function createView() {
   wc.setWindowOpenHandler(({ url, disposition, features, frameName }) => {
     const tab = disposition === 'foreground-tab' || disposition === 'background-tab';
     const clicked = Date.now() - st.lastInput < GESTURE_MS;
+    const target = P.hostOf(url);
+    const listed = PG.blockedBy(target);
+    if (listed) {
+      PG.logPop('window', P.siteOf(P.hostOf(pageUrl())), target, 'blocked');
+      PG.noteBlocked(listed);
+      if (clicked) say(`Blocked a pop-up to ${target} (it is on your block list).`);
+      return { action: 'deny' };
+    }
     if (tab && clicked && !features && !frameName && P.allowPageUrl(url)) {
       if (!askLeave(url)) setImmediate(() => load(url));
       return { action: 'deny' };
     }
     const site = P.siteOf(P.hostOf(pageUrl()));
     if (site && st.allowedSites.has(site) && P.allowPageUrl(url)) {
+      PG.logPop('window', site, target, 'opened');
       st.nextPopup = 'real';
       return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: realPopupOptions(features) };
     }
@@ -472,9 +502,11 @@ function createView() {
       setImmediate(push);
     }
     if (st.litterbugIds.size >= MAX_LITTERBUGS) {
+      PG.logPop('window', site, target, 'dropped');
       st.watchdog.notePopupCapped(site);
       return { action: 'deny' };
     }
+    PG.logPop('window', site, target, 'dropped');
     st.nextPopup = 'litterbug';
     return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: LITTERBUG_OPTIONS };
   });
@@ -609,10 +641,13 @@ function fromShell(e) {
   return alive() && e.sender === st.win.webContents;
 }
 
+const launcherNow = LN.launcherEnv({ packaged: app.isPackaged, env: process.env, home: REAL_HOME });
+
 let shellReady = false;
 
 function register() {
   ipcMain.on('nb-report', onReport);
+  PG.register(fromShell);
   ipcMain.handle('dl-answer', (e, on) => {
     if (!fromShell(e)) return { ok: false };
     st.dlAllowed = on === true;
@@ -640,6 +675,7 @@ function register() {
   ipcMain.handle('dl-panel', async (e, on) => {
     if (!fromShell(e)) return { ok: false };
     st.dlPanelOpen = on === true && st.dlAllowed;
+    if (st.dlPanelOpen) st.popOpen = false;
     st.dlWarn = false;
     if (st.dlPanelOpen) {
       st.dlQueueOpen = false;
@@ -736,6 +772,36 @@ function register() {
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
     return { ok: setLine(key, value) };
+  });
+  ipcMain.handle('launcher-status', (e) => (fromShell(e) ? LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) : null));
+  ipcMain.handle('launcher-install', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    let r;
+    try {
+      let icon = null;
+      try {
+        icon = fs.readFileSync(path.join(__dirname, '..', 'ui', 'icon.png'));
+      } catch {
+        icon = null;
+      }
+      r = LN.installLauncher({ paths: launcherNow.launcherPaths(), running: launcherNow.runningAppImage(), iconPng: icon, version: app.getVersion() });
+    } catch (err) {
+      const error = `The launcher could not be added (${err && err.code ? err.code : 'error'}).`;
+      say(error);
+      return { error };
+    }
+    if (r.error) {
+      say(r.error);
+      return r;
+    }
+    say(r.shortcut ? 'Added Null Browser to the app menu and the desktop.' : 'Added Null Browser to the app menu.');
+    return { ok: true, shortcut: Boolean(r.shortcut), status: LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) };
+  });
+  ipcMain.handle('launcher-remove', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    LN.removeLauncher({ paths: launcherNow.launcherPaths() });
+    say('Removed Null Browser from the app menu and the desktop.');
+    return { ok: true, status: LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) };
   });
   ipcMain.handle('open-ram', (e) => {
     if (!fromShell(e)) return { ok: false };
@@ -1014,6 +1080,7 @@ app.whenReady().then(() => {
   st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'vieworder.js') });
   st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'lessinfo.js') });
   st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'noclip.js') });
+  st.ses.registerPreloadScript({ type: 'frame', filePath: path.join(__dirname, 'blockfront.js') });
   register();
   createWindow();
   setInterval(watchdogCpuPoll, W.CPU_IDLE_MS).unref();

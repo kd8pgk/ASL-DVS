@@ -125,6 +125,7 @@
       $('shot-save').disabled = s.shot.busy;
       $('shot-cancel').disabled = s.shot.busy;
     }
+    renderPop(s.pop || {});
     renderDownloads(s.dl || {});
     const dlRows = (s.dl && s.dl.asking ? 1 : 0) + (s.dl && s.dl.queue && s.dl.queue.length ? 1 : 0);
     const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows + dlRows;
@@ -195,6 +196,77 @@
       li.appendChild(rm);
     }
     return li;
+  }
+
+  let popState = {};
+  function popButton(label, title, fn) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (title) b.title = title;
+    b.addEventListener('click', fn);
+    return b;
+  }
+  function popRow(main, sub, buttons) {
+    const li = document.createElement('li');
+    const what = document.createElement('span');
+    what.className = 'pop-what';
+    what.textContent = main;
+    li.appendChild(what);
+    for (const b of buttons) li.appendChild(b);
+    if (sub) {
+      const small = document.createElement('small');
+      small.textContent = sub;
+      li.appendChild(small);
+    }
+    return li;
+  }
+  function renderPop(p) {
+    popState = p;
+    const btn = $('popbtn');
+    btn.setAttribute('aria-expanded', p.open ? 'true' : 'false');
+    show($('pop-panel'), Boolean(p.open));
+    if (!p.open) return;
+    $('pop-pick').textContent = p.picking ? 'Stop picking' : 'Pick';
+    $('pop-note').textContent = p.note || '';
+    show($('pop-note'), Boolean(p.note));
+    const kinds = { frame: 'Ad frame', overlay: 'Overlay', cover: 'Covers the page', picked: 'Picked' };
+    const found = $('pop-found');
+    found.textContent = '';
+    for (const f of p.found || []) {
+      const hosts = [...new Set([...(f.thirdParty && f.frameHost ? [f.frameHost] : []), ...(f.hosts || [])])];
+      const buttons = [];
+      if (f.selector) {
+        buttons.push(popButton('Show', 'Outline it on the page', () => window.nb.popShow(f.id)));
+        buttons.push(popButton('Hide', `Hide ${f.selector} on ${f.frameHost} (this run)`, () => window.nb.popHide(f.id)));
+      }
+      for (const h of hosts.slice(0, 3)) buttons.push(popButton(`Block ${h}`, `Block every request to ${h} and its subdomains (this run)`, () => window.nb.popBlock(f.id, h)));
+      found.appendChild(popRow(`${kinds[f.kind] || 'Item'}: ${f.tag} ${f.w}×${f.h} · ${f.frameHost}`, [f.text, f.selector].filter(Boolean).join('  ·  '), buttons));
+    }
+    if (!(p.found || []).length) {
+      const li = document.createElement('li');
+      li.textContent = 'Nothing listed. Use Find on this page, or Pick.';
+      found.appendChild(li);
+    }
+    const log = $('pop-log');
+    log.textContent = '';
+    const words = { window: 'pop-up window', leave: 'jump to another site' };
+    for (const e of p.log || []) {
+      const buttons = [];
+      if (e.action !== 'blocked') buttons.push(popButton(`Block ${e.host}`, `Block every request to ${e.host} and its subdomains (this run)`, () => window.nb.popBlockLog(e.id)));
+      log.appendChild(popRow(`${e.action}: ${words[e.kind] || e.kind} to ${e.host}${e.n > 1 ? ` ×${e.n}` : ''}`, `from ${e.from}`, buttons));
+    }
+    if (!(p.log || []).length) {
+      const li = document.createElement('li');
+      li.textContent = 'Nothing has tried to open a window or jump away yet.';
+      log.appendChild(li);
+    }
+    $('pop-counts').textContent = `${p.hostCount || 0} blocked host${p.hostCount === 1 ? '' : 's'}, ${p.elementCount || 0} hidden element rule${p.elementCount === 1 ? '' : 's'}. Kept only until Null Browser closes.`;
+    const list = $('pop-list');
+    list.textContent = '';
+    const hitMap = new Map(p.hits || []);
+    for (const h of p.hosts || []) list.appendChild(popRow(`${h}${hitMap.has(h) ? `  ·  blocked ${hitMap.get(h)} request${hitMap.get(h) === 1 ? '' : 's'}` : ''}`, '', [popButton('✕', `Remove ${h}`, () => window.nb.popRemove('host', h))]));
+    for (const e of p.elements || []) list.appendChild(popRow(`${e.host}  ·  hide ${e.selector}`, '', [popButton('✕', 'Remove this rule', () => window.nb.popRemove('element', e.host, e.selector))]));
   }
 
   function renderDownloads(d) {
@@ -352,6 +424,37 @@
   $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
+  let launcher = null;
+  function renderLauncher() {
+    const b = $('launcher');
+    if (!launcher || !launcher.available) {
+      b.hidden = true;
+      return;
+    }
+    b.hidden = false;
+    if (!launcher.installed) {
+      b.textContent = 'Add to menu';
+      b.title = 'Add Null Browser to the app menu and the desktop (writes a few files to your home folder)';
+    } else if (!launcher.fromInstalled) {
+      b.textContent = 'Update menu copy';
+      b.title = `Replace the copy the menu starts (${launcher.installedVersion || 'unknown version'}) with this one`;
+    } else {
+      b.textContent = 'Remove from menu';
+      b.title = 'Take Null Browser out of the app menu and off the desktop';
+    }
+  }
+  async function launcherClick() {
+    if (!launcher) return;
+    const removing = launcher.installed && launcher.fromInstalled;
+    const r = removing ? await window.nb.removeLauncher() : await window.nb.addLauncher();
+    if (r.status) launcher = r.status;
+    renderLauncher();
+  }
+  $('launcher').addEventListener('click', launcherClick);
+  window.nb.launcherStatus().then((st) => {
+    launcher = st;
+    renderLauncher();
+  });
   $('ramopen').addEventListener('click', () => window.nb.openRam());
   $('wipe').addEventListener('click', () => window.nb.wipeAll());
   $('leave-go').addEventListener('click', () => window.nb.leaveAnswer(leaveId, true));
@@ -385,6 +488,16 @@
   }
   const panelWatch = new ResizeObserver(reportPanels);
   for (const el of document.querySelectorAll('.panel')) panelWatch.observe(el);
+  $('popbtn').addEventListener('click', () => {
+    bmOpen = false;
+    show($('bm-panel'), false);
+    window.nb.popPanel(!popState.open);
+  });
+  $('pop-close').addEventListener('click', () => window.nb.popPanel(false));
+  $('pop-find').addEventListener('click', () => window.nb.popFind());
+  $('pop-pick').addEventListener('click', () => window.nb.popPick());
+  $('pop-import').addEventListener('click', () => window.nb.popImport());
+  $('pop-clearlog').addEventListener('click', () => window.nb.popClearLog());
   $('dl-rescan').addEventListener('click', () => window.nb.dlRescan());
   $('dl-close').addEventListener('click', () => window.nb.dlPanel(false));
   $('dl-yes').addEventListener('click', () => window.nb.dlAnswer(true));
@@ -397,7 +510,8 @@
   $('dlq-cancel').addEventListener('click', () => window.nb.dlCancelAll());
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
-    if (dlState.warn) window.nb.dlWarn(false);
+    if (popState.open) window.nb.popPanel(false);
+    else if (dlState.warn) window.nb.dlWarn(false);
     else if (dlState.panel) window.nb.dlPanel(false);
     else if (dlState.queuePanel) window.nb.dlQueuePanel(false);
   });
