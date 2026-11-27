@@ -352,6 +352,7 @@
   $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
+  $('ramopen').addEventListener('click', () => window.nb.openRam());
   $('wipe').addEventListener('click', () => window.nb.wipeAll());
   $('leave-go').addEventListener('click', () => window.nb.leaveAnswer(leaveId, true));
   $('leave-stay').addEventListener('click', () => window.nb.leaveAnswer(leaveId, false));

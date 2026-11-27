@@ -1,6 +1,13 @@
 # Null Browser changelog
 
-Current version: `0.17.1`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.17.2`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.17.2 (2026-11-27)
+
+A **RAM folder** button in the toolbar.
+
+- **RAM folder** opens this run's RAM folder (`/dev/shm/null-browser-…`) in your default file manager (Caja, Thunar and others), and a notice shows its path. It holds the run's cache and session data, screenshots waiting in `quarantine/`, and files being checked.
+- **Nothing is written by the browser.** It only hands the folder to the system, the way Open hands a PDF on. A file manager may keep the path in its own history. The folder is still removed when Null Browser closes.
 
 ## 0.17.1 (2026-11-27)
 

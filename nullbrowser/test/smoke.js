@@ -931,6 +931,12 @@ async function main() {
   assert.equal(fastState.fastJs, true, 'the marker switches JIT back on for this run');
   assert.match(await fastWin.textContent('#fastjs'), /JIT: On/);
   assert.equal(await fast.evaluate(({ app: a2 }) => a2.commandLine.getSwitchValue('js-flags')), '', 'no --jitless is passed this run');
+  const openedBefore = fs.readFileSync(openLog, 'utf8').trim().split('\n').length;
+  await fastWin.click('#ramopen');
+  await waitFor(() => fs.readFileSync(openLog, 'utf8').trim().split('\n').length === openedBefore + 1, 'the RAM folder is handed to the file manager');
+  const ramOpened = fs.readFileSync(openLog, 'utf8').trim().split('\n').pop();
+  assert.ok(ramOpened.startsWith(`${ramBase}${path.sep}null-browser-`) && fs.statSync(ramOpened).isDirectory(), 'it is this run\'s own RAM folder');
+  await fastWin.waitForFunction((p2) => document.getElementById('msg-notice') ? true : document.body.textContent.includes(p2), ramOpened);
   await fast.close();
   await waitFor(() => fs.readdirSync(ramBase).length === 0, 'the faster-JavaScript run also cleans up its RAM folder');
 

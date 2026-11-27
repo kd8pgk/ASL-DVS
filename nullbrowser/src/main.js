@@ -58,7 +58,7 @@ if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const { st } = require('./state');
-const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
+const { onDownload, openFile, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
@@ -736,6 +736,12 @@ function register() {
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
     return { ok: setLine(key, value) };
+  });
+  ipcMain.handle('open-ram', (e) => {
+    if (!fromShell(e)) return { ok: false };
+    openFile(ram.dir, 'the RAM folder');
+    say(`This run's RAM folder is ${ram.dir}. It is removed when Null Browser closes.`);
+    return { ok: true };
   });
   ipcMain.handle('screenshot', async (e) => {
     if (!fromShell(e)) return { ok: false };
