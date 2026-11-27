@@ -95,6 +95,16 @@ test('the faster-JavaScript marker is added or removed from the relaunch args wi
   assert.ok(P.unsafeSwitches([P.FAST_JS_ARG]).length === 0, 'the marker itself is never treated as an unsafe switch');
 });
 
+test('a restart goes through the AppImage if there is one, else through the launcher script, else the plain binary', () => {
+  const isFile = (f) => ['/home/u/NullBrowser.AppImage', '/opt/nb/nullbrowser'].includes(f);
+  assert.equal(P.relaunchExec({ APPIMAGE: '/home/u/NullBrowser.AppImage' }, '/tmp/.mount_x/nullbrowser-bin', true, isFile), '/home/u/NullBrowser.AppImage');
+  assert.equal(P.relaunchExec({ APPIMAGE: 'relative/x.AppImage' }, '/opt/nb/nullbrowser-bin', true, isFile), '/opt/nb/nullbrowser');
+  assert.equal(P.relaunchExec({ APPIMAGE: '/gone.AppImage' }, '/opt/nb/nullbrowser-bin', true, isFile), '/opt/nb/nullbrowser');
+  assert.equal(P.relaunchExec({}, '/opt/nb/nullbrowser-bin', true, isFile), '/opt/nb/nullbrowser');
+  assert.equal(P.relaunchExec({}, '/opt/nb/nullbrowser-bin', false, isFile), '');
+  assert.equal(P.relaunchExec({}, '/usr/bin/electron', true, isFile), '');
+});
+
 test('the user agent is plain Chromium with the version Chrome itself sends', () => {
   const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) NullBrowser/0.11.0 Chrome/152.0.7977.169 Electron/44.11.5 Safari/537.36';
   assert.equal(P.chromiumUserAgent(ua), 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36');

@@ -95,6 +95,26 @@ function prelaunchDir(value) {
   return value;
 }
 
+function realHome(env, fallback) {
+  const v = env && env.NULLBROWSER_REAL_HOME;
+  if (!v || !path.isAbsolute(v) || path.basename(v).startsWith(PREFIX)) return fallback;
+  try {
+    if (!fs.statSync(v).isDirectory()) return fallback;
+  } catch {
+    return fallback;
+  }
+  return v;
+}
+
+function relaunchEnv(env, ramDir, home) {
+  const out = { NULLBROWSER_PRELAUNCH_DIR: null, NULLBROWSER_REAL_HOME: home, HOME: home };
+  for (const key of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'TMPDIR']) {
+    const v = env && env[key];
+    if (v && ramDir && (v === ramDir || v.startsWith(`${ramDir}${path.sep}`))) out[key] = null;
+  }
+  return out;
+}
+
 function rammaidRemove(dir) {
   if (!dir || !path.basename(dir).startsWith(PREFIX)) return false;
   try {
@@ -116,4 +136,4 @@ function rammaidAfterExit(dir, pid = process.pid, run = spawn) {
   }
 }
 
-module.exports = { PREFIX, ramBase, rammaidSweep, createRamDir, adoptRamDir, prelaunchDir, rammaidRemove, rammaidAfterExit, alive };
+module.exports = { PREFIX, ramBase, rammaidSweep, createRamDir, adoptRamDir, prelaunchDir, realHome, relaunchEnv, rammaidRemove, rammaidAfterExit, alive };

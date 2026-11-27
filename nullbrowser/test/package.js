@@ -49,6 +49,8 @@ async function main() {
   assert.ok(fs.statSync(bin).mode & 0o111, 'the wrapper is executable');
   assert.match(fs.readFileSync(bin, 'utf8'), /^#!\/bin\/sh/, 'the wrapper is a shell script');
 
+  assert.match(fs.readFileSync(bin, 'utf8'), /NULLBROWSER_REAL_HOME/, 'the wrapper hands the real home folder to the app');
+
   const got = fuses();
   for (const [k, v] of Object.entries(EXPECT_FUSES)) assert.equal(got[k], v, `fuse ${k}`);
 

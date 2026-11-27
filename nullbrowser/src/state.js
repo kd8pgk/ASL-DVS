@@ -5,7 +5,7 @@ const st = {
   allowedSites: new Set(), litterbugIds: new Set(), blockedSite: '', nextPopup: '',
   pendingFile: null, pendingShot: null, dlAllowed: false, dlAsking: true,
   dlList: [], dlKnown: [], dlCands: [], dlProbed: new Map(), dlListFor: '', dlSeq: 0, dlScanSeq: 0, dlTotal: 0, dlSkipped: 0, dlProbing: 0, dlScanError: '',
-  dlWarn: false, dlPanelOpen: false, dlQueueOpen: false,
+  panelSpace: 0, dlWarn: false, dlPanelOpen: false, dlQueueOpen: false,
   shotSeq: 0, fileSeq: 0, bookmarks: [], bookmarkSeq: 0, pendingJs: null,
   pendingLeave: null, leaveSeq: 0,
   watchdog: null,
