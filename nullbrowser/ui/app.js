@@ -125,9 +125,10 @@
       $('shot-save').disabled = s.shot.busy;
       $('shot-cancel').disabled = s.shot.busy;
     }
+    renderView(s.view || {});
     renderPop(s.pop || {});
     renderDownloads(s.dl || {});
-    const dlRows = (s.dl && s.dl.asking ? 1 : 0) + (s.dl && s.dl.queue && s.dl.queue.length ? 1 : 0);
+    const dlRows = (s.dl && s.dl.asking ? 1 : 0) + (s.dl && s.dl.queue && s.dl.queue.length ? 1 : 0) + (s.view && s.view.asking ? 1 : 0);
     const rows = (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (jsAsking ? 1 : 0) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows + dlRows;
     document.documentElement.style.setProperty('--top', `${44 + 34 * rows}px`);
     show($('blank'), s.blank);
@@ -154,7 +155,7 @@
     b.addEventListener('click', () => window.nb.dlOne(item.href));
     const badge = document.createElement('span');
     badge.className = 'dl-badge';
-    badge.textContent = { pdf: 'PDF', mp3: 'MP3', wav: 'WAV', webm: 'WebM', mp4: 'MP4', jpg: 'JPG', mpeg: 'MPEG', webp: 'WebP' }[item.kind] || item.kind;
+    badge.textContent = { pdf: 'PDF', mp3: 'MP3', wav: 'WAV', webm: 'WebM', mp4: 'MP4', jpg: 'JPG', mpeg: 'MPEG', webp: 'WebP', png: 'PNG', gif: 'GIF' }[item.kind] || item.kind;
     li.appendChild(b);
     li.appendChild(badge);
     return li;
@@ -198,6 +199,31 @@
     return li;
   }
 
+  let viewNow = {};
+  let viewOpen = false;
+  function renderView(v) {
+    viewNow = v;
+    $('viewbtn').textContent = `View: ${v.short || 'Full'}`;
+    show($('viewask'), Boolean(v.asking));
+    const t = v.tier === undefined ? 4 : v.tier;
+    $('vt-text').checked = t >= 1;
+    $('vt-links').checked = t >= 2;
+    $('vt-layout').checked = t >= 3;
+    $('vt-scripts').checked = t >= 4;
+    $('view-label').textContent = v.label || '';
+    $('viewbtn').setAttribute('aria-expanded', viewOpen ? 'true' : 'false');
+    show($('view-panel'), viewOpen);
+  }
+  function setViewOpen(on) {
+    viewOpen = on;
+    if (on) {
+      bmOpen = false;
+      show($('bm-panel'), false);
+      if (popState.open) window.nb.popPanel(false);
+      if (dlState.panel) window.nb.dlPanel(false);
+    }
+    renderView(viewNow);
+  }
   let popState = {};
   function popButton(label, title, fn) {
     const b = document.createElement('button');
@@ -472,6 +498,7 @@
       window.nb.dlAsk();
       return;
     }
+    setViewOpen(false);
     window.nb.dlPanel(!dlState.panel);
   });
   let panelSent = 0;
@@ -488,7 +515,17 @@
   }
   const panelWatch = new ResizeObserver(reportPanels);
   for (const el of document.querySelectorAll('.panel')) panelWatch.observe(el);
+  $('viewbtn').addEventListener('click', () => setViewOpen(!viewOpen));
+  $('view-close').addEventListener('click', () => setViewOpen(false));
+  $('view-pics').addEventListener('click', () => window.nb.viewSet(0));
+  $('view-full').addEventListener('click', () => window.nb.viewSet(4));
+  $('view-choose').addEventListener('click', () => {
+    window.nb.viewSet(viewNow.tier === undefined ? 4 : viewNow.tier);
+    setViewOpen(true);
+  });
+  for (const [id, key] of [['vt-text', 'text'], ['vt-links', 'links'], ['vt-layout', 'layout'], ['vt-scripts', 'scripts']]) $(id).addEventListener('change', (ev) => window.nb.viewTick(key, ev.target.checked));
   $('popbtn').addEventListener('click', () => {
+    setViewOpen(false);
     bmOpen = false;
     show($('bm-panel'), false);
     window.nb.popPanel(!popState.open);
@@ -510,7 +547,8 @@
   $('dlq-cancel').addEventListener('click', () => window.nb.dlCancelAll());
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
-    if (popState.open) window.nb.popPanel(false);
+    if (viewOpen) setViewOpen(false);
+    else if (popState.open) window.nb.popPanel(false);
     else if (dlState.warn) window.nb.dlWarn(false);
     else if (dlState.panel) window.nb.dlPanel(false);
     else if (dlState.queuePanel) window.nb.dlQueuePanel(false);

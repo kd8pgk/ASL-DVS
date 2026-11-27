@@ -32,7 +32,28 @@ const webp = () => {
   return b;
 };
 
-const good = { pdf: pdf(), mp3: mp3(), wav: wav(), webm: webm(), mp4: mp4(), jpg: jpg(), mpeg: mpeg(), webp: webp() };
+const pngOf = (data) => {
+  const chunk = (type, body) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(body.length);
+    return Buffer.concat([len, Buffer.from(type, 'latin1'), body, Buffer.alloc(4)]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(8, 0);
+  ihdr.writeUInt32BE(8, 4);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', data), chunk('IEND', Buffer.alloc(0))]);
+};
+const png = () => pngOf(Buffer.alloc(300, 5));
+const gif = () => {
+  const b = Buffer.alloc(120, 1);
+  b.write('GIF89a', 0, 'latin1');
+  b.writeUInt16LE(4, 6);
+  b.writeUInt16LE(4, 8);
+  b[b.length - 1] = 0x3b;
+  return b;
+};
+
+const good = { pdf: pdf(), mp3: mp3(), wav: wav(), webm: webm(), mp4: mp4(), jpg: jpg(), mpeg: mpeg(), webp: webp(), png: png(), gif: gif() };
 
 test('each allowed type passes with its own check', () => {
   for (const [kind, buf] of Object.entries(good)) {
@@ -317,4 +338,42 @@ test('frames are read together, a failing or slow frame is counted, and a failin
   const bad = await D.collectFrames([{ id: 'm', main: true }], () => Promise.reject(new Error('x')), 50);
   assert.equal(bad.mainFailed, true);
   assert.equal(bad.failed, 0);
+});
+
+test('a PNG needs its signature, a header, data and an exact end; a GIF needs its header, a size and a trailer', () => {
+  const sha = (b) => D.sha256(b);
+  assert.equal(D.checkDownload('png', png(), sha(png())).ok, true);
+  const cut = png().subarray(0, png().length - 12);
+  assert.equal(D.checkDownload('png', cut, sha(cut)).ok, false);
+  const extra = Buffer.concat([png(), Buffer.from('trailing')]);
+  assert.equal(D.checkDownload('png', extra, sha(extra)).ok, false);
+  const noData = pngOf(Buffer.alloc(0));
+  noData.write('XXXX', 8 + 25 + 4, 'latin1');
+  assert.equal(D.checkDownload('png', noData, sha(noData)).ok, false);
+  assert.equal(D.checkDownload('png', jpg(), sha(jpg())).ok, false);
+  assert.equal(D.checkDownload('gif', gif(), sha(gif())).ok, true);
+  const open = gif();
+  open[open.length - 1] = 0;
+  assert.equal(D.checkDownload('gif', open, sha(open)).ok, false);
+  assert.equal(D.checkDownload('gif', png(), sha(png())).ok, false);
+  assert.equal(D.kindOfPath('/a/b.PNG'), 'png');
+  assert.equal(D.kindOfPath('/a/b.gif'), 'gif');
+  assert.equal(D.kindOfProbe(png(), 'image/png'), 'png');
+  assert.equal(D.kindOfProbe(gif(), 'image/jpeg'), '');
+});
+
+test('big pictures are not refused for bytes that only look like a script or program in compressed data', () => {
+  const sha = (b) => D.sha256(b);
+  const body = Buffer.alloc(6 * 1024 * 1024, 7);
+  for (let i = 100000; i < body.length - 100000; i += 997) {
+    body[i] = 0x23;
+    body[i + 1] = 0x21;
+    body[i + 2] = 0x2f;
+  }
+  const big = pngOf(body);
+  assert.equal(D.checkDownload('png', big, sha(big)).ok, true);
+  const start = Buffer.concat([Buffer.from('#!/bin/sh\n'), png()]);
+  assert.equal(D.checkDownload('png', start, sha(start)).ok, false, 'a script at the very start is still refused');
+  const pdfWithScript = pdf('#!/bin/sh');
+  assert.equal(D.checkDownload('pdf', pdfWithScript, sha(pdfWithScript)).ok, false, 'other types are scanned all the way through, as before');
 });

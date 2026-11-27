@@ -245,8 +245,9 @@
     certificates, queues, watchdog counts, downloads in the RAM folder). It
     keeps bookmarks and `quarantine/`, and the toolbar settings.
   - Downloads (0.15.0): off by default and asked each run (nothing stored).
-    The **Download** list holds only the main page's links to the seven
-    allowed types; each file is fetched with no cookies (`credentials:
+    The **Download** list holds only the main page's links to the allowed
+    types (`KINDS` in `src/download.js`: PDF, MP3, WAV, WebM, MP4, JPG, PNG,
+    GIF, MPEG, WebP); each file is fetched with no cookies (`credentials:
     'omit'`), checked in `dlq/` in the RAM folder (`src/download.js`:
     structure, hidden code, SHA-256), then saved to Downloads with an atomic
     `.nb-partial-` write and a no-overwrite link. Cookies are sent only on a
@@ -263,6 +264,16 @@
     screenshots and the launcher all use it. A restart (the JIT button)
     goes through `$APPIMAGE` or the launcher script, with the RAM folder, `HOME`
     and `TMPDIR` of the old run taken out of its environment.
+  - **View (0.20.0, `src/view.js`, `src/viewmain.js`).** Asked at each start
+    like downloads; unanswered means the full page. Five levels (pictures
+    only, +text, +links, +the page's own layout and media without scripts,
+    full page) set by four tiered tick boxes. Below the full page the
+    response's own security policy and report headers are replaced
+    (`pageHeaders`): no page script ever runs, and in the picture levels the
+    page is replaced in place by a gallery whose only script carries a
+    per-run nonce. Pictures are fetched by the main process (`nbimg://f/`,
+    no cookies, no referer, first-bytes check, size caps). What a page
+    reports is cleaned by `sanitizeItems`; the gallery escapes everything.
   - **Block list (0.19.0, `src/blocklist.js`, `src/popups.js`,
     `src/popguard.js`, frame preload `src/blockfront.js`).** In memory only,
     for one run: host rules (`onBeforeRequest`, `window.open`, the leave

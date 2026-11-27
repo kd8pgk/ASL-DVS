@@ -15,7 +15,11 @@ const KINDS = {
   jpg: { ext: '.jpg', mimes: ['image/jpeg'], label: 'JPG' },
   mpeg: { ext: '.mpeg', mimes: ['video/mpeg'], label: 'MPEG' },
   webp: { ext: '.webp', mimes: ['image/webp'], label: 'WebP' },
+  png: { ext: '.png', mimes: ['image/png'], label: 'PNG' },
+  gif: { ext: '.gif', mimes: ['image/gif'], label: 'GIF' },
 };
+
+const IMAGE_KINDS = ['jpg', 'webp', 'png', 'gif'];
 
 const EXT_KIND = {
   '.pdf': 'pdf',
@@ -28,6 +32,8 @@ const EXT_KIND = {
   '.mpeg': 'mpeg',
   '.mpg': 'mpeg',
   '.webp': 'webp',
+  '.png': 'png',
+  '.gif': 'gif',
 };
 
 const DYNAMIC_EXTS = ['php', 'asp', 'aspx', 'jsp', 'cgi', 'do', 'action', 'pl', 'py', 'cfm', 'ashx', 'axd'];
@@ -69,6 +75,8 @@ function kindOfHead(buf) {
     return '';
   }
   if (startsWith(buf, [0xff, 0xd8, 0xff])) return 'jpg';
+  if (startsWith(buf, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'png';
+  if (startsWith(buf, Buffer.from('GIF87a')) || startsWith(buf, Buffer.from('GIF89a'))) return 'gif';
   if (startsWith(buf, [0, 0, 1, 0xba]) || startsWith(buf, [0, 0, 1, 0xb3])) return 'mpeg';
   if (startsWith(buf, Buffer.from('ID3'))) return 'mp3';
   if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return 'mp3';
@@ -141,6 +149,35 @@ function structureOk(kind, buf) {
     if (!startsWith(buf, [0xff, 0xd9], buf.length - 2)) return { ok: false, reason: 'it does not end like a JPG' };
     return { ok: true };
   }
+  if (kind === 'png') {
+    if (!startsWith(buf, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return { ok: false, reason: 'it is not a PNG file' };
+    let at = 8;
+    let first = true;
+    let idat = false;
+    let end = false;
+    while (at + 12 <= buf.length) {
+      const len = buf.readUInt32BE(at);
+      const type = buf.toString('latin1', at + 4, at + 8);
+      if (len > 0x7fffffff || at + 12 + len > buf.length) return { ok: false, reason: 'its pieces do not add up' };
+      if (first && (type !== 'IHDR' || len !== 13)) return { ok: false, reason: 'it has no image header' };
+      first = false;
+      if (type === 'IDAT') idat = true;
+      at += 12 + len;
+      if (type === 'IEND') {
+        end = true;
+        break;
+      }
+    }
+    if (!idat) return { ok: false, reason: 'it has no image data' };
+    if (!end || at !== buf.length) return { ok: false, reason: 'it does not end like a PNG' };
+    return { ok: true };
+  }
+  if (kind === 'gif') {
+    if (!startsWith(buf, Buffer.from('GIF87a')) && !startsWith(buf, Buffer.from('GIF89a'))) return { ok: false, reason: 'it is not a GIF file' };
+    if (buf.readUInt16LE(6) < 1 || buf.readUInt16LE(8) < 1) return { ok: false, reason: 'it has no picture size' };
+    if (!buf.subarray(Math.max(0, buf.length - 8)).includes(0x3b)) return { ok: false, reason: 'it does not end like a GIF' };
+    return { ok: true };
+  }
   if (kind === 'webp') {
     if (!startsWith(buf, Buffer.from('RIFF')) || !startsWith(buf, Buffer.from('WEBP'), 8)) return { ok: false, reason: 'it is not a WebP file' };
     if (buf.readUInt32LE(4) + 8 > buf.length) return { ok: false, reason: 'it is cut short' };
@@ -175,14 +212,21 @@ function peAt(buf, at) {
   return pe + 4 <= buf.length && buf[pe] === 0x50 && buf[pe + 1] === 0x45 && buf[pe + 2] === 0 && buf[pe + 3] === 0;
 }
 
+function edgesOf(buf) {
+  const edge = 1024;
+  if (buf.length <= edge * 2) return buf;
+  return Buffer.concat([buf.subarray(0, edge), buf.subarray(buf.length - edge)]);
+}
+
 function hiddenCodeReason(kind, buf) {
-  for (const pat of PROGRAM_PATTERNS) if (buf.indexOf(pat) >= 0) return 'it contains a program';
+  const lead = IMAGE_KINDS.includes(kind) ? edgesOf(buf) : buf;
+  for (const pat of PROGRAM_PATTERNS) if (lead.indexOf(pat) >= 0) return 'it contains a program';
   let at = buf.indexOf('MZ');
   while (at >= 0) {
     if (peAt(buf, at)) return 'it contains a Windows program';
     at = buf.indexOf('MZ', at + 1);
   }
-  if (buf.indexOf('#!/') >= 0) return 'it contains a script';
+  if (lead.indexOf('#!/') >= 0) return 'it contains a script';
   for (const tag of WEB_TAGS) if (buf.indexOf(tag) >= 0) return 'it contains web page code';
   if (kind === 'pdf') {
     const text = buf.toString('latin1');
@@ -544,6 +588,7 @@ module.exports = {
   kindOfProbe,
   skippedExt,
   EXT_KIND,
+  IMAGE_KINDS,
   DYNAMIC_EXTS,
   MAX_PROBES,
   MAX_LIST,

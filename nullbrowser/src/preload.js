@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('nb', {
   launcherStatus: () => ipcRenderer.invoke('launcher-status'),
   addLauncher: () => ipcRenderer.invoke('launcher-install'),
   removeLauncher: () => ipcRenderer.invoke('launcher-remove'),
+  viewSet: (tier) => ipcRenderer.invoke('view-set', tier),
+  viewTick: (key, on) => ipcRenderer.invoke('view-tick', key, on),
   popPanel: (on) => ipcRenderer.invoke('pop-panel', on),
   popFind: () => ipcRenderer.invoke('pop-find'),
   popPick: () => ipcRenderer.invoke('pop-pick'),

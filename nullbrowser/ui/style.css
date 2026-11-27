@@ -73,6 +73,9 @@ button.primary { color: var(--green); border-color: var(--green-dim); }
 .dl-badge { font-size: var(--fs-xs); font-weight: bold; color: var(--cyan); border: 1px solid var(--cyan); border-radius: 3px; padding: 0 .3rem; }
 .dl-all { color: var(--amber); }
 #popbtn[aria-expanded="true"] { color: var(--amber); border-color: var(--amber); }
+.view-panel { width: 430px; }
+.view-row { display: flex; align-items: center; gap: .5rem; padding: .35rem .7rem; font-size: var(--fs-md); cursor: pointer; }
+#viewbtn[aria-expanded="true"] { color: var(--amber); border-color: var(--amber); }
 .pop-panel { width: 460px; }
 .pop-panel ul { max-height: 130px; }
 .pop-panel li { flex-wrap: wrap; }
