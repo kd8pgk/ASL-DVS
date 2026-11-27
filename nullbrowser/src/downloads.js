@@ -9,6 +9,7 @@ const SH = require('./shot');
 const DL = require('./download');
 const { st } = require('./state');
 const shared = require('./ctx');
+const { own } = require('./slowline');
 
 function rammaidFile(file) {
   try {
@@ -352,30 +353,219 @@ async function runDownload(item, ctx) {
   }
 }
 
-const FILE_SCAN = `(function(){var out=[];var n=document.querySelectorAll('a[href],audio[src],video[src],source[src],img[src]');for(var i=0;i<n.length&&out.length<300;i++){var e=n[i];var h=e.tagName==='A'?e.href:(e.currentSrc||e.src||'');if(h&&String(h).length<=4096)out.push({href:String(h)})}return out})()`;
+const FILE_SCAN = DL.scanScript();
 
-async function scanFiles() {
+const PROBE_BYTES = 512;
+const PROBE_MS = 5000;
+const PROBE_PARALLEL = 4;
+const probesActive = new Set();
+const probesQueued = [];
+const probesInflight = new Set();
+let probesRunning = 0;
+let rescanTimer = null;
+
+function sameDoc(a, b) {
+  return String(a || '').split('#')[0] === String(b || '').split('#')[0];
+}
+
+function probeFile(href) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let got = 0;
+    let url = href;
+    let hops = 0;
+    let settled = false;
+    let req = null;
+    let timer = null;
+    const held = new Set();
+    const hold = (u) => {
+      own.add(u);
+      held.add(u);
+    };
+    const finish = (kind) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      for (const u of held) own.delete(u);
+      probesActive.delete(stop);
+      try {
+        if (req) req.abort();
+      } catch {}
+      resolve(kind);
+    };
+    const stop = () => finish(null);
+    probesActive.add(stop);
+    timer = setTimeout(stop, PROBE_MS);
+    hold(url);
+    try {
+      req = net.request({ method: 'GET', url, session: st.ses, credentials: 'omit', redirect: 'manual' });
+    } catch {
+      finish(null);
+      return;
+    }
+    req.setHeader('Accept', '*/*');
+    req.setHeader('Range', `bytes=0-${PROBE_BYTES - 1}`);
+    req.on('redirect', (code, method, redirectUrl) => {
+      let next;
+      try {
+        next = new URL(redirectUrl);
+      } catch {
+        finish('');
+        return;
+      }
+      hops += 1;
+      if (hops > 5 || (next.protocol !== 'https:' && next.protocol !== 'http:') || (new URL(url).protocol === 'https:' && next.protocol === 'http:')) {
+        finish('');
+        return;
+      }
+      url = next.href;
+      hold(url);
+      req.followRedirect();
+    });
+    req.on('response', (res) => {
+      if (settled) return;
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        finish('');
+        return;
+      }
+      const ct = String([].concat(res.headers['content-type'] || '')[0] || '');
+      if (/^(text|application\/(json|xml|javascript|xhtml))/i.test(ct.trim())) {
+        finish('');
+        return;
+      }
+      res.on('data', (c) => {
+        if (settled) return;
+        chunks.push(c);
+        got += c.length;
+        if (got >= PROBE_BYTES) finish(DL.kindOfProbe(Buffer.concat(chunks).subarray(0, PROBE_BYTES), ct));
+      });
+      res.on('end', () => finish(DL.kindOfProbe(Buffer.concat(chunks), ct)));
+      res.on('error', stop);
+      res.on('aborted', stop);
+    });
+    req.on('error', stop);
+    req.end();
+  });
+}
+
+function cancelProbes() {
+  probesQueued.length = 0;
+  for (const stop of [...probesActive]) stop();
+  st.dlProbing = 0;
+}
+
+function mergeList() {
+  const entries = new Map(st.dlKnown.map((e) => [e.href, e]));
+  for (const href of st.dlCands) {
+    const e = st.dlProbed.get(href);
+    if (e && !entries.has(href)) entries.set(href, e);
+  }
+  const { list, total } = DL.sortCap(entries.values());
+  st.dlList = list;
+  st.dlTotal = total;
+}
+
+function pumpProbes(epoch) {
+  while (probesRunning < PROBE_PARALLEL && probesQueued.length) {
+    const href = probesQueued.shift();
+    probesRunning += 1;
+    probesInflight.add(href);
+    probeFile(href).then((kind) => {
+      probesRunning -= 1;
+      probesInflight.delete(href);
+      if (epoch === st.dlSeq) {
+        if (kind !== null) st.dlProbed.set(href, kind ? DL.entryFor(href, kind) : null);
+        st.dlProbing = probesQueued.length + probesRunning;
+        mergeList();
+        shared.push();
+      }
+      pumpProbes(epoch);
+    });
+  }
+}
+
+function startProbes(epoch) {
+  probesQueued.length = 0;
+  for (const h of st.dlCands) if (!st.dlProbed.has(h) && !probesInflight.has(h)) probesQueued.push(h);
+  st.dlProbing = probesQueued.length + probesInflight.size;
+  pumpProbes(epoch);
+}
+
+function resetDownloads() {
+  st.dlSeq += 1;
+  cancelProbes();
+  if (rescanTimer) clearTimeout(rescanTimer);
+  rescanTimer = null;
+  st.dlList = [];
+  st.dlKnown = [];
+  st.dlCands = [];
+  st.dlProbed = new Map();
+  st.dlListFor = '';
+  st.dlTotal = 0;
+  st.dlSkipped = 0;
+  st.dlScanError = '';
+}
+
+async function scanFiles(opts = {}) {
   if (!st.view || st.view.webContents.isDestroyed()) return;
+  const probe = opts.probe === undefined ? st.dlPanelOpen && st.dlAllowed : opts.probe;
   const url = shared.pageUrl();
+  st.dlScanSeq += 1;
+  const seq = st.dlScanSeq;
+  const epoch = st.dlSeq;
   if (!url || !/^https?:/.test(url)) {
-    st.dlList = [];
+    resetDownloads();
     shared.push();
     return;
   }
-  let links = [];
+  const wc = st.view.webContents;
+  const frames = [];
   try {
-    links = await st.view.webContents.mainFrame.executeJavaScript(FILE_SCAN, false);
+    for (const f of wc.mainFrame.framesInSubtree) {
+      if (f.detached) continue;
+      const isMain = f === wc.mainFrame;
+      if (!isMain && (!f.url || f.url === 'about:blank')) continue;
+      frames.push({ frame: f, main: isMain });
+    }
   } catch {
-    links = [];
+    frames.length = 0;
   }
-  if (shared.pageUrl() !== url) return;
-  st.dlList = DL.buildList(Array.isArray(links) ? links : [], url);
+  if (!frames.length) frames.push({ frame: wc.mainFrame, main: true });
+  const got = await DL.collectFrames(frames, (f) => f.frame.executeJavaScript(FILE_SCAN, false));
+  if (seq !== st.dlScanSeq || epoch !== st.dlSeq || !sameDoc(shared.pageUrl(), url)) return;
+  if (got.mainFailed) st.dlScanError = 'page';
+  else if (got.failed) st.dlScanError = `frames:${got.failed}`;
+  else st.dlScanError = '';
+  const built = DL.buildScan(got.items, url);
+  st.dlKnown = built.list;
+  st.dlCands = built.candidates;
+  st.dlSkipped = built.skipped;
   st.dlListFor = url;
+  mergeList();
+  if (!probe) {
+    st.dlProbing = 0;
+  } else {
+    startProbes(epoch);
+  }
   shared.push();
 }
 
+function scheduleRescan() {
+  if (!st.dlPanelOpen || !st.dlAllowed) return;
+  if (rescanTimer) clearTimeout(rescanTimer);
+  rescanTimer = setTimeout(() => {
+    rescanTimer = null;
+    scanFiles({ probe: true });
+  }, 500);
+}
+
 function entryOf(href) {
+  if (!sameDoc(st.dlListFor, shared.pageUrl())) return null;
   return st.dlList.find((x) => x.href === href) || null;
 }
 
-module.exports = { rammaidFile, openFile, checkAndOpen, endFile, finishFile, answerFile, onDownload, dlDir, fsyncDir, saveAtomic, fetchFile, W_BACKOFF, runDownload, FILE_SCAN, scanFiles, entryOf };
+function listIsCurrent() {
+  return Boolean(st.dlListFor) && sameDoc(st.dlListFor, shared.pageUrl());
+}
+
+module.exports = { rammaidFile, openFile, checkAndOpen, endFile, finishFile, answerFile, onDownload, dlDir, fsyncDir, saveAtomic, fetchFile, W_BACKOFF, runDownload, FILE_SCAN, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, probeFile, entryOf };

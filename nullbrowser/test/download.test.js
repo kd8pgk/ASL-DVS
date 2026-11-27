@@ -24,7 +24,15 @@ const mp4 = () => {
 const jpg = () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300), Buffer.from([0xff, 0xd9])]);
 const mpeg = () => Buffer.concat([Buffer.from([0, 0, 1, 0xba]), Buffer.alloc(300)]);
 
-const good = { pdf: pdf(), mp3: mp3(), wav: wav(), webm: webm(), mp4: mp4(), jpg: jpg(), mpeg: mpeg() };
+const webp = () => {
+  const b = Buffer.alloc(400);
+  b.write('RIFF', 0, 'latin1');
+  b.writeUInt32LE(b.length - 8, 4);
+  b.write('WEBPVP8 ', 8, 'latin1');
+  return b;
+};
+
+const good = { pdf: pdf(), mp3: mp3(), wav: wav(), webm: webm(), mp4: mp4(), jpg: jpg(), mpeg: mpeg(), webp: webp() };
 
 test('each allowed type passes with its own check', () => {
   for (const [kind, buf] of Object.entries(good)) {
@@ -106,7 +114,7 @@ test('a taken name gets a number and is never overwritten', () => {
   assert.equal(D.uniqueName('b.pdf', () => false), 'b.pdf');
 });
 
-test('the list has only the main page links of the seven types, merged, sorted, with name, path and host', () => {
+test('the list has only the main page links of the allowed types, merged, sorted, with name, path and host', () => {
   const page = 'https://comic.test/strip/5';
   const list = D.buildList([
     { href: '/files/b.pdf' },
@@ -174,4 +182,139 @@ test('the queue never keeps the cookie it was given once the file is done', asyn
   q.add([{ name: 'x.pdf' }], { cookie: 'sid=secret' });
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(JSON.stringify(q.snapshot()).includes('secret'), false);
+});
+
+test('a WebP must be a RIFF WEBP with image data and not cut short', () => {
+  const sha = (b) => D.sha256(b);
+  assert.equal(D.checkDownload('webp', webp(), sha(webp())).ok, true);
+  const cut = webp();
+  cut.writeUInt32LE(5000, 4);
+  assert.equal(D.checkDownload('webp', cut, sha(cut)).ok, false);
+  const noData = webp();
+  noData.write('JUNK', 12, 'latin1');
+  assert.equal(D.checkDownload('webp', noData, sha(noData)).ok, false);
+  assert.equal(D.checkDownload('webp', wav(), sha(wav())).ok, false);
+  assert.equal(D.kindOfPath('/a/b.WEBP'), 'webp');
+});
+
+test('the first bytes tell the kind, and a disagreeing type drops the link', () => {
+  for (const [kind, buf] of Object.entries(good)) assert.equal(D.kindOfHead(buf), kind, kind);
+  assert.equal(D.kindOfHead(Buffer.from('<!doctype html><html>     ')), '');
+  assert.equal(D.kindOfHead(Buffer.from('MZ' + 'x'.repeat(40))), '');
+  assert.equal(D.kindOfProbe(jpg(), 'image/jpeg'), 'jpg');
+  assert.equal(D.kindOfProbe(jpg(), 'application/octet-stream'), 'jpg');
+  assert.equal(D.kindOfProbe(jpg(), ''), 'jpg');
+  assert.equal(D.kindOfProbe(jpg(), 'application/pdf'), '');
+  assert.equal(D.kindOfProbe(Buffer.from('hello world, not a file at all'), 'image/jpeg'), '');
+});
+
+test('hints name the kind: download name, type, and a query value', () => {
+  const page = 'https://x.test/p';
+  const list = D.buildList([
+    { href: '/get?id=1', name: 'strip.mp4' },
+    { href: '/blob/aaa', type: 'application/pdf' },
+    { href: '/dl?file=song.mp3&x=1' },
+    { href: '/dl?id=9' },
+  ], page);
+  assert.deepEqual(list.map((e) => e.kind).sort(), ['mp3', 'mp4', 'pdf']);
+  assert.equal(list.find((e) => e.kind === 'mp4').name, 'strip.mp4');
+});
+
+test('extensionless links become candidates: a sibling host like cdn first, then the same host, then loose media, then other sites; skip page-like and unknown files', () => {
+  const page = 'https://www.comic.test/strip';
+  const scan = D.buildScan([
+    { href: 'https://other.test/go/1' },
+    { href: 'https://cdn.comic.test/x/abc', media: true },
+    { href: 'https://cdn.comic.test/f/9' },
+    { href: '/dl?id=42' },
+    { href: '/about.html' },
+    { href: '/files/prog.zip' },
+    { href: '/getit.php' },
+    { href: 'https://www.comic.test/strip#top' },
+    { href: 'https://other.test/go/1' },
+    { href: 'mailto:a@b.test' },
+  ], page);
+  assert.deepEqual(scan.candidates, ['https://cdn.comic.test/f/9', 'https://www.comic.test/dl?id=42', 'https://www.comic.test/getit.php', 'https://cdn.comic.test/x/abc', 'https://other.test/go/1']);
+  assert.equal(scan.list.length, 0);
+});
+
+test('only 100 candidates are probed and the rest are counted', () => {
+  const links = Array.from({ length: 150 }, (_, i) => ({ href: `https://c.test/m/${i}`, media: true }));
+  const scan = D.buildScan(links, 'https://x.test/');
+  assert.equal(scan.candidates.length, 100);
+  assert.equal(scan.skipped, 50);
+});
+
+test('the list is capped at 200 but reports the total', () => {
+  const many = Array.from({ length: 300 }, (_, i) => ({ href: `/f/${String(i).padStart(3, '0')}.jpg` }));
+  const scan = D.buildScan(many, 'https://x.test/');
+  assert.equal(scan.list.length, 200);
+  assert.equal(scan.total, 300);
+});
+
+function fakeDoc(nodes) {
+  return {
+    baseURI: 'https://p.test/dir/',
+    querySelectorAll: () => nodes,
+  };
+}
+
+function fakeNode(tag, attrs = {}) {
+  return {
+    tagName: tag,
+    href: attrs.href,
+    src: attrs.src || '',
+    currentSrc: attrs.currentSrc || '',
+    data: attrs.data || '',
+    poster: attrs.poster || '',
+    getAttribute: (n) => (attrs.attrs && attrs.attrs[n]) || null,
+    closest: () => (attrs.inLink ? {} : null),
+  };
+}
+
+test('the page scan does not stop at 300 other links', () => {
+  const nodes = [];
+  for (let i = 0; i < 1500; i += 1) nodes.push(fakeNode('A', { href: `https://p.test/page/${i}.html` }));
+  nodes.push(fakeNode('A', { href: 'https://p.test/files/last.pdf' }));
+  nodes.push(fakeNode('IMG', { src: 'https://cdn.test/thumb/1.jpg', inLink: true }));
+  nodes.push(fakeNode('IMG', { src: 'https://cdn.test/thumb/2', inLink: true }));
+  nodes.push(fakeNode('IMG', { src: 'https://cdn.test/i/abc', attrs: { srcset: 'https://cdn.test/i/abc-2x 2x' } }));
+  nodes.push(fakeNode('A', { href: 'https://p.test/dl?id=1' }));
+  nodes.push(fakeNode('A', { href: 'https://p.test/get', attrs: { download: 'x.mp3' } }));
+  nodes.push(fakeNode('VIDEO', { currentSrc: 'https://cdn.test/v/1', poster: 'https://cdn.test/v/1-poster' }));
+  const out = D.scanFn(Object.keys(D.EXT_KIND).map((e) => e.slice(1)), D.DYNAMIC_EXTS, fakeDoc(nodes));
+  const hrefs = out.items.map((i) => i.href);
+  assert.ok(hrefs.includes('https://p.test/files/last.pdf'));
+  assert.ok(hrefs.includes('https://cdn.test/i/abc'));
+  assert.ok(hrefs.includes('https://cdn.test/i/abc-2x'));
+  assert.ok(hrefs.includes('https://cdn.test/v/1-poster'));
+  assert.ok(hrefs.includes('https://p.test/dl?id=1'));
+  assert.equal(hrefs.some((h) => h.endsWith('.html')), false, 'page links are not collected');
+  assert.equal(hrefs.some((h) => h.includes('/thumb/')), false, 'a picture inside a link is that link\'s thumbnail and is left out');
+  const scan = D.buildScan(out.items, 'https://p.test/dir/');
+  assert.deepEqual(scan.list.map((e) => e.name).sort(), ['last.pdf', 'x.mp3']);
+  assert.equal(scan.candidates[0], 'https://p.test/dl?id=1', 'links are checked before loose pictures');
+  assert.ok(scan.candidates.includes('https://cdn.test/i/abc'));
+});
+
+test('the scan script is plain text that evaluates to a call', () => {
+  const src = D.scanScript();
+  assert.match(src, /^\(function scanFn/);
+  assert.doesNotThrow(() => new Function(`return ${src}`));
+});
+
+test('frames are read together, a failing or slow frame is counted, and a failing main frame is reported', async () => {
+  const frames = [{ id: 'm', main: true }, { id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const run = (f) => {
+    if (f.id === 'b') return Promise.reject(new Error('gone'));
+    if (f.id === 'c') return new Promise(() => {});
+    return Promise.resolve({ items: [{ href: `https://x.test/${f.id}.pdf` }] });
+  };
+  const got = await D.collectFrames(frames, run, 50);
+  assert.equal(got.items.length, 2);
+  assert.equal(got.failed, 2);
+  assert.equal(got.mainFailed, false);
+  const bad = await D.collectFrames([{ id: 'm', main: true }], () => Promise.reject(new Error('x')), 50);
+  assert.equal(bad.mainFailed, true);
+  assert.equal(bad.failed, 0);
 });

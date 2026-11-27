@@ -1,6 +1,20 @@
 # Null Browser changelog
 
-Current version: `0.16.1`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.17.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.17.0 (2026-11-27)
+
+The Download list finds more files, and says when it could not read a page.
+
+- **WebP added.** The list and the download checks now cover WebP as well: PDF, MP3, WebM, MP4, JPG, WAV, MPEG and WebP. A WebP must have a RIFF/WEBP header, image data and a size that fits the file.
+- **Long pages work.** The page scan used to stop after 300 elements of any kind, so a page with a menu and many pictures never reached its files further down. Now only likely files are collected, up to 1,000 links, 600 media addresses and 400 other links per frame. The list still shows at most 200 files and now says "Showing the first 200 of N files".
+- **More ways to name a file.** Links are listed when the path ends in a file type, when the link's `download` name or `type` names one, or when a query value does (`?file=song.mp3`). Pictures, audio and video on the page are read from `src`, `srcset`, `poster`, `object` and `embed` too.
+- **Links with no file type** (a CDN address, `/get?id=42`). When you open the list, each of these gets one check: a request for its first 512 bytes, with no cookies and no referer, 4 at a time, 5 seconds each, at most 100 links per scan (links to a sibling host such as `cdn.` first, then links on the same host, then loose pictures and media, then links to other sites). A link is listed only when its first bytes are one of the eight types and any `Content-Type` agrees. Web pages, errors and links whose type and bytes disagree are dropped. Nothing is checked until you open the list, and checks stop when you close it or leave the page. Links to other sites are checked too, so opening the list contacts those sites; a page can also point a link at a private-network address.
+- **Thumbnails stay out.** A picture inside a link is that link's thumbnail and is not listed; the link behind it is checked instead, so the full file is listed. Pictures that are not inside a link are still listed.
+- **Embedded frames are listed**, including frames from other sites. The list refreshes a moment after a frame finishes loading while it is open.
+- **Errors are shown.** If the page cannot be read the panel says "Could not read this page" with **Scan again**; if some frames cannot be read it says how many. "No files found" appears only when the scan worked and no check is still running. Each frame has a 3-second limit.
+- **No stale list.** The list, the checks and the scan result are cleared when you start a new page and by the ✕ button. An older scan can no longer replace a newer one, and a download can only be started from the list of the page you are on.
+- Not changed: the checks before saving, the queue, and the rule that downloads are off until you allow them each run.
 
 ## 0.16.1 (2026-11-26)
 

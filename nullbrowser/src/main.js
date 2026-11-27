@@ -57,7 +57,7 @@ if (!fastJs) app.commandLine.appendSwitch('js-flags', P.JS_FLAGS);
 app.disableHardwareAcceleration();
 
 const { st } = require('./state');
-const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, entryOf } = require('./downloads');
+const { onDownload, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
@@ -123,6 +123,10 @@ function state() {
       queuePanel: st.dlQueueOpen,
       warn: st.dlWarn,
       list: st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })),
+      total: st.dlTotal,
+      probing: st.dlProbing,
+      skipped: st.dlSkipped,
+      scanError: st.dlScanError,
       queue: dlQueue.snapshot(),
       busy: dlQueue.busy(),
     },
@@ -181,6 +185,7 @@ function purgeIfSiteChanged(nextUrl) {
 function wipeAll() {
   dlQueue.cancelAll();
   dlQueue.clear();
+  resetDownloads();
   st.dlAllowed = false;
   st.dlAsking = true;
   st.dlQueueOpen = false;
@@ -435,9 +440,14 @@ function createView() {
     setImmediate(pump);
     scanFiles();
   });
+  wc.on('did-frame-finish-load', (ev, isMainFrame) => {
+    if (!isMainFrame) scheduleRescan();
+  });
+  wc.on('did-navigate-in-page', () => scheduleRescan());
   wc.on('did-start-navigation', (ev, url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
       st.pendingLeave = null;
+      resetDownloads();
       purgeIfSiteChanged(url);
       resetLine();
       st.error = null;
@@ -606,7 +616,10 @@ function register() {
     if (!fromShell(e)) return { ok: false };
     st.dlAllowed = on === true;
     st.dlAsking = false;
-    if (!st.dlAllowed) dlQueue.cancelAll();
+    if (!st.dlAllowed) {
+      dlQueue.cancelAll();
+      cancelProbes();
+    }
     push();
     return { ok: true };
   });
@@ -622,9 +635,16 @@ function register() {
     st.dlWarn = false;
     if (st.dlPanelOpen) {
       st.dlQueueOpen = false;
-      await scanFiles();
+      await scanFiles({ probe: true });
+    } else {
+      cancelProbes();
     }
     push();
+    return { ok: true };
+  });
+  ipcMain.handle('dl-rescan', async (e) => {
+    if (!fromShell(e) || !st.dlAllowed) return { ok: false };
+    await scanFiles({ probe: st.dlPanelOpen });
     return { ok: true };
   });
   ipcMain.handle('dl-queue-panel', (e, on) => {
@@ -635,24 +655,33 @@ function register() {
   });
   ipcMain.handle('dl-warn', (e, on) => {
     if (!fromShell(e)) return { ok: false };
-    st.dlWarn = on === true && st.dlAllowed && st.dlList.length > 0;
+    st.dlWarn = on === true && st.dlAllowed && st.dlList.length > 0 && listIsCurrent();
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-all', (e) => {
     if (!fromShell(e) || !st.dlAllowed || st.dlList.length === 0) return { ok: false };
+    if (!listIsCurrent()) {
+      scanFiles({ probe: st.dlPanelOpen });
+      return { ok: false };
+    }
     dlQueue.add(st.dlList.map(({ href, kind, name, path: p, host }) => ({ href, kind, name, path: p, host })));
     st.dlWarn = false;
     st.dlPanelOpen = false;
+    cancelProbes();
     push();
     return { ok: true };
   });
   ipcMain.handle('dl-one', (e, href) => {
     if (!fromShell(e) || !st.dlAllowed) return { ok: false };
     const f = entryOf(href);
-    if (!f) return { ok: false };
+    if (!f) {
+      if (!listIsCurrent()) scanFiles({ probe: st.dlPanelOpen });
+      return { ok: false };
+    }
     dlQueue.add([{ href: f.href, kind: f.kind, name: f.name, path: f.path, host: f.host }]);
     st.dlPanelOpen = false;
+    cancelProbes();
     push();
     return { ok: true };
   });
