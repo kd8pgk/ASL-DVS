@@ -1,6 +1,20 @@
 # Null Browser Mobile changelog
 
-Current version: `0.7.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.8.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.8.0 (2026-11-28)
+
+**View**: pictures only, with boxes to turn more of the page back on, as in the desktop build (0.20.0).
+
+- **Asked at each start**: **Pictures only**, **Full page** or **Choose…**. Nothing is saved; the answer lasts until the app closes. If you dismiss the question, pages show in full.
+- **Tools → View** opens four tiered boxes: **Text**, **Links**, **The page's own layout, video and audio (still no scripts)** and **Scripts (the full page)**. Ticking one ticks the ones above it; unticking one unticks the ones below it. Changing a box reloads the page.
+- **Pictures only, Pictures and text, Pictures, text and links.** The page's scripts never run in these three. Null Browser fetches the page's HTML itself (with the site's cookies, as the page view would), reads it with its own small scanner, and hands the page view a plain gallery in its place: one single column on a dark page, then, when ticked, headings, paragraphs and captions in page order, and links. The address bar, back and reload work as usual, because the gallery answers the page's own address.
+- **What is read.** `img`, `srcset`, `picture`, lazy `data-src`, video posters, and text blocks; menus, footers, side bars, forms and hidden elements are skipped; a thumbnail inside a link to a bigger picture is replaced by the bigger one; duplicates and pictures under 120 pixels are dropped.
+- **How the pictures are fetched.** By the app itself, as they come into view, with no cookies and no referer; each must start like a JPG, PNG, GIF, WebP or AVIF (SVG and anything else is dropped); at most 400 pictures, 25 MB each and 300 MB in all per page. **Images: Off** still wins. Tap a picture to see it larger; the arrows move to the next one.
+- **Page layout and media, no scripts** turns off JavaScript in the page view and loads the real page.
+- **A strict policy on the gallery**: no frames, no fonts, no media, scripts only the gallery's own, pictures only from the app itself.
+- **Known limits.** Android's page view has no way to read computed styles without running the page, so hidden-by-stylesheet elements and CSS background pictures are not seen in the gallery, which the desktop build does see. A file that is not a page (PDF, audio, video, picture) passes straight to the page view; anything else that is not HTML (an SVG, for example) is refused. The block list's **Find** and **Pick** need scripts, so they do nothing in the layout level.
+- **Tests.** Unit tests for the tiers, the picture check, the HTML scanner and the cleaning of what it finds (hidden, navigation, lazy and `picture` pictures, entities, relative and bad addresses) and the gallery page (everything a site gave is escaped). The fetching and the page wiring are compiled by CI but not yet run on a phone.
 
 ## 0.7.0 (2026-11-28)
 

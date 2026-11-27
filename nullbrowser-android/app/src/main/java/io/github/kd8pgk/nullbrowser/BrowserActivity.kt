@@ -94,6 +94,8 @@ class BrowserActivity : Activity() {
     private lateinit var line: SlowLine
     private lateinit var pop: PopGuard
     private lateinit var popSheet: PopSheet
+    private lateinit var viewGuard: ViewGuard
+    private lateinit var viewBtn: Button
     private var popNoticed = false
     private var starvedActive = 0
     private lateinit var lineBtn: Button
@@ -161,6 +163,12 @@ class BrowserActivity : Activity() {
         popSheet = PopSheet(this, pop) { chooseBlockList() }
         pop.onPicked = { popSheet.show() }
         findViewById<Button>(R.id.popBtn).setOnClickListener { popSheet.show() }
+        viewBtn = findViewById(R.id.viewBtn)
+        viewGuard = ViewGuard(web) { runOnUiThread { renderView() } }
+        viewGuard.userAgent = web.settings.userAgentString
+        viewGuard.imagesOn = { line.images }
+        viewBtn.setOnClickListener { showViewDialog() }
+        renderView()
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -191,7 +199,7 @@ class BrowserActivity : Activity() {
                 return false
             }
 
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = pop.intercept(request) ?: line.intercept(request)
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = pop.intercept(request) ?: viewGuard.interceptPicture(request) ?: viewGuard.interceptMain(request) ?: line.intercept(request)
 
             override fun onPageCommitVisible(view: WebView, url: String) {
                 pop.applyCss(view, url)
@@ -400,6 +408,58 @@ class BrowserActivity : Activity() {
         addr.setOnFocusChangeListener { _, has -> editing = has }
 
         goBlank()
+        web.post { askView() }
+    }
+
+    private fun renderView() {
+        if (isDestroyed) return
+        viewBtn.text = "View: " + ViewTier.SHORT[viewGuard.tier]
+    }
+
+    private fun askView() {
+        if (isDestroyed || !viewGuard.asking) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("How much of each page?")
+            .setMessage("Pictures only shows just the pictures of a page, in one column. The answer lasts until Null Browser closes; nothing is saved.")
+            .setPositiveButton("Pictures only") { _, _ -> viewGuard.setTier(0) }
+            .setNegativeButton("Full page") { _, _ -> viewGuard.setTier(4) }
+            .setNeutralButton("Choose…") { _, _ ->
+                viewGuard.setTier(4)
+                showViewDialog()
+            }
+            .show()
+    }
+
+    private fun showViewDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this)
+        box.orientation = android.widget.LinearLayout.VERTICAL
+        box.setPadding(pad, pad / 2, pad, 0)
+        val intro = TextView(this)
+        intro.text = "Pictures only is the base. Each box turns more of the page back on, and ticks the ones above it. Changing it reloads the page."
+        box.addView(intro)
+        val keys = listOf("text" to "Text", "links" to "Links", "layout" to "The page's own layout, video and audio (still no scripts)", "scripts" to "Scripts (the full page)")
+        val checks = keys.map { (_, label) -> CheckBox(this).also { it.text = label } }
+        val label = TextView(this)
+        var busy = false
+        fun sync() {
+            busy = true
+            checks.forEachIndexed { i, c -> c.isChecked = viewGuard.tier >= i + 1 }
+            busy = false
+            label.text = ViewTier.LABELS[viewGuard.tier]
+        }
+        checks.forEachIndexed { i, c ->
+            c.setOnCheckedChangeListener { _, on ->
+                if (!busy) {
+                    viewGuard.setTier(ViewTier.applyTick(viewGuard.tier, keys[i].first, on))
+                    sync()
+                }
+            }
+            box.addView(c)
+        }
+        box.addView(label)
+        sync()
+        android.app.AlertDialog.Builder(this).setTitle("View").setView(box).setPositiveButton("Close", null).show()
     }
 
     private fun upgradeIfNeeded(url: Uri): String? {
