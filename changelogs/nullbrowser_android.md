@@ -1,6 +1,19 @@
 # Null Browser Mobile changelog
 
-Current version: `0.6.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.7.0`. The app is in `nullbrowser-android/`; its version is `appVersion` in `nullbrowser-android/app/build.gradle.kts`. Newest entries first.
+
+## 0.7.0 (2026-11-28)
+
+Pop-ups: see where they point and block them for one run, as in the desktop build (0.19.0).
+
+- **Tools → Pop-ups** opens a full-screen sheet. The old **Line** button is now **Tools**, because the row holds more than the line settings.
+- **Tried this run.** Every pop-up window a page tried to open and every jump to another site, with the site it came from and the address it pointed at (`dropped`, `blocked`, `went` or `tapped`). Each line has **Block <host>**. A pop-up without a tap used to be refused with no trace of where it pointed; it is now taken into a small window that has no scripts and can load nothing, its address is recorded, and it is destroyed after 3 seconds (at most 3 at once).
+- **On this page.** **Find on this page** lists elements fixed over the page that cover a large part of it or sit on a high layer, and frames from other sites, with **Show** (outlines it on the page), **Hide** and **Block <host>**. **Pick** closes the sheet so you can tap the pop-up on the page; the sheet comes back with it listed. A pop-up inside a frame from another site can be listed (by its address) but not picked from inside, because Android's page view gives an app no way into another site's frame.
+- **Block list.** Host rules cancel every request to the host and its subdomains (everything except the page itself), refuse a jump to it, and drop a pop-up window aimed at it. Element rules hide matching elements on a site with injected CSS. **Import list…** adds hosts, hosts-file lines, `||host^` and `site##selector` from a text file you pick (up to 5 MB and 20,000 rules). A page's own site cannot be blocked from the sheet.
+- **One run only.** The list, the log and the counts are in memory and are gone when the app closes. ✕ clears the log and what the page found, and keeps the list. Nothing is written.
+- **Safety.** What a page reports about an element is cleaned and length-limited before it is shown; a rule is only made from that stored list, never from a string a page sends; selectors may not hold braces, semicolons, `@`, `url(` or the whole page (`body`, `html`, `*`).
+- **Known limits.** Element rules reach the page and not frames of other sites (use a host rule for those). Android's page view has no way to run a script before the page's own scripts, so a rule shows its effect a moment after the page starts, not before.
+- **Tests.** Unit tests for the JSON reader, the block list, the cleaning of what a page reports and the quoting of injected script. The sheet and the page wiring are compiled by CI but not yet run on a phone.
 
 ## 0.6.0 (2026-11-26)
 

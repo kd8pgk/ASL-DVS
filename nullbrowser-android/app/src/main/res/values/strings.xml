@@ -18,8 +18,9 @@
     <string name="cancel">Cancel</string>
     <string name="not_really">%1$s is not really %2$s, so it was not opened.</string>
     <string name="no_app">No app on this phone could open %1$s.</string>
-    <string name="popups_off">Pop-ups are refused in Null Browser.</string>
-    <string name="line">Line</string>
+    <string name="line">Tools</string>
+    <string name="pop">Pop-ups</string>
+    <string name="popup_dropped">A pop-up was dropped. Open Tools, then Pop-ups, to see where it pointed.</string>
     <string name="line_slow">Slow</string>
     <string name="slow_auto">Slow: Auto</string>
     <string name="slow_on">Slow: On</string>
