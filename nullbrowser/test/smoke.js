@@ -223,9 +223,9 @@ async function main() {
     if (q.url === '/dlmore') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       const filler = Array.from({ length: 420 }, (_, i) => `<a href="/page/${i}.html">p${i}</a>`).join(' ');
-      return s.end(`<!doctype html><title>more</title><p>${filler}</p><img src="/dlimg/abc"><a href="/dlget?id=7">Get seven</a> <a href="/dlnav?id=1">Next</a> <a href="/dlfake?id=2">Fake</a> <a href="/files/good.webp">Webp</a> <a href="/dlq?file=song.mp3">Song</a> <a href="/late/last.pdf">Last</a><iframe src="http://127.0.0.1:${portB}/dlframeB"></iframe>`);
+      return s.end(`<!doctype html><title>more</title><p>${filler}</p><img src="/dlimg/abc"><a href="/dlget?id=7"><img src="/dlthumb/t7" width="40" height="40">Get seven</a> <a href="/dlnav?id=1">Next</a> <a href="/dlfake?id=2">Fake</a> <a href="/files/good.webp">Webp</a> <a href="/dlq?file=song.mp3">Song</a> <a href="/late/last.pdf">Last</a><iframe src="http://127.0.0.1:${portB}/dlframeB"></iframe>`);
     }
-    if (q.url.startsWith('/dlimg/') || q.url.startsWith('/dlget') || q.url.startsWith('/dlnav') || q.url.startsWith('/dlfake')) {
+    if (q.url.startsWith('/dlimg/') || q.url.startsWith('/dlthumb/') || q.url.startsWith('/dlget') || q.url.startsWith('/dlnav') || q.url.startsWith('/dlfake')) {
       probeSeen.push({ url: q.url, cookie: q.headers.cookie || '', range: q.headers.range || '', referer: q.headers.referer || '' });
       if (q.url.startsWith('/dlnav')) {
         s.writeHead(200, { 'Content-Type': 'text/html' });
@@ -587,6 +587,7 @@ async function main() {
   assert.equal(has(/good\.webp/), true, 'a WebP link is listed');
   assert.equal(has(/\/dlq/), true, 'a link that names its file in the query is listed');
   assert.equal(has(/\/dlB\/inner\.pdf/), true, 'a file in a frame from another site is listed');
+  assert.equal(has(/\/dlthumb/), false, 'the thumbnail inside a link is not listed');
   assert.equal(has(/\/dlnav/), false, 'an extensionless link to a web page is not listed');
   assert.equal(has(/\/dlfake/), false, 'a link whose type and bytes disagree is not listed');
   assert.equal(has(/\/page\/\d+\.html/), false, 'page links are not listed');

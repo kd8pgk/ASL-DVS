@@ -226,7 +226,7 @@
       else if (err.startsWith('frames:')) notes.push(`${err.slice(7)} embedded frame${err === 'frames:1' ? '' : 's'} could not be read.`);
       if (d.probing > 0) notes.push(`Checking ${d.probing} more link${d.probing === 1 ? '' : 's'}…`);
       if (d.total > list.length) notes.push(`Showing the first ${list.length} of ${d.total} files.`);
-      if (d.skipped > 0) notes.push(`${d.skipped} more link${d.skipped === 1 ? '' : 's'} were not checked (limit 60).`);
+      if (d.skipped > 0) notes.push(`${d.skipped} more link${d.skipped === 1 ? '' : 's'} were not checked (limit 100).`);
       $('dl-note').textContent = notes.join(' ');
       show($('dl-note'), notes.length > 0);
       show($('dl-rescanrow'), err === 'page');

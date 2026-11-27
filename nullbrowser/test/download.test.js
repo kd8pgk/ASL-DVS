@@ -220,11 +220,12 @@ test('hints name the kind: download name, type, and a query value', () => {
   assert.equal(list.find((e) => e.kind === 'mp4').name, 'strip.mp4');
 });
 
-test('extensionless links become candidates: media first, then the same site, then others; skip page-like and unknown files', () => {
+test('extensionless links become candidates: a sibling host like cdn first, then the same host, then loose media, then other sites; skip page-like and unknown files', () => {
   const page = 'https://www.comic.test/strip';
   const scan = D.buildScan([
     { href: 'https://other.test/go/1' },
     { href: 'https://cdn.comic.test/x/abc', media: true },
+    { href: 'https://cdn.comic.test/f/9' },
     { href: '/dl?id=42' },
     { href: '/about.html' },
     { href: '/files/prog.zip' },
@@ -233,15 +234,15 @@ test('extensionless links become candidates: media first, then the same site, th
     { href: 'https://other.test/go/1' },
     { href: 'mailto:a@b.test' },
   ], page);
-  assert.deepEqual(scan.candidates, ['https://cdn.comic.test/x/abc', 'https://www.comic.test/dl?id=42', 'https://www.comic.test/getit.php', 'https://other.test/go/1']);
+  assert.deepEqual(scan.candidates, ['https://cdn.comic.test/f/9', 'https://www.comic.test/dl?id=42', 'https://www.comic.test/getit.php', 'https://cdn.comic.test/x/abc', 'https://other.test/go/1']);
   assert.equal(scan.list.length, 0);
 });
 
-test('only 60 candidates are probed and the rest are counted', () => {
-  const links = Array.from({ length: 100 }, (_, i) => ({ href: `https://c.test/m/${i}`, media: true }));
+test('only 100 candidates are probed and the rest are counted', () => {
+  const links = Array.from({ length: 150 }, (_, i) => ({ href: `https://c.test/m/${i}`, media: true }));
   const scan = D.buildScan(links, 'https://x.test/');
-  assert.equal(scan.candidates.length, 60);
-  assert.equal(scan.skipped, 40);
+  assert.equal(scan.candidates.length, 100);
+  assert.equal(scan.skipped, 50);
 });
 
 test('the list is capped at 200 but reports the total', () => {
@@ -267,6 +268,7 @@ function fakeNode(tag, attrs = {}) {
     data: attrs.data || '',
     poster: attrs.poster || '',
     getAttribute: (n) => (attrs.attrs && attrs.attrs[n]) || null,
+    closest: () => (attrs.inLink ? {} : null),
   };
 }
 
@@ -274,6 +276,8 @@ test('the page scan does not stop at 300 other links', () => {
   const nodes = [];
   for (let i = 0; i < 1500; i += 1) nodes.push(fakeNode('A', { href: `https://p.test/page/${i}.html` }));
   nodes.push(fakeNode('A', { href: 'https://p.test/files/last.pdf' }));
+  nodes.push(fakeNode('IMG', { src: 'https://cdn.test/thumb/1.jpg', inLink: true }));
+  nodes.push(fakeNode('IMG', { src: 'https://cdn.test/thumb/2', inLink: true }));
   nodes.push(fakeNode('IMG', { src: 'https://cdn.test/i/abc', attrs: { srcset: 'https://cdn.test/i/abc-2x 2x' } }));
   nodes.push(fakeNode('A', { href: 'https://p.test/dl?id=1' }));
   nodes.push(fakeNode('A', { href: 'https://p.test/get', attrs: { download: 'x.mp3' } }));
@@ -286,9 +290,11 @@ test('the page scan does not stop at 300 other links', () => {
   assert.ok(hrefs.includes('https://cdn.test/v/1-poster'));
   assert.ok(hrefs.includes('https://p.test/dl?id=1'));
   assert.equal(hrefs.some((h) => h.endsWith('.html')), false, 'page links are not collected');
+  assert.equal(hrefs.some((h) => h.includes('/thumb/')), false, 'a picture inside a link is that link\'s thumbnail and is left out');
   const scan = D.buildScan(out.items, 'https://p.test/dir/');
   assert.deepEqual(scan.list.map((e) => e.name).sort(), ['last.pdf', 'x.mp3']);
-  assert.equal(scan.candidates[0].startsWith('https://cdn.test/'), true);
+  assert.equal(scan.candidates[0], 'https://p.test/dl?id=1', 'links are checked before loose pictures');
+  assert.ok(scan.candidates.includes('https://cdn.test/i/abc'));
 });
 
 test('the scan script is plain text that evaluates to a call', () => {

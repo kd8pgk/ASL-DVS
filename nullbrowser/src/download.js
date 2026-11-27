@@ -31,7 +31,7 @@ const EXT_KIND = {
 };
 
 const DYNAMIC_EXTS = ['php', 'asp', 'aspx', 'jsp', 'cgi', 'do', 'action', 'pl', 'py', 'cfm', 'ashx', 'axd'];
-const MAX_PROBES = 60;
+const MAX_PROBES = 100;
 const MAX_LIST = MAX_BATCH_FILES;
 
 function kindOfPath(pathname) {
@@ -289,7 +289,7 @@ function buildScan(links, pageUrl) {
     }
     if (cands.has(key) || key === base.href.split('#')[0]) continue;
     if (!l.media && !l.name && !l.type && !u.search && skippedExt(u.pathname)) continue;
-    const tier = l.media ? 0 : sameSite(u, base) ? 1 : 2;
+    const tier = l.media ? 2 : !sameSite(u, base) ? 3 : u.hostname !== base.hostname ? 0 : 1;
     cands.set(key, { href: key, tier, order: cands.size });
   }
   const ranked = [...cands.values()].sort((a, b) => a.tier - b.tier || a.order - b.order);
@@ -382,6 +382,8 @@ function scanFn(E, D, doc) {
       else if (!x || D.indexOf(x) >= 0 || q) take(weak, 400, h, '', '', false);
       continue;
     }
+    var inLink = typeof e.closest === 'function' && Boolean(e.closest('a[href]'));
+    if (inLink && (tag === 'IMG' || tag === 'SOURCE')) continue;
     var ts = e.getAttribute('type') || '';
     take(media, 600, e.currentSrc || e.src || e.data || '', '', ts, true);
     if (tag === 'IMG' || tag === 'SOURCE') {
@@ -389,7 +391,7 @@ function scanFn(E, D, doc) {
       var parts = ss.split(',');
       for (var j = 0; j < parts.length && j < 20; j++) take(media, 600, parts[j].trim().split(/\s+/)[0], '', '', true);
     }
-    if (tag === 'VIDEO') take(media, 600, e.poster || '', '', '', true);
+    if (tag === 'VIDEO' && !inLink) take(media, 600, e.poster || '', '', '', true);
   }
   return { items: media.concat(strong, weak), visited: visited };
 }
