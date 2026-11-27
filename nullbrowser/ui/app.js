@@ -352,6 +352,37 @@
   $('shot-save').addEventListener('click', () => window.nb.shotAnswer(true));
   $('shot-cancel').addEventListener('click', () => window.nb.shotAnswer(false));
   $('fastjs').addEventListener('click', () => window.nb.requestFastJs(!fastJsNow));
+  let launcher = null;
+  function renderLauncher() {
+    const b = $('launcher');
+    if (!launcher || !launcher.available) {
+      b.hidden = true;
+      return;
+    }
+    b.hidden = false;
+    if (!launcher.installed) {
+      b.textContent = 'Add to menu';
+      b.title = 'Add Null Browser to the app menu and the desktop (writes a few files to your home folder)';
+    } else if (!launcher.fromInstalled) {
+      b.textContent = 'Update menu copy';
+      b.title = `Replace the copy the menu starts (${launcher.installedVersion || 'unknown version'}) with this one`;
+    } else {
+      b.textContent = 'Remove from menu';
+      b.title = 'Take Null Browser out of the app menu and off the desktop';
+    }
+  }
+  async function launcherClick() {
+    if (!launcher) return;
+    const removing = launcher.installed && launcher.fromInstalled;
+    const r = removing ? await window.nb.removeLauncher() : await window.nb.addLauncher();
+    if (r.status) launcher = r.status;
+    renderLauncher();
+  }
+  $('launcher').addEventListener('click', launcherClick);
+  window.nb.launcherStatus().then((st) => {
+    launcher = st;
+    renderLauncher();
+  });
   $('ramopen').addEventListener('click', () => window.nb.openRam());
   $('wipe').addEventListener('click', () => window.nb.wipeAll());
   $('leave-go').addEventListener('click', () => window.nb.leaveAnswer(leaveId, true));

@@ -61,6 +61,7 @@ const { st } = require('./state');
 const { onDownload, openFile, answerFile, rammaidFile, runDownload, scanFiles, scheduleRescan, cancelProbes, resetDownloads, listIsCurrent, entryOf } = require('./downloads');
 const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
+const LN = require('./launcher');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
 const { line, meter, starts, served, ahead, own, pageId, slowActive, lineState, lineChanged, serve, resetLine, clearAhead, stopImages, holdImage, pump, onReport, setLine, lineErrored } = require('./slowline');
 
@@ -609,6 +610,8 @@ function fromShell(e) {
   return alive() && e.sender === st.win.webContents;
 }
 
+const launcherNow = LN.launcherEnv({ packaged: app.isPackaged, env: process.env, home: REAL_HOME });
+
 let shellReady = false;
 
 function register() {
@@ -736,6 +739,36 @@ function register() {
   ipcMain.handle('line-set', (e, key, value) => {
     if (!fromShell(e)) return { ok: false };
     return { ok: setLine(key, value) };
+  });
+  ipcMain.handle('launcher-status', (e) => (fromShell(e) ? LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) : null));
+  ipcMain.handle('launcher-install', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    let r;
+    try {
+      let icon = null;
+      try {
+        icon = fs.readFileSync(path.join(__dirname, '..', 'ui', 'icon.png'));
+      } catch {
+        icon = null;
+      }
+      r = LN.installLauncher({ paths: launcherNow.launcherPaths(), running: launcherNow.runningAppImage(), iconPng: icon, version: app.getVersion() });
+    } catch (err) {
+      const error = `The launcher could not be added (${err && err.code ? err.code : 'error'}).`;
+      say(error);
+      return { error };
+    }
+    if (r.error) {
+      say(r.error);
+      return r;
+    }
+    say(r.shortcut ? 'Added Null Browser to the app menu and the desktop.' : 'Added Null Browser to the app menu.');
+    return { ok: true, shortcut: Boolean(r.shortcut), status: LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) };
+  });
+  ipcMain.handle('launcher-remove', (e) => {
+    if (!fromShell(e)) return { error: 'Not allowed.' };
+    LN.removeLauncher({ paths: launcherNow.launcherPaths() });
+    say('Removed Null Browser from the app menu and the desktop.');
+    return { ok: true, status: LN.launcherStatus(launcherNow.launcherPaths(), launcherNow.runningAppImage(), app.getVersion()) };
   });
   ipcMain.handle('open-ram', (e) => {
     if (!fromShell(e)) return { ok: false };

@@ -252,9 +252,25 @@
     `.nb-partial-` write and a no-overwrite link. Cookies are sent only on a
     401/403 **Retry with sign-in** for one file, held in memory, and dropped.
     No link menu and no right-click menu; the list is the only way in.
-  - Two written exceptions now: the **Screenshot** (0.13.0) and user-started
-    downloads (0.15.0). Each writes to Downloads only after a deliberate user
-    action, and nothing else writes outside the RAM folder.
+  - Three written exceptions now: the **Screenshot** (0.13.0), user-started
+    downloads (0.15.0) and the **Add to menu** launcher (0.18.0). Each writes
+    outside the RAM folder only after a deliberate user action, and nothing
+    else does.
+  - **Real home (0.17.1).** The AppImage launcher points `HOME` at the RAM
+    folder before the app starts, so the app never uses `HOME` or
+    `os.homedir()` for the real home: it takes `NULLBROWSER_REAL_HOME` (set by
+    the launcher, and by `main.js` for a source run, `R.realHome`). Downloads,
+    screenshots and the launcher all use it. A restart (the JIT button)
+    goes through `$APPIMAGE` or the launcher script, with the RAM folder, `HOME`
+    and `TMPDIR` of the old run taken out of its environment.
+  - **Add to menu (0.18.0, `src/launcher.js`).** Same as Node Controller
+    Desktop's launcher, shown only when running from an AppImage: copies the
+    AppImage to `~/.local/share/null-browser/`, writes
+    `~/.local/share/applications/nullbrowser.desktop`, the icon under
+    `~/.local/share/icons/hicolor/256x256/apps/` and the same entry in the
+    Desktop folder (from the real home's `user-dirs.dirs`). **Remove from menu**
+    takes them all away. Nothing is written until the button is pressed; it
+    refuses a home folder that is a RAM folder.
   - One written exception (0.13.0): the **Screenshot** button writes a PDF to
     the Downloads folder, and only when you press Save. It is made in
     `quarantine/` inside the RAM folder and checked there first

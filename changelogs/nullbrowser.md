@@ -1,6 +1,15 @@
 # Null Browser changelog
 
-Current version: `0.17.2`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.18.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.18.0 (2026-11-27)
+
+**Add to menu**, the same install as Node Controller Desktop.
+
+- A toolbar button, shown only when Null Browser runs from an AppImage. **Add to menu** copies the AppImage to `~/.local/share/null-browser/`, writes the menu entry `~/.local/share/applications/nullbrowser.desktop` (name Null Browser, category Network and Web Browser), the icon under `~/.local/share/icons/hicolor/256x256/apps/` and the same entry on your Desktop folder (taken from your `user-dirs.dirs`, so a renamed Desktop folder works). The entry is then in Caja and Thunar menus, and the desktop icon starts the copy.
+- The button then reads **Remove from menu**, which deletes all of those files. If you run a newer AppImage than the menu copy, it reads **Update menu copy**.
+- **Written only when you press the button**, a third deliberate exception next to the screenshot and downloads. It writes to your real home folder (never the RAM folder, which it refuses), with the usual atomic writes. Nothing is written at start-up, and a run that is not an AppImage shows no button.
+- The window class is `nullbrowser`, so docks group the window with the menu entry.
 
 ## 0.17.2 (2026-11-27)
 
