@@ -128,13 +128,13 @@
    "version": "6.13.91-pi02w"
   },
   "termon": {
-   "blob": "d3f4d73ade58a7dd6efa4b2b731dbcbc01cad745",
-   "commit": "fb093af5f63d7738c7048d8e17d9e38b4c1c005f",
-   "file": "termon_v0_1_7_20261108.py",
-   "landed": "2026-11-08T23:57:21Z",
-   "promoted": "2026-11-13T10:33:46Z",
-   "reason": "count",
-   "version": "0.1.7"
+   "blob": "65bd3b4467798cf43bb5f6485277f1f08998fe4e",
+   "commit": "d6baa56fee62207afded77e5476598a041d55ca5",
+   "file": "termon_v0_2_5_20261113.py",
+   "landed": "2026-11-13T10:33:46Z",
+   "promoted": "2026-11-27T10:33:46Z",
+   "reason": "age",
+   "version": "0.2.5"
   },
   "uninstall_all": {
    "blob": "a121790fac7dc23325f8019160866b3bad1bbaae",
