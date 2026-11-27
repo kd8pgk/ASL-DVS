@@ -61,7 +61,33 @@ const panelLog = [];
 const fpSeen = [];
 const dlSeen = [];
 let adFrames = 0;
+const vimgSeen = [];
 const probeSeen = [];
+
+function solidPng(w, h, rgb) {
+  const zlib = require('node:zlib');
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(td) >>> 0);
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.alloc(1 + w * 3);
+  for (let x = 0; x < w; x += 1) {
+    row[1 + x * 3] = rgb[0];
+    row[2 + x * 3] = rgb[1];
+    row[3 + x * 3] = rgb[2];
+  }
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 
 function pngOf(bytes) {
   const zlib = require('node:zlib');
@@ -259,6 +285,21 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>popbox</title><div id="box" class="ad-box" style="position:absolute;left:40px;top:40px;width:240px;height:120px;background:#06c">An ad</div>');
     }
+    if (q.url === '/viewpage') {
+      s.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'" });
+      return s.end('<!doctype html><title>Gallery test</title><h1 id="h">Big headline</h1><p id="para">Some paragraph text with <a id="lnk" href="/two">a link</a>.</p><a href="/vimg/full1.png"><img src="/vimg/thumb1.png" width="300" height="200"></a><img data-src="/vimg/lazy2.png" width="300" height="200"><img src="/vimg/icon.png" width="16" height="16"><img src="/vimg/small.png"><div style="width:400px;height:300px;background-image:url(/vimg/bg3.png)"></div><script src="/vscript.js"></script>');
+    }
+    if (q.url === '/vscript.js') {
+      s.writeHead(200, { 'Content-Type': 'text/javascript' });
+      return s.end("window.__ran=true;");
+    }
+    if (q.url.startsWith('/vimg/')) {
+      const name = q.url.slice(6).split(/[?#]/)[0].replace(/\.png$/, '');
+      vimgSeen.push({ name, cookie: q.headers.cookie || '', referer: q.headers.referer || '' });
+      const size = { full1: [400, 300, [200, 40, 40]], thumb1: [100, 100, [40, 40, 200]], lazy2: [300, 200, [40, 200, 40]], bg3: [500, 300, [200, 200, 40]], small: [40, 40, [200, 40, 200]], icon: [16, 16, [0, 0, 0]] }[name] || [10, 10, [0, 0, 0]];
+      s.writeHead(200, { 'Content-Type': 'image/png' });
+      return s.end(solidPng(size[0], size[1], size[2]));
+    }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>clip</title><input id="i" style="position:absolute;left:10px;top:10px;width:300px"><iframe id="f" src="/two" style="position:absolute;top:60px"></iframe>');
@@ -348,6 +389,10 @@ async function main() {
   };
 
   await win.waitForSelector('#blank:not([hidden])');
+  assert.equal(await win.isVisible('#viewask'), true, 'how much of each page to show is asked at each start');
+  assert.match(await win.textContent('#viewbtn'), /View: Full/, 'until it is answered pages show in full, as before');
+  await win.click('#view-full');
+  await win.waitForSelector('#viewask', { state: 'hidden' });
   assert.equal(await win.inputValue('#addr'), '');
   await win.evaluate(() => document.fonts.ready);
   assert.equal(await win.evaluate(() => document.fonts.check('16px "Readex Pro"')), true, 'the shared Readex Pro font is loaded from the app');
@@ -627,8 +672,52 @@ async function main() {
   await go(`http://127.0.0.1:${portA}/`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/`, 'back on the start page');
   const afterNav = await win.evaluate(() => window.nb.state());
-  assert.equal(afterNav.dl.list.length, 0, 'the list of the old page is gone after leaving it');
+  assert.equal(afterNav.dl.list.some((e) => /dlget|dlimg|late\/last|good\.webp/.test(e.path)), false, 'the list of the old page is gone after leaving it');
   await win.click('#dl-qclose').catch(() => {});
+
+  await go(`http://127.0.0.1:${portA}/viewpage`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/viewpage`, 'the view test page');
+  await waitFor(async () => (await pageEval('window.__ran === true')) === true, 'the full page runs its script');
+  assert.equal(await pageEval("document.getElementById('para') !== null"), true, 'the full page has its text');
+  const galleryCount = () => pageEval("document.documentElement.hasAttribute('data-nb-gallery') ? document.querySelectorAll('main img').length : -1");
+  const viewSeenBefore = vimgSeen.length;
+  await win.click('#viewbtn');
+  await win.waitForSelector('#view-panel:not([hidden])');
+  await win.uncheck('#vt-text');
+  await waitFor(async () => (await galleryCount()) === 3, 'pictures only: three pictures stay (the small one and the icon are dropped)');
+  assert.equal(await pageEval("document.querySelector('main').innerText.trim()"), '', 'no text at all');
+  assert.equal(await pageEval("document.querySelectorAll('main a, main p, main h1, main li').length"), 0, 'no links or text blocks');
+  assert.equal(await pageEval('window.__ran === undefined'), true, 'the page script did not run');
+  const placed = await pageEval("Array.from(document.querySelectorAll('main img')).map(function(i){var r=i.getBoundingClientRect();return [Math.round(r.left),Math.round(r.width),i.naturalWidth]})");
+  assert.equal(new Set(placed.map((p) => p[0])).size, 1, 'one column: every picture starts at the same left edge');
+  assert.equal(new Set(placed.map((p) => p[1])).size, 1, 'and has the same width');
+  assert.equal(placed.every((p) => p[2] > 0), true, 'every picture loaded');
+  const viewSeen = vimgSeen.slice(viewSeenBefore);
+  const names = viewSeen.map((r) => r.name);
+  assert.equal(names.includes('thumb1'), false, 'the thumbnail is never fetched when its link goes to a bigger picture');
+  assert.equal(names.includes('icon'), false, 'a small icon is not fetched');
+  for (const n of ['full1', 'lazy2', 'bg3']) assert.equal(names.includes(n), true, `${n} was fetched for the gallery`);
+  assert.equal(viewSeen.filter((r) => ['full1', 'lazy2', 'bg3'].includes(r.name)).every((r) => r.cookie === ''), true, 'the gallery fetches send no cookies');
+  await pageEval("document.querySelector('main img').click(); true");
+  assert.equal(await pageEval("document.getElementById('lb').hidden"), false, 'a click opens the picture larger');
+  assert.equal(await pageEval("document.getElementById('lbi').getAttribute('src') === document.querySelector('main img').getAttribute('src')"), true);
+  await pageEval("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'})); true");
+  assert.equal(await pageEval("document.getElementById('lbi').getAttribute('src') === document.querySelectorAll('main img')[1].getAttribute('src')"), true, 'the arrow key moves to the next picture');
+  await pageEval("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})); true");
+  assert.equal(await pageEval("document.getElementById('lb').hidden"), true, 'Esc closes it');
+  await win.check('#vt-text');
+  await waitFor(async () => (await pageEval("document.documentElement.hasAttribute('data-nb-gallery') && document.querySelector('main h1, main p') !== null")) === true, 'text comes back as plain text');
+  assert.match(await pageEval("document.querySelector('main').innerText"), /Big headline[\s\S]*Some paragraph text with a link\./);
+  assert.equal(await pageEval("document.querySelectorAll('main a').length"), 0, 'but not links');
+  await win.check('#vt-links');
+  await waitFor(async () => (await pageEval("document.querySelectorAll('main a').length")) === 1, 'links come back');
+  await win.check('#vt-layout');
+  await waitFor(async () => (await pageEval("!document.documentElement.hasAttribute('data-nb-gallery') && document.getElementById('para') !== null")) === true, 'the real page comes back');
+  assert.equal(await pageEval('window.__ran === undefined'), true, 'with its layout but still no scripts');
+  await win.check('#vt-scripts');
+  await waitFor(async () => (await pageEval('window.__ran === true')) === true, 'the full page runs its script again');
+  await win.click('#view-close');
+  await win.waitForSelector('#view-panel', { state: 'hidden' });
 
   await go(`http://127.0.0.1:${portA}/popspam`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/popspam`, 'the pop-up test page');

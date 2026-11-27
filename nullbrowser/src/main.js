@@ -63,6 +63,7 @@ const shared = require('./ctx');
 const { makeShot, answerShot } = require('./screenshot');
 const LN = require('./launcher');
 const PG = require('./popguard');
+const PV = require('./viewmain');
 const { hardenShell, pageLang, fingerprint, showFingerprint, topUrlOf, litterbugRequest, thirdParty } = require('./network');
 const { line, meter, starts, served, ahead, own, pageId, slowActive, lineState, lineChanged, serve, resetLine, clearAhead, stopImages, holdImage, pump, onReport, setLine, lineErrored } = require('./slowline');
 
@@ -120,6 +121,7 @@ function state() {
     line: lineState(),
     shot: st.pendingShot ? { text: st.pendingShot.text, busy: st.pendingShot.busy } : null,
     pop: PG.popState(),
+    view: PV.viewState(),
     dl: {
       allowed: st.dlAllowed,
       asking: st.dlAsking,
@@ -143,7 +145,7 @@ function lineRows(l) {
 
 function bars() {
   const s = state();
-  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0);
+  return (s.notice ? 1 : 0) + (s.ask ? 1 : 0) + (s.popup ? 1 : 0) + (s.jsAsk === null ? 0 : 1) + (s.leave ? 1 : 0) + (s.shot ? 1 : 0) + lineRows(s.line) + (s.dl.asking ? 1 : 0) + (s.dl.queue.length ? 1 : 0) + (s.view.asking ? 1 : 0);
 }
 
 function layout() {
@@ -334,6 +336,10 @@ function hardenPage(s) {
     const csp = doc ? S.cspHeaders(details.responseHeaders) : null;
     if (csp) details = { ...details, responseHeaders: csp };
     let headers = csp || asks;
+    if (doc) {
+      const viewed = PV.headersFor(headers || details.responseHeaders);
+      if (viewed) headers = viewed;
+    }
     if (details.resourceType === 'mainFrame' && details.statusCode >= 200 && details.statusCode < 300) {
       const ct = Object.entries(details.responseHeaders || {}).find(([k]) => k.toLowerCase() === 'content-type');
       if (F.kindOfMime(ct ? [].concat(ct[1])[0] : '')) {
@@ -461,6 +467,7 @@ function createView() {
     setImmediate(pump);
     scanFiles();
   });
+  wc.on('did-finish-load', () => PV.apply());
   wc.on('did-frame-finish-load', (ev, isMainFrame) => {
     if (!isMainFrame) scheduleRescan();
   });
@@ -470,6 +477,7 @@ function createView() {
       st.pendingLeave = null;
       resetDownloads();
       PG.resetPage();
+      PV.resetPage();
       purgeIfSiteChanged(url);
       resetLine();
       st.error = null;
@@ -648,6 +656,7 @@ let shellReady = false;
 function register() {
   ipcMain.on('nb-report', onReport);
   PG.register(fromShell);
+  PV.register(fromShell);
   ipcMain.handle('dl-answer', (e, on) => {
     if (!fromShell(e)) return { ok: false };
     st.dlAllowed = on === true;
@@ -1068,11 +1077,15 @@ app.whenReady().then(() => {
   hardenPage(st.ses);
   st.ses.protocol.handle(S.SCHEME, (req) => {
     let token = '';
+    let kind = '';
     try {
-      token = new URL(req.url).pathname.slice(1);
+      const u = new URL(req.url);
+      token = u.pathname.slice(1);
+      kind = u.hostname;
     } catch {
       token = '';
     }
+    if (kind === 'f') return PV.picture(token);
     const hit = served.get(token);
     if (!hit) return new Response('', { status: 404 });
     return new Response(hit.buf, { headers: { 'content-type': hit.type || 'application/octet-stream', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });

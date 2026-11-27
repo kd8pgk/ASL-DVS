@@ -1,6 +1,25 @@
 # Null Browser changelog
 
-Current version: `0.19.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+Current version: `0.20.0`. The app is in `nullbrowser/`; its version is `version` in `nullbrowser/package.json`. Newest entries first.
+
+## 0.20.0 (2026-11-27)
+
+**View**: pictures only, with boxes to turn more of the page back on. PNG and GIF join the downloadable types.
+
+- **Asked at each start**, next to the downloads question: **Pictures only**, **Full page** or **Choose…**. Nothing is saved; the answer lasts until Null Browser closes. Until you answer, pages show in full as before.
+- **View** (toolbar) opens four boxes. Each one turns more back on and ticks the ones above it; unticking one unticks the ones below it. Changing a box reloads the page.
+  - **Pictures only** (nothing ticked): one single column of pictures on a dark page, with no text, links or anything else.
+  - **Text**: headings, paragraphs and captions come back, in page order between the pictures. Menus, footers, side bars and forms stay out.
+  - **Links**: links in the text, and pictures that link to another page, work again; leaving the site still asks first.
+  - **The page's own layout, video and audio**: the real page with its styles, but still no scripts.
+  - **Scripts**: the full page.
+- **Scripts never run below the full page.** The page's own security policy and report addresses are replaced by a strict one while a picture view is on (no scripts, no frames, no fonts, no media, pictures only from the browser itself), so the page's pictures are not fetched twice and ads, trackers and pop-ups never start. The block list from 0.19.0 still applies when scripts are on.
+- **How the pictures are found.** The page's HTML and styles load; the browser reads `img`, `srcset`, `picture`, lazy `data-src`, video posters and large CSS backgrounds in page order, uses the bigger picture when a thumbnail links to one, and drops duplicates and anything under 120 pixels. It then replaces the page with the gallery in place, so the address bar, back button and history work as usual.
+- **How they are fetched.** One at a time as you scroll, by the browser itself with no cookies and no referer. A file must start like a JPG, PNG, GIF, WebP or AVIF; anything else (SVG included) is dropped. Limits: 400 pictures, 25 MB each, 300 MB in all per page. **Images: Off** in the Line row still wins.
+- **Click a picture** to see it larger; the arrow keys move to the next one, Esc closes it. With Links on, a linked picture shows an **Open link** button.
+- **PNG and GIF** can now be listed and downloaded like the other types, with structure checks (PNG: signature, header, data, exact end; GIF: header, size, trailer).
+- **Fewer false refusals on pictures.** Hidden-code checks for `#!/` and program headers now look only at the first and last kilobyte of a JPG, PNG, GIF or WebP, because those bytes turn up by chance deep inside compressed data and large pictures were refused for it. Every other type is scanned all the way through, as before.
+- Not covered: the Download list has nothing to list in the picture views (the pictures come from the browser itself); a page that needs scripts to show anything is empty until you tick **Scripts**.
 
 ## 0.19.0 (2026-11-27)
 
