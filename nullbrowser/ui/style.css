@@ -72,6 +72,15 @@ button.primary { color: var(--green); border-color: var(--green-dim); }
 .dl-item small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
 .dl-badge { font-size: var(--fs-xs); font-weight: bold; color: var(--cyan); border: 1px solid var(--cyan); border-radius: 3px; padding: 0 .3rem; }
 .dl-all { color: var(--amber); }
+#popbtn[aria-expanded="true"] { color: var(--amber); border-color: var(--amber); }
+.pop-panel { width: 460px; }
+.pop-panel ul { max-height: 130px; }
+.pop-panel li { flex-wrap: wrap; }
+.pop-panel li small { flex-basis: 100%; color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.pop-panel li button { padding: .15rem .45rem; font-size: var(--fs-xs); }
+.pop-actions { margin: 0; padding: .4rem .5rem; }
+.pop-h { display: flex; align-items: center; justify-content: space-between; margin: 0; padding: .35rem .6rem 0; color: var(--amber); font-size: var(--fs-sm); font-weight: bold; }
+.pop-what { flex: 1; min-width: 0; color: var(--bright); overflow-wrap: anywhere; }
 .dl-state { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; }
 .dl-state.ok { color: var(--green); }
 .dl-state.bad { color: var(--red); }

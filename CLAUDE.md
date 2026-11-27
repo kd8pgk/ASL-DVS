@@ -263,6 +263,16 @@
     screenshots and the launcher all use it. A restart (the JIT button)
     goes through `$APPIMAGE` or the launcher script, with the RAM folder, `HOME`
     and `TMPDIR` of the old run taken out of its environment.
+  - **Block list (0.19.0, `src/blocklist.js`, `src/popups.js`,
+    `src/popguard.js`, frame preload `src/blockfront.js`).** In memory only,
+    for one run: host rules (`onBeforeRequest`, `window.open`, the leave
+    prompt) and element rules (CSS from a list built once and given to each
+    frame once per load). Nothing is written or exported (Export was
+    deliberately left out until the session list proves itself). The list
+    survives the ✕ button like bookmarks. What a page reports about its own
+    elements is untrusted: `sanitizeItem` cleans it and rules are made only
+    from the browser's own stored list, never from a string a page sends. A
+    page's own site cannot be blocked from the panel.
   - **Add to menu (0.18.0, `src/launcher.js`).** Same as Node Controller
     Desktop's launcher, shown only when running from an AppImage: copies the
     AppImage to `~/.local/share/null-browser/`, writes

@@ -60,6 +60,7 @@ function walk(dir) {
 const panelLog = [];
 const fpSeen = [];
 const dlSeen = [];
+let adFrames = 0;
 const probeSeen = [];
 
 function pngOf(bytes) {
@@ -246,6 +247,18 @@ async function main() {
       s.writeHead(200, { 'Content-Type': 'application/pdf' });
       return s.end('%PDF-1.4\n<</Type /Page>>\n' + ' '.repeat(1500) + '\n%%EOF\n');
     }
+    if (q.url === '/popspam') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end(`<!doctype html><title>popspam</title><div id="promo" class="promo-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:9999;background:#000">SUBSCRIBE NOW</div><p id="content">real content</p><iframe id="adf" src="http://ads.test:${portB}/adframe" style="position:fixed;right:0;bottom:0;width:300px;height:250px"></iframe><script>setTimeout(function(){window.open('http://ads.test:${portB}/popunder')},200)</script>`);
+    }
+    if (q.url === '/popjump') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end(`<!doctype html><title>popjump</title><p>wait</p><script>setTimeout(function(){location.href='http://ads.test:${portB}/landing'},300)</script>`);
+    }
+    if (q.url === '/popbox') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>popbox</title><div id="box" class="ad-box" style="position:absolute;left:40px;top:40px;width:240px;height:120px;background:#06c">An ad</div>');
+    }
     if (q.url === '/clip') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>clip</title><input id="i" style="position:absolute;left:10px;top:10px;width:300px"><iframe id="f" src="/two" style="position:absolute;top:60px"></iframe>');
@@ -265,6 +278,15 @@ async function main() {
   });
   const b = http.createServer((q, s) => {
     seenB.push({ url: q.url, cookie: q.headers.cookie || '' });
+    if (q.url === '/adframe') {
+      adFrames += 1;
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>ad</title><p>ad frame</p>');
+    }
+    if (q.url === '/popunder' || q.url === '/landing') {
+      s.writeHead(200, { 'Content-Type': 'text/html' });
+      return s.end('<!doctype html><title>landing</title><p>ads</p>');
+    }
     if (q.url === '/dlframeB') {
       s.writeHead(200, { 'Content-Type': 'text/html' });
       return s.end('<!doctype html><title>frame b</title><a href="/dlB/inner.pdf">Inside a foreign frame</a>');
@@ -305,7 +327,7 @@ async function main() {
   fs.mkdirSync(realHome);
   const launch = (extra = [], envExtra = {}) => _electron.launch({
     executablePath: require('electron'),
-    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1,MAP other.test 127.0.0.1,MAP wd.test 127.0.0.1', ...extra],
+    args: [root, '--no-sandbox', '--host-resolver-rules=MAP pub.test 127.0.0.1,MAP other.test 127.0.0.1,MAP wd.test 127.0.0.1,MAP ads.test 127.0.0.1', ...extra],
     env: { ...noProxy(process.env), NULLBROWSER_RAM_BASE: ramBase, NULLBROWSER_OPEN_LOG: openLog, HOME: realHome, XDG_CONFIG_HOME: path.join(realHome, '.config'), XDG_CACHE_HOME: path.join(realHome, '.cache'), ...envExtra },
   });
   const warm = await launch();
@@ -607,6 +629,55 @@ async function main() {
   const afterNav = await win.evaluate(() => window.nb.state());
   assert.equal(afterNav.dl.list.length, 0, 'the list of the old page is gone after leaving it');
   await win.click('#dl-qclose').catch(() => {});
+
+  await go(`http://127.0.0.1:${portA}/popspam`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/popspam`, 'the pop-up test page');
+  await win.click('#popbtn');
+  await win.waitForSelector('#pop-panel:not([hidden])');
+  await win.waitForFunction(() => /dropped: pop-up window to ads\.test/.test(document.getElementById('pop-log').textContent), null, { timeout: 15000 });
+  await win.click('#pop-find');
+  await win.waitForFunction(() => /Covers the page/.test(document.getElementById('pop-found').textContent) && /Ad frame/.test(document.getElementById('pop-found').textContent), null, { timeout: 15000 });
+  const foundText = await win.textContent('#pop-found');
+  assert.match(foundText, /#promo/, 'the overlay is named by its id');
+  assert.match(foundText, /ads\.test/, 'the ad frame shows where it comes from');
+  const popViewTop = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.contentView && x.contentView.children.length > 0).contentView.children[0].getBounds().y);
+  const popPanelBottom = await win.evaluate(() => Math.ceil(document.getElementById('pop-panel').getBoundingClientRect().bottom));
+  assert.ok(popViewTop >= popPanelBottom, 'the page sits below the open pop-up panel');
+  await win.locator('#pop-found li', { hasText: 'Covers the page' }).locator('button', { hasText: 'Hide' }).click();
+  await waitFor(async () => (await pageEval("getComputedStyle(document.getElementById('promo')).display")) === 'none', 'the overlay is hidden at once');
+  await win.locator('#pop-found li', { hasText: 'Ad frame' }).locator('button', { hasText: 'Block ads.test' }).click();
+  await win.waitForFunction(() => /1 blocked host, 1 hidden element rule/.test(document.getElementById('pop-counts').textContent));
+  const framesBefore = adFrames;
+  await go(`http://127.0.0.1:${portA}/popspam`);
+  await win.waitForFunction(() => /blocked: pop-up window to ads\.test/.test(document.getElementById('pop-log').textContent), null, { timeout: 15000 });
+  assert.equal(await pageEval("getComputedStyle(document.getElementById('promo')).display"), 'none', 'the hidden overlay stays hidden after a reload');
+  await sleep(500);
+  assert.equal(adFrames, framesBefore, 'the ad frame is not requested again');
+  await go(`http://127.0.0.1:${portA}/popjump`);
+  await win.waitForFunction(() => /Blocked a jump to ads\.test/.test(document.getElementById('notice').textContent), null, { timeout: 15000 });
+  assert.equal(await win.isHidden('#leave'), true, 'a jump to a listed host does not even ask');
+  await win.waitForFunction(() => /blocked: jump to another site to ads\.test/.test(document.getElementById('pop-log').textContent));
+  await go(`http://127.0.0.1:${portA}/popbox`);
+  await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/popbox`, 'the page with a box to pick');
+  await win.click('#pop-pick');
+  await win.waitForFunction(() => /Stop picking/.test(document.getElementById('pop-pick').textContent));
+  const clickPage = (x, y) => app.evaluate(({ BrowserWindow }, [px, py]) => {
+    const wc = BrowserWindow.getAllWindows().find((w) => w.contentView && w.contentView.children.length > 0).contentView.children[0].webContents;
+    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+    wc.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'left', clickCount: 1 });
+  }, [x, y]);
+  await sleep(300);
+  await clickPage(100, 80);
+  await win.waitForFunction(() => /Picked: div/.test(document.getElementById('pop-found').textContent) && /#box/.test(document.getElementById('pop-found').textContent), null, { timeout: 15000 });
+  await win.locator('#pop-found li', { hasText: 'Picked' }).locator('button', { hasText: 'Hide' }).click();
+  await waitFor(async () => (await pageEval("getComputedStyle(document.getElementById('box')).display")) === 'none', 'the picked box is hidden');
+  await win.locator('#pop-list li', { hasText: 'ads.test' }).locator('button').click();
+  await win.locator('#pop-list li', { hasText: '#box' }).locator('button').click();
+  await win.locator('#pop-list li', { hasText: '#promo' }).locator('button').click();
+  await win.waitForFunction(() => /0 blocked hosts, 0 hidden element rules/.test(document.getElementById('pop-counts').textContent));
+  await win.click('#pop-close');
+  await win.waitForSelector('#pop-panel', { state: 'hidden' });
 
   await go(`http://127.0.0.1:${portA}/clip`);
   await waitFor(async () => (await pageUrl()) === `http://127.0.0.1:${portA}/clip`, 'the clipboard page');
