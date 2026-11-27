@@ -498,6 +498,15 @@
     and destroyed after 3 s (at most 3). The in-page scripts are generated
     from the desktop `src/popups.js`; what a page reports is untrusted and
     cleaned by `PopItems`. The **Line** button is now **Tools**.
+  - **View (0.8.0, `ViewTier.kt`, `HtmlScan.kt`, `Gallery.kt`,
+    `ViewGuard.kt`).** Asked at each start; five levels set by four tiered
+    boxes as on desktop. Below the full page the page's scripts never run:
+    in the picture levels `shouldInterceptRequest` answers the page's own
+    address with a gallery built from HTML the app fetched itself and read with
+    its own scanner (no computed styles, so no CSS backgrounds), under a strict
+    policy header; pictures come from the app's fetcher on the fake host
+    `nbpic.invalid` (no cookies, first-bytes check, size caps). The layout level
+    turns JavaScript off in the page view.
   - **What WebView does not give an app a supported way to control, and so
     is not attempted:** disabling the JIT compiler, passing Chromium
     command-line switches (closing the ones the desktop build closes, such

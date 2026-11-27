@@ -20,6 +20,7 @@
     <string name="no_app">No app on this phone could open %1$s.</string>
     <string name="line">Tools</string>
     <string name="pop">Pop-ups</string>
+    <string name="view_full">View: Full</string>
     <string name="popup_dropped">A pop-up was dropped. Open Tools, then Pop-ups, to see where it pointed.</string>
     <string name="line_slow">Slow</string>
     <string name="slow_auto">Slow: Auto</string>
